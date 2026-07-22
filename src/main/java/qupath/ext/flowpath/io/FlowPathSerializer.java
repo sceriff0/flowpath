@@ -17,6 +17,7 @@ import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.Region2DGate;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -34,8 +35,10 @@ import java.util.List;
 public class FlowPathSerializer {
 
     // v2 adds per-channel compartment + statistic on threshold and quadrant gates.
-    // v1 files load unchanged (compartment defaults to whole-cell, statistic to mean).
-    private static final int CURRENT_VERSION = 2;
+    // v3 extends the same to the 2D region gates (polygon / rectangle / ellipse).
+    // Older files load unchanged: a missing compartment defaults to whole-cell and a
+    // missing statistic to mean, which is exactly how those gates used to behave.
+    private static final int CURRENT_VERSION = 3;
 
     private FlowPathSerializer() {
         // static utility class
@@ -191,9 +194,7 @@ public class FlowPathSerializer {
         obj.addProperty("excludeOutliers", node.isExcludeOutliers());
 
         if (node instanceof PolygonGate pg) {
-            obj.addProperty("channelX", pg.getChannelX());
-            obj.addProperty("channelY", pg.getChannelY());
-            obj.addProperty("thresholdIsZScore", pg.isThresholdIsZScore());
+            serializeRegionAxes(obj, pg);
             JsonArray verts = new JsonArray();
             for (double[] v : pg.getVertices()) {
                 JsonArray pt = new JsonArray();
@@ -203,18 +204,14 @@ public class FlowPathSerializer {
             obj.add("vertices", verts);
             serializeTwoBranches(obj, pg.getBranches());
         } else if (node instanceof RectangleGate rg) {
-            obj.addProperty("channelX", rg.getChannelX());
-            obj.addProperty("channelY", rg.getChannelY());
-            obj.addProperty("thresholdIsZScore", rg.isThresholdIsZScore());
+            serializeRegionAxes(obj, rg);
             obj.addProperty("minX", rg.getMinX());
             obj.addProperty("maxX", rg.getMaxX());
             obj.addProperty("minY", rg.getMinY());
             obj.addProperty("maxY", rg.getMaxY());
             serializeTwoBranches(obj, rg.getBranches());
         } else if (node instanceof EllipseGate eg) {
-            obj.addProperty("channelX", eg.getChannelX());
-            obj.addProperty("channelY", eg.getChannelY());
-            obj.addProperty("thresholdIsZScore", eg.isThresholdIsZScore());
+            serializeRegionAxes(obj, eg);
             obj.addProperty("centerX", eg.getCenterX());
             obj.addProperty("centerY", eg.getCenterY());
             obj.addProperty("radiusX", eg.getRadiusX());
@@ -256,6 +253,17 @@ public class FlowPathSerializer {
         }
 
         return obj;
+    }
+
+    /** Write the axis block shared by every 2D region gate (polygon / rectangle / ellipse). */
+    private static void serializeRegionAxes(JsonObject obj, Region2DGate gate) {
+        obj.addProperty("channelX", gate.getChannelX());
+        obj.addProperty("channelY", gate.getChannelY());
+        obj.addProperty("thresholdIsZScore", gate.isThresholdIsZScore());
+        obj.addProperty("compartmentX", gate.getCompartmentX().name());
+        obj.addProperty("compartmentY", gate.getCompartmentY().name());
+        obj.addProperty("statisticX", gate.getStatisticX().name());
+        obj.addProperty("statisticY", gate.getStatisticY().name());
     }
 
     private static List<GateNode> deserializeNodeList(JsonArray array) throws IOException {
@@ -388,15 +396,21 @@ public class FlowPathSerializer {
         gate.setClipPercentileHigh(clipHigh);
         gate.setExcludeOutliers(excludeOutliers);
 
-        String chX = obj.has("channelX") ? obj.get("channelX").getAsString() : null;
-        String chY = obj.has("channelY") ? obj.get("channelY").getAsString() : null;
-
-        // Shared: z-score flag for all 2D gate types
+        // Shared axis block for all 2D region gate types: channels, z-score flag,
+        // and the per-axis compartment/statistic (absent in v1/v2 files, which then
+        // default to whole-cell mean and behave exactly as before).
+        if (gate instanceof Region2DGate region) {
+            if (obj.has("channelX")) region.setChannelX(obj.get("channelX").getAsString());
+            if (obj.has("channelY")) region.setChannelY(obj.get("channelY").getAsString());
+            region.setCompartmentX(parseCompartment(obj, "compartmentX"));
+            region.setCompartmentY(parseCompartment(obj, "compartmentY"));
+            region.setStatisticX(parseStatistic(obj, "statisticX"));
+            region.setStatisticY(parseStatistic(obj, "statisticY"));
+        }
         if (obj.has("thresholdIsZScore"))
             gate.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
 
         if (gate instanceof PolygonGate pg) {
-            pg.setChannelX(chX); pg.setChannelY(chY);
             if (obj.has("vertices")) {
                 List<double[]> verts = new ArrayList<>();
                 for (JsonElement elem : obj.getAsJsonArray("vertices")) {
@@ -406,13 +420,11 @@ public class FlowPathSerializer {
                 pg.setVertices(verts);
             }
         } else if (gate instanceof RectangleGate rg) {
-            rg.setChannelX(chX); rg.setChannelY(chY);
             if (obj.has("minX")) rg.setMinX(obj.get("minX").getAsDouble());
             if (obj.has("maxX")) rg.setMaxX(obj.get("maxX").getAsDouble());
             if (obj.has("minY")) rg.setMinY(obj.get("minY").getAsDouble());
             if (obj.has("maxY")) rg.setMaxY(obj.get("maxY").getAsDouble());
         } else if (gate instanceof EllipseGate eg) {
-            eg.setChannelX(chX); eg.setChannelY(chY);
             if (obj.has("centerX")) eg.setCenterX(obj.get("centerX").getAsDouble());
             if (obj.has("centerY")) eg.setCenterY(obj.get("centerY").getAsDouble());
             if (obj.has("radiusX")) eg.setRadiusX(obj.get("radiusX").getAsDouble());

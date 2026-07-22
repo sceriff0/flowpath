@@ -173,4 +173,62 @@ class MarkerStatsTest {
         assertNotEquals(stats.getMean("CD45"), stats.getMean("CD3"));
         assertNotEquals(stats.getStd("CD45"), stats.getStd("CD3"));
     }
+
+    // ---- percentileRankOf: inverse of getPercentileValue --------------------
+
+    @Test
+    void percentileRankIsInverseOfPercentileValue() {
+        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
+        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+
+        for (double pct : new double[]{0, 12.5, 25, 50, 70, 99, 100}) {
+            double value = stats.getPercentileValue("CD45", pct);
+            assertEquals(pct, stats.percentileRankOf("CD45", value), 1e-9,
+                    "round-trip must hold at percentile " + pct);
+        }
+    }
+
+    @Test
+    void percentileRankInterpolatesAndClampsToTheEnds() {
+        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
+        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+
+        assertEquals(12.5, stats.percentileRankOf("CD45", 15.0), 1e-9, "halfway between ranks 0 and 25");
+        assertEquals(0.0, stats.percentileRankOf("CD45", -100.0), 1e-9, "below the minimum clamps to 0");
+        assertEquals(100.0, stats.percentileRankOf("CD45", 999.0), 1e-9, "above the maximum clamps to 100");
+    }
+
+    @Test
+    void percentileRankReturnsNaNWhenTheColumnIsUnusable() {
+        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30}});
+        MarkerStats stats = MarkerStats.compute(index, allTrue(3));
+
+        assertTrue(Double.isNaN(stats.percentileRankOf("NoSuchMarker", 5.0)));
+        assertTrue(Double.isNaN(stats.percentileRankOf("CD45", Double.NaN)));
+    }
+
+    @Test
+    void percentileRankHandlesAConstantColumn() {
+        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{7, 7, 7, 7}});
+        MarkerStats stats = MarkerStats.compute(index, allTrue(4));
+
+        // Every value equals the min, so the rank pins to 0 rather than dividing by zero.
+        assertEquals(0.0, stats.percentileRankOf("CD45", 7.0), 1e-9);
+        assertFalse(Double.isNaN(stats.percentileRankOf("CD45", 7.0)));
+    }
+
+    @Test
+    void percentileRankTracksLazilyRegisteredCompartmentColumns() {
+        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
+        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+
+        // The editor and GatingEngine both register resolved columns this way.
+        stats.ensureColumn("CD45: Nucleus: Sum", new double[]{1000, 2000, 3000, 4000, 5000});
+
+        assertTrue(stats.hasColumn("CD45: Nucleus: Sum"));
+        assertEquals(70.0, stats.percentileRankOf("CD45: Nucleus: Sum", 3800.0), 1e-9);
+        // Same percentile, different column: the basis of the raw-threshold remap.
+        assertEquals(38.0, stats.getPercentileValue("CD45",
+                stats.percentileRankOf("CD45: Nucleus: Sum", 3800.0)), 1e-9);
+    }
 }

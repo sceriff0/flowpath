@@ -12,6 +12,7 @@ import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.Region2DGate;
 import qupath.lib.objects.PathObject;
 import qupath.lib.roi.interfaces.ROI;
 
@@ -404,14 +405,14 @@ public final class GatingEngine {
             double cx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
             double cy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
             return qg.evaluateQuadrant(cx, cy);
-        } else if (node instanceof PolygonGate || node instanceof RectangleGate || node instanceof EllipseGate) {
+        } else if (node instanceof Region2DGate) {
             List<String> channels = node.getChannels();
             if (channels.size() < 2) return -1;
             String chX = channels.get(0);
             String chY = channels.get(1);
             if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) return -1;
-            Compartment cX = compAt(node, 0), cY = compAt(node, 1);
-            Statistic sX = statAt(node, 0), sY = statAt(node, 1);
+            Compartment cX = node.compartmentAt(0), cY = node.compartmentAt(1);
+            Statistic sX = node.statisticAt(0), sY = node.statisticAt(1);
             String keyX = index.resolvedKey(chX, cX, sX);
             String keyY = index.resolvedKey(chY, cY, sY);
             double rawX = index.getResolvedColumn(chX, cX, sX)[cellIdx];
@@ -428,11 +429,7 @@ public final class GatingEngine {
             boolean gateZScore = node.isThresholdIsZScore();
             double vx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
             double vy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-            boolean inside;
-            if (node instanceof PolygonGate pg) inside = pg.contains(vx, vy);
-            else if (node instanceof RectangleGate rg) inside = rg.contains(vx, vy);
-            else inside = ((EllipseGate) node).contains(vx, vy);
-            return inside ? 0 : 1;
+            return ((Region2DGate) node).contains(vx, vy) ? 0 : 1;
         } else {
             // Threshold gate
             String channel = node.getChannel();
@@ -455,18 +452,6 @@ public final class GatingEngine {
 
     // ---- compartment resolution helpers ----
 
-    /** Compartment for a gate's k-th channel (parallel to getChannels()); whole-cell if unspecified. */
-    private static Compartment compAt(GateNode node, int k) {
-        List<Compartment> c = node.getCompartments();
-        return k < c.size() ? c.get(k) : Compartment.WHOLE_CELL;
-    }
-
-    /** Statistic for a gate's k-th channel (parallel to getChannels()); mean if unspecified. */
-    private static Statistic statAt(GateNode node, int k) {
-        List<Statistic> s = node.getStatistics();
-        return k < s.size() ? s.get(k) : Statistic.MEAN;
-    }
-
     /**
      * Register {@link MarkerStats} columns for every non-default compartment/statistic
      * selection referenced by the gate tree, before the per-cell walk. Whole-cell mean
@@ -478,8 +463,8 @@ public final class GatingEngine {
             List<String> channels = node.getChannels();
             for (int k = 0; k < channels.size(); k++) {
                 String ch = channels.get(k);
-                Compartment c = compAt(node, k);
-                Statistic s = statAt(node, k);
+                Compartment c = node.compartmentAt(k);
+                Statistic s = node.statisticAt(k);
                 String key = index.resolvedKey(ch, c, s);
                 if (!key.equals(ch) && index.getMarkerIndex(ch) >= 0) {
                     stats.ensureColumn(key, index.getResolvedColumn(ch, c, s));
@@ -553,7 +538,7 @@ public final class GatingEngine {
         if (!node.isEnabled()) return;
         if (node instanceof QuadrantGate qg) {
             walkQuadrantNode(qg, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-        } else if (node instanceof PolygonGate || node instanceof RectangleGate || node instanceof EllipseGate) {
+        } else if (node instanceof Region2DGate) {
             walk2DNode(node, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
         } else {
             walkThresholdNode(node, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
@@ -657,8 +642,8 @@ public final class GatingEngine {
         String chY = channels.get(1);
         if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) return;
 
-        Compartment cX = compAt(node, 0), cY = compAt(node, 1);
-        Statistic sX = statAt(node, 0), sY = statAt(node, 1);
+        Compartment cX = node.compartmentAt(0), cY = node.compartmentAt(1);
+        Statistic sX = node.statisticAt(0), sY = node.statisticAt(1);
         String keyX = index.resolvedKey(chX, cX, sX);
         String keyY = index.resolvedKey(chY, cY, sY);
         double rawX = index.getResolvedColumn(chX, cX, sX)[cellIdx];
@@ -684,16 +669,7 @@ public final class GatingEngine {
         boolean gateZScore = node.isThresholdIsZScore();
         double vx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
         double vy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-        boolean inside;
-        if (node instanceof PolygonGate pg) {
-            inside = pg.contains(vx, vy);
-        } else if (node instanceof RectangleGate rg) {
-            inside = rg.contains(vx, vy);
-        } else if (node instanceof EllipseGate eg) {
-            inside = eg.contains(vx, vy);
-        } else {
-            inside = false;
-        }
+        boolean inside = ((Region2DGate) node).contains(vx, vy);
 
         Branch branch = inside ? node.getBranches().get(0) : node.getBranches().get(1);
         if (!excluded[cellIdx]) {

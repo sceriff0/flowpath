@@ -41,6 +41,12 @@ public class MarkerStats {
     /**
      * Compute and store summary statistics (sorted values, mean, std, min/max,
      * histogram) for a single column under {@code name}.
+     * <p>
+     * Everything is computed before anything is published, and {@link #means} — the
+     * map {@link #hasColumn} tests — is written <em>last</em>. Columns are registered
+     * lazily from both the FX thread (the gate editor, drawing a histogram for a
+     * compartment selection) and the background gating thread, so a reader that sees
+     * {@code hasColumn(name)} must see a fully populated column, not a half-written one.
      */
     private void putColumnStats(String name, double[] raw, boolean[] mask) {
         int n = raw.length;
@@ -58,32 +64,28 @@ public class MarkerStats {
         }
 
         Arrays.sort(passing);
-        sortedValues.put(name, passing);
 
         if (actualCount == 0) {
-            means.put(name, 0.0);
+            sortedValues.put(name, passing);
             stds.put(name, 0.0);
             mins.put(name, 0.0);
             maxs.put(name, 0.0);
             histogramBins.put(name, new double[HISTOGRAM_BINS + 1]);
             histogramCounts.put(name, new double[HISTOGRAM_BINS]);
+            means.put(name, 0.0);   // published last: see javadoc
             return;
         }
 
         double min = passing[0];
         double max = passing[actualCount - 1];
-        mins.put(name, min);
-        maxs.put(name, max);
 
         double sum = 0;
         for (double v : passing) sum += v;
         double mean = sum / actualCount;
-        means.put(name, mean);
 
         double sumSq = 0;
         for (double v : passing) sumSq += (v - mean) * (v - mean);
         double std = Math.sqrt(sumSq / actualCount);
-        stds.put(name, std);
 
         // Histogram
         double[] bins = new double[HISTOGRAM_BINS + 1];
@@ -102,8 +104,13 @@ public class MarkerStats {
             counts[bin]++;
         }
 
+        sortedValues.put(name, passing);
+        mins.put(name, min);
+        maxs.put(name, max);
+        stds.put(name, std);
         histogramBins.put(name, bins);
         histogramCounts.put(name, counts);
+        means.put(name, mean);      // published last: see javadoc
     }
 
     /**
@@ -146,6 +153,36 @@ public class MarkerStats {
         if (hi >= sorted.length) hi = sorted.length - 1;
         double frac = idx - lo;
         return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+    }
+
+    /**
+     * Percentile rank (0-100) of {@code value} within the column stored under
+     * {@code channel}, by linear interpolation over the sorted values. The inverse
+     * of {@link #getPercentileValue}: {@code percentileRankOf(k, getPercentileValue(k, p)) == p}.
+     * <p>
+     * Used to carry a raw threshold across a compartment/statistic switch: a raw
+     * number means nothing in the new column (a Sum is ~100x a Mean), but its
+     * percentile does, so the gate keeps splitting the population the same way.
+     *
+     * @return the rank in [0,100], or NaN if the column is unknown or empty
+     */
+    public double percentileRankOf(String channel, double value) {
+        double[] sorted = sortedValues.get(channel);
+        if (sorted == null || sorted.length == 0 || Double.isNaN(value)) return Double.NaN;
+        if (sorted.length == 1) return 50.0;
+        if (value <= sorted[0]) return 0.0;
+        if (value >= sorted[sorted.length - 1]) return 100.0;
+        // Last index whose value is <= the query.
+        int lo = 0, hi = sorted.length - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >>> 1;
+            if (sorted[mid] <= value) lo = mid; else hi = mid - 1;
+        }
+        double idx = lo;
+        if (lo < sorted.length - 1 && sorted[lo + 1] > sorted[lo]) {
+            idx += (value - sorted[lo]) / (sorted[lo + 1] - sorted[lo]);
+        }
+        return 100.0 * idx / (sorted.length - 1);
     }
 
     public double[] getHistogramBins(String channel) {

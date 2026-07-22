@@ -93,6 +93,24 @@ public class GateNode {
     }
 
     /**
+     * Compartment for the {@code k}-th channel of {@link #getChannels()}, or whole-cell
+     * when the gate does not specify one. Together with {@link #statisticAt(int)} this
+     * is the single place that defines how an axis resolves to a measurement column, so
+     * {@code GatingEngine}, {@code PhenotypeCsvExporter} and the gate editor cannot drift
+     * apart on it.
+     */
+    public Compartment compartmentAt(int k) {
+        List<Compartment> comps = getCompartments();
+        return k >= 0 && k < comps.size() ? comps.get(k) : Compartment.WHOLE_CELL;
+    }
+
+    /** Statistic for the {@code k}-th channel of {@link #getChannels()}; mean when unspecified. */
+    public Statistic statisticAt(int k) {
+        List<Statistic> stats = getStatistics();
+        return k >= 0 && k < stats.size() ? stats.get(k) : Statistic.MEAN;
+    }
+
+    /**
      * Gate type discriminator for serialization.
      */
     public String getGateType() {
