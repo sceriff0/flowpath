@@ -258,11 +258,20 @@ class EndToEndGatingCsvTest {
         CsvResult csv = runPipeline(tree, index, stats, "polygon.csv");
         assertEquals(2, csv.rows.size());
 
-        String inside = csv.cellValue(0, "phenotype");
-        String outside = csv.cellValue(1, "phenotype");
-        assertNotEquals(inside, outside, "Inside and outside should have different phenotypes");
-        // Default branch names: branch 0 = "Inside", branch 1 = "Outside"
-        // (from PolygonGate constructor)
+        // Pin *which* branch each cell lands in. Asserting only that the two differ
+        // would pass just as happily with the containment test inverted.
+        String insideName = gate.getBranches().get(0).getName();
+        String outsideName = gate.getBranches().get(1).getName();
+        assertEquals(insideName, csv.cellValue(0, "phenotype"),
+                "cell 0 (5,3) is inside the triangle");
+        assertEquals(outsideName, csv.cellValue(1, "phenotype"),
+                "cell 1 (20,20) is outside the triangle");
+
+        // Both axis columns of a region gate are marked for a contained cell.
+        assertEquals("+", csv.cellValue(0, "CD45_sign"));
+        assertEquals("+", csv.cellValue(0, "CD3_sign"));
+        assertEquals("-", csv.cellValue(1, "CD45_sign"));
+        assertEquals("-", csv.cellValue(1, "CD3_sign"));
     }
 
     // ========== Test 5: Rectangle gate ==========
@@ -285,11 +294,11 @@ class EndToEndGatingCsvTest {
         CsvResult csv = runPipeline(tree, index, stats, "rectangle.csv");
         assertEquals(3, csv.rows.size());
 
-        String p0 = csv.cellValue(0, "phenotype");
-        String p1 = csv.cellValue(1, "phenotype");
-        String p2 = csv.cellValue(2, "phenotype");
-        assertEquals(p1, p2, "Both outside cells should have the same phenotype");
-        assertNotEquals(p0, p1, "Inside and outside should differ");
+        String insideName = gate.getBranches().get(0).getName();
+        String outsideName = gate.getBranches().get(1).getName();
+        assertEquals(insideName, csv.cellValue(0, "phenotype"), "(5,5) is inside [2,8]x[2,8]");
+        assertEquals(outsideName, csv.cellValue(1, "phenotype"), "(1,1) is below the region");
+        assertEquals(outsideName, csv.cellValue(2, "phenotype"), "(10,10) is above the region");
     }
 
     // ========== Test 6: Ellipse gate ==========
@@ -313,11 +322,11 @@ class EndToEndGatingCsvTest {
         CsvResult csv = runPipeline(tree, index, stats, "ellipse.csv");
         assertEquals(3, csv.rows.size());
 
-        String inside1 = csv.cellValue(0, "phenotype");
-        String inside2 = csv.cellValue(1, "phenotype");
-        String outside = csv.cellValue(2, "phenotype");
-        assertEquals(inside1, inside2, "Both inside cells should have the same phenotype");
-        assertNotEquals(inside1, outside, "Inside and outside should differ");
+        String insideName = gate.getBranches().get(0).getName();
+        String outsideName = gate.getBranches().get(1).getName();
+        assertEquals(insideName, csv.cellValue(0, "phenotype"), "(5,5) is the centre");
+        assertEquals(insideName, csv.cellValue(1, "phenotype"), "(5,7) is 2 < radius 3");
+        assertEquals(outsideName, csv.cellValue(2, "phenotype"), "(5,9) is 4 > radius 3");
     }
 
     // ========== Test 7: Disabled gate is skipped ==========

@@ -68,11 +68,14 @@ public class CellIndex {
             areas[i] = area;
             perimeters[i] = perimeter;
             eccentricities[i] = eccentricity;
-            // Solidity = area / convex_area; NaN if either is missing
+            // Solidity = area / convex_area, falling back to a directly exported
+            // "Solidity" measurement. MIRAGE writes both, but only emits Convex Area
+            // when that column survives upstream — without the fallback the quality
+            // filter silently drops solidity from its available metrics.
             if (!Double.isNaN(area) && !Double.isNaN(convexArea) && convexArea > 0) {
                 solidities[i] = area / convexArea;
             } else {
-                solidities[i] = Double.NaN;
+                solidities[i] = findMeasurement(measurements, "solidity");
             }
 
             // Spatial coordinates
@@ -108,7 +111,15 @@ public class CellIndex {
     /**
      * Find a marker intensity value by channel name.
      * Tries exact match first, then looks for "[layer] channel" patterns
-     * (from import_phenotype.groovy layer-prefixed measurements).
+     * (from import_phenotype.groovy layer-prefixed measurements), and finally the
+     * structured whole-cell mean key {@code "<channel>: Cell: Mean"}.
+     * <p>
+     * The last step matters for a <em>structured-only</em> GeoJSON: MIRAGE currently
+     * writes a bare {@code "CD3"} column alongside the per-compartment keys, but
+     * {@code "CD3: Cell: Mean"} <em>is</em> the whole-cell mean by definition. Without
+     * this fallback such a file resolves the default (whole-cell/mean) selection to
+     * NaN for every cell while {@link CompartmentCapability} still advertises the
+     * marker — an empty histogram over data that is right there.
      */
     private static double findMarkerValue(Map<String, Number> measurements, String channel) {
         // Exact match
@@ -119,6 +130,17 @@ public class CellIndex {
         String suffix = "] " + channel;
         for (Map.Entry<String, Number> entry : measurements.entrySet()) {
             if (entry.getKey().endsWith(suffix) && entry.getValue() != null) {
+                return entry.getValue().doubleValue();
+            }
+        }
+
+        // Structured whole-cell mean, exact then layer-prefixed.
+        String structured = MeasurementKeys.build(channel, Compartment.WHOLE_CELL, Statistic.MEAN);
+        val = measurements.get(structured);
+        if (val != null) return val.doubleValue();
+        String structuredSuffix = "] " + structured;
+        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
+            if (entry.getKey().endsWith(structuredSuffix) && entry.getValue() != null) {
                 return entry.getValue().doubleValue();
             }
         }
@@ -161,6 +183,10 @@ public class CellIndex {
      * Find a morphological measurement by key name.
      * Tries exact match, then layer-prefixed "[layer] key", then prefix match
      * (e.g., "area" matches "area µm²"). Returns NaN if not found.
+     * <p>
+     * The layer prefix is stripped before the prefix pass so the two conventions
+     * compose: {@code "[Layer0] Area µm²"} carries both a prefix and a unit suffix,
+     * and matched neither branch on its own.
      */
     private static double findMeasurement(Map<String, Number> measurements, String key) {
         Number val = measurements.get(key);
@@ -177,7 +203,8 @@ public class CellIndex {
         // Prefix match: "area" matches "Area µm²" (case-insensitive, underscores treated as spaces)
         String keyLower = key.toLowerCase().replace('_', ' ');
         for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            String entryLower = entry.getKey().toLowerCase().replace('_', ' ');
+            String entryLower = MeasurementKeys.stripLayerPrefix(entry.getKey())
+                    .toLowerCase().replace('_', ' ');
             if (entryLower.startsWith(keyLower) && entry.getValue() != null) {
                 return entry.getValue().doubleValue();
             }
