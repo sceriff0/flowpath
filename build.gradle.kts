@@ -6,7 +6,7 @@ plugins {
 qupathExtension {
     name = "FlowPath - GatingTree"
     group = "io.github.qupath"
-    version = "1.10.0"
+    version = "1.10.1"
     description = "Interactive tree-based cell phenotyping with hierarchical gates. Designed for multiplexed imaging data."
     automaticModule = "qupath.ext.flowpath"
 }

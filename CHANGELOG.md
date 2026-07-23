@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.1] - 23/07/2026
+
+### Fixed
+- Converting a 2D gate by drawing a different shape no longer loses the gate's
+  comparison space. The z-score flag and both axes' compartment/statistic are now
+  carried onto the replacement, so a boundary is evaluated in the space it was
+  drawn in. Previously the overlay still rendered correctly over the points while
+  every cell was misclassified.
+- The z-score flag now has a single declaration on `GateNode` and defaults to
+  z-score for every gate type. Region gates previously defaulted to raw while
+  threshold and quadrant gates defaulted to z-score. Saved gate trees always wrote
+  the flag explicitly and load unchanged.
+- Fallback marker discovery no longer drops markers whose names begin with "x" or
+  "y" (YAP1, XBP1, Xist). Single-letter coordinate columns are matched exactly
+  rather than by prefix.
+- Closing the FlowPath window detaches its hierarchy listener, which previously
+  leaked the panel and its cell index on every reopen.
+- Closing an image clears the preview service's state, so a later gate edit no
+  longer re-runs gating onto the previous image's detections.
+- Removing a gate while a branch-name field held focus no longer throws.
+- `GateTree.findDuplicateLeafNames` no longer reports a name repeated inside one
+  root as a cross-root collision.
+- A gate with no channel round-trips through save/load instead of failing with an
+  unchecked exception.
+- Changing the channel on a quadrant or region gate rebuilds the compartment and
+  statistic selectors, instead of keeping a selection the new channel may not have.
+
+### Changed
+- `CellIndex.getMarkerIndex` uses a lookup map rather than a linear scan; it is
+  called once per cell per gate in the gating walk.
+
 ## [0.4.0] - 22/03/2026
 
 ### Added
