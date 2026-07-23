@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -96,7 +97,10 @@ public class GateTree {
             if (!root.isEnabled()) continue;
             List<String> leafNames = new ArrayList<>();
             root.collectLeafNames(leafNames);
-            for (String name : leafNames) {
+            // De-duplicate within the root first: a name used twice inside one root
+            // is a naming choice there, not the cross-root collision reported here.
+            // Recording the root index twice made it look like one.
+            for (String name : new LinkedHashSet<>(leafNames)) {
                 nameToRoots.computeIfAbsent(name, k -> new ArrayList<>()).add(i);
             }
         }

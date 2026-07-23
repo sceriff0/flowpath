@@ -21,7 +21,6 @@ public class QuadrantGate extends GateNode {
     private String channelY;
     private double thresholdX;
     private double thresholdY;
-    private boolean thresholdIsZScore = true;
 
     // Per-axis measurement compartment + statistic (each channel chosen independently).
     private Compartment compartmentX = Compartment.WHOLE_CELL;
@@ -55,7 +54,6 @@ public class QuadrantGate extends GateNode {
         this.channelY = channelY;
         this.thresholdX = thresholdX;
         this.thresholdY = thresholdY;
-        this.thresholdIsZScore = true;
 
         int green = (0 << 16) | (200 << 8) | 0;
         int blue = (0 << 16) | (100 << 8) | 200;
@@ -132,11 +130,8 @@ public class QuadrantGate extends GateNode {
     @Override
     public void setThreshold(double threshold) { this.thresholdX = threshold; }
 
-    @Override
-    public boolean isThresholdIsZScore() { return thresholdIsZScore; }
-
-    @Override
-    public void setThresholdIsZScore(boolean v) { this.thresholdIsZScore = v; }
+    // The z-score flag is inherited from GateNode — see the field declaration there
+    // for why it is not redeclared per gate type.
 
     // The base single-channel accessors map to the X axis (mirrors getChannel()).
     @Override
@@ -189,7 +184,6 @@ public class QuadrantGate extends GateNode {
         copy.channelY = this.channelY;
         copy.thresholdX = this.thresholdX;
         copy.thresholdY = this.thresholdY;
-        copy.thresholdIsZScore = this.thresholdIsZScore;
         copy.compartmentX = this.compartmentX;
         copy.compartmentY = this.compartmentY;
         copy.statisticX = this.statisticX;

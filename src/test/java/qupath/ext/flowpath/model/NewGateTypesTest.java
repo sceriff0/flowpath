@@ -269,6 +269,7 @@ class NewGateTypesTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2.0, 8.0, 2.0, 8.0);
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         // default QualityFilter (passes all)

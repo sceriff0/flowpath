@@ -10,8 +10,8 @@ import java.util.List;
  * (accessible via {@link #getBranches()}). Subclasses define the gate-specific
  * parameters and evaluation logic.
  * <p>
- * For backward compatibility, this class can be instantiated directly as a
- * threshold gate. Prefer using {@link ThresholdGate} for new code.
+ * Instantiate this class directly for a threshold gate; there is no separate
+ * {@code ThresholdGate} type.
  */
 public class GateNode {
 
@@ -20,11 +20,15 @@ public class GateNode {
     private double clipPercentileLow = 1.0;
     private double clipPercentileHigh = 99.0;
     private boolean excludeOutliers = false;
+    // Declared once here, for every gate type: the flag decides whether the engine
+    // compares raw intensities or standardised values, and which space the editor
+    // draws in. Subclasses must not shadow it, or two gate types end up reading
+    // different variables and a gate converted between them changes meaning.
+    private boolean thresholdIsZScore = true;
 
     // --- ThresholdGate-specific fields (kept here for backward compat) ---
     private String channel;
     private double threshold;
-    private boolean thresholdIsZScore;
 
     // --- Per-channel measurement compartment + statistic (rich GeoJSON) ---
     // Default to whole-cell mean, which resolves to the bare marker key on legacy data.

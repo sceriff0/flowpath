@@ -84,13 +84,30 @@ public class FlowPathSerializer {
         try {
             return parseGateTree(root);
         } catch (com.google.gson.JsonSyntaxException | IllegalStateException | ClassCastException
-                 | NullPointerException | IndexOutOfBoundsException e) {
+                 | NullPointerException | IndexOutOfBoundsException
+                 | UnsupportedOperationException e) {
+            // UnsupportedOperationException is what Gson throws for a typed read of a
+            // JSON null; catching it keeps every malformed-file path inside the
+            // documented IOException contract.
             throw new IOException("Invalid FlowPath file structure: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Read a string property, tolerating both an absent key and an explicit JSON
+     * null. A gate may legitimately carry a null channel (the no-arg constructor
+     * leaves it null, and the editor's channel combo can be cleared), which
+     * {@code addProperty} writes as {@code null}. Calling {@code getAsString} on
+     * that throws {@link UnsupportedOperationException} — an unchecked type that
+     * escapes {@link #load}'s {@code IOException} contract.
+     */
+    private static String optString(JsonObject obj, String key) {
+        if (!obj.has(key)) return null;
+        JsonElement elem = obj.get(key);
+        return elem.isJsonNull() ? null : elem.getAsString();
+    }
+
     private static GateTree parseGateTree(JsonObject root) throws IOException {
-        // Version check (currently only version 1 is supported)
         int version = root.has("version") ? root.get("version").getAsInt() : 1;
         if (version > CURRENT_VERSION) {
             throw new IOException("Unsupported gate tree version: " + version
@@ -329,8 +346,7 @@ public class FlowPathSerializer {
         node.setClipPercentileHigh(clipHigh);
         node.setExcludeOutliers(excludeOutliers);
 
-        if (obj.has("channel"))
-            node.setChannel(obj.get("channel").getAsString());
+        node.setChannel(optString(obj, "channel"));
         if (obj.has("threshold"))
             node.setThreshold(obj.get("threshold").getAsDouble());
         if (obj.has("thresholdIsZScore"))
@@ -360,10 +376,8 @@ public class FlowPathSerializer {
         gate.setClipPercentileHigh(clipHigh);
         gate.setExcludeOutliers(excludeOutliers);
 
-        if (obj.has("channelX"))
-            gate.setChannelX(obj.get("channelX").getAsString());
-        if (obj.has("channelY"))
-            gate.setChannelY(obj.get("channelY").getAsString());
+        gate.setChannelX(optString(obj, "channelX"));
+        gate.setChannelY(optString(obj, "channelY"));
         if (obj.has("thresholdX"))
             gate.setThresholdX(obj.get("thresholdX").getAsDouble());
         if (obj.has("thresholdY"))
@@ -400,8 +414,8 @@ public class FlowPathSerializer {
         // and the per-axis compartment/statistic (absent in v1/v2 files, which then
         // default to whole-cell mean and behave exactly as before).
         if (gate instanceof Region2DGate region) {
-            if (obj.has("channelX")) region.setChannelX(obj.get("channelX").getAsString());
-            if (obj.has("channelY")) region.setChannelY(obj.get("channelY").getAsString());
+            region.setChannelX(optString(obj, "channelX"));
+            region.setChannelY(optString(obj, "channelY"));
             region.setCompartmentX(parseCompartment(obj, "compartmentX"));
             region.setCompartmentY(parseCompartment(obj, "compartmentY"));
             region.setStatisticX(parseStatistic(obj, "statisticX"));

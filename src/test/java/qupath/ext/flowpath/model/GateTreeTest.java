@@ -108,4 +108,35 @@ class GateTreeTest {
         Map<String, List<Integer>> dupes = tree.findDuplicateLeafNames();
         assertTrue(dupes.isEmpty());
     }
+
+    @Test
+    void findDuplicateLeafNamesIgnoresRepeatsWithinASingleRoot() {
+        var tree = new GateTree();
+        var root = new GateNode("CD45");
+        // One root, both of whose leaves carry the same name. That is a naming
+        // choice inside one root, not the cross-root collision this method reports
+        // (and which GatingEngine logs as a warning).
+        root.setPositiveName("SAME");
+        root.setNegativeName("SAME");
+        tree.addRoot(root);
+
+        assertTrue(tree.findDuplicateLeafNames().isEmpty(),
+                "a name repeated inside one root is not a cross-root duplicate");
+    }
+
+    @Test
+    void findDuplicateLeafNamesReportsEachRootOnceForACrossRootCollision() {
+        var tree = new GateTree();
+        var first = new GateNode("CD45");
+        first.setPositiveName("SAME");
+        first.setNegativeName("SAME");
+        var second = new GateNode("CD3");
+        second.setPositiveName("SAME");
+        tree.addRoot(first);
+        tree.addRoot(second);
+
+        Map<String, List<Integer>> dupes = tree.findDuplicateLeafNames();
+        assertEquals(List.of(0, 1), dupes.get("SAME"),
+                "root 0 contributes once even though it holds the name twice");
+    }
 }

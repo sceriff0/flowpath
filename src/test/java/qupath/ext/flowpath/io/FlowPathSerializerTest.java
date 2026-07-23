@@ -264,4 +264,35 @@ class FlowPathSerializerTest {
         GateTree loaded = FlowPathSerializer.load(file);
         assertFalse(loaded.isRoiFilterEnabled());
     }
+
+    @Test
+    void gateWithNoChannelRoundTripsInsteadOfThrowing() throws IOException {
+        // A gate can legitimately hold a null channel — GateNode's no-arg constructor
+        // leaves it null, and the editor's channel combo can be cleared. Serializing
+        // that writes a JSON null, which must read back as a null channel rather than
+        // as an exception escaping load()'s IOException contract.
+        var tree = new GateTree();
+        tree.addRoot(new GateNode());
+
+        File file = tempDir.resolve("null-channel.json").toFile();
+        FlowPathSerializer.save(tree, file);
+
+        GateTree loaded = assertDoesNotThrow(() -> FlowPathSerializer.load(file));
+        assertEquals(1, loaded.getRoots().size());
+        assertNull(loaded.getRoots().get(0).getChannel());
+    }
+
+    @Test
+    void explicitJsonNullChannelIsReadAsNull() throws IOException {
+        File file = tempDir.resolve("explicit-null.json").toFile();
+        try (BufferedWriter w = new BufferedWriter(new FileWriter(file))) {
+            w.write("""
+                    {"version": 3, "gates": [
+                      {"type": "threshold", "channel": null, "threshold": 0.0}
+                    ]}""");
+        }
+
+        GateTree loaded = assertDoesNotThrow(() -> FlowPathSerializer.load(file));
+        assertNull(loaded.getRoots().get(0).getChannel());
+    }
 }

@@ -3,6 +3,7 @@ package qupath.ext.flowpath.model;
 import qupath.lib.objects.PathObject;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,6 +15,10 @@ public class CellIndex {
 
     private final PathObject[] objects;
     private final String[] markerNames;
+    // Marker name -> column index. Resolved once per cell per gate in the gating
+    // walk, so a linear scan over the panel here costs O(cells x gates x markers)
+    // string comparisons per preview refresh.
+    private final Map<String, Integer> markerIndexByName;
     private final double[][] values; // [markerIndex][cellIndex]
     private final double[] areas;
     private final double[] perimeters;
@@ -30,6 +35,14 @@ public class CellIndex {
                       double[] centroidX, double[] centroidY) {
         this.objects = objects;
         this.markerNames = markerNames;
+        // putIfAbsent keeps first-declared-wins, matching the scan this replaced;
+        // a null name is skipped rather than rejected, because the scan simply never
+        // matched one and callers should not start seeing an NPE from the constructor.
+        Map<String, Integer> byName = new HashMap<>(Math.max(1, markerNames.length * 2));
+        for (int i = 0; i < markerNames.length; i++) {
+            if (markerNames[i] != null) byName.putIfAbsent(markerNames[i], i);
+        }
+        this.markerIndexByName = Map.copyOf(byName);
         this.values = values;
         this.areas = areas;
         this.perimeters = perimeters;
@@ -256,12 +269,10 @@ public class CellIndex {
                 && (statistic == null || statistic == Statistic.MEAN);
     }
 
+    /** Column index for a marker name, or {@code -1} if this index has no such marker. */
     public int getMarkerIndex(String name) {
-        for (int i = 0; i < markerNames.length; i++) {
-            if (markerNames[i].equals(name))
-                return i;
-        }
-        return -1;
+        if (name == null) return -1;
+        return markerIndexByName.getOrDefault(name, -1);
     }
 
     public PathObject getObject(int cellIndex) {

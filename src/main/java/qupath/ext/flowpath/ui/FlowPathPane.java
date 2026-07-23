@@ -231,27 +231,18 @@ public class FlowPathPane extends BorderPane {
      * Build CellIndex and MarkerStats from the currently loaded image's detections.
      */
     private void initializeFromImage() {
-        // Remove old hierarchy listener from previous image
-        if (hierarchyListener != null && listenerImageData != null) {
-            listenerImageData.getHierarchy().removeListener(hierarchyListener);
-            hierarchyListener = null;
-            listenerImageData = null;
-        }
+        detachHierarchyListener();
 
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) {
-            cellIndex = null;
-            markerStats = null;
-            markerNames = Collections.emptyList();
+            clearImageState();
             editorPane.setChannelNames(markerNames);
             return;
         }
 
         Collection<PathObject> detections = imageData.getHierarchy().getDetectionObjects();
         if (detections.isEmpty()) {
-            cellIndex = null;
-            markerStats = null;
-            markerNames = Collections.emptyList();
+            clearImageState();
             editorPane.setChannelNames(markerNames);
             editorPane.setGateNode(null);
             Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
@@ -336,6 +327,36 @@ public class FlowPathPane extends BorderPane {
         updateStatusBar();
     }
 
+    /** Detach the hierarchy listener from whichever image it was registered on. */
+    private void detachHierarchyListener() {
+        if (hierarchyListener != null && listenerImageData != null) {
+            listenerImageData.getHierarchy().removeListener(hierarchyListener);
+        }
+        hierarchyListener = null;
+        listenerImageData = null;
+    }
+
+    /**
+     * Drop every reference to the previous image, in this pane <em>and</em> in the
+     * preview service.
+     * <p>
+     * Clearing only this pane's fields left the service holding the old
+     * {@code CellIndex} and {@code ImageData}, which pass its non-null guard: a gate
+     * edit made with no image open would then re-run gating and write PathClass
+     * assignments onto the previous image's detections.
+     */
+    private void clearImageState() {
+        cellIndex = null;
+        markerStats = null;
+        markerNames = Collections.emptyList();
+        cachedQualityMask = null;
+        cachedRoiMask = null;
+        previewService.setCellIndex(null);
+        previewService.setMarkerStats(null);
+        previewService.setImageData(null);
+        previewService.setRoiMask(null);
+    }
+
     /**
      * Discover marker names from the image's channel metadata.
      * Falls back to detection measurements if no image channels are found.
@@ -367,15 +388,6 @@ public class FlowPathPane extends BorderPane {
         }
 
         // Fallback: extract from detection measurements (minus morphology fields)
-        // Use lowercase prefixes to match both naming conventions:
-        //   QuPath default: "Area µm²", "Centroid X µm", "Eccentricity", "Perimeter µm", "Solidity", "Convex Area µm²", "Major Axis Length µm", "Minor Axis Length µm"
-        //   import_phenotype.groovy: "area µm²", "eccentricity", "perimeter", "convex_area", "axis_major_length", "axis_minor_length"
-        Set<String> excludePrefixes = Set.of(
-            "centroid", "area", "eccentricity", "perimeter", "convex",
-            "solidity", "axis_major", "axis_minor", "major axis", "minor axis",
-            "x", "y", "label", "fov", "cell_size"
-        );
-
         if (measurementKeys.isEmpty()) return Collections.emptyList();
 
         // Collapse per-compartment keys ("CD3: Nucleus: Mean") down to their base
@@ -388,13 +400,43 @@ public class FlowPathPane extends BorderPane {
             })
             .filter(name -> !name.startsWith("["))
             .filter(name -> !name.startsWith("_"))
-            .filter(name -> {
-                String lower = name.toLowerCase();
-                return excludePrefixes.stream().noneMatch(lower::startsWith);
-            })
+            .filter(name -> !isMorphologyName(name))
             .distinct()
             .sorted()
             .collect(Collectors.toList());
+    }
+
+    /**
+     * Morphology and geometry columns, matched by lowercase prefix so both naming
+     * conventions are covered:
+     *   QuPath default — "Area µm²", "Centroid X µm", "Eccentricity", "Perimeter µm",
+     *   "Solidity", "Convex Area µm²", "Major Axis Length µm", "Minor Axis Length µm";
+     *   import_phenotype.groovy — "area µm²", "eccentricity", "perimeter",
+     *   "convex_area", "axis_major_length", "axis_minor_length".
+     */
+    private static final Set<String> MORPHOLOGY_PREFIXES = Set.of(
+        "centroid", "area", "eccentricity", "perimeter", "convex",
+        "solidity", "axis_major", "axis_minor", "major axis", "minor axis",
+        "label", "fov", "cell_size"
+    );
+
+    /**
+     * Spatial-coordinate columns whose names are a single letter. These must be
+     * matched exactly, never by prefix: prefix-matching "x" and "y" also swallowed
+     * real panel markers such as YAP1, XBP1 and Xist, which then vanished from the
+     * channel list with no warning shown to the user.
+     */
+    private static final Set<String> MORPHOLOGY_EXACT = Set.of("x", "y");
+
+    /**
+     * True if a measurement name is a morphology/identity column rather than a
+     * marker channel. Package-private so the rule is testable without a QuPath GUI.
+     */
+    static boolean isMorphologyName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (MORPHOLOGY_EXACT.contains(lower)) return true;
+        return MORPHOLOGY_PREFIXES.stream().anyMatch(lower::startsWith);
     }
 
     private boolean hasMeasurement(Set<String> keys, String channel) {
@@ -1057,8 +1099,15 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * Clean up resources when the window is closed.
+     * <p>
+     * Detaching the hierarchy listener matters as much as stopping the executor:
+     * the extension builds a fresh pane every time the window is reopened
+     * ({@code FlowPathExtension.showGateTreeWindow}), so a listener left attached
+     * keeps a discarded pane — and its whole {@code CellIndex} — reachable, and
+     * keeps recomputing ROI masks for a window that is gone.
      */
     public void shutdown() {
+        detachHierarchyListener();
         previewService.shutdown();
     }
 }

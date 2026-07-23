@@ -168,4 +168,33 @@ class CellIndexTest {
         assertEquals(100.0, index.getCentroidX(0));
         assertEquals(200.0, index.getCentroidY(0));
     }
+
+    @Test
+    void getMarkerIndexResolvesEveryMarkerAndRejectsUnknownOnes() {
+        // getMarkerIndex sits in the gating hot path (once per cell per gate), so it
+        // is backed by a lookup map rather than a scan. Pin the semantics that the
+        // scan provided: first-declared wins, unknown/null yields -1.
+        PathObject cell = createCell();
+        List<String> markers = List.of("CD3", "CD8", "CD19", "Ki67");
+        for (String m : markers) {
+            cell.getMeasurements().put(m, 1.0);
+        }
+        CellIndex index = CellIndex.build(List.of(cell), markers);
+
+        for (int i = 0; i < markers.size(); i++) {
+            assertEquals(i, index.getMarkerIndex(markers.get(i)), markers.get(i));
+        }
+        assertEquals(-1, index.getMarkerIndex("NOT_A_MARKER"));
+        assertEquals(-1, index.getMarkerIndex(null));
+    }
+
+    @Test
+    void getMarkerIndexReturnsTheFirstOccurrenceOfADuplicatedMarker() {
+        PathObject cell = createCell();
+        cell.getMeasurements().put("CD3", 1.0);
+        CellIndex index = CellIndex.build(List.of(cell), List.of("CD3", "CD8", "CD3"));
+
+        assertEquals(0, index.getMarkerIndex("CD3"),
+                "a duplicated marker name resolves to its first column, as the scan did");
+    }
 }

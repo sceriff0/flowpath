@@ -360,6 +360,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -689,6 +690,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -806,6 +808,7 @@ class CsvCorrectnessTest {
         quad.setThresholdIsZScore(false);
 
         RectangleGate rect = new RectangleGate("CD8", "CD4", 4, 10, 4, 10);
+        rect.setThresholdIsZScore(false);  // region is in raw marker units
         quad.getBranches().get(0).getChildren().add(rect); // PP branch
 
         GateTree tree = new GateTree();

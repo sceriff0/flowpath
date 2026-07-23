@@ -615,7 +615,7 @@ public class GateEditorPane extends VBox {
                         }
                         buildBranchNamesEditor(gate);
                     }
-                    refreshScatter.run(); fireNodeChanged();
+                    refreshScatter.run(); fireNodeChanged(); rebuildForChannelChange();
                 }});
                 chYCombo.setOnAction(e -> { if (!suppressEvents) {
                     String oldY = gate.getChannelY(); String newY = chYCombo.getValue();
@@ -626,7 +626,7 @@ public class GateEditorPane extends VBox {
                         }
                         buildBranchNamesEditor(gate);
                     }
-                    refreshScatter.run(); fireNodeChanged();
+                    refreshScatter.run(); fireNodeChanged(); rebuildForChannelChange();
                 }});
             }
         }
@@ -839,6 +839,7 @@ public class GateEditorPane extends VBox {
                         }
                     }
                     fireNodeChanged();
+                    rebuildForChannelChange();
                 };
                 chXCombo.setOnAction(e -> { if (!suppressEvents) refreshScatter.run(); });
                 chYCombo.setOnAction(e -> { if (!suppressEvents) refreshScatter.run(); });
@@ -931,6 +932,10 @@ public class GateEditorPane extends VBox {
 
     private void buildActionButtons(GateNode node) {
         actionButtonArea.getChildren().clear();
+        // Reached with a null node when the editor is cleared while a branch-name
+        // field holds focus: clearing the container moves focus, and the focus-lost
+        // handler fires after setGateNode(null) has already nulled currentNode.
+        if (node == null) return;
 
         List<Branch> branches = node.getBranches();
         HBox buttonRow = new HBox(8);
@@ -1176,10 +1181,27 @@ public class GateEditorPane extends VBox {
 
     // ---- Internal ----
 
-    private void copySharedSettings(GateNode from, GateNode to) {
+    /**
+     * Carry a gate's settings onto its replacement when the user converts one gate
+     * type into another by drawing a different shape.
+     * <p>
+     * The drawn coordinates are read straight off the scatter plot, which renders in
+     * the <em>source</em> gate's coordinate space: z-scored or raw per its z-score
+     * flag, and standardised against each axis' resolved column (channel +
+     * compartment + statistic). Both therefore have to travel with the shape. If they
+     * do not, {@code GatingEngine} evaluates the boundary in a different space than
+     * it was drawn in — the overlay still renders over the points, so nothing looks
+     * wrong while every cell is misclassified.
+     * <p>
+     * Package-private and static so the conversion contract is testable without a
+     * JavaFX toolkit.
+     */
+    static void copySharedSettings(GateNode from, GateNode to) {
         to.setClipPercentileLow(from.getClipPercentileLow());
         to.setClipPercentileHigh(from.getClipPercentileHigh());
         to.setExcludeOutliers(from.isExcludeOutliers());
+        to.setThresholdIsZScore(from.isThresholdIsZScore());
+        copyAxisSelection(from, to);
         // Copy branch children, colors, and names from old gate to new gate
         for (int i = 0; i < Math.min(from.getBranches().size(), to.getBranches().size()); i++) {
             Branch srcBranch = from.getBranches().get(i);
@@ -1187,6 +1209,30 @@ public class GateEditorPane extends VBox {
             dstBranch.setChildren(new ArrayList<>(srcBranch.getChildren()));
             dstBranch.setColor(srcBranch.getColor());
             dstBranch.setName(srcBranch.getName());
+        }
+    }
+
+    /**
+     * Copy each axis' compartment + statistic across a gate-type change, reading the
+     * source through the same parallel {@code getChannels()} / {@code compartmentAt(k)}
+     * / {@code statisticAt(k)} contract {@code GatingEngine} resolves columns with.
+     * Axes the source does not have (a threshold gate converted to a 2D gate) fall
+     * back to whole-cell mean, which is what {@code compartmentAt} returns out of range.
+     */
+    private static void copyAxisSelection(GateNode from, GateNode to) {
+        if (to instanceof Region2DGate region) {
+            region.setCompartmentX(from.compartmentAt(0));
+            region.setStatisticX(from.statisticAt(0));
+            region.setCompartmentY(from.compartmentAt(1));
+            region.setStatisticY(from.statisticAt(1));
+        } else if (to instanceof QuadrantGate quad) {
+            quad.setCompartmentX(from.compartmentAt(0));
+            quad.setStatisticX(from.statisticAt(0));
+            quad.setCompartmentY(from.compartmentAt(1));
+            quad.setStatisticY(from.statisticAt(1));
+        } else {
+            to.setCompartment(from.compartmentAt(0));
+            to.setStatistic(from.statisticAt(0));
         }
     }
 
@@ -1429,6 +1475,27 @@ public class GateEditorPane extends VBox {
 
     private boolean isThresholdGate(GateNode node) {
         return !(node instanceof QuadrantGate) && !(node instanceof Region2DGate);
+    }
+
+    /**
+     * Rebuild the editor after a 2D gate's channel changed, so the per-axis
+     * compartment and statistic selectors are re-derived for the new channel.
+     * <p>
+     * Without this the gate keeps the previous channel's selection. When the new
+     * channel has no measurement for that compartment, every resolved value is NaN
+     * and the plot goes empty with no explanation. {@code addCompartmentControls} is
+     * the only place the selection is validated against {@link CompartmentCapability},
+     * and it only runs while the editor is being built — which is why the threshold
+     * editor already rebuilds itself on a channel change.
+     * <p>
+     * Deferred so the rebuild does not tear down the combo whose action is running.
+     */
+    private void rebuildForChannelChange() {
+        GateNode node = currentNode;
+        if (node == null) return;
+        Platform.runLater(() -> {
+            if (currentNode == node) setGateNode(node);
+        });
     }
 
     private void withSuppressedEvents(Runnable action) {

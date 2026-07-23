@@ -249,6 +249,7 @@ class EndToEndGatingCsvTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         PolygonGate gate = new PolygonGate("CD45", "CD3");
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{10, 0}, new double[]{5, 10}));
 
         GateTree tree = new GateTree();
@@ -286,6 +287,7 @@ class EndToEndGatingCsvTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -314,6 +316,7 @@ class EndToEndGatingCsvTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         EllipseGate gate = new EllipseGate("CD45", "CD3", 5, 5, 3, 3);
+        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -565,6 +568,7 @@ class EndToEndGatingCsvTest {
         root.getPositiveChildren().add(cd3Gate);
 
         RectangleGate rectGate = new RectangleGate("CD8", "CD4", 4, 10, 4, 10);
+        rectGate.setThresholdIsZScore(false);  // region is in raw marker units
         cd3Gate.getPositiveChildren().add(rectGate);
 
         GateTree tree = new GateTree();
