@@ -25,8 +25,8 @@ public class QuadrantGate extends GateNode {
     // Per-axis measurement compartment + statistic (each channel chosen independently).
     private Compartment compartmentX = Compartment.WHOLE_CELL;
     private Compartment compartmentY = Compartment.WHOLE_CELL;
-    private Statistic statisticX = Statistic.MEAN;
-    private Statistic statisticY = Statistic.MEAN;
+    private Statistic statisticX = Statistic.MEDIAN;
+    private Statistic statisticY = Statistic.MEDIAN;
 
     // 4 branches: PP(++), NP(-+), PN(+-), NN(--)
     private final Branch branchPP;

@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.Statistic;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.regions.ImagePlane;
@@ -86,6 +87,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.5);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -116,6 +118,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 0.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(true);
 
         GateTree tree = new GateTree();
@@ -202,6 +205,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 50.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
@@ -240,9 +244,11 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode root = new GateNode("CD45", 5.5);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
 
         GateNode childGate = new GateNode("CD3", 3.5);
+        childGate.setStatistic(Statistic.MEAN);
         childGate.setThresholdIsZScore(false);
         root.getPositiveChildren().add(childGate);
 
@@ -278,6 +284,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("NONEXISTENT", 0.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -325,6 +332,7 @@ class GatingEngineTest {
         qf.setMinArea(Double.MAX_VALUE);
 
         GateNode gate = new GateNode("CD45", 3.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -382,6 +390,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode root = new GateNode("CD45", 3.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.getRoots().add(root);
@@ -407,8 +416,10 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
+        parent.setStatistic(Statistic.MEAN);
         parent.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 25.0);
+        child.setStatistic(Statistic.MEAN);
         child.setThresholdIsZScore(false);
 
         // Add child under positive branch of parent
@@ -434,6 +445,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode root = new GateNode("CD45", 3.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.getRoots().add(root);
@@ -461,8 +473,10 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
+        parent.setStatistic(Statistic.MEAN);
         parent.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 15.0);
+        child.setStatistic(Statistic.MEAN);
         child.setThresholdIsZScore(false);
 
         // Add child under NEGATIVE branch (index 1)
@@ -495,10 +509,13 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode grandparent = new GateNode("CD45", 3.0);
+        grandparent.setStatistic(Statistic.MEAN);
         grandparent.setThresholdIsZScore(false);
         GateNode parent = new GateNode("CD3", 35.0);
+        parent.setStatistic(Statistic.MEAN);
         parent.setThresholdIsZScore(false);
         GateNode grandchild = new GateNode("CD8", 250.0);
+        grandchild.setStatistic(Statistic.MEAN);
         grandchild.setThresholdIsZScore(false);
 
         grandparent.getBranches().get(0).getChildren().add(parent);  // parent under CD45+
@@ -527,9 +544,11 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
+        parent.setStatistic(Statistic.MEAN);
         parent.setThresholdIsZScore(false);
         parent.setEnabled(false);  // disabled
         GateNode child = new GateNode("CD3", 25.0);
+        child.setStatistic(Statistic.MEAN);
         child.setThresholdIsZScore(false);
 
         parent.getBranches().get(0).getChildren().add(child);
@@ -559,8 +578,10 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
 
         GateNode root1 = new GateNode("CD45", 5.0);
+        root1.setStatistic(Statistic.MEAN);
         root1.setThresholdIsZScore(false);
         GateNode root2 = new GateNode("PANCK", 5.0);
+        root2.setStatistic(Statistic.MEAN);
         root2.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -591,6 +612,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         GateNode root1 = new GateNode("CD45", 5.0);
+        root1.setStatistic(Statistic.MEAN);
         root1.setThresholdIsZScore(false);
         // Set known colors
         int red = (255 << 16);
@@ -599,6 +621,7 @@ class GatingEngineTest {
         root1.getBranches().get(1).setColor(blue);   // CD45- = blue
 
         GateNode root2 = new GateNode("PANCK", 5.0);
+        root2.setStatistic(Statistic.MEAN);
         root2.setThresholdIsZScore(false);
         int green = (255 << 8);
         int gray = (128 << 16) | (128 << 8) | 128;
@@ -632,6 +655,7 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         GateNode root = new GateNode("CD45", 5.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -654,8 +678,10 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
 
         GateNode root1 = new GateNode("CD45", 5.0);
+        root1.setStatistic(Statistic.MEAN);
         root1.setThresholdIsZScore(false);
         GateNode root2 = new GateNode("PANCK", 5.0);
+        root2.setStatistic(Statistic.MEAN);
         root2.setThresholdIsZScore(false);
         root2.setEnabled(false);
 
@@ -678,10 +704,13 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
 
         GateNode r1 = new GateNode("A", 5.0);
+        r1.setStatistic(Statistic.MEAN);
         r1.setThresholdIsZScore(false);
         GateNode r2 = new GateNode("B", 5.0);
+        r2.setStatistic(Statistic.MEAN);
         r2.setThresholdIsZScore(false);
         GateNode r3 = new GateNode("C", 5.0);
+        r3.setStatistic(Statistic.MEAN);
         r3.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -709,12 +738,14 @@ class GatingEngineTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         GateNode root1 = new GateNode("CD45", 5.0);
+        root1.setStatistic(Statistic.MEAN);
         root1.setThresholdIsZScore(false);
         root1.setExcludeOutliers(true);
         root1.setClipPercentileLow(1.0);
         root1.setClipPercentileHigh(99.0);
 
         GateNode root2 = new GateNode("PANCK", 5.0);
+        root2.setStatistic(Statistic.MEAN);
         root2.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();

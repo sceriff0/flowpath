@@ -31,9 +31,11 @@ public class GateNode {
     private double threshold;
 
     // --- Per-channel measurement compartment + statistic (rich GeoJSON) ---
-    // Default to whole-cell mean, which resolves to the bare marker key on legacy data.
+    // Default to whole-cell median (Mirage always exports "<marker>: Cell: Median").
+    // The compartment stays whole-cell so the axis resolves to "<marker>: Cell: Median"
+    // on rich data, and GateEditorPane falls back to Mean when no Median column exists.
     private Compartment compartment = Compartment.WHOLE_CELL;
-    private Statistic statistic = Statistic.MEAN;
+    private Statistic statistic = Statistic.MEDIAN;
 
     // Branches: index 0 = positive, index 1 = negative
     private final Branch positiveBranch;

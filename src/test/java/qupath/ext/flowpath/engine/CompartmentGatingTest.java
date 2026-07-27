@@ -65,6 +65,7 @@ class CompartmentGatingTest {
         // Default whole-cell mean (== bare "CD3" = 50 for both) -> both positive at raw t=10.
         GateNode gate = new GateNode("CD3", 10.0);
         gate.setThresholdIsZScore(false);
+        gate.setStatistic(Statistic.MEAN);   // whole-cell mean resolves to bare "CD3"
         String[] ph = run(twoCellIndex(), gate).getPhenotypes();
         assertEquals("CD3+", ph[0]);
         assertEquals("CD3+", ph[1]);
@@ -76,6 +77,7 @@ class CompartmentGatingTest {
         GateNode gate = new GateNode("CD3", 10.0);
         gate.setThresholdIsZScore(false);
         gate.setCompartment(Compartment.NUCLEAR);
+        gate.setStatistic(Statistic.MEAN);   // data carries Nucleus Mean, not Median
         String[] ph = run(twoCellIndex(), gate).getPhenotypes();
         assertEquals("CD3+", ph[0]);
         assertEquals("CD3-", ph[1]);
@@ -86,6 +88,7 @@ class CompartmentGatingTest {
         GateNode gate = new GateNode("CD3", 10.0);
         gate.setThresholdIsZScore(false);
         gate.setCompartment(Compartment.CYTOPLASMIC);
+        gate.setStatistic(Statistic.MEAN);   // data carries Cytoplasm Mean, not Median
         String[] ph = run(twoCellIndex(), gate).getPhenotypes();
         assertEquals("CD3-", ph[0]);
         assertEquals("CD3+", ph[1]);
@@ -99,6 +102,7 @@ class CompartmentGatingTest {
         GateNode gate = new GateNode("CD3", 0.0);
         gate.setThresholdIsZScore(true);
         gate.setCompartment(Compartment.NUCLEAR);
+        gate.setStatistic(Statistic.MEAN);   // data carries Nucleus Mean, not Median
         String[] ph = run(twoCellIndex(), gate).getPhenotypes();
         assertEquals("CD3+", ph[0]);
         assertEquals("CD3-", ph[1]);
@@ -106,6 +110,7 @@ class CompartmentGatingTest {
         // Sanity: with whole-cell z-score both are positive (std 0 -> z 0 >= 0).
         GateNode wc = new GateNode("CD3", 0.0);
         wc.setThresholdIsZScore(true);
+        wc.setStatistic(Statistic.MEAN);   // whole-cell mean resolves to bare "CD3"
         String[] phWc = run(twoCellIndex(), wc).getPhenotypes();
         assertEquals("CD3+", phWc[0]);
         assertEquals("CD3+", phWc[1]);

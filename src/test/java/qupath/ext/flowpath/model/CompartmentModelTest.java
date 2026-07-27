@@ -128,7 +128,7 @@ class CompartmentModelTest {
     void thresholdGateCompartmentDefaultsAndCopy() {
         GateNode g = new GateNode("CD3");
         assertEquals(Compartment.WHOLE_CELL, g.getCompartment());
-        assertEquals(Statistic.MEAN, g.getStatistic());
+        assertEquals(Statistic.MEDIAN, g.getStatistic());
         assertEquals(List.of(Compartment.WHOLE_CELL), g.getCompartments());
 
         g.setCompartment(Compartment.NUCLEAR);

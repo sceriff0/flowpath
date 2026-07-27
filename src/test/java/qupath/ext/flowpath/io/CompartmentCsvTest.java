@@ -234,6 +234,7 @@ class CompartmentCsvTest {
         RectangleGate rg = new RectangleGate("CD3", "CD8", 150, 400, 0, 100);
         rg.setCompartmentX(Compartment.NUCLEAR);
         rg.setStatisticX(Statistic.MEAN);
+        rg.setStatisticY(Statistic.MEAN);   // Y is whole-cell CD8 (bare column, mean)
         rg.setThresholdIsZScore(false);
 
         Csv csv = run(idx, stats, rg);
@@ -254,7 +255,8 @@ class CompartmentCsvTest {
         pg.setCompartmentX(Compartment.NUCLEAR);
         pg.setStatisticY(Statistic.SUM);
         assertEquals(List.of(Compartment.NUCLEAR, Compartment.WHOLE_CELL), pg.getCompartments());
-        assertEquals(List.of(Statistic.MEAN, Statistic.SUM), pg.getStatistics());
+        // X axis was never set, so it reports the new default statistic (Median).
+        assertEquals(List.of(Statistic.MEDIAN, Statistic.SUM), pg.getStatistics());
 
         EllipseGate eg = new EllipseGate("CD3", "CD8", 0, 0, 1, 1);
         eg.setCompartmentY(Compartment.CYTOPLASMIC);

@@ -22,8 +22,8 @@ public abstract class Region2DGate extends GateNode {
     private String channelY;
     private Compartment compartmentX = Compartment.WHOLE_CELL;
     private Compartment compartmentY = Compartment.WHOLE_CELL;
-    private Statistic statisticX = Statistic.MEAN;
-    private Statistic statisticY = Statistic.MEAN;
+    private Statistic statisticX = Statistic.MEDIAN;
+    private Statistic statisticY = Statistic.MEDIAN;
 
     private final Branch insideBranch;
     private final Branch outsideBranch;

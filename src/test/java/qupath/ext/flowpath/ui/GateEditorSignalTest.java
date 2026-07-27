@@ -187,8 +187,10 @@ class GateEditorSignalTest {
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
 
         assertEquals(Compartment.NUCLEAR, gate.getCompartment());
-        // Engine key for this selection; the editor must use the same one.
-        String key = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEAN);
+        // Engine key for this selection; the editor must use the same one. The gate keeps
+        // its default statistic (Median) across the compartment switch, so on this expanded
+        // fixture the axis must resolve to "CD3: Nucleus: Median", not the bare mean.
+        String key = f.index().resolvedKey("CD3", Compartment.NUCLEAR, gate.getStatistic());
         assertTrue(f.stats().hasColumn(key),
                 "editor must register the resolved column with MarkerStats before displaying it");
 
@@ -219,6 +221,35 @@ class GateEditorSignalTest {
         assertEquals(expHi, slider.getMax(), 1e-6);
     }
 
+    /**
+     * A freshly created gate defaults to Median. On expanded Mirage data (which always
+     * carries {@code "<marker>: Cell: Median"}) the editor must keep the model on Median
+     * and resolve the axis to that structured column, and the statistic selector must
+     * expose all three expanded statistics (Mean / Median / Sum) for CD3.
+     */
+    @Test
+    void freshDefaultGateResolvesToCellMedianOnExpandedData() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        GateNode gate = new GateNode("CD3");
+        assertEquals(Statistic.MEDIAN, gate.getStatistic(), "new gates default to Median");
+
+        Fixture f = editorFor(gate);
+
+        // Median is available here, so the editor leaves the model on Median.
+        assertEquals(Compartment.WHOLE_CELL, gate.getCompartment());
+        assertEquals(Statistic.MEDIAN, gate.getStatistic());
+        String key = f.index().resolvedKey("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN);
+        assertEquals("CD3: Cell: Median", key, "whole-cell median resolves to the structured key");
+        assertTrue(f.stats().hasColumn(key),
+                "editor must register the Cell Median column for a default gate on expanded data");
+
+        // The statistic selector exposes the full expanded set and defaults to Median.
+        ComboBox<Statistic> stat = statisticCombo(f.pane(), 0);
+        assertTrue(stat.getItems().containsAll(List.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM)),
+                "expanded data exposes Mean / Median / Sum, was: " + stat.getItems());
+        assertEquals(Statistic.MEDIAN, stat.getValue(), "selector defaults to Median");
+    }
+
     // ---- Raw <-> Z-score: adaptive, then freely adjustable ------------------
 
     @Test
@@ -227,6 +258,7 @@ class GateEditorSignalTest {
         GateNode gate = new GateNode("CD3");
         gate.setThresholdIsZScore(false);
         gate.setThreshold(120.0);                     // raw whole-cell mean
+        gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
         Fixture f = editorFor(gate);
 
         FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Z-score").setSelected(true));
@@ -273,6 +305,7 @@ class GateEditorSignalTest {
         GateNode gate = new GateNode("CD3");
         gate.setThresholdIsZScore(false);
         gate.setThreshold(120.0);
+        gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
         Fixture f = editorFor(gate);
 
         FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Z-score").setSelected(true));
@@ -312,6 +345,8 @@ class GateEditorSignalTest {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 0, 0, 0);
         rg.setThresholdIsZScore(false);
+        rg.setStatisticX(Statistic.MEAN);             // percentiles below are bare-column values
+        rg.setStatisticY(Statistic.MEAN);
         Fixture f = editorFor(rg);
         double loX = f.stats().getPercentileValue("CD3", 20.0);
         double hiX = f.stats().getPercentileValue("CD3", 80.0);
@@ -382,6 +417,7 @@ class GateEditorSignalTest {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         GateNode gate = new GateNode("CD3");
         gate.setThresholdIsZScore(false);
+        gate.setStatistic(Statistic.MEAN);            // raw threshold is a bare-column value
         Fixture f = editorFor(gate);
         double raw = f.stats().getPercentileValue("CD3", 70.0);
         FxTestSupport.onFxRun(() -> gate.setThreshold(raw));

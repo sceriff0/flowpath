@@ -212,6 +212,37 @@ class MirageInputFidelityTest {
     }
 
     @Test
+    void nonExpandedMedianDefaultExportResolvesForAFreshGate() {
+        // MIRAGE's *default* (non-expanded) run always emits "<marker>: Cell: Median"
+        // for every compartment, plus the bare whole-cell mean, but NOT Cell Mean/Sum.
+        // FlowPath's new default statistic is Median, so a freshly created gate must read
+        // that structured column rather than go NaN. This is now the common production input.
+        PathObject o = PathObjects.createDetectionObject(
+                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
+        o.getMeasurements().put("CD3", 50.0);                 // bare == whole-cell mean
+        o.getMeasurements().put("CD3: Cell: Median", 30.0);   // always present, even non-expanded
+        o.getMeasurements().put("Area µm²", 100.0);
+
+        // Discovery advertises exactly Median for the Cell compartment (no Mean/Sum columns).
+        var cap = CompartmentCapability.scan(List.of(o), 10);
+        assertTrue(cap.isRich(), "a per-compartment Median key makes this a rich export");
+        assertEquals(EnumSet.of(Statistic.MEDIAN), EnumSet.copyOf(cap.statisticsFor("CD3")),
+                "a default (non-expanded) run exposes only Median");
+
+        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        // The bare base column is still the whole-cell mean.
+        assertEquals(50.0, idx.getMarkerValues(0)[0], 1e-4);
+
+        // A fresh gate defaults to Median and resolves to the structured Cell Median column,
+        // not the bare mean.
+        GateNode gate = new GateNode("CD3");
+        assertEquals(Statistic.MEDIAN, gate.getStatistic(), "fresh gates default to Median");
+        assertEquals(30.0,
+                idx.getResolvedColumn("CD3", gate.getCompartment(), gate.getStatistic())[0], 1e-4,
+                "default gate reads Cell Median, not the bare whole-cell mean");
+    }
+
+    @Test
     void layerPrefixedCompartmentKeysResolve() {
         // import_phenotype.groovy prefixes measurements with "[Layer0] ".
         PathObject o = PathObjects.createDetectionObject(

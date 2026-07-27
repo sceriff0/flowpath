@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.io.FlowPathSerializer;
+import qupath.ext.flowpath.model.Statistic;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.regions.ImagePlane;
@@ -86,6 +87,8 @@ class NewGateTypesTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3", 5.0, 5.0);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -269,6 +272,8 @@ class NewGateTypesTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2.0, 8.0, 2.0, 8.0);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();

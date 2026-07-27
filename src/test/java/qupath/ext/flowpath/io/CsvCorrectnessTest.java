@@ -104,8 +104,10 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         GateNode gate1 = new GateNode("CD45", 5.0);
+        gate1.setStatistic(Statistic.MEAN);
         gate1.setThresholdIsZScore(false);
         GateNode gate2 = new GateNode("CD3", 5.0);
+        gate2.setStatistic(Statistic.MEAN);
         gate2.setThresholdIsZScore(false);
         gate1.getPositiveChildren().add(gate2);
 
@@ -132,6 +134,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -161,6 +164,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 0.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(true);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -190,6 +194,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
 
         GateNode gate = new GateNode("CD45", 0.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -219,6 +224,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(100));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 0, 50, 0, 50);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
         gate.setClipPercentileHigh(99.0);
@@ -244,6 +251,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(100));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(50);
         gate.setThresholdY(50);
         gate.setThresholdIsZScore(false);
@@ -273,6 +282,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(0.0);
         gate.setThresholdY(0.0);
         gate.setThresholdIsZScore(true);
@@ -306,6 +317,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", -0.5, 0.5, -0.5, 0.5);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(true);
 
         GateTree tree = new GateTree();
@@ -333,6 +346,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 3, 7, 3, 7);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -360,6 +375,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
@@ -386,6 +403,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(5.0);
         gate.setThresholdY(5.0);
         gate.setThresholdIsZScore(false);
@@ -423,6 +442,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(n));
 
         GateNode gate = new GateNode("CD45", 250.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -452,6 +472,8 @@ class CsvCorrectnessTest {
     @Test
     void polygonGateSerializationRoundTrip() throws IOException {
         PolygonGate gate = new PolygonGate("CD45", "CD3");
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{10, 0}, new double[]{5, 10}));
         gate.getBranches().get(0).setName("Custom Inside");
         gate.setClipPercentileLow(2.0);
@@ -478,6 +500,8 @@ class CsvCorrectnessTest {
     @Test
     void rectangleGateSerializationRoundTrip() throws IOException {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 1.5, 8.5, 2.0, 9.0);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.getBranches().get(1).setName("Custom Outside");
 
         GateTree tree = new GateTree();
@@ -498,6 +522,8 @@ class CsvCorrectnessTest {
     @Test
     void ellipseGateSerializationRoundTrip() throws IOException {
         EllipseGate gate = new EllipseGate("CD45", "CD3", 5.0, 5.0, 3.0, 2.0);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
 
         GateTree tree = new GateTree();
         tree.addRoot(gate);
@@ -518,9 +544,12 @@ class CsvCorrectnessTest {
     @Test
     void nestedChildInPolygonBranchSurvivesRoundTrip() throws IOException {
         PolygonGate parent = new PolygonGate("CD45", "CD3");
+        parent.setStatisticX(Statistic.MEAN);
+        parent.setStatisticY(Statistic.MEAN);
         parent.setVertices(List.of(new double[]{0, 0}, new double[]{10, 0}, new double[]{5, 10}));
 
         GateNode child = new GateNode("CD8", 3.0);
+        child.setStatistic(Statistic.MEAN);
         child.setThresholdIsZScore(false);
         parent.getBranches().get(0).getChildren().add(child);
 
@@ -548,6 +577,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         GateNode gate = new GateNode("CD45", 0.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -567,6 +597,7 @@ class CsvCorrectnessTest {
     @Test
     void enabledFlagSerializationRoundTrip() throws IOException {
         GateNode gate = new GateNode("CD45", 3.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -607,6 +638,7 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 25.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
@@ -658,6 +690,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(5.0);
         gate.setThresholdY(5.0);
         gate.setThresholdIsZScore(false);
@@ -690,6 +724,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
@@ -721,10 +757,12 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode enabled = new GateNode("CD45", 5.0);
+        enabled.setStatistic(Statistic.MEAN);
         enabled.setThresholdIsZScore(false);
         enabled.setEnabled(true);
 
         GateNode disabled = new GateNode("CD3", 5.0);
+        disabled.setStatistic(Statistic.MEAN);
         disabled.setThresholdIsZScore(false);
         disabled.setEnabled(false);
 
@@ -757,9 +795,12 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         GateNode root = new GateNode("CD45", 5.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
 
         QuadrantGate quad = new QuadrantGate("CD3", "CD8");
+        quad.setStatisticX(Statistic.MEAN);
+        quad.setStatisticY(Statistic.MEAN);
         quad.setThresholdX(5.0);
         quad.setThresholdY(5.0);
         quad.setThresholdIsZScore(false);
@@ -803,11 +844,15 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
 
         QuadrantGate quad = new QuadrantGate("CD45", "CD3");
+        quad.setStatisticX(Statistic.MEAN);
+        quad.setStatisticY(Statistic.MEAN);
         quad.setThresholdX(5.0);
         quad.setThresholdY(5.0);
         quad.setThresholdIsZScore(false);
 
         RectangleGate rect = new RectangleGate("CD8", "CD4", 4, 10, 4, 10);
+        rect.setStatisticX(Statistic.MEAN);
+        rect.setStatisticY(Statistic.MEAN);
         rect.setThresholdIsZScore(false);  // region is in raw marker units
         quad.getBranches().get(0).getChildren().add(rect); // PP branch
 
@@ -842,6 +887,8 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 0, 10, 0, 10);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
         gate.setClipPercentileHigh(99.0);
@@ -893,6 +940,7 @@ class CsvCorrectnessTest {
 
         // Root: CD45 threshold=15 (raw), excludeOutliers
         GateNode root = new GateNode("CD45", 15.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
         root.setExcludeOutliers(true);
         root.setClipPercentileLow(1.0);
@@ -900,11 +948,13 @@ class CsvCorrectnessTest {
 
         // Child on CD45+: CD3 threshold=5 (raw)
         GateNode cd3gate = new GateNode("CD3", 5.0);
+        cd3gate.setStatistic(Statistic.MEAN);
         cd3gate.setThresholdIsZScore(false);
         root.getPositiveChildren().add(cd3gate);
 
         // Disabled root: CD20 (should be skipped)
         GateNode disabledGate = new GateNode("CD20", 10.0);
+        disabledGate.setStatistic(Statistic.MEAN);
         disabledGate.setThresholdIsZScore(false);
         disabledGate.setEnabled(false);
 

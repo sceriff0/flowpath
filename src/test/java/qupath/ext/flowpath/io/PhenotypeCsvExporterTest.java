@@ -9,6 +9,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.Statistic;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.regions.ImagePlane;
@@ -99,6 +100,7 @@ class PhenotypeCsvExporterTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -147,6 +149,7 @@ class PhenotypeCsvExporterTest {
         qf.setMinArea(50);
 
         GateNode gate = new GateNode("CD45", 3.5);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -196,6 +199,7 @@ class PhenotypeCsvExporterTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -242,9 +246,11 @@ class PhenotypeCsvExporterTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode root = new GateNode("CD45", 5.0);
+        root.setStatistic(Statistic.MEAN);
         root.setThresholdIsZScore(false);
 
         GateNode child = new GateNode("CD3", 3.0);
+        child.setStatistic(Statistic.MEAN);
         child.setThresholdIsZScore(false);
         root.getPositiveChildren().add(child);
 
@@ -298,6 +304,7 @@ class PhenotypeCsvExporterTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
         gate.setPositiveName("CD45+, bright");
 
@@ -371,6 +378,7 @@ class PhenotypeCsvExporterTest {
         qf.setMinArea(Double.MAX_VALUE);
 
         GateNode gate = new GateNode("CD45", 2.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
@@ -412,6 +420,7 @@ class PhenotypeCsvExporterTest {
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
         gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
