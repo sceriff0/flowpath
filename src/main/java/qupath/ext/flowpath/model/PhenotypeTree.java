@@ -10,6 +10,7 @@ public final class PhenotypeTree {
 
     private final List<PhenotypeNode> roots = new ArrayList<>();
     private final Map<String, PhenotypeNode> byName = new LinkedHashMap<>();
+    private final Map<Integer, ConstraintEntry> constraintsById = new LinkedHashMap<>();
 
     public void addRoot(PhenotypeNode node) { roots.add(node); }
 
@@ -32,5 +33,22 @@ public final class PhenotypeTree {
             p = pn != null ? pn.getParent() : null;
         }
         return out;
+    }
+
+    public void addConstraint(ConstraintEntry entry) {
+        if (entry != null) constraintsById.put(entry.id(), entry);
+    }
+
+    public ConstraintEntry getConstraint(int id) { return constraintsById.get(id); }
+
+    /** Human-readable label for a Conflict's violated constraint; "—" when unknown. */
+    public String constraintLabel(int id) {
+        ConstraintEntry e = constraintsById.get(id);
+        if (e == null) return "—";
+        List<String> m = e.markers();
+        if ("requires".equals(e.kind()) && m.size() == 2) {
+            return m.get(0) + " → " + m.get(1) + " (requires)";
+        }
+        return String.join(" ⊥ ", m) + " (" + e.kind() + ")";
     }
 }
