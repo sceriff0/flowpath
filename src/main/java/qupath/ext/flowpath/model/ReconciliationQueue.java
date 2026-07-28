@@ -1,0 +1,35 @@
+package qupath.ext.flowpath.model;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+/** Prioritised worklist + bulk pre-clear rules for reconciliation (spec §7.3). */
+public final class ReconciliationQueue {
+
+    private ReconciliationQueue() {}
+
+    private static int rank(PhenotypeOutcome o) {
+        return switch (o) {
+            case CONFLICT -> 0;
+            case AMBIGUOUS -> 1;
+            case UNCLASSIFIED -> 2;
+            default -> 3; // excluded
+        };
+    }
+
+    /** Uncertain first (Conflict → Ambiguous), then optionally Unclassified; Artefact excluded. */
+    public static List<CellPhenotype> buildWorklist(Collection<CellPhenotype> cells, boolean includeUnclassified) {
+        List<CellPhenotype> kept = new ArrayList<>();
+        for (CellPhenotype c : cells) {
+            PhenotypeOutcome o = c.getOutcome();
+            if (o == PhenotypeOutcome.CONFLICT || o == PhenotypeOutcome.AMBIGUOUS
+                    || (includeUnclassified && o == PhenotypeOutcome.UNCLASSIFIED)) {
+                kept.add(c);
+            }
+        }
+        // Stable sort by rank keeps input order within each group.
+        kept.sort((a, b) -> Integer.compare(rank(a.getOutcome()), rank(b.getOutcome())));
+        return kept;
+    }
+}
