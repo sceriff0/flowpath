@@ -3,6 +3,7 @@ package qupath.ext.flowpath.model;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /** Prioritised worklist + bulk pre-clear rules for reconciliation (spec §7.3). */
 public final class ReconciliationQueue {
@@ -31,5 +32,21 @@ public final class ReconciliationQueue {
         // Stable sort by rank keeps input order within each group.
         kept.sort((a, b) -> Integer.compare(rank(a.getOutcome()), rank(b.getOutcome())));
         return kept;
+    }
+
+    /** Commit the top candidate when its score ≥ minScore; return the cells left for manual triage. */
+    public static List<CellPhenotype> residueAfterPreClear(
+            List<CellPhenotype> worklist, double minScore,
+            BiConsumer<CellPhenotype, String> commit) {
+        List<CellPhenotype> residue = new ArrayList<>();
+        for (CellPhenotype c : worklist) {
+            List<Candidate> cands = c.candidates();
+            if (!cands.isEmpty() && cands.get(0).score() >= minScore) {
+                commit.accept(c, cands.get(0).name());
+            } else {
+                residue.add(c);
+            }
+        }
+        return residue;
     }
 }
