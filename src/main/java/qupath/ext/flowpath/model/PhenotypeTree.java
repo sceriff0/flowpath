@@ -11,6 +11,7 @@ public final class PhenotypeTree {
     private final List<PhenotypeNode> roots = new ArrayList<>();
     private final Map<String, PhenotypeNode> byName = new LinkedHashMap<>();
     private final Map<Integer, ConstraintEntry> constraintsById = new LinkedHashMap<>();
+    private final Map<String, Integer> reservedColors = new LinkedHashMap<>();
 
     public void addRoot(PhenotypeNode node) { roots.add(node); }
 
@@ -51,4 +52,8 @@ public final class PhenotypeTree {
         }
         return String.join(" ⊥ ", m) + " (" + e.kind() + ")";
     }
+
+    public void setReservedColor(String name, int packed) { reservedColors.put(name, packed); }
+
+    public int reservedColor(String name) { return reservedColors.getOrDefault(name, 0x808080); }
 }
