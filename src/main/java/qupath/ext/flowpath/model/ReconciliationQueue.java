@@ -49,4 +49,29 @@ public final class ReconciliationQueue {
         }
         return residue;
     }
+
+    /**
+     * The nearest phenotype that is an ancestor of every candidate (a candidate that is itself
+     * an ancestor of the others counts). Returns {@code null} when there are fewer than two
+     * candidates or they share no common ancestor.
+     */
+    public static String propagateUp(CellPhenotype cell, PhenotypeTree tree) {
+        List<String> names = cell.candidateNames();
+        if (names.size() < 2) return null;
+
+        // Ancestor-inclusive chain (self first, then ancestors) for the first candidate.
+        List<String> chain = new ArrayList<>();
+        chain.add(names.get(0));
+        chain.addAll(tree.ancestorsOf(names.get(0)));
+
+        for (String anc : chain) {
+            boolean commonToAll = true;
+            for (String name : names) {
+                boolean covered = name.equals(anc) || tree.ancestorsOf(name).contains(anc);
+                if (!covered) { commonToAll = false; break; }
+            }
+            if (commonToAll) return anc;
+        }
+        return null;
+    }
 }
