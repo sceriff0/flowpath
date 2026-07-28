@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,7 @@ public final class PhenotypeTree {
     private final Map<String, PhenotypeNode> byName = new LinkedHashMap<>();
     private final Map<Integer, ConstraintEntry> constraintsById = new LinkedHashMap<>();
     private final Map<String, Integer> reservedColors = new LinkedHashMap<>();
+    private final Map<String, Integer> reservedCounts = new LinkedHashMap<>();
 
     public void addRoot(PhenotypeNode node) { roots.add(node); }
 
@@ -56,4 +58,25 @@ public final class PhenotypeTree {
     public void setReservedColor(String name, int packed) { reservedColors.put(name, packed); }
 
     public int reservedColor(String name) { return reservedColors.getOrDefault(name, 0x808080); }
+
+    public int reservedCount(String reservedName) { return reservedCounts.getOrDefault(reservedName, 0); }
+
+    /** Reset and recompute live counts: committed phenotypes roll up to ancestors; buckets tallied. */
+    public void recomputeCounts(Collection<CellPhenotype> cells) {
+        for (PhenotypeNode n : byName.values()) n.setCount(0);
+        reservedCounts.clear();
+        for (CellPhenotype c : cells) {
+            if (c.getOutcome() == PhenotypeOutcome.PHENOTYPE) {
+                PhenotypeNode node = byName.get(c.getCommitted());
+                if (node != null) node.setCount(node.getCount() + 1);
+                for (String anc : ancestorsOf(c.getCommitted())) {
+                    PhenotypeNode a = byName.get(anc);
+                    if (a != null) a.setCount(a.getCount() + 1);
+                }
+            } else {
+                String bucket = c.getOutcome().reservedName();
+                if (bucket != null) reservedCounts.merge(bucket, 1, Integer::sum);
+            }
+        }
+    }
 }
