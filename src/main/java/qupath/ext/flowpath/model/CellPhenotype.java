@@ -76,4 +76,23 @@ public final class CellPhenotype {
     public void setCommitted(String committed) { this.committed = committed; }
     public void setProvenance(Provenance provenance) { this.provenance = provenance; }
     public void setOutcome(PhenotypeOutcome outcome) { this.outcome = outcome; }
+
+    /** Candidate phenotypes (pheno_score > 0), highest score first, ties by name. */
+    public java.util.List<Candidate> candidates() {
+        java.util.List<Candidate> out = new java.util.ArrayList<>();
+        for (Map.Entry<String, Double> e : phenoScores.entrySet()) {
+            if (e.getValue() != null && e.getValue() > 0.0) out.add(new Candidate(e.getKey(), e.getValue()));
+        }
+        out.sort((a, b) -> {
+            int byScore = Double.compare(b.score(), a.score());
+            return byScore != 0 ? byScore : a.name().compareTo(b.name());
+        });
+        return out;
+    }
+
+    public java.util.List<String> candidateNames() {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (Candidate c : candidates()) names.add(c.name());
+        return names;
+    }
 }
