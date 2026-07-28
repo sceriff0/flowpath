@@ -71,6 +71,12 @@ public final class CellPhenotype {
     public double pPos(String marker) { return pPos.getOrDefault(marker, Double.NaN); }
     public Integer state(String marker) { return states.get(marker); }
 
+    /** Human-readable label for the constraint behind a Conflict; "—" otherwise. */
+    public String violatedConstraintLabel(PhenotypeTree tree) {
+        if (outcome != PhenotypeOutcome.CONFLICT || violatedConstraintId < 0) return "—";
+        return tree.constraintLabel(violatedConstraintId);
+    }
+
     // Public mutators used by ReconciliationController (Task 14, in package `engine`)
     // and by add_cycle carry-forward (Task 21, in package `io`).
     public void setCommitted(String committed) { this.committed = committed; }
