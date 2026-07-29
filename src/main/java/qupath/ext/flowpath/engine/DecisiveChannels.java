@@ -6,7 +6,6 @@ import qupath.ext.flowpath.model.PhenotypeTree;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /** The lineage markers whose signature differs across a candidate set (spec §7.3 step 3). */

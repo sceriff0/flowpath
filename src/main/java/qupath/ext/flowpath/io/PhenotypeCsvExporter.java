@@ -320,8 +320,8 @@ public class PhenotypeCsvExporter {
      * Rich phenotype export (spec §7.5) — the terminal deliverable. One row per cell:
      * committed class, outcome, provenance, and the derived candidate set.
      */
-    public static void exportPhenotypes(File file, List<qupath.ext.flowpath.model.CellPhenotype> cells,
-                                        qupath.ext.flowpath.model.PhenotypeTree tree) throws IOException {
+    public static void exportPhenotypes(File file, List<CellPhenotype> cells,
+                                        PhenotypeTree tree) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
             writer.write("cell_label,committed_phenotype,outcome,provenance,candidates");
             writer.newLine();

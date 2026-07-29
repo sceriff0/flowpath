@@ -4,9 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import qupath.ext.flowpath.engine.ReconciliationController;
 import qupath.ext.flowpath.model.CellPhenotype;
-import qupath.ext.flowpath.model.PhenotypeTree;
+import qupath.ext.flowpath.model.PhenotypeOutcome;
 import qupath.ext.flowpath.model.Provenance;
 
 import java.io.BufferedReader;
@@ -73,8 +72,9 @@ public final class PhenotypePersistence {
             String manual = priorManual.get(cellId(patientId, c));
             if (manual == null) continue;
             if (c.candidateNames().contains(manual)) {
-                // package-visible setters live in the model package; use the controller to apply.
-                new ReconciliationController(new PhenotypeTree()).commit(c, manual);
+                c.setCommitted(manual);
+                c.setProvenance(Provenance.MANUAL);
+                c.setOutcome(PhenotypeOutcome.PHENOTYPE);
                 kept++;
             } else {
                 resurfaced.add(c);

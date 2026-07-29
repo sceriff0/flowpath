@@ -24,7 +24,7 @@ import java.util.Optional;
 public class FlowPathExtension implements QuPathExtension {
 
     private static final String NAME = "FlowPath - GatingTree";
-    private static final String PHENOTYPE_NAME = "FlowPath - Phenotyping";
+    private static final String PHENOTYPE_NAME = "FlowPath - Phenotyping (experimental)";
     private static final String DESCRIPTION = "Interactive tree-based cell phenotyping";
 
     private Stage stage;
