@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Parses the {@code panel_model.json} sidecar into a {@link PhenotypeTree} (Gson). */
 public final class PanelModelReader {
@@ -93,5 +94,15 @@ public final class PanelModelReader {
             }
         }
         return tree;
+    }
+
+    /** Feature-detect the sidecar: absent/unreadable → Optional.empty() (degrade to gating-only). */
+    public static java.util.Optional<qupath.ext.flowpath.model.PhenotypeTree> tryRead(File sidecar) {
+        if (sidecar == null || !sidecar.exists()) return java.util.Optional.empty();
+        try {
+            return java.util.Optional.of(read(sidecar));
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
     }
 }
