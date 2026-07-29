@@ -26,10 +26,11 @@ public final class DecisiveChannels {
         List<String> decisive = new ArrayList<>();
         for (String m : markers) {
             Integer first = null;
+            boolean initialized = false;
             boolean differs = false;
             for (Map0 s : sigs) {
-                Integer v = s.map().get(m); // null = marker absent in this signature
-                if (first == null && !differs) first = v;
+                Integer v = s.map().get(m);            // null = marker absent in this signature
+                if (!initialized) { first = v; initialized = true; }
                 else if (!java.util.Objects.equals(first, v)) differs = true;
             }
             if (differs) decisive.add(m);

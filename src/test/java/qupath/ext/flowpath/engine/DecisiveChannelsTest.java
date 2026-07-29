@@ -24,4 +24,16 @@ class DecisiveChannelsTest {
         List<String> decisive = DecisiveChannels.forCandidates(List.of("CD8_T", "CD4_T"), tree());
         assertEquals(List.of("CD4", "CD8"), decisive); // CD3 shared (1==1) → excluded
     }
+
+    @Test
+    void absentMarkerCountsAsDiffering() {
+        PhenotypeTree t = new PhenotypeTree();
+        PhenotypeNode a = new PhenotypeNode("A_cell", "test",
+                Map.of("CD3", 1), 0, true);
+        PhenotypeNode b = new PhenotypeNode("B_cell", "test",
+                Map.of("CD3", 1, "CD8", 1), 0, true);
+        t.register(a); t.register(b);
+        List<String> decisive = DecisiveChannels.forCandidates(List.of("A_cell", "B_cell"), t);
+        assertEquals(List.of("CD8"), decisive); // CD3 shared (1==1) → excluded; CD8 absent-in-A vs present-in-B → decisive
+    }
 }
