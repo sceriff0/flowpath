@@ -13,6 +13,7 @@ import qupath.ext.flowpath.model.ReconciliationItem;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 /** Worklist + per-cell candidate panel driving viewer-navigated point-and-click reconciliation. */
@@ -50,7 +51,7 @@ public class ReconciliationPane extends BorderPane {
         showCurrent();
     }
 
-    public CellPhenotype getCurrent() { return items.get(cursor); }
+    public CellPhenotype getCurrent() { return getCurrentOrNull(); }
 
     public CellPhenotype getCurrentOrNull() { return cursor >= 0 && cursor < items.size() ? items.get(cursor) : null; }
 
@@ -62,7 +63,7 @@ public class ReconciliationPane extends BorderPane {
 
     private void advance() {
         if (cursor < items.size() - 1) { cursor++; showCurrent(); }
-        else { cursor = items.size() > 0 ? items.size() - 1 : -1; }
+        else { cursor = -1; showCurrent(); }
     }
 
     private void showCurrent() {
@@ -73,7 +74,7 @@ public class ReconciliationPane extends BorderPane {
                 + (item.constraintLabel().equals("—") ? "" : " [" + item.constraintLabel() + "]"));
         candidateList.getItems().clear();
         for (Candidate c : item.candidates()) {
-            candidateList.getItems().add(c.name() + " " + String.format("%.2f", c.score()));
+            candidateList.getItems().add(c.name() + " " + String.format(Locale.US, "%.2f", c.score()));
         }
         if (onNavigate != null) onNavigate.accept(item);
     }

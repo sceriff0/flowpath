@@ -51,4 +51,29 @@ class ReconciliationPaneTest {
         assertEquals(2L, FxTestSupport.onFx(() -> pane.getCurrent().getLabel()));
         assertTrue(navigated.contains(1L) && navigated.contains(2L));
     }
+
+    @Test
+    void emptyWorklistReturnsNullSafely() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        PhenotypeTree t = tree();
+        ReconciliationController ctrl = new ReconciliationController(t);
+        ReconciliationPane pane = FxTestSupport.onFx(() -> new ReconciliationPane(t, ctrl));
+        FxTestSupport.onFxRun(() -> pane.setItems(List.of()));
+
+        // Empty worklist: getCurrent() must return null, not throw IndexOutOfBoundsException
+        assertNull(FxTestSupport.onFx(pane::getCurrent));
+    }
+
+    @Test
+    void terminalCommitAdvancesToDoneState() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        PhenotypeTree t = tree();
+        ReconciliationController ctrl = new ReconciliationController(t);
+        ReconciliationPane pane = FxTestSupport.onFx(() -> new ReconciliationPane(t, ctrl));
+        FxTestSupport.onFxRun(() -> pane.setItems(List.of(ambiguous(1))));
+
+        // Single-item worklist: after commit, getCurrent() returns null (worklist exhausted / done state)
+        FxTestSupport.onFxRun(() -> pane.commitCurrent("CD8_T"));
+        assertNull(FxTestSupport.onFx(pane::getCurrent));
+    }
 }
