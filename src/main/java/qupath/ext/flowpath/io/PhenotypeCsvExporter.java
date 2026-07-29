@@ -3,10 +3,12 @@ package qupath.ext.flowpath.io;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.CellPhenotype;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.PhenotypeTree;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
@@ -312,5 +314,30 @@ public class PhenotypeCsvExporter {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;
+    }
+
+    /**
+     * Rich phenotype export (spec §7.5) — the terminal deliverable. One row per cell:
+     * committed class, outcome, provenance, and the derived candidate set.
+     */
+    public static void exportPhenotypes(File file, List<qupath.ext.flowpath.model.CellPhenotype> cells,
+                                        qupath.ext.flowpath.model.PhenotypeTree tree) throws IOException {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
+            writer.write("cell_label,committed_phenotype,outcome,provenance,candidates");
+            writer.newLine();
+            for (var c : cells) {
+                StringBuilder cands = new StringBuilder();
+                for (var cand : c.candidates()) {
+                    if (cands.length() > 0) cands.append(';');
+                    cands.append(cand.name()).append(':').append(fmt(cand.score()));
+                }
+                writer.write(String.valueOf(c.getLabel()));
+                writer.write(',' + escapeCsv(c.getCommitted() != null ? c.getCommitted() : ""));
+                writer.write(',' + escapeCsv(c.getOutcome().name()));
+                writer.write(',' + escapeCsv(c.getProvenance().name()));
+                writer.write(',' + escapeCsv(cands.toString()));
+                writer.newLine();
+            }
+        }
     }
 }
