@@ -55,61 +55,6 @@ jobs:
           echo "ver=${VER}"  >> "$GITHUB_OUTPUT"
           echo "Resolved release tag: v${VER}"
 
-      # Guard 0: the catalog secret MUST exist, or the entire release is refused
-      # BEFORE anything is built, tagged, or published. A missing secret used to
-      # surface only at the final "Update catalog" step — after the release was
-      # already out — so the catalog could silently fall behind. Fail fast here.
-      #   workflow_dispatch: the tag is created later in this job, so failing now
-      #     means no tag is ever created.
-      #   tag push: the tag already exists (it triggered this run); delete it so a
-      #     missing secret leaves no dangling tag on an unreleased commit.
-      # (secrets cannot be read in step `if:`, so the check lives in the script.)
-      - name: Require CATALOG_PAT secret
-        env:
-          CATALOG_PAT: ${{ secrets.CATALOG_PAT }}
-          TAG: ${{ steps.rel.outputs.tag }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          # Refuse if the secret is missing/empty.
-          if [ -z "$CATALOG_PAT" ]; then
-            echo "::error::CATALOG_PAT secret is missing or empty. Refusing to tag or release ${TAG} so the catalog can never fall out of sync. Add it in Settings → Secrets and variables → Actions, then re-run." >&2
-            if [ "$EVENT_NAME" = "push" ]; then
-              echo "Tag ${TAG} was pushed without a configured catalog secret — deleting it so the tag does not take effect." >&2
-              git push --delete origin "$TAG" || echo "::warning::Could not delete tag ${TAG}; please remove it manually."
-            fi
-            exit 1
-          fi
-          # Non-empty is NOT enough. The REST `.permissions` field reports the
-          # repo OWNER's role, not a fine-grained token's actual grant, so it
-          # false-positives for a read-only PAT (observed: probe says push=true,
-          # the real git push still 403s). The only reliable preflight is an
-          # actual write: create a throwaway ref with the token, then delete it.
-          API="https://api.github.com/repos/sceriff0/flowpath-catalog"
-          AUTH=(-H "Authorization: Bearer $CATALOG_PAT" -H "Accept: application/vnd.github+json")
-          SHA=$(curl -sSL "${AUTH[@]}" "$API/git/ref/heads/main" | jq -r '.object.sha // empty')
-          WRITABLE=no
-          if [ -z "$SHA" ]; then
-            echo "::error::CATALOG_PAT cannot read sceriff0/flowpath-catalog (token invalid or has no access to the repo). Fix the secret, then re-run." >&2
-          else
-            CHECK="catalog-pat-writecheck-${GITHUB_RUN_ID}"
-            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X POST "$API/git/refs" \
-              -d "{\"ref\":\"refs/heads/${CHECK}\",\"sha\":\"${SHA}\"}")
-            if [ "$CODE" = "201" ]; then
-              curl -sS "${AUTH[@]}" -X DELETE "$API/git/refs/heads/${CHECK}" >/dev/null || true
-              WRITABLE=yes
-            else
-              echo "::error::CATALOG_PAT cannot WRITE to sceriff0/flowpath-catalog (test ref-create returned HTTP ${CODE}). Grant 'Contents: Read and write' on that repo (fine-grained PAT) or 'repo' scope (classic), then re-run." >&2
-            fi
-          fi
-          if [ "$WRITABLE" != "yes" ]; then
-            if [ "$EVENT_NAME" = "push" ]; then
-              echo "Deleting tag ${TAG} so an unwritable secret leaves no dangling tag on an unreleased commit." >&2
-              git push --delete origin "$TAG" || echo "::warning::Could not delete tag ${TAG}; please remove it manually."
-            fi
-            exit 1
-          fi
-          echo "CATALOG_PAT verified writable on the catalog — release may proceed."
-
       # Guard 1: the version being released must match build.gradle.kts, so the
       # built JAR, the tag, and the catalog entry can never disagree.
       - name: Verify version matches build.gradle.kts
@@ -167,21 +112,19 @@ jobs:
           files: build/libs/*-all.jar
           generate_release_notes: true
 
+      # The catalog now lives in this repo, so updating it is a local edit and a
+      # push — no cross-repo clone, and no CATALOG_PAT. That token was a recurring
+      # failure mode: a read-only or expired PAT failed here with a 403 *after* the
+      # tag and release had already been created, leaving a published release that
+      # QuPath could not see. GITHUB_TOKEN can write to its own repo, so that whole
+      # class of failure is gone.
       - name: Update catalog
         env:
-          CATALOG_PAT: ${{ secrets.CATALOG_PAT }}
           TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          if [ -z "$CATALOG_PAT" ]; then
-            echo "::error::CATALOG_PAT secret is missing or empty — catalog was NOT updated for ${TAG}. Add/rotate it in repo Settings → Secrets and variables → Actions." >&2
-            exit 1
-          fi
           JAR_NAME=$(find build/libs -name '*-all.jar' -printf '%f' -quit)
           # GitHub normalizes spaces to dots in release asset filenames
           JAR_NAME="${JAR_NAME// /.}"
-
-          git clone https://x-access-token:${CATALOG_PAT}@github.com/sceriff0/flowpath-catalog.git /tmp/catalog
-          cd /tmp/catalog
 
           EXTENSION_NAME="FlowPath"
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${JAR_NAME}"
@@ -196,7 +139,21 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # On the tag-push path the checkout is detached at the tag, and on the
+          # dispatch path main may have moved since the job started. Either way,
+          # commit onto current origin/main rather than onto whatever this
+          # workspace happens to be sitting on — the catalog edit is independent
+          # of the tagged tree, so replaying it on the newest main is correct and
+          # avoids a non-fast-forward push.
+          git stash push -- catalog.json
+          git fetch origin main
+          git checkout -B main origin/main
+          git stash pop
+
           git add catalog.json
-          git diff --staged --quiet && { echo "Catalog already contains ${EXTENSION_NAME} ${TAG} — nothing to commit."; exit 0; }
-          git commit -m "Add ${EXTENSION_NAME} ${TAG} to catalog"
-          git push
+          git diff --staged --quiet && { echo "Catalog already contains ${EXTENSION_NAME} ${TAG} - nothing to commit."; exit 0; }
+          git commit -m ":bookmark: Add ${EXTENSION_NAME} ${TAG} to catalog"
+          # The tag was cut before this commit, so the release JAR and the catalog
+          # entry pointing at it are deliberately one commit apart on main.
+          git push origin HEAD:main

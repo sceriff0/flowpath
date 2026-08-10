@@ -1,0 +1,113 @@
+/* ===========================================================================
+   FlowPath documentation — custom Material theme touches
+   Palette matches the FlowPath logo: blue → violet.
+   =========================================================================== */
+
+:root {
+  --md-primary-fg-color:        #2563eb; /* blue-600  */
+  --md-primary-fg-color--light: #3b82f6; /* blue-500  */
+  --md-primary-fg-color--dark:  #4338ca; /* indigo-700 */
+  --md-accent-fg-color:         #8b5cf6; /* violet-500 */
+}
+
+/* Slightly tighter, more readable content column */
+.md-grid {
+  max-width: 60rem;
+}
+
+/* ---- Hero block on the landing page ---------------------------------- */
+.flowpath-hero {
+  text-align: center;
+  padding: 2.4rem 1rem 1.2rem;
+  margin: 0 0 1.5rem;
+  border-radius: 0.6rem;
+  background: linear-gradient(135deg,
+              var(--md-primary-fg-color--dark),
+              var(--md-accent-fg-color));
+  color: #fff;
+}
+.flowpath-hero h1 {
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.4rem;
+  font-size: 2.6rem;
+}
+.flowpath-hero p {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.9rem;
+  max-width: 40rem;
+  margin: 0.2rem auto;
+}
+.flowpath-hero .flowpath-badges {
+  margin-top: 1rem;
+}
+[data-md-color-scheme="slate"] .flowpath-hero {
+  background: linear-gradient(135deg, #1d4ed8, #7c3aed);
+}
+
+/* The logo wordmark already carries the gradient; let it sit on the hero
+   without a competing box. */
+.flowpath-hero img.flowpath-wordmark {
+  max-width: 22rem;
+  width: 70%;
+  height: auto;
+  margin: 0 auto 0.6rem;
+  display: block;
+}
+
+/* ---- Grid cards: gentle lift on hover -------------------------------- */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.10);
+  transform: translateY(-2px);
+}
+
+/* ---- Component "pills" ------------------------------------------------ */
+.md-typeset .stage-pill {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 1rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: var(--md-primary-fg-color);
+}
+
+/* ---- Screenshot figures: framed, captioned --------------------------- */
+.md-typeset figure.screenshot {
+  margin: 1.4rem auto;
+  text-align: center;
+}
+.md-typeset figure.screenshot img {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  max-width: 100%;
+}
+.md-typeset figure.screenshot figcaption {
+  font-size: 0.78rem;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* ---- Make tables breathe a little ------------------------------------ */
+.md-typeset table:not([class]) th {
+  background: var(--md-primary-fg-color--dark);
+  color: #fff;
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: var(--md-primary-fg-color--dark);
+}
+
+/* ---- Mermaid diagrams centered with a touch of padding --------------- */
+.md-typeset .mermaid {
+  margin: 1.2rem auto;
+  text-align: center;
+}

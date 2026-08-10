@@ -28,3 +28,5 @@ notebooks
 # Files
 ARCHITECTURE.md
 *.geojson
+# MkDocs build output
+site/

@@ -20,7 +20,7 @@ pipeline, and with any QuPath detections carrying per-marker measurements.
 In QuPath, add the FlowPath catalog and install **FlowPath**:
 
 ```
-https://raw.githubusercontent.com/sceriff0/flowpath-catalog/main/catalog.json
+https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath-gatingtree/main/catalog.json
 ```
 
 (Extensions → Manage extensions → Manage extension catalogs → Add.) Launch with
