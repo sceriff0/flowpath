@@ -111,6 +111,19 @@ public class LivePreviewService {
         this.onUpdateComplete = onUpdateComplete;
     }
 
+    /**
+     * The most recent gating result, or {@code null} before the first run completes.
+     * <p>
+     * Exposed so the gating pane can hand the assignment to the UMAP view without
+     * re-running {@link GatingEngine#assignAll} over every cell. The returned object is
+     * immutable in practice — the service replaces the reference on each run rather than
+     * mutating it — so a caller that holds one is holding a consistent picture of the
+     * gating at the moment it read it.
+     */
+    public GatingEngine.AssignmentResult getLastResult() {
+        return lastResult;
+    }
+
     public int getLastExcludedCount() {
         return lastExcludedCount;
     }

@@ -27,6 +27,15 @@ public class MarkerStats {
 
     private MarkerStats() {}
 
+    /**
+     * Compute statistics over every cell, with no quality mask applied.
+     * Equivalent to {@link #compute(CellIndex, boolean[])} with a null mask — used by
+     * the UMAP view, which scales features over the whole indexed population.
+     */
+    public static MarkerStats compute(CellIndex index) {
+        return compute(index, null);
+    }
+
     public static MarkerStats compute(CellIndex index, boolean[] qualityMask) {
         MarkerStats s = new MarkerStats();
         s.qualityMask = qualityMask;

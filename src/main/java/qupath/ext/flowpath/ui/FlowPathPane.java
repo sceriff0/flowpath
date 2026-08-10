@@ -26,6 +26,8 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.umap.PhenotypeSnapshot;
+import qupath.ext.flowpath.umap.UmapWindow;
 import qupath.lib.display.ChannelDisplayInfo;
 import qupath.lib.display.DirectServerChannelInfo;
 import qupath.lib.display.ImageDisplay;
@@ -60,6 +62,13 @@ public class FlowPathPane extends BorderPane {
     private final LivePreviewService previewService;
     private final Label statusBar;
     private final ComboBox<String> colorByRootCombo;
+    private final Button umapButton;
+
+    /**
+     * The UMAP view this pane opens and keeps fed. Created eagerly but does not build
+     * any UI until the user asks for it — an unopened window costs one object.
+     */
+    private final UmapWindow umapWindow = new UmapWindow();
 
     private static final int MAX_UNDO = 50;
     private final Deque<GateTree> undoStack = new ArrayDeque<>();
@@ -191,8 +200,24 @@ public class FlowPathPane extends BorderPane {
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
 
+        // The bridge to the other half of the extension. Styled as the primary action on
+        // this toolbar because it is the one step that is not file I/O: everything else
+        // here saves or loads the gating, this one takes it somewhere new.
+        umapButton = new Button("Open UMAP");
+        umapButton.setStyle("-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;");
+        umapButton.setDisable(true);
+        umapButton.setTooltip(new Tooltip(
+            "Embed these cells in a UMAP, coloured by the phenotypes above (Ctrl+U).\n"
+            + "Opens pre-configured on the markers your gates use.\n"
+            + "Edits to the gate tree recolour the UMAP live — no recompute needed."));
+        umapButton.setOnAction(e -> openUmapWindow());
+
+        HBox toolbarSpacer = new HBox();
+        HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
+
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn);
+            exportBtn, toolbarSpacer, umapButton);
+        toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
         HBox statusRow = new HBox(6, spinner, statusBar);
@@ -212,6 +237,8 @@ public class FlowPathPane extends BorderPane {
                 loadTree(); e.consume();
             } else if (new KeyCodeCombination(KeyCode.E, KeyCombination.SHORTCUT_DOWN).match(e)) {
                 exportCsv(); e.consume();
+            } else if (new KeyCodeCombination(KeyCode.U, KeyCombination.SHORTCUT_DOWN).match(e)) {
+                openUmapWindow(); e.consume();
             }
         });
 
@@ -863,6 +890,89 @@ public class FlowPathPane extends BorderPane {
         treeView.refresh();
         updateStatusBar();
         refreshColorByRootCombo();
+        umapButton.setDisable(cellIndex == null);
+
+        // Push the new phenotyping to the UMAP if it is open. push() is a no-op when it
+        // is not, so the common case costs one boolean check rather than the snapshot
+        // build — which matters because this runs after every debounced gating pass,
+        // i.e. continuously while a threshold slider is being dragged.
+        if (umapWindow.isShowing()) {
+            PhenotypeSnapshot snap = buildSnapshot();
+            if (snap != null) {
+                umapWindow.push(snap);
+            }
+        }
+    }
+
+    // --- UMAP handoff ---
+
+    /**
+     * Open (or focus) the UMAP window on the current phenotyping.
+     * <p>
+     * Requires a gating pass to have completed: the snapshot carries per-cell labels, and
+     * before the first pass there are none. Rather than opening an empty window, this
+     * says so and leaves the user where they are.
+     */
+    private void openUmapWindow() {
+        PhenotypeSnapshot snap = buildSnapshot();
+        if (snap == null) {
+            Dialogs.showWarningNotification("FlowPath",
+                cellIndex == null
+                    ? "Load an image with cell detections first."
+                    : "Waiting for the first gating pass to finish — try again in a moment.");
+            return;
+        }
+        umapWindow.open(qupath, snap, getScene() != null ? getScene().getWindow() : null);
+    }
+
+    /**
+     * Capture the current gating state for the UMAP view, or {@code null} if there is
+     * nothing to capture yet.
+     * <p>
+     * Cheap by construction: the {@link CellIndex} and {@link MarkerStats} are passed by
+     * reference (the UMAP view reads them, never mutates them) and the per-cell arrays
+     * come straight off the last gating result. Nothing here re-walks the tree or
+     * re-reads the hierarchy, which is what makes it safe to call on every preview
+     * update.
+     */
+    private PhenotypeSnapshot buildSnapshot() {
+        if (cellIndex == null || markerStats == null) return null;
+        GatingEngine.AssignmentResult result = previewService.getLastResult();
+        if (result == null) return null;
+
+        String[] phenotypes = result.getPhenotypes();
+        int[] colors = result.getColors();
+        boolean[] excluded = result.getExcluded();
+        // A result produced against an older index (image switched mid-pass) would
+        // mislabel every cell. Drop it and wait for the next pass instead.
+        if (phenotypes.length != cellIndex.size()) return null;
+
+        var panel = PhenotypeSnapshot.collectGatedPanel(gateTree);
+        return new PhenotypeSnapshot(
+                cellIndex,
+                markerStats,
+                markerNames != null ? markerNames : List.of(),
+                compartmentCapability,
+                phenotypes,
+                colors,
+                excluded,
+                panel.markers(),
+                panel.selection(),
+                countGates(gateTree.getRoots()),
+                imageKey());
+    }
+
+    /** A stable identity for the active image, used to detect that a snapshot is stale. */
+    private String imageKey() {
+        ImageData<?> data = qupath.getImageData();
+        if (data == null) return "";
+        try {
+            var server = data.getServer();
+            if (server != null && server.getPath() != null) return server.getPath();
+        } catch (Exception ignored) {
+            // A server mid-teardown can throw; identity is still better than nothing.
+        }
+        return "image@" + System.identityHashCode(data);
     }
 
     private void refreshColorByRootCombo() {
@@ -1108,6 +1218,7 @@ public class FlowPathPane extends BorderPane {
      */
     public void shutdown() {
         detachHierarchyListener();
+        umapWindow.close();
         previewService.shutdown();
     }
 }
