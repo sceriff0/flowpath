@@ -36,7 +36,7 @@ In QuPath:
 **Extensions → Manage extensions → Manage extension catalogs → Add catalog →**
 
 ```
-https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath-gatingtree/main/catalog.json
+https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath/main/catalog.json
 ```
 
 Then, back in **Manage extensions**, install **FlowPath** with the `+` button.
@@ -75,7 +75,7 @@ See the [walkthrough in Usage](usage.md).
 ## Current version
 
 The latest release published in
-[`catalog.json`](https://github.com/sceriff0/qupath-extension-flowpath-gatingtree/blob/main/catalog.json)
+[`catalog.json`](https://github.com/sceriff0/qupath-extension-flowpath/blob/main/catalog.json)
 — the source of truth. QuPath's extension manager reads it live.
 
 | Extension | Latest | Minimum QuPath |
@@ -83,12 +83,12 @@ The latest release published in
 | FlowPath | **v2.0.0** | v0.7.0 |
 
 The changelog and full release history live on the
-[repo's Releases page](https://github.com/sceriff0/qupath-extension-flowpath-gatingtree/releases).
+[repo's Releases page](https://github.com/sceriff0/qupath-extension-flowpath/releases).
 
 ## Alternative: drop in a JAR
 
 Prefer to do it by hand? Download the release JAR from
-[GitHub Releases](https://github.com/sceriff0/qupath-extension-flowpath-gatingtree/releases)
+[GitHub Releases](https://github.com/sceriff0/qupath-extension-flowpath/releases)
 and drop it into QuPath's **extensions directory** (Extensions → Manage
 extensions shows the path), then restart QuPath.
 
@@ -104,8 +104,8 @@ FlowPath uses the standard `qupath-extension-settings` Gradle plugin and needs
 **JDK 25** plus QuPath 0.7.0 artefacts.
 
 ```bash
-git clone https://github.com/sceriff0/qupath-extension-flowpath-gatingtree.git
-cd qupath-extension-flowpath-gatingtree
+git clone https://github.com/sceriff0/qupath-extension-flowpath.git
+cd qupath-extension-flowpath
 ./gradlew build shadowJar
 ```
 

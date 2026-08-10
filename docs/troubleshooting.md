@@ -2,7 +2,7 @@
 
 Common questions first, then fixes for specific issues. If nothing here covers
 your problem, open an issue on the
-[FlowPath repo](https://github.com/sceriff0/qupath-extension-flowpath-gatingtree/issues).
+[FlowPath repo](https://github.com/sceriff0/qupath-extension-flowpath/issues).
 
 ## Common questions
 
@@ -66,7 +66,7 @@ your problem, open an issue on the
 ??? failure "Adding the catalog URL fails or shows nothing"
     Check the URL for typos — it must be exactly the **raw** GitHub URL:
     ```
-    https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath-gatingtree/main/catalog.json
+    https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath/main/catalog.json
     ```
     (note `raw.githubusercontent.com`, not the repository web page). A
     network/proxy block on `githubusercontent.com` will also cause this.
