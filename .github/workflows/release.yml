@@ -131,10 +131,15 @@ jobs:
           fi
 
       # The gate: if tests fail, the job stops here and no tag is ever created.
+      # `build` does NOT run shadowJar (it is not wired into the build graph), so it
+      # only produces the thin jar. FlowPath now bundles SMILE for the UMAP engine, so
+      # the thin jar would install and then fail at runtime with NoClassDefFoundError
+      # the moment a user pressed Run UMAP. The release ships build/libs/*-all.jar,
+      # which means shadowJar MUST be invoked explicitly here.
       - name: Build and test
         env:
           FLOWPATH_FX_REQUIRED: "true"   # fail loudly if the xvfb display breaks
-        run: xvfb-run --auto-servernum ./gradlew build
+        run: xvfb-run --auto-servernum ./gradlew build shadowJar
 
       - name: Upload test results
         uses: dorny/test-reporter@v1
@@ -159,7 +164,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
-          files: build/libs/*.jar
+          files: build/libs/*-all.jar
           generate_release_notes: true
 
       - name: Update catalog
@@ -171,15 +176,15 @@ jobs:
             echo "::error::CATALOG_PAT secret is missing or empty — catalog was NOT updated for ${TAG}. Add/rotate it in repo Settings → Secrets and variables → Actions." >&2
             exit 1
           fi
-          JAR_NAME=$(find build/libs -name '*.jar' ! -name '*-all.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -printf '%f' -quit)
+          JAR_NAME=$(find build/libs -name '*-all.jar' -printf '%f' -quit)
           # GitHub normalizes spaces to dots in release asset filenames
           JAR_NAME="${JAR_NAME// /.}"
 
           git clone https://x-access-token:${CATALOG_PAT}@github.com/sceriff0/flowpath-catalog.git /tmp/catalog
           cd /tmp/catalog
 
-          EXTENSION_NAME="FlowPath - GatingTree"
-          DOWNLOAD_URL="https://github.com/sceriff0/qupath-extension-flowpath-gatingtree/releases/download/${TAG}/${JAR_NAME}"
+          EXTENSION_NAME="FlowPath"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${JAR_NAME}"
 
           NEW_RELEASE=$(jq -n --arg name "$TAG" --arg url "$DOWNLOAD_URL" \
             '{name: $name, main_url: $url, version_range: {min: "v0.7.0"}}')

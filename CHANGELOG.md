@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 10/08/2026
+
+FlowPath and qUMAP are now one extension. Gating is the way in, and the UMAP
+opens from it already knowing what the gates mean.
+
+### Breaking
+- **Two extensions became one.** The extension is now named `FlowPath` and
+  installs a single menu item (`Ctrl+G`). QuPath keys extensions by name, so it
+  will not treat this as an upgrade of *FlowPath - GatingTree* or
+  *FlowPath - qUMAP* — remove both under Extensions → Manage extensions before
+  installing, or you get three menu items and two disagreeing cell indices.
+  Saved gate trees (`.json`) load unchanged.
+- **The release artefact is now the fat JAR** (`FlowPath-<version>-all.jar`). The
+  UMAP engine needs SMILE bundled; a thin JAR installs and then fails with
+  `NoClassDefFoundError` on the first Run UMAP.
+- The catalog lists a single `FlowPath` extension. AnnoMask and Decidware are no
+  longer listed there; install them from their own repos.
+
+### Added
+- **Open UMAP** in the gating toolbar (`Ctrl+U`), which hands the UMAP view a
+  `PhenotypeSnapshot`: the same `CellIndex` instance the gating walked, per-cell
+  phenotype labels and colours, the exclusion mask, and the markers actually used
+  as gate axes with their compartment and statistic.
+- The UMAP now opens **pre-configured on the gated panel** rather than on every
+  channel the slide carries, and defaults to colouring by phenotype rather than
+  by an arbitrary marker.
+- **Live recolouring.** A gate edit re-pushes the phenotyping to an open UMAP.
+  Because editing a gate does not rebuild the index, the embedding survives and
+  only its colours change — no recompute per threshold nudge.
+- **Interactive legend:** click a population to hide it (hidden points are not
+  drawn, so what they were burying becomes visible), hover to highlight it, and
+  read each one's share of the total. A *show all* link appears while anything is
+  hidden.
+- `CellIndex.build(detections, markers, MarkerSelection)`, `toMatrix()` and
+  `getMarkerValuesRaw()`, carried over from qUMAP.
+
+### Changed
+- **The UMAP window was rebuilt around the workflow.** Two dense toolbar rows of
+  eighteen always-visible controls became a left rail ordered
+  Cells → Embedding → Colour → Select, with advanced UMAP parameters folded away
+  until asked for.
+- Colouring by phenotype vs. by marker is now a two-segment switch rather than a
+  marker dropdown whose `-- none --` entry silently meant "phenotype mode".
+- **Progress moved inline.** The floating progress dialog — which opened over the
+  plot and duplicated a Cancel the rail already showed — is gone; a progress bar
+  and the current phase now sit directly under Run UMAP.
+- An empty plot area now states what will happen, on how many cells, and offers
+  the action, instead of printing "No UMAP data".
+- `CellIndex` and `MarkerStats` had diverged between the two codebases and are
+  reconciled into one. The fused `CellIndex` keeps FlowPath's morphology columns,
+  lazy compartment columns and marker-name map, and gains qUMAP's
+  `MarkerSelection` support, sampled-key resolution and ROI centroid fallback.
+  `Compartment`, `Statistic`, `MeasurementKeys` and `CompartmentCapability` —
+  previously byte-identical copies in both repos — now exist once.
+- Marker-overlay z-scores use the population standard deviation (ddof=0),
+  matching what `FeatureScaler` already used for the embedding and what gating has
+  always used for thresholds. qUMAP's display path previously used the sample
+  standard deviation, so the two disagreed by a factor of `sqrt(n/(n-1))` —
+  invisible at realistic cell counts, but now consistent.
+- `CellIndex` array accessors keep the no-copy contract. qUMAP's cloned; cloning
+  on the gating hot path would allocate a full copy of the dataset (over a
+  gigabyte on a multi-million-cell slide) purely to read it. The three qUMAP tests
+  that asserted defensive copies now pin the no-copy contract instead.
+
+### Fixed
+- The UMAP no longer rebuilds its own cell index from the hierarchy while the
+  gating pane has already curated one. Editing a feature previously re-queried the
+  hierarchy without the annotation filter, silently widening the analysis back to
+  the whole slide; it now reuses exactly the cells the snapshot indexed.
+- Switching images with a snapshot active empties the UMAP and waits for the
+  gating pane to re-index, rather than replacing the curated cell set with every
+  detection on the new image.
+
 ## [1.10.1] - 23/07/2026
 
 ### Fixed

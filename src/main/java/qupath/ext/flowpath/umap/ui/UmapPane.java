@@ -6,6 +6,7 @@ import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
+import javafx.scene.text.TextAlignment;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import qupath.ext.flowpath.model.CellIndex;
@@ -151,6 +152,26 @@ public class UmapPane extends BorderPane {
     private final SplitPane centerSplit;
     private boolean markerOverlayVisible = false;
 
+    // --- Rail chrome ---
+    private static final double RAIL_WIDTH = 236;
+    private static final String RAIL_CONTROL_STYLE = "-fx-text-fill: #d5d5d5; -fx-font-size: 11;";
+    private static final String RAIL_LABEL_STYLE = "-fx-text-fill: #9aa0a6; -fx-font-size: 10;";
+    private static final String SECTION_HEADER_STYLE =
+            "-fx-text-fill: #7f8a94; -fx-font-size: 10; -fx-font-weight: bold;";
+    private static final String PRIMARY_BUTTON_STYLE =
+            "-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;";
+
+    private Label cellsSummary;
+    private ProgressBar computeProgress;
+    private Label computeStage;
+    private ToggleGroup colorModeGroup;
+    private ToggleButton colorByPhenotype;
+    private ToggleButton colorByMarker;
+    private StackPane emptyState;
+    private Label emptyHeadline;
+    private Label emptySubline;
+    private Button emptyAction;
+
     public UmapPane(QuPathGUI qupath) {
         this.qupath = qupath;
 
@@ -271,7 +292,6 @@ public class UmapPane extends BorderPane {
                 this::computeRestingState,
                 this::onUmapResultReady,
                 this::setStatus,
-                () -> getScene() != null ? getScene().getWindow() : null,
                 dotSize -> {
                     umapCanvas.setDotSize(dotSize);
                     markerOverlay.setDotSize(dotSize);
@@ -282,70 +302,202 @@ public class UmapPane extends BorderPane {
                 tagNameField, tagColorPicker, applyTagButton,
                 exportButton);
         computeController.attachUiState(uiState);
+        // Every transition — including the ones ComputeController drives on its own —
+        // repaints the rail summary and the empty state. Hooking the property rather
+        // than dotting refreshOverview() through a dozen call sites is what keeps the
+        // headline, the sub-line and the cell summary from ever disagreeing.
+        uiState.currentStateProperty().addListener((obs, o, n) -> {
+            setComputeProgress(n == UiStateController.UiState.COMPUTING, "Starting…");
+            refreshOverview();
+        });
         uiState.setState(UiStateController.UiState.NO_IMAGE);
 
         // --- Layout ---
+        //
+        // The standalone qUMAP put all eighteen controls in two dense toolbar rows above
+        // the plot: compute parameters, display options and destructive actions side by
+        // side, every one of them visible whether or not it could do anything yet. There
+        // was no reading order and no sense of what to do first.
+        //
+        // The rail below replaces that with the actual workflow, top to bottom — check
+        // your cells, embed them, colour them, select from them — with each step's
+        // controls grouped under a heading and the advanced knobs folded away until
+        // asked for. The plot gets the whole rest of the window.
 
-        // Advanced controls — hidden unless "Custom" preset
-        var advancedParams = new HBox(6,
-                new Label("k:"), computeController.getKSpinner(),
-                new Label("Epochs:"), computeController.getEpochsSpinner(),
-                new Separator(Orientation.VERTICAL),
-                new Label("Subsample:"), computeController.getSubsampleMode(),
-                new Label("Max:"), computeController.getMaxCellsSpinner()
-        );
-        advancedParams.setAlignment(Pos.CENTER_LEFT);
-        advancedParams.setVisible(false);
-        advancedParams.setManaged(false);
+        cellsSummary = new Label("No cells loaded");
+        cellsSummary.setWrapText(true);
+        cellsSummary.setStyle("-fx-text-fill: #d5d5d5; -fx-font-size: 11;");
 
-        // Show/hide advanced controls based on preset
-        computeController.getQualityPreset().valueProperty().addListener((obs, oldVal, newVal) -> {
-            boolean show = "Custom".equals(newVal);
-            advancedParams.setVisible(show);
-            advancedParams.setManaged(show);
+        featuresButton.setMaxWidth(Double.MAX_VALUE);
+        roiFilterCheckBox.setStyle(RAIL_CONTROL_STYLE);
+
+        var cellsSection = section("1 · Cells", cellsSummary, featuresButton, roiFilterCheckBox);
+
+        // --- Embedding ---
+        var presetCombo = computeController.getQualityPreset();
+        presetCombo.setMaxWidth(Double.MAX_VALUE);
+        var scalingCombo = computeController.getScalingMode();
+        scalingCombo.setMaxWidth(Double.MAX_VALUE);
+
+        // Advanced knobs stay collapsed. They exist for the rare run that needs them,
+        // and a user who does not know what "negative samples" means should never have
+        // to decide whether it matters before they can see their data.
+        var advancedGrid = new GridPane();
+        advancedGrid.setHgap(6);
+        advancedGrid.setVgap(4);
+        advancedGrid.addRow(0, railLabel("Neighbours (k)"), computeController.getKSpinner());
+        advancedGrid.addRow(1, railLabel("Epochs"), computeController.getEpochsSpinner());
+        advancedGrid.addRow(2, railLabel("Subsample"), computeController.getSubsampleMode());
+        advancedGrid.addRow(3, railLabel("Max cells"), computeController.getMaxCellsSpinner());
+        for (var node : List.of(computeController.getKSpinner(), computeController.getEpochsSpinner(),
+                computeController.getSubsampleMode(), computeController.getMaxCellsSpinner())) {
+            ((Region) node).setPrefWidth(96);
+        }
+
+        var advancedPane = new TitledPane("Advanced", advancedGrid);
+        advancedPane.setExpanded(false);
+        advancedPane.setStyle("-fx-font-size: 10;");
+        // Choosing "Custom" is an explicit request to tune, so open the drawer for them.
+        presetCombo.valueProperty().addListener((obs, o, n) -> {
+            if ("Custom".equals(n)) advancedPane.setExpanded(true);
         });
 
-        // Toolbar row 1
-        var row1 = new HBox(6,
-                computeController.getComputeButton(), computeController.getCancelButton(), progressIndicator,
-                roiFilterCheckBox, viewerSyncCheckBox,
-                computeController.getQualityPreset(),
-                new Label("Scale:"), computeController.getScalingMode(),
-                advancedParams,
-                new Label("Dot size:"), computeController.getDotSizeSpinner()
-        );
-        row1.setPadding(new Insets(4));
-        row1.setAlignment(Pos.CENTER_LEFT);
+        var computeBtn = computeController.getComputeButton();
+        computeBtn.setText("Run UMAP");
+        computeBtn.setMaxWidth(Double.MAX_VALUE);
+        computeBtn.setStyle(PRIMARY_BUTTON_STYLE);
+        computeBtn.setTooltip(new Tooltip(
+                "Compute the embedding from the selected features.\n"
+                        + "Runs in the background — the gating window stays usable."));
 
-        // Toolbar row 2
-        var row2 = new HBox(6,
-                new Label("Marker:"), markerDropdown, colorScaleDropdown,
-                featuresButton,
-                new Separator(Orientation.VERTICAL),
+        var cancelBtn = computeController.getCancelButton();
+        cancelBtn.setMaxWidth(Double.MAX_VALUE);
+
+        computeProgress = new ProgressBar();
+        computeProgress.setMaxWidth(Double.MAX_VALUE);
+        computeProgress.setVisible(false);
+        computeProgress.setManaged(false);
+        computeStage = new Label();
+        computeStage.setWrapText(true);
+        computeStage.setStyle("-fx-text-fill: #9aa0a6; -fx-font-size: 10;");
+        computeStage.setVisible(false);
+        computeStage.setManaged(false);
+
+        var embedSection = section("2 · Embedding",
+                railLabel("Quality"), presetCombo,
+                railLabel("Feature scaling"), scalingCombo,
+                advancedPane,
+                computeBtn, cancelBtn, computeProgress, computeStage);
+
+        // --- Colour ---
+        // A segmented pair rather than two independent dropdowns: colouring by phenotype
+        // and colouring by marker expression are alternatives, and the old layout — a
+        // marker combo whose "-- none --" entry silently meant "phenotype mode" — made
+        // that look like a setting rather than a choice.
+        colorModeGroup = new ToggleGroup();
+        colorByPhenotype = segmentedToggle("Phenotype", colorModeGroup);
+        colorByMarker = segmentedToggle("Marker", colorModeGroup);
+        colorByPhenotype.setSelected(true);
+        colorByPhenotype.setTooltip(new Tooltip(
+                "Colour every cell by the phenotype its gates assigned."));
+        colorByMarker.setTooltip(new Tooltip(
+                "Colour every cell by one marker's expression level."));
+
+        var colorModeRow = new HBox(colorByPhenotype, colorByMarker);
+        HBox.setHgrow(colorByPhenotype, Priority.ALWAYS);
+        HBox.setHgrow(colorByMarker, Priority.ALWAYS);
+
+        markerDropdown.setMaxWidth(Double.MAX_VALUE);
+        colorScaleDropdown.setMaxWidth(Double.MAX_VALUE);
+        var markerControls = new VBox(4,
+                railLabel("Marker"), markerDropdown,
+                railLabel("Scale"), colorScaleDropdown);
+        markerControls.setVisible(false);
+        markerControls.setManaged(false);
+
+        colorModeGroup.selectedToggleProperty().addListener((obs, o, sel) -> {
+            // A segmented control must always have exactly one segment down; clicking the
+            // active one would otherwise deselect it and leave the plot in no mode at all.
+            if (sel == null) {
+                (o == colorByMarker ? colorByMarker : colorByPhenotype).setSelected(true);
+                return;
+            }
+            boolean byMarker = sel == colorByMarker;
+            markerControls.setVisible(byMarker);
+            markerControls.setManaged(byMarker);
+            if (byMarker) {
+                // Land on a real marker rather than the placeholder, so switching modes
+                // shows something immediately instead of an unchanged plot.
+                if (NO_MARKER.equals(markerDropdown.getValue()) && !currentMarkers.isEmpty()) {
+                    markerDropdown.setValue(preferredMarker());
+                }
+            } else {
+                markerDropdown.setValue(NO_MARKER);
+            }
+            onMarkerSelected();
+        });
+
+        var dotSizeSpinner = computeController.getDotSizeSpinner();
+        dotSizeSpinner.setPrefWidth(80);
+        var resetViewButton = new Button("Reset view");
+        resetViewButton.setMaxWidth(Double.MAX_VALUE);
+        resetViewButton.setTooltip(new Tooltip("Undo zoom and pan, fitting all points in view."));
+        resetViewButton.setOnAction(e -> umapCanvas.resetView());
+
+        var dotRow = new HBox(6, railLabel("Dot size"), dotSizeSpinner);
+        dotRow.setAlignment(Pos.CENTER_LEFT);
+
+        var colorSection = section("3 · Colour", colorModeRow, markerControls, dotRow, resetViewButton);
+
+        // --- Select ---
+        drawButton.setMaxWidth(Double.MAX_VALUE);
+        clearButton.setMaxWidth(Double.MAX_VALUE);
+        tagNameField.setMaxWidth(Double.MAX_VALUE);
+        applyTagButton.setMaxWidth(Double.MAX_VALUE);
+        tagColorPicker.setMaxWidth(Double.MAX_VALUE);
+        viewerSyncCheckBox.setStyle(RAIL_CONTROL_STYLE);
+
+        var tagRow = new HBox(6, tagNameField, tagColorPicker);
+        HBox.setHgrow(tagNameField, Priority.ALWAYS);
+        tagColorPicker.setPrefWidth(52);
+
+        var selectSection = section("4 · Select",
                 drawButton, clearButton,
-                new Separator(Orientation.VERTICAL),
-                new Label("Population:"), tagNameField, tagColorPicker, applyTagButton,
-                new Separator(Orientation.VERTICAL),
-                exportButton
-        );
-        row2.setPadding(new Insets(4));
-        row2.setAlignment(Pos.CENTER_LEFT);
+                railLabel("Name the selection"), tagRow, applyTagButton,
+                viewerSyncCheckBox);
 
-        var toolbar = new VBox(row1, row2);
-        toolbar.setStyle("-fx-background-color: #333;");
-        setTop(toolbar);
+        var rail = new VBox(14, cellsSection, embedSection, colorSection, selectSection);
+        rail.setPadding(new Insets(10));
+        rail.setStyle("-fx-background-color: #2b2b2b;");
+        rail.setPrefWidth(RAIL_WIDTH);
+        rail.setMinWidth(RAIL_WIDTH);
 
-        // Center: UMAP canvas + optional marker overlay + legend
+        var railScroll = new ScrollPane(rail);
+        railScroll.setFitToWidth(true);
+        railScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        railScroll.setStyle("-fx-background: #2b2b2b; -fx-background-color: #2b2b2b;");
+        railScroll.setPrefWidth(RAIL_WIDTH + 14);
+        railScroll.setMinWidth(RAIL_WIDTH + 14);
+        setLeft(railScroll);
+
+        // --- Centre: plot + legend, with an empty state layered over it ---
         var legendBox = new VBox(legend, colorScaleLegend);
         VBox.setVgrow(legend, Priority.ALWAYS);
 
         centerSplit = new SplitPane(umapCanvas, legendBox);
-        centerSplit.setDividerPositions(0.85);
-        setCenter(centerSplit);
+        centerSplit.setDividerPositions(0.82);
 
-        // Status bar
-        var statusBar = new HBox(8, statusLabel);
-        statusBar.setPadding(new Insets(3, 6, 3, 6));
+        emptyState = buildEmptyState();
+        var centerStack = new StackPane(centerSplit, emptyState);
+        setCenter(centerStack);
+
+        // --- Status bar ---
+        statusLabel.setWrapText(true);
+        var statusSpacer = new Region();
+        HBox.setHgrow(statusSpacer, Priority.ALWAYS);
+        var statusBar = new HBox(8, progressIndicator, statusLabel, statusSpacer, exportButton);
+        statusBar.setAlignment(Pos.CENTER_LEFT);
+        statusBar.setPadding(new Insets(4, 8, 4, 8));
         statusBar.setStyle("-fx-background-color: #2a2a2a;");
         setBottom(statusBar);
 
@@ -398,6 +550,167 @@ public class UmapPane extends BorderPane {
         Platform.runLater(this::initializeFromImage);
     }
 
+    // --- Rail construction helpers ---
+
+    /** A labelled group of rail controls, separated from its neighbours by a rule. */
+    private VBox section(String title, javafx.scene.Node... children) {
+        var header = new Label(title.toUpperCase(java.util.Locale.ROOT));
+        header.setStyle(SECTION_HEADER_STYLE);
+
+        var rule = new Separator(Orientation.HORIZONTAL);
+        rule.setStyle("-fx-opacity: 0.25;");
+
+        var box = new VBox(6);
+        box.getChildren().addAll(header, rule);
+        box.getChildren().addAll(children);
+        return box;
+    }
+
+    /** A dim caption above a rail control. */
+    private static Label railLabel(String text) {
+        var l = new Label(text);
+        l.setStyle(RAIL_LABEL_STYLE);
+        return l;
+    }
+
+    /** One half of a two-segment mode switch. */
+    private static ToggleButton segmentedToggle(String text, ToggleGroup group) {
+        var t = new ToggleButton(text);
+        t.setToggleGroup(group);
+        t.setMaxWidth(Double.MAX_VALUE);
+        t.setStyle("-fx-font-size: 11;");
+        return t;
+    }
+
+    /**
+     * The overlay shown while there is no embedding.
+     * <p>
+     * An empty plot area is the single worst moment in the old UI: the canvas printed
+     * "No UMAP data" in the middle of a grey rectangle, and the one control that would
+     * fix it was a small button among seventeen others. This states what will happen,
+     * on how many cells, and offers the action — so the first run is one click from the
+     * place the user is already looking.
+     */
+    private StackPane buildEmptyState() {
+        emptyHeadline = new Label("No embedding yet");
+        emptyHeadline.setStyle("-fx-text-fill: #d5d5d5; -fx-font-size: 16; -fx-font-weight: bold;");
+
+        emptySubline = new Label("Load an image with cell detections to begin.");
+        emptySubline.setStyle("-fx-text-fill: #9aa0a6; -fx-font-size: 12;");
+        emptySubline.setWrapText(true);
+        emptySubline.setTextAlignment(TextAlignment.CENTER);
+        emptySubline.setMaxWidth(380);
+
+        emptyAction = new Button("Run UMAP");
+        emptyAction.setStyle(PRIMARY_BUTTON_STYLE);
+        emptyAction.setVisible(false);
+        emptyAction.setManaged(false);
+        emptyAction.setOnAction(e -> computeController.getComputeButton().fire());
+
+        var box = new VBox(10, emptyHeadline, emptySubline, emptyAction);
+        box.setAlignment(Pos.CENTER);
+        // The panel is only a backdrop for its own contents; clicks anywhere else must
+        // reach the canvas beneath so zoom and pan keep working the moment data arrives.
+        box.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        box.setPadding(new Insets(24));
+
+        var stack = new StackPane(box);
+        stack.setAlignment(Pos.CENTER);
+        stack.setPickOnBounds(false);
+        stack.setMouseTransparent(false);
+        return stack;
+    }
+
+    /**
+     * Refresh the rail summary and the empty state from current data.
+     * <p>
+     * One method rather than scattered {@code setText} calls, so the headline, the
+     * sub-line, the action button and the cell summary can never describe three
+     * different states at once.
+     */
+    private void refreshOverview() {
+        boolean hasCells = cellIndex != null && cellIndex.size() > 0;
+        boolean hasEmbedding = umapResult != null;
+
+        if (!hasCells) {
+            cellsSummary.setText("No cells loaded.");
+        } else if (snapshot != null) {
+            int included = snapshot.includedCount();
+            int dropped = snapshot.cellCount() - included;
+            int pops = snapshot.populations().size();
+            StringBuilder sb = new StringBuilder(String.format("%,d cells", included));
+            if (dropped > 0) sb.append(String.format(" · %,d filtered out", dropped));
+            sb.append(snapshot.hasPhenotypes()
+                    ? String.format("%n%d phenotype%s from %d gate%s", pops, pops == 1 ? "" : "s",
+                            snapshot.gateCount(), snapshot.gateCount() == 1 ? "" : "s")
+                    : String.format("%nNo gates applied yet"));
+            sb.append(String.format("%n%d of %d markers selected",
+                    includedMarkerCount(), currentMarkers.size()));
+            cellsSummary.setText(sb.toString());
+        } else {
+            cellsSummary.setText(String.format("%,d cells%n%d of %d markers selected",
+                    cellIndex.size(), includedMarkerCount(), currentMarkers.size()));
+        }
+
+        // The annotation filter belongs to the gating pane in snapshot mode — it has
+        // already been applied, and a second checkbox that appears to offer the same
+        // choice would either do nothing or silently disagree with the gating window.
+        boolean standalone = !isSnapshotMode();
+        roiFilterCheckBox.setVisible(standalone);
+        roiFilterCheckBox.setManaged(standalone);
+
+        emptyState.setVisible(!hasEmbedding);
+        emptyState.setManaged(!hasEmbedding);
+        if (hasEmbedding) return;
+
+        if (!hasCells) {
+            emptyHeadline.setText("No cells to embed");
+            emptySubline.setText(isSnapshotMode()
+                    ? "Waiting for the gating window to index this image."
+                    : "Open an image with cell detections, then come back.");
+            emptyAction.setVisible(false);
+            emptyAction.setManaged(false);
+            return;
+        }
+
+        emptyHeadline.setText("Ready to embed");
+        int markers = includedMarkerCount();
+        String base = String.format("%,d cells across %d marker%s.",
+                cellIndex.size(), markers, markers == 1 ? "" : "s");
+        emptySubline.setText(snapshot != null && !snapshot.gatedMarkers().isEmpty()
+                ? base + " Features are pre-selected from your gates — adjust them under "
+                        + "Cells, or run as-is."
+                : base + " Choose which markers to use under Cells, or run as-is.");
+        emptyAction.setVisible(true);
+        emptyAction.setManaged(true);
+        emptyAction.setDisable(computeController.getComputeButton().isDisabled());
+    }
+
+    /** How many markers are ticked in the feature picker. */
+    private int includedMarkerCount() {
+        if (currentMarkers.isEmpty()) return 0;
+        int n = 0;
+        for (String m : currentMarkers) {
+            if (markerSelection.isIncluded(m)) n++;
+        }
+        return n;
+    }
+
+    /**
+     * The marker to land on when the user switches to marker colouring: the first gated
+     * one if the gating tree named any, otherwise the first in the panel. Opening on a
+     * marker the user actually gated is far more likely to show them something they
+     * recognise than opening on whatever channel happens to sort first.
+     */
+    private String preferredMarker() {
+        if (snapshot != null) {
+            for (String m : snapshot.gatedMarkers()) {
+                if (currentMarkers.contains(m)) return m;
+            }
+        }
+        return currentMarkers.get(0);
+    }
+
     // --- Snapshot handoff from the gating pane ---
 
     /**
@@ -433,6 +746,7 @@ public class UmapPane extends BorderPane {
             baseColors = null;                  // force a re-derive from the new labels
             updatePhenotypeColors();
             updateLegend();
+            refreshOverview();
             setStatus(describeSnapshot(incoming) + " — recoloured from the gating tree.",
                     StatusLevel.INFO);
             return;
@@ -442,7 +756,6 @@ public class UmapPane extends BorderPane {
         indexGeneration.incrementAndGet();
         gateGeneration.incrementAndGet();
         computeService.cancel();
-        computeController.disposeProgressDialog();
         umapResult = null;
         gateMask = null;
         baseColors = null;
@@ -596,7 +909,6 @@ public class UmapPane extends BorderPane {
      */
     private void clearDerivedState() {
         computeService.cancel();
-        computeController.disposeProgressDialog();
         umapResult = null;
         gateMask = null;
         baseColors = null;
@@ -630,7 +942,6 @@ public class UmapPane extends BorderPane {
 
         // Tear down any running computation cleanly
         computeService.cancel();
-        computeController.disposeProgressDialog();
         umapResult = null;
         cellIndex = null;
         markerStats = null;
@@ -836,6 +1147,7 @@ public class UmapPane extends BorderPane {
                 markerStats = rebuiltStats;
                 // Refresh the overlay if one is showing for the selected marker.
                 onMarkerSelected();
+                refreshOverview();
                 setStatus(String.format("Features updated — %,d cells, %d markers. Recompute UMAP to apply.",
                         rebuilt.size(), markersCopy.size()), StatusLevel.SUCCESS);
             });
@@ -991,15 +1303,28 @@ public class UmapPane extends BorderPane {
         updatePhenotypeColors();
         updateLegend();
 
-        // Friendly default: if the user hasn't picked a marker yet, auto-select the
-        // first one so a fresh embedding shows expression immediately instead of
-        // sitting on NO_MARKER and forcing a hunt through the dropdown.
-        String currentMarker = markerDropdown.getValue();
-        boolean noMarkerChosen = currentMarker == null || NO_MARKER.equals(currentMarker);
-        if (noMarkerChosen && !currentMarkers.isEmpty()) {
-            markerDropdown.setValue(currentMarkers.get(0));
-            onMarkerSelected(); // setValue does not reliably fire the action handler
+        // What the first finished embedding should be coloured by.
+        //
+        // Standalone, the answer is "some marker" — without one the plot is a uniform
+        // grey blob and the user has to go hunting through a dropdown to see anything.
+        //
+        // Opened from a gate tree the answer is the opposite: the phenotypes ARE the
+        // thing they came to look at, and overriding them with an arbitrary channel
+        // would throw away the whole reason the two halves were joined. So only fall
+        // back to marker colouring when there are no phenotypes to show.
+        boolean phenotypesWorthShowing = snapshot != null && snapshot.hasPhenotypes();
+        if (phenotypesWorthShowing) {
+            colorByPhenotype.setSelected(true);
+        } else if (!currentMarkers.isEmpty()) {
+            String currentMarker = markerDropdown.getValue();
+            if (currentMarker == null || NO_MARKER.equals(currentMarker)) {
+                colorByMarker.setSelected(true);
+                markerDropdown.setValue(preferredMarker());
+                onMarkerSelected();   // setValue does not reliably fire the action handler
+            }
         }
+
+        refreshOverview();
     }
 
     // --- Phenotype Coloring ---
@@ -1677,6 +2002,31 @@ public class UmapPane extends BorderPane {
     enum StatusLevel { INFO, WARN, ERROR, SUCCESS }
 
     /**
+     * Show or hide the inline compute progress in the rail.
+     * <p>
+     * The old UI reported progress in a floating dialog that covered the plot and had to
+     * be moved out of the way. Progress belongs next to the button that started it: the
+     * bar sits directly under Run UMAP, and the stage line ("Building neighbour
+     * graph…", "Projecting remaining 840,000 cells…") tells the user which of the slow
+     * phases they are in, which is the difference between waiting and wondering.
+     */
+    private void setComputeProgress(boolean running, String stage) {
+        computeProgress.setVisible(running);
+        computeProgress.setManaged(running);
+        computeStage.setVisible(running);
+        computeStage.setManaged(running);
+        if (running) {
+            // Indeterminate: SMILE's UMAP reports phase transitions, not a fraction, and
+            // a bar that invents a percentage would be lying about the longest wait in
+            // the application.
+            computeProgress.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+            if (stage != null) computeStage.setText(stage);
+        } else {
+            computeStage.setText("");
+        }
+    }
+
+    /**
      * Functional bridge that lets sibling controllers (e.g. {@link ComputeController})
      * push colored / auto-clearing status messages without exposing the raw
      * {@code statusLabel}.
@@ -1687,6 +2037,12 @@ public class UmapPane extends BorderPane {
     }
 
     private void setStatus(String text, StatusLevel level) {
+        // While a run is in flight the compute service's phase messages are the most
+        // useful thing on screen, so mirror them into the rail beside the progress bar
+        // as well as into the status line.
+        if (computeStage.isVisible() && level == StatusLevel.INFO && text != null) {
+            computeStage.setText(text);
+        }
         statusLabel.setText(text);
         statusLabel.setStyle(switch (level) {
             case INFO -> "-fx-text-fill: white;";

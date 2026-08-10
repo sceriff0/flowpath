@@ -26,8 +26,7 @@ import java.util.function.Supplier;
  *   <li>Build and own the quality-preset combo, k/epochs/dotSize/maxCells spinners,
  *       subsample-mode combo, compute and cancel buttons.</li>
  *   <li>Track the {@code applyingPreset} guard, current {@code negativeSamples}
- *       (set by the active preset), {@code computeStartTime}, and the floating
- *       {@link UmapProgressDialog}.</li>
+ *       (set by the active preset) and {@code computeStartTime}.</li>
  *   <li>Wire {@code computeService}'s {@code onComplete}/{@code onError}/
  *       {@code onStatusUpdate} callbacks.</li>
  *   <li>Drive {@link UiStateController} into {@code COMPUTING}/{@code COMPUTED}
@@ -50,9 +49,6 @@ import java.util.function.Supplier;
  *       receives it via constructor and wires its callbacks. UmapPane's
  *       {@code initializeFromImage} keeps calling {@code computeService.cancel()}
  *       directly for tear-down.</li>
- *   <li><b>BLOCK #2 status snapshot:</b> the status-update lambda lives in this
- *       controller and snapshots {@code progressDialog} into a local before use
- *       (verbatim preservation of the v0.9.2 FX-thread race fix).</li>
  *   <li><b>Status reporting:</b> uses a {@code BiConsumer<String, StatusLevel>}
  *       supplied by UmapPane so colored/auto-clear status semantics stay
  *       centralized in {@code UmapPane#setStatus}.</li>
@@ -75,7 +71,6 @@ final class ComputeController {
     private boolean applyingPreset = false;
     private int negativeSamples = 3;          // Fast preset default; updated by applyPreset
     private long computeStartTime;
-    private UmapProgressDialog progressDialog;
 
     // --- Collaborators ---
     private final UmapComputeService computeService;
@@ -92,7 +87,6 @@ final class ComputeController {
     private final Supplier<UiStateController.UiState> restingStateSupplier;
     private final Consumer<UmapResult> resultConsumer;
     private final UmapPane.StatusReporter statusReporter;
-    private final Supplier<javafx.stage.Window> ownerSupplier;
 
     /**
      * Construct the compute controller. Builds its own JavaFX controls; expose
@@ -107,9 +101,6 @@ final class ComputeController {
      *                              AFTER the UI state is set to COMPUTED
      * @param statusReporter        accepts ({@code text}, {@link UmapPane.StatusLevel})
      *                              pairs so UmapPane can color/auto-clear consistently
-     * @param ownerSupplier         supplies the window used as the modal owner for
-     *                              warning dialogs / the progress dialog (may return null
-     *                              before the panel is attached to a scene)
      * @param dotSizeListener       called when the user adjusts the Dot Size spinner;
      *                              UmapPane forwards this to its canvases. Kept as a
      *                              callback so the controller owns no rendering surface.
@@ -119,14 +110,12 @@ final class ComputeController {
                       Supplier<UiStateController.UiState> restingStateSupplier,
                       Consumer<UmapResult> resultConsumer,
                       UmapPane.StatusReporter statusReporter,
-                      Supplier<javafx.stage.Window> ownerSupplier,
                       Consumer<Double> dotSizeListener) {
         this.computeService = Objects.requireNonNull(computeService, "computeService");
         this.cellIndexSupplier = Objects.requireNonNull(cellIndexSupplier, "cellIndexSupplier");
         this.restingStateSupplier = Objects.requireNonNull(restingStateSupplier, "restingStateSupplier");
         this.resultConsumer = Objects.requireNonNull(resultConsumer, "resultConsumer");
         this.statusReporter = Objects.requireNonNull(statusReporter, "statusReporter");
-        this.ownerSupplier = Objects.requireNonNull(ownerSupplier, "ownerSupplier");
         Objects.requireNonNull(dotSizeListener, "dotSizeListener");
 
         // --- Build controls ---
@@ -211,23 +200,14 @@ final class ComputeController {
         // --- Wire compute service callbacks ---
         computeService.setOnComplete(this::onUmapComplete);
         computeService.setOnError(this::onUmapError);
-        // BLOCK #2 (UI half): snapshot the mutable progressDialog field into a
-        // local before use. UmapComputeService already enqueues this callback via
-        // Platform.runLater, so we run on the FX thread — but cancelUmap() and
-        // onUmapComplete() (also on the FX thread) can null progressDialog
-        // between when the engine enqueues a status update and when the FX thread
-        // dequeues and runs this lambda. Reading the field into a local at the
-        // start ensures the null-check and the dlg.updateStatus(s) call both see
-        // the same reference, even if a sibling FX-thread handler nulls the field
-        // mid-execution (e.g. via a re-entrant event). The statusReporter is
-        // final-after-init in UmapPane and never replaced.
-        computeService.setOnStatusUpdate(s -> {
-            statusReporter.report(s, UmapPane.StatusLevel.INFO);
-            UmapProgressDialog dlg = progressDialog;  // snapshot
-            if (dlg != null) {
-                dlg.updateStatus(s);
-            }
-        });
+        // Phase messages ("Building neighbour graph…", "Projecting remaining N cells…")
+        // go to the status reporter, which mirrors them into the rail beside the inline
+        // progress bar. They used to also drive a floating progress dialog; that dialog
+        // opened over the plot, had to be dragged aside, and duplicated a Cancel button
+        // that the rail already shows. Progress now lives under the button that started
+        // it, so there is one place to look and nothing covering the data.
+        computeService.setOnStatusUpdate(s ->
+                statusReporter.report(s, UmapPane.StatusLevel.INFO));
     }
 
     /**
@@ -241,17 +221,6 @@ final class ComputeController {
      */
     void attachUiState(UiStateController uiState) {
         this.uiState = Objects.requireNonNull(uiState, "uiState");
-    }
-
-    /**
-     * Close and clear the progress dialog if one is currently held. Idempotent;
-     * called by UmapPane's {@code initializeFromImage} during tear-down.
-     */
-    void disposeProgressDialog() {
-        if (progressDialog != null) {
-            progressDialog.close();
-            progressDialog = null;
-        }
     }
 
     // --- Control getters (toolbar assembly happens in UmapPane) ---
@@ -374,13 +343,6 @@ final class ComputeController {
         computeStartTime = System.currentTimeMillis();
         statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
 
-        // Show progress dialog
-        if (progressDialog != null) progressDialog.close();
-        javafx.stage.Window owner = ownerSupplier.get();
-        progressDialog = new UmapProgressDialog(owner);
-        progressDialog.setOnCancel(this::cancelUmap);
-        progressDialog.show();
-
         computeService.compute(cellIndex, params, maxCells, scaling);
     }
 
@@ -394,7 +356,6 @@ final class ComputeController {
         // Restore the appropriate post-cancel state: COMPUTED if a prior result exists,
         // READY if cellIndex is built but no result yet, NO_IMAGE if neither.
         uiState.setState(restingStateSupplier.get());
-        if (progressDialog != null) { progressDialog.close(); progressDialog = null; }
         statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
     }
 
@@ -406,7 +367,6 @@ final class ComputeController {
     void onUmapComplete(UmapResult result) {
         // Enables gating + export, disables tag controls (await polygon), hides cancel/progress
         uiState.setState(UiStateController.UiState.COMPUTED);
-        if (progressDialog != null) { progressDialog.close(); progressDialog = null; }
 
         // Hand the result to UmapPane for rendering / coloring / legend update
         resultConsumer.accept(result);
@@ -425,7 +385,6 @@ final class ComputeController {
      */
     void onUmapError(String message) {
         uiState.setState(restingStateSupplier.get());
-        if (progressDialog != null) { progressDialog.close(); progressDialog = null; }
         statusReporter.report("Error: " + message, UmapPane.StatusLevel.ERROR);
 
         new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
@@ -435,7 +394,4 @@ final class ComputeController {
 
     /** Visible for tests: snapshot the current preset's negative-samples count. */
     int getNegativeSamples() { return negativeSamples; }
-
-    /** Visible for tests: whether a progress dialog is currently held. */
-    boolean hasProgressDialog() { return progressDialog != null; }
 }

@@ -16,12 +16,21 @@ dependencies {
     shadow(libs.bundles.logging)
     shadow(libs.qupath.fxtras)
 
-    // SMILE provides the UMAP implementation. Bundled into the fat JAR, with the
-    // native BLAS backends excluded — they add ~100MB of platform binaries that the
-    // pure-Java path used here never loads.
+    // SMILE provides the UMAP implementation (smile.manifold.UMAP +
+    // smile.graph.NearestNeighborGraph). Bundled into the fat JAR, minus three sets
+    // of dependencies FlowPath never reaches:
+    //
+    //  - org.bytedeco / com.epam — native BLAS backends. The pure-Java path used
+    //    here never loads them.
+    //  - org.duckdb — pulled in for SMILE's data-loading conveniences, which nothing
+    //    here calls. It ships prebuilt native libraries for four platforms and was
+    //    231MB uncompressed, roughly 95% of the shaded JAR. Excluding it takes the
+    //    release artefact from 75MB to under 5MB.
+    //  - commons-csv — likewise only used by SMILE's I/O layer.
     implementation("com.github.haifengl:smile-core:4.3.0") {
         exclude(group = "org.bytedeco")
         exclude(group = "com.epam")
+        exclude(group = "org.duckdb")
         exclude(group = "org.apache.commons", module = "commons-csv")
     }
 
