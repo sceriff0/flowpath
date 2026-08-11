@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 11/08/2026
+
+Per-compartment gating works on a default MIRAGE export. It did not before.
+
+### Fixed
+- **Nuclear and cytoplasmic gating read NaN on a default-quantification export.**
+  MIRAGE emits `Median` for every compartment it quantifies and adds `Mean`/`Sum`
+  only with `--expanded_quantification`. FlowPath had that documented backwards
+  and pinned a gate axis to `Mean` whenever a channel carried a single statistic
+  — exactly the default case. The axis resolved to `"<marker>: <Compartment>:
+  Mean"`, a key that is not in the file, so every cell read NaN: an empty
+  histogram and a gate that classified nothing. Whole-cell appeared to work only
+  because `(Whole-cell, Mean)` is the one selection with a bare-key fallback.
+  Exports made with `--expanded_quantification` were unaffected.
+- **The `W·med` badge appeared on a new gate and vanished.** Same cause: the gate
+  model defaults to Median and the editor immediately overrode it. New gates now
+  resolve their compartment and statistic against the image before reaching the
+  tree, so the badge reflects what will actually be measured.
+- **The UMAP feature seed had the same defect**, and its guard against a NaN
+  column fell back to the very statistic it had just rejected. Both halves now
+  call `CompartmentCapability.resolveCompartment` / `resolveStatistic`.
+- Converting a threshold gate to a 2D gate stamped a whole-cell `Mean` Y axis
+  onto the new gate, reading past the source's axis count. Only axes the source
+  actually has are copied now.
+- Compartment availability was sampled over 100 cells for gating but 20 for the
+  UMAP, so a marker whose keys appeared later was offered in the gate editor and
+  silently downgraded in the UMAP.
+
+### Performance
+- **Loading a per-compartment export is ~30x faster.** `CellIndex.build` took
+  14.6 s for 50 000 cells x 169 measurements and now takes 0.5 s. The morphology
+  lookup names (`area`, `Centroid X`) never match the exported names (`Area µm²`,
+  `Centroid X µm`) exactly, so every cell fell through to two case-folding scans
+  of its entire measurement map, seven times over. The keys are resolved once
+  from a sample instead.
+- **Switching compartment is no longer slow.** An unresolvable key takes
+  `CellIndex`'s per-cell fallback, ~100x the resolved path (1225 ms vs 13 ms per
+  column at 50 000 cells) — and the bug above guaranteed that path on every
+  switch. Resolved columns now resolve their key once and do one lookup per cell.
+
+### Changed
+- Region gates (polygon, rectangle, ellipse) show their compartment badge in the
+  gate tree, as quadrant and threshold gates already did. A nuclear region gate
+  was previously indistinguishable from a whole-cell one.
+
 ## [2.0.0] - 10/08/2026
 
 FlowPath and qUMAP are now one extension. Gating is the way in, and the UMAP
