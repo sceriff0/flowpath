@@ -2,9 +2,7 @@ package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.roi.ROIs;
-import qupath.lib.regions.ImagePlane;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.util.Collections;
 import java.util.List;
@@ -13,19 +11,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CellIndexCentroidTest {
 
-    private static PathObject createCell() {
-        return createCellAt(0, 0);
-    }
-
-    private static PathObject createCellAt(double x, double y) {
-        return PathObjects.createDetectionObject(
-                ROIs.createPointsROI(x, y, ImagePlane.getDefaultPlane()));
-    }
-
     @Test
     void buildWithBasicMeasurements() {
-        var c1 = createCell();
-        var c2 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
         c1.getMeasurements().put("CD45", 1.0);
         c2.getMeasurements().put("CD45", 2.0);
 
@@ -38,7 +27,7 @@ class CellIndexCentroidTest {
 
     @Test
     void markerIndexReturnsMinusOneForUnknown() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 1.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -48,8 +37,8 @@ class CellIndexCentroidTest {
 
     @Test
     void getObjectReturnsOriginalPathObject() {
-        var c1 = createCell();
-        var c2 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
         var index = CellIndex.build(List.of(c1, c2), List.of());
 
         assertSame(c1, index.getObject(0));
@@ -58,7 +47,7 @@ class CellIndexCentroidTest {
 
     @Test
     void markerValueFromLayerPrefix() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("[Layer0] CD45", 5.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -67,7 +56,7 @@ class CellIndexCentroidTest {
 
     @Test
     void missingMarkerValueReturnsNaN() {
-        var c = createCell();
+        var c = Cells.detection();
         var index = CellIndex.build(List.of(c), List.of("MISSING"));
 
         assertTrue(Double.isNaN(index.getMarkerValues(0)[0]));
@@ -84,7 +73,7 @@ class CellIndexCentroidTest {
         // ROI sits at (7, 9) but explicit centroid measurements are present, so the
         // measurements win — this keeps FlowPath CSV round-trips byte-faithful,
         // including whatever units the exporter used.
-        var c = createCellAt(7, 9);
+        var c = Cells.detectionAt(7, 9);
         c.getMeasurements().put("Centroid X", 100.0);
         c.getMeasurements().put("Centroid Y", 200.0);
         var index = CellIndex.build(List.of(c), List.of());
@@ -99,7 +88,7 @@ class CellIndexCentroidTest {
         // position lives on the ROI. Without this fallback every centroid was NaN,
         // which blanked the CSV export's centroid columns and left no coordinate to
         // navigate the viewer to.
-        var c = createCellAt(12.5, 34.5);
+        var c = Cells.detectionAt(12.5, 34.5);
         c.getMeasurements().put("CD45", 1.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -108,19 +97,27 @@ class CellIndexCentroidTest {
     }
 
     @Test
-    void centroidFallsBackPerAxis() {
-        // Only X is supplied as a measurement; Y must still come from the ROI.
-        var c = createCellAt(12.5, 34.5);
+    void centroidFallsBackJointlyNeverPerAxis() {
+        // Supersedes the old centroidFallsBackPerAxis expectation, which encoded a unit
+        // bug: it took X from the measurement (micrometres) and Y from the ROI (pixels),
+        // producing a "position" that was half in one coordinate space and half in the
+        // other. A position is a pair, so the axes resolve together — an export offering
+        // only one centroid measurement offers no usable centroid, and BOTH axes come
+        // from the ROI.
+        var c = Cells.detectionAt(12.5, 34.5);
         c.getMeasurements().put("Centroid X", 100.0);
         var index = CellIndex.build(List.of(c), List.of());
 
-        assertEquals(100.0, index.getCentroidX(0));
+        assertEquals(12.5, index.getCentroidX(0),
+                "X must abandon its measurement when Y has none — not mix spaces");
         assertEquals(34.5, index.getCentroidY(0));
+        assertEquals(CoordinateSpace.PIXELS, index.geometry().sourceSpace(),
+                "and the space the fallback landed in must be recorded");
     }
 
     @Test
     void centroidFromLayerPrefixedMeasurement() {
-        var c = createCellAt(7, 9);
+        var c = Cells.detectionAt(7, 9);
         c.getMeasurements().put("[Layer0] Centroid X", 100.0);
         c.getMeasurements().put("[Layer0] Centroid Y", 200.0);
         var index = CellIndex.build(List.of(c), List.of());
@@ -136,7 +133,7 @@ class CellIndexCentroidTest {
         // per-cell fallback rather than silently becoming NaN.
         var cells = new java.util.ArrayList<PathObject>();
         for (int i = 0; i < 25; i++) {
-            var c = createCell();
+            var c = Cells.detection();
             c.getMeasurements().put("CD45", (double) i);
             cells.add(c);
         }
@@ -152,7 +149,7 @@ class CellIndexCentroidTest {
 
     @Test
     void getMarkerValuesRawExposesBackingArray() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 5.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -163,8 +160,8 @@ class CellIndexCentroidTest {
 
     @Test
     void toMatrixTransposesCorrectly() {
-        var c1 = createCell();
-        var c2 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
         c1.getMeasurements().put("CD45", 1.0);
         c1.getMeasurements().put("CD3", 10.0);
         c2.getMeasurements().put("CD45", 2.0);
@@ -184,9 +181,9 @@ class CellIndexCentroidTest {
 
     @Test
     void toMatrixReplacesNaNWithColumnMean() {
-        var c1 = createCell();
-        var c2 = createCell();
-        var c3 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
+        var c3 = Cells.detection();
         // Test with all-present values to verify basic matrix construction
         c1.getMeasurements().put("CD45", 2.0);
         c2.getMeasurements().put("CD45", 4.0);
@@ -203,7 +200,7 @@ class CellIndexCentroidTest {
 
     @Test
     void toMatrixSingleCellSingleMarker() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 42.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
         double[][] matrix = index.toMatrix();
@@ -215,7 +212,7 @@ class CellIndexCentroidTest {
 
     @Test
     void multipleMarkersStoredIndependently() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 3.0);
         c.getMeasurements().put("CD3", 7.0);
         var index = CellIndex.build(List.of(c), List.of("CD45", "CD3"));
@@ -226,7 +223,7 @@ class CellIndexCentroidTest {
 
     @Test
     void getMarkerNamesReturnsAllMarkers() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 1.0);
         c.getMeasurements().put("CD3", 2.0);
         var index = CellIndex.build(List.of(c), List.of("CD45", "CD3"));
@@ -252,7 +249,7 @@ class CellIndexCentroidTest {
 
     @Test
     void getMarkerValuesSharesTheBackingColumn() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 5.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -265,8 +262,8 @@ class CellIndexCentroidTest {
 
     @Test
     void getObjectsSharesTheBackingArray() {
-        var c1 = createCell();
-        var c2 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
         var index = CellIndex.build(List.of(c1, c2), List.of());
 
         assertSame(index.getObjects(), index.getObjects(),
@@ -277,7 +274,7 @@ class CellIndexCentroidTest {
 
     @Test
     void getMarkerNamesSharesTheBackingArray() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 1.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -290,7 +287,7 @@ class CellIndexCentroidTest {
     void missingCentroidMeasurementUsesRoiNotNaN() {
         // Supersedes the old missingCentroidReturnsNaN expectation, which encoded
         // the bug: a detection always has a ROI, so its position is always known.
-        var c = createCellAt(3, 4);
+        var c = Cells.detectionAt(3, 4);
         c.getMeasurements().put("CD45", 1.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 

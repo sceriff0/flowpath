@@ -2,11 +2,13 @@ package qupath.ext.flowpath.io;
 
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.model.CellGeometry;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
@@ -48,62 +50,78 @@ public class PhenotypeCsvExporter {
         // static utility class
     }
 
-    /** A 1D threshold imposed on a resolved column by a ThresholdGate or one QuadrantGate axis. */
-    private record MarkerThreshold(double threshold, boolean isZScore) {}
+    /**
+     * A 1D cut imposed on a resolved column by a ThresholdGate or one QuadrantGate axis,
+     * kept as {@code (gate, axis)} rather than as a copied threshold value so that
+     * deciding positivity goes through the gate's own
+     * {@link GateNode#isPositiveAt(int, double)} — the same geometry the engine and the
+     * histogram use.
+     */
+    private record AxisCut(GateNode gate, int axis) {}
 
     /**
-     * One exported column group: the measurement column a gate axis resolves to, plus
-     * the header prefix used for its {@code _raw} / {@code _zscore} / {@code _sign} triplet.
+     * A region gate with both of its axis columns already resolved, so the per-cell sign
+     * pass reads {@code double[]} by index instead of re-resolving two columns per cell.
      */
-    private record ResolvedColumn(String channel, Compartment compartment, Statistic statistic, String key) {
-        /** {@code "CD3: Nucleus: Mean"} -> {@code "CD3_Nucleus_Mean"}; a bare marker is unchanged. */
-        String header() {
-            return key.replace(": ", "_");
-        }
+    private record ResolvedRegion(Region2DGate gate, MeasuredColumn x, MeasuredColumn y,
+                                  boolean evaluable) {}
+
+    /** {@code "CD3: Nucleus: Mean"} -> {@code "CD3_Nucleus_Mean"}; a bare marker is unchanged. */
+    private static String header(MeasuredColumn column) {
+        return column.key().replace(": ", "_");
     }
 
     /**
      * Export phenotype assignments to CSV with raw intensities, z-scores, and signs.
+     *
+     * @param stats statistics for the same population the gating used; required, because
+     *              every {@code _zscore} and every z-score-mode {@code _sign} is reported
+     *              against it
      */
     public static void export(File file, CellIndex index, GatingEngine.AssignmentResult result,
                               GateTree tree, MarkerStats stats) throws IOException {
 
-        List<ResolvedColumn> columns = collectColumns(tree, index);
+        // Each column arrives already registered with MarkerStats — that is what holding a
+        // MeasuredColumn means — so there is no separate ensure pass to forget.
+        List<MeasuredColumn> columns = collectColumns(tree, index, stats);
 
         // Threshold inventory keyed by resolved column, so a nuclear cut and a
         // cytoplasmic cut on the same marker never pool into one sign.
-        Map<String, List<MarkerThreshold>> thresholdsByColumn = new LinkedHashMap<>();
-        Map<String, List<Region2DGate>> regionGatesByColumn = new LinkedHashMap<>();
+        Map<String, List<AxisCut>> thresholdsByColumn = new LinkedHashMap<>();
+        Map<String, List<ResolvedRegion>> regionGatesByColumn = new LinkedHashMap<>();
         for (GateNode root : tree.getRoots()) {
-            collectThresholdsRecursive(root, index, thresholdsByColumn, regionGatesByColumn);
-        }
-
-        // Materialise each column once rather than per cell, and make sure MarkerStats
-        // knows it — the engine's pre-pass registers gated columns, but export() is also
-        // called directly (tests, scripting) where that has not necessarily happened.
-        double[][] columnValues = new double[columns.size()][];
-        for (int c = 0; c < columns.size(); c++) {
-            ResolvedColumn col = columns.get(c);
-            columnValues[c] = index.getResolvedColumn(col.channel(), col.compartment(), col.statistic());
-            if (stats != null && !stats.hasColumn(col.key())) {
-                stats.ensureColumn(col.key(), columnValues[c]);
-            }
+            collectThresholdsRecursive(root, index, stats, thresholdsByColumn, regionGatesByColumn);
         }
 
         String[] phenotypes = result.getPhenotypes();
         boolean[] outOfAnnotation = result.getOutOfAnnotation();
         boolean[] outlier = result.getOutlier();
 
+        CellGeometry geometry = index.geometry();
+        // Emitted only when the export actually carries labels. An all-blank column would
+        // be worse than no column: join_flowpath.py branches on the column's *presence*,
+        // so a blank one sends it down the exact-join path to match nothing, where its
+        // absence correctly selects the centroid fallback.
+        boolean withLabel = index.hasLabels();
+
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
             // Header — Out_of_annotation and Outlier flag cells excluded from QuPath
             // visual classification but still written as CSV rows.
-            writer.write("cell_id,phenotype,Out_of_annotation,Outlier,centroid_x,centroid_y,area,perimeter,eccentricity,solidity");
-            for (ResolvedColumn col : columns) {
+            //
+            // cell_id, phenotype, centroid_x and centroid_y are a cross-repo contract:
+            // mirage/bin/join_flowpath.py hard-fails without the last three and inverts
+            // centroid_x/centroid_y as `/ pixel_size - 0.5`. They must keep these names
+            // and centroid_* must be micrometres. Additional columns are safe.
+            writer.write("cell_id");
+            if (withLabel) writer.write(",label");
+            writer.write(",phenotype,Out_of_annotation,Outlier,centroid_x,centroid_y"
+                    + ",centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity");
+            for (MeasuredColumn col : columns) {
                 // Escape the *whole* field, suffix included: a channel name containing a
                 // comma would otherwise emit `"CD3, clone"_raw`, which is text after a
                 // closing quote and not valid CSV (lenient parsers recover; strict ones
                 // do not).
-                String base = col.header();
+                String base = header(col);
                 writer.write("," + escapeCsv(base + "_raw"));
                 writer.write("," + escapeCsv(base + "_zscore"));
                 writer.write("," + escapeCsv(base + "_sign"));
@@ -115,6 +133,7 @@ public class PhenotypeCsvExporter {
                 String phenotype = phenotypes[i] != null ? phenotypes[i] : "";
 
                 writer.write(String.valueOf(i));
+                if (withLabel) writer.write(',' + fmtLabel(index.getLabel(i)));
                 writer.write(',');
                 writer.write(escapeCsv(phenotype));
                 writer.write(',');
@@ -122,28 +141,33 @@ public class PhenotypeCsvExporter {
                 writer.write(',');
                 writer.write(outlier[i] ? "True" : "False");
 
-                writer.write(',' + fmt(index.getCentroidX(i)));
-                writer.write(',' + fmt(index.getCentroidY(i)));
+                // centroid_x/centroid_y are micrometres whenever micrometres can be
+                // known — either measured, or derived from the ROI via the image's
+                // calibration. Only an uncalibrated image with no µm measurement leaves
+                // them in the source space (pixels), which is what they have always been
+                // in that case; blanking them instead would lose the position entirely.
+                writer.write(',' + fmt(micronsOrSource(geometry, i, true)));
+                writer.write(',' + fmt(micronsOrSource(geometry, i, false)));
+                // The pixel space, stated explicitly. Additive, and it saves a consumer
+                // from inverting the calibration to get back to mask coordinates.
+                writer.write(',' + fmt(geometry.pixelsX(i)));
+                writer.write(',' + fmt(geometry.pixelsY(i)));
                 writer.write(',' + fmt(index.getArea(i)));
                 writer.write(',' + fmt(index.getPerimeter(i)));
                 writer.write(',' + fmt(index.getEccentricity(i)));
                 writer.write(',' + fmt(index.getSolidity(i)));
 
                 for (int c = 0; c < columns.size(); c++) {
-                    ResolvedColumn col = columns.get(c);
-                    String key = col.key();
-                    double raw = columnValues[c][i];
+                    MeasuredColumn col = columns.get(c);
+                    double raw = col.valueAt(i);
 
-                    double zscore;
-                    if (Double.isNaN(raw) || stats == null || stats.getStd(key) <= 1e-10) {
-                        zscore = Double.NaN;
-                    } else {
-                        zscore = stats.toZScore(key, raw);
-                    }
+                    double zscore = (Double.isNaN(raw) || !col.hasSpread())
+                            ? Double.NaN
+                            : col.toZScore(raw);
 
-                    String sign = computeSign(i, key, raw, index, stats,
-                                              thresholdsByColumn.get(key),
-                                              regionGatesByColumn.get(key));
+                    String sign = computeSign(i, col, raw,
+                                              thresholdsByColumn.get(col.key()),
+                                              regionGatesByColumn.get(col.key()));
 
                     writer.write(',' + fmt(raw));
                     writer.write(',' + fmt(zscore));
@@ -159,45 +183,42 @@ public class PhenotypeCsvExporter {
      * and 2D region gates per resolved axis column.
      */
     private static void collectThresholdsRecursive(
-            GateNode node, CellIndex index,
-            Map<String, List<MarkerThreshold>> thresholds,
-            Map<String, List<Region2DGate>> regionGates) {
+            GateNode node, CellIndex index, MarkerStats stats,
+            Map<String, List<AxisCut>> thresholds,
+            Map<String, List<ResolvedRegion>> regionGates) {
         if (!node.isEnabled()) return;
         if (node instanceof QuadrantGate qg) {
-            boolean z = qg.isThresholdIsZScore();
-            addThreshold(thresholds, index, qg.getChannelX(), qg.getCompartmentX(), qg.getStatisticX(),
-                    qg.getThresholdX(), z);
-            addThreshold(thresholds, index, qg.getChannelY(), qg.getCompartmentY(), qg.getStatisticY(),
-                    qg.getThresholdY(), z);
+            addThreshold(thresholds, index.column(qg, 0, stats), qg, 0);
+            addThreshold(thresholds, index.column(qg, 1, stats), qg, 1);
         } else if (node instanceof Region2DGate region) {
-            String keyX = keyOf(index, region.getChannelX(), region.getCompartmentX(), region.getStatisticX());
-            String keyY = keyOf(index, region.getChannelY(), region.getCompartmentY(), region.getStatisticY());
-            if (keyX != null) regionGates.computeIfAbsent(keyX, k -> new ArrayList<>()).add(region);
-            if (keyY != null) regionGates.computeIfAbsent(keyY, k -> new ArrayList<>()).add(region);
+            // Resolve both axes once here; computeSign then reads them by cell index.
+            // A half-configured region still registers under the axis it does have, so
+            // that column reports "-" rather than blank — the gate exists, this cell just
+            // is not in it.
+            MeasuredColumn colX = index.column(region, 0, stats);
+            MeasuredColumn colY = index.column(region, 1, stats);
+            boolean evaluable = colX != null && colY != null
+                    && index.getMarkerIndex(region.getChannelX()) >= 0
+                    && index.getMarkerIndex(region.getChannelY()) >= 0;
+            ResolvedRegion resolved = new ResolvedRegion(region, colX, colY, evaluable);
+            if (colX != null) regionGates.computeIfAbsent(colX.key(), k -> new ArrayList<>()).add(resolved);
+            if (colY != null) regionGates.computeIfAbsent(colY.key(), k -> new ArrayList<>()).add(resolved);
         } else {
             // ThresholdGate: 1D cut on a single resolved column
-            addThreshold(thresholds, index, node.getChannel(), node.getCompartment(), node.getStatistic(),
-                    node.getThreshold(), node.isThresholdIsZScore());
+            addThreshold(thresholds, index.column(node, 0, stats), node, 0);
         }
         for (Branch b : node.getBranches()) {
             for (GateNode child : b.getChildren()) {
-                collectThresholdsRecursive(child, index, thresholds, regionGates);
+                collectThresholdsRecursive(child, index, stats, thresholds, regionGates);
             }
         }
     }
 
-    private static void addThreshold(Map<String, List<MarkerThreshold>> thresholds, CellIndex index,
-                                     String channel, Compartment comp, Statistic stat,
-                                     double threshold, boolean isZScore) {
-        String key = keyOf(index, channel, comp, stat);
-        if (key == null) return;
-        thresholds.computeIfAbsent(key, k -> new ArrayList<>()).add(new MarkerThreshold(threshold, isZScore));
-    }
-
-    /** Resolved column key, or null when the gate has no usable channel on this axis. */
-    private static String keyOf(CellIndex index, String channel, Compartment comp, Statistic stat) {
-        if (channel == null || channel.isEmpty()) return null;
-        return index.resolvedKey(channel, comp, stat);
+    private static void addThreshold(Map<String, List<AxisCut>> thresholds,
+                                     MeasuredColumn column, GateNode gate, int axis) {
+        if (column == null) return;
+        thresholds.computeIfAbsent(column.key(), k -> new ArrayList<>())
+                .add(new AxisCut(gate, axis));
     }
 
     /**
@@ -207,55 +228,55 @@ public class PhenotypeCsvExporter {
      * "+" on both of that gate's axis columns).
      * <p>
      * Returns blank if the column has no threshold or region anywhere in the tree.
-     * Mirrors {@code GatingEngine.evaluateGate}.
+     * <p>
+     * The <em>geometry</em> — where the cut is, what counts as inside — comes from the
+     * gates themselves ({@link GateNode#isPositiveAt}, {@link GateNode#branchFor}), the
+     * same methods {@code GatingEngine} classifies with and the plots colour with, so this
+     * column cannot drift away from the {@code phenotype} column beside it. Only the
+     * <em>sample resolution</em> is local, and deliberately so: a degenerate column is
+     * skipped here (the gate contributes no opinion) where the engine standardises it to
+     * zero, because a sign of "+" earned by a column with no spread would be noise.
      */
-    private static String computeSign(int cellIdx, String key, double raw,
-                                       CellIndex index, MarkerStats stats,
-                                       List<MarkerThreshold> thresholds,
-                                       List<Region2DGate> regionGates) {
+    private static String computeSign(int cellIdx, MeasuredColumn column, double raw,
+                                       List<AxisCut> thresholds,
+                                       List<ResolvedRegion> regionGates) {
         boolean hasThresholds = thresholds != null && !thresholds.isEmpty();
         boolean hasRegions = regionGates != null && !regionGates.isEmpty();
         if (!hasThresholds && !hasRegions) return "";
         if (Double.isNaN(raw)) return "";
 
         if (hasThresholds) {
-            for (MarkerThreshold t : thresholds) {
+            for (AxisCut cut : thresholds) {
                 double cmp;
-                if (t.isZScore()) {
-                    if (stats == null || stats.getStd(key) <= 1e-10) continue;
-                    cmp = stats.toZScore(key, raw);
+                if (cut.gate().isThresholdIsZScore()) {
+                    if (!column.hasSpread()) continue;
+                    cmp = column.toZScore(raw);
                 } else {
                     cmp = raw;
                 }
-                if (cmp >= t.threshold()) return "+";
+                if (cut.gate().isPositiveAt(cut.axis(), cmp)) return "+";
             }
         }
 
         if (hasRegions) {
-            for (Region2DGate gate : regionGates) {
-                String chX = gate.getChannelX();
-                String chY = gate.getChannelY();
-                if (chX == null || chY == null) continue;
-                if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) continue;
+            for (ResolvedRegion region : regionGates) {
+                if (!region.evaluable()) continue;
                 // Each axis is evaluated on its own resolved column, matching the engine.
-                String keyX = index.resolvedKey(chX, gate.getCompartmentX(), gate.getStatisticX());
-                String keyY = index.resolvedKey(chY, gate.getCompartmentY(), gate.getStatisticY());
-                double rawX = index.getResolvedColumn(chX, gate.getCompartmentX(), gate.getStatisticX())[cellIdx];
-                double rawY = index.getResolvedColumn(chY, gate.getCompartmentY(), gate.getStatisticY())[cellIdx];
+                double rawX = region.x().valueAt(cellIdx);
+                double rawY = region.y().valueAt(cellIdx);
                 if (Double.isNaN(rawX) || Double.isNaN(rawY)) continue;
                 double vx;
                 double vy;
-                if (gate.isThresholdIsZScore()) {
-                    if (stats == null
-                            || stats.getStd(keyX) <= 1e-10
-                            || stats.getStd(keyY) <= 1e-10) continue;
-                    vx = stats.toZScore(keyX, rawX);
-                    vy = stats.toZScore(keyY, rawY);
+                if (region.gate().isThresholdIsZScore()) {
+                    if (!region.x().hasSpread() || !region.y().hasSpread()) continue;
+                    vx = region.x().toZScore(rawX);
+                    vy = region.y().toZScore(rawY);
                 } else {
                     vx = rawX;
                     vy = rawY;
                 }
-                if (gate.contains(vx, vy)) return "+";
+                // Branch 0 of a region gate is "inside" — see Region2DGate.branchFor.
+                if (region.gate().branchFor(vx, vy) == 0) return "+";
             }
         }
 
@@ -268,36 +289,64 @@ public class PhenotypeCsvExporter {
     }
 
     /**
+     * Format a segmentation label. Written without a decimal part when it is integral,
+     * which it always is for a label — {@code join_flowpath.py} does {@code int(v)} on
+     * the column, and an integer reads as an identity rather than as a measurement.
+     */
+    private static String fmtLabel(double val) {
+        if (Double.isNaN(val)) return "";
+        if (val == Math.rint(val) && !Double.isInfinite(val)) {
+            return String.valueOf((long) val);
+        }
+        return fmt(val);
+    }
+
+    /**
+     * The micrometre coordinate, or the raw source coordinate when micrometres cannot be
+     * derived (an uncalibrated image whose cells carry no µm centroid). Never mixes the
+     * two <em>within</em> a column: {@link CellGeometry} decides one source space for the
+     * whole index, so this either resolves to µm for every row or to pixels for every row.
+     */
+    private static double micronsOrSource(CellGeometry geometry, int i, boolean xAxis) {
+        double microns = xAxis ? geometry.micronsX(i) : geometry.micronsY(i);
+        if (!Double.isNaN(microns)) return microns;
+        return xAxis ? geometry.sourceX(i) : geometry.sourceY(i);
+    }
+
+    /**
      * Collect every column to export: the resolved columns each gate axis uses
      * (depth-first order), then the bare column for any marker in the cell index not
      * already covered. Whole-cell mean resolves to the bare marker key, so a default
      * gate and its marker share one triplet exactly as before.
      */
-    private static List<ResolvedColumn> collectColumns(GateTree tree, CellIndex index) {
-        Map<String, ResolvedColumn> byKey = new LinkedHashMap<>();
+    private static List<MeasuredColumn> collectColumns(GateTree tree, CellIndex index,
+                                                       MarkerStats stats) {
+        Map<String, MeasuredColumn> byKey = new LinkedHashMap<>();
         for (GateNode root : tree.getRoots()) {
-            collectColumnsRecursive(root, index, byKey);
+            collectColumnsRecursive(root, index, stats, byKey);
         }
+        // Every marker also gets its default column. Which key that lands under is
+        // CellIndex's rule to state, not ours — asking for the whole-cell mean and letting
+        // it resolve is what keeps an ungated marker sharing one triplet with a default
+        // gate on the same marker.
         for (String m : index.getMarkerNames()) {
-            byKey.putIfAbsent(m, new ResolvedColumn(m, Compartment.WHOLE_CELL, Statistic.MEAN, m));
+            MeasuredColumn col = index.column(m, Compartment.WHOLE_CELL, Statistic.MEAN, stats);
+            byKey.putIfAbsent(col.key(), col);
         }
         return new ArrayList<>(byKey.values());
     }
 
-    private static void collectColumnsRecursive(GateNode node, CellIndex index,
-                                                Map<String, ResolvedColumn> byKey) {
+    private static void collectColumnsRecursive(GateNode node, CellIndex index, MarkerStats stats,
+                                                Map<String, MeasuredColumn> byKey) {
         List<String> channels = node.getChannels();
         for (int k = 0; k < channels.size(); k++) {
-            String ch = channels.get(k);
-            if (ch == null || ch.isEmpty()) continue;
-            Compartment comp = node.compartmentAt(k);
-            Statistic stat = node.statisticAt(k);
-            byKey.putIfAbsent(index.resolvedKey(ch, comp, stat),
-                    new ResolvedColumn(ch, comp, stat, index.resolvedKey(ch, comp, stat)));
+            MeasuredColumn col = index.column(node, k, stats);
+            if (col == null) continue;
+            byKey.putIfAbsent(col.key(), col);
         }
         for (Branch branch : node.getBranches()) {
             for (GateNode child : branch.getChildren()) {
-                collectColumnsRecursive(child, index, byKey);
+                collectColumnsRecursive(child, index, stats, byKey);
             }
         }
     }
