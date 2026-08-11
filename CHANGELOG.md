@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Architectural deepening across the gating engine, measurement resolution and the
+MIRAGE ingest seam. One user-visible bug fixed; no format or contract changed.
+
+### Fixed
+- **A freshly created or just-cleared 2D gate drew every cell in the *Inside*
+  colour while the engine classified every cell as *Outside*.** The scatter plot
+  only installed an overlay once a shape was drawable (>=3 vertices, non-zero
+  width/radius), and with no overlay its hit test answered "no overlay = all
+  inside". So the plot said everything was selected while the gate selected
+  nothing. Display and classification are now the same code, and
+  `DisplayClassificationAgreementTest` pins the agreement across all five gate
+  types including boundary cases.
+- **The v2.0.1 sample-size fix was only half applied.** `CellIndex.KEY_SAMPLE_SIZE`
+  was still 20 while `CompartmentCapability.DEFAULT_SAMPLE_SIZE` was 100, so a
+  marker whose keys first appeared at cell 50 was offered by the capability scan
+  and then failed to resolve. A second copy of the same drift lived in the UMAP's
+  own marker discovery. Both are gone; the sizes are now one constant.
+- **The gating -> UMAP snapshot identity check was falsifiable.** The UMAP's
+  feature picker rebuilds its own `CellIndex` without updating the snapshot, so
+  `snapshot.index() == incoming.index()` compared against a stale object and chose
+  recolour against a different index. A rebuild onto a same-size, different-cells
+  index also slipped past the record's length validation and painted old
+  phenotypes onto new cells. Identity is now answered from the data
+  (`describesSameCells`) and reconciled via `rebindTo`, which throws rather than
+  migrate half-way.
+- The centroid column could hold micrometres in some rows and pixels in others,
+  because the ROI fallback was applied per axis. Fallback is now joint, and the
+  resulting coordinate space is recorded.
+
+### Added
+- **`ScaleVerdict`** cross-checks the `Centroid X/Y um` measurement against
+  `ROI x PixelCalibration`. MIRAGE's `params.pixel_size` is a static config value
+  that is never auto-detected, so a wrong setting scales every micrometre value
+  uniformly and MIRAGE cannot see it. FlowPath is the only place holding the
+  pyramid calibration, the pixel ROI and the micrometre measurement at once.
+  Reported in the status bar on disagreement.
+- **`IngestReport`** — dropped channels, unresolved keys, cells missing a key the
+  sample resolved, duplicate/null marker names, non-cell objects and the scale
+  verdict. An empty histogram is no longer the only symptom of an unresolved axis.
+  It also separates MIRAGE's two distinct silences: a measurement *omitted*
+  upstream (failed join) versus a literal `0.0` (genuinely empty compartment).
+- **`label` CSV column** when the measurement is present. `mirage/bin/join_flowpath.py`
+  prefers an exact join on `label` and warns when falling back to a fuzzy centroid
+  join. Note MIRAGE does not yet emit `label` into the GeoJSON, so closing this
+  end-to-end needs the producer-side change too.
+- `centroid_x_px` / `centroid_y_px` (additive; `centroid_x`/`centroid_y` keep their
+  names and now reliably carry micrometres).
+
+### Changed
+- `MeasuredColumn` replaces the four-step resolve/ensure/read protocol. Skipping
+  the registration step used to return a z-score of exactly 0.0 for every cell
+  rather than failing - the cause of five separate v2.0.1 fixes. It is no longer
+  expressible.
+- `ResolvedGate.branchOf` is the single gate predicate. Five implementations
+  became one; `GatingEngine` lost 217 lines. Measured marginally *faster*
+  (13.0-13.2 ms vs 13.5-13.8 ms over 200k cells x 5 gates).
+- `UmapSession` extracted from `UmapPane` (2063 -> 1716 lines) and is drivable
+  without a JavaFX toolkit.
+- `UndoHistory` extracted from `FlowPathPane`, with an injectable clock so the
+  500ms coalescing window is testable.
+- One shared test fixture (`testing/Cells`) replaces 12 private cell-builders;
+  one `FxTestSupport` replaces two byte-identical copies.
+
+### Unchanged (verified)
+- CSV headers and values, and the JSON gate-tree format. `phenotype`,
+  `centroid_x` and `centroid_y` are a cross-repo contract with
+  `mirage/bin/join_flowpath.py`, which hard-fails without them.
+- `GatingEngine.computeRoiMask` still compares pixels to pixels.
+- Gating semantics for MIRAGE's literal-`0.0` empty compartment. That distinction
+  is now *reported* but not acted on - changing it would change published numbers.
+
 ## [2.0.1] - 11/08/2026
 
 Per-compartment gating works on a default MIRAGE export. It did not before.
