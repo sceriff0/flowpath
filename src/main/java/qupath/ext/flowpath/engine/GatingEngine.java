@@ -2,17 +2,10 @@ package qupath.ext.flowpath.engine;
 
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
-import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
-import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
-import qupath.ext.flowpath.model.EllipseGate;
-import qupath.ext.flowpath.model.PolygonGate;
-import qupath.ext.flowpath.model.QuadrantGate;
-import qupath.ext.flowpath.model.RectangleGate;
-import qupath.ext.flowpath.model.Region2DGate;
 import qupath.lib.objects.PathObject;
 import qupath.lib.roi.interfaces.ROI;
 
@@ -22,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -140,8 +134,10 @@ public final class GatingEngine {
         boolean[] outlier = new boolean[n];
         int[] colors = new int[n];
 
-        // 0. Register stats for any compartment/statistic columns the tree uses.
-        prepareResolvedColumns(tree.getRoots(), index, stats);
+        // 0. Resolve every gate axis to a MeasuredColumn (which registers its stats),
+        //    once, before the per-cell walk. This replaces the old prepareResolvedColumns
+        //    pre-pass: registration is no longer a separate step that could be skipped.
+        List<ResolvedGate> plan = ResolvedGate.compile(tree.getRoots(), index, stats, null);
 
         // 1. Initialize all as Unclassified
         for (int i = 0; i < n; i++) {
@@ -176,9 +172,9 @@ public final class GatingEngine {
         resetCounts(roots);
 
         // Count enabled roots to decide single vs. multi-root mode
-        List<GateNode> enabledRoots = new ArrayList<>();
-        for (GateNode root : roots) {
-            if (root.isEnabled()) enabledRoots.add(root);
+        List<ResolvedGate> enabledRoots = new ArrayList<>();
+        for (ResolvedGate root : plan) {
+            if (root.node.isEnabled()) enabledRoots.add(root);
         }
         boolean multiRoot = enabledRoots.size() > 1;
 
@@ -196,9 +192,10 @@ public final class GatingEngine {
         if (multiRoot) {
             perRootColors = new ArrayList<>();
             rootLabels = new ArrayList<>();
-            for (GateNode root : enabledRoots) {
+            for (ResolvedGate root : enabledRoots) {
                 perRootColors.add(new int[n]);
-                rootLabels.add(root.getChannels().isEmpty() ? "Root" : root.getChannels().get(0));
+                rootLabels.add(root.node.getChannels().isEmpty()
+                        ? "Root" : root.node.getChannels().get(0));
             }
         }
 
@@ -206,7 +203,7 @@ public final class GatingEngine {
         // for CSV export; branch counts skip increments when excluded[i] is true so the
         // visible counts in the UI continue to reflect non-excluded cells only.
         for (int i = 0; i < n; i++) {
-            walkRoots(roots, i, index, stats, phenotypes, excluded, outlier, colors, perRootColors);
+            walkRoots(plan, i, phenotypes, excluded, outlier, colors, perRootColors);
         }
 
         return new AssignmentResult(phenotypes, excluded, outOfAnnotation, outlier,
@@ -307,8 +304,10 @@ public final class GatingEngine {
         int n = index.size();
         boolean[] mask = new boolean[n];
 
-        // Register stats for any compartment columns referenced by ancestor gates.
-        prepareResolvedColumns(tree.getRoots(), index, stats);
+        // Resolve every gate axis once (which registers its stats), keeping an identity
+        // map so each ancestor on the path can be looked up outside the per-cell loop.
+        Map<GateNode, ResolvedGate> byNode = new IdentityHashMap<>();
+        ResolvedGate.compile(tree.getRoots(), index, stats, byNode);
 
         // Find the path from root to the target node
         java.util.List<Object> path = new java.util.ArrayList<>();
@@ -340,12 +339,13 @@ public final class GatingEngine {
             Branch branch = (Branch) path.get(p + 1);
             if (!gate.isEnabled()) continue;
 
+            // Resolved once per ancestor, outside the cell loop.
+            ResolvedGate resolved = byNode.get(gate);
+            if (resolved == null) continue;
             int branchIdx = gate.getBranches().indexOf(branch);
-            // Use each ancestor gate's own z-score flag instead of the global one
-            boolean gateUseZScore = gate.isThresholdIsZScore();
             for (int i = 0; i < n; i++) {
                 if (!mask[i]) continue;
-                int result = evaluateGate(gate, i, index, stats, gateUseZScore);
+                int result = resolved.branchOf(i);
                 if (result < 0 || result != branchIdx) {
                     mask[i] = false;
                 }
@@ -378,116 +378,17 @@ public final class GatingEngine {
         return false;
     }
 
-    /**
-     * Evaluate which branch index a single cell falls into for a gate.
-     * Returns -1 if the cell would be excluded (outlier).
-     */
-    private static int evaluateGate(GateNode node, int cellIdx,
-                                     CellIndex index, MarkerStats stats, boolean useZScore) {
-        if (node instanceof QuadrantGate qg) {
-            String chX = qg.getChannelX();
-            String chY = qg.getChannelY();
-            if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) return -1;
-            String keyX = index.resolvedKey(chX, qg.getCompartmentX(), qg.getStatisticX());
-            String keyY = index.resolvedKey(chY, qg.getCompartmentY(), qg.getStatisticY());
-            double rawX = index.getResolvedColumn(chX, qg.getCompartmentX(), qg.getStatisticX())[cellIdx];
-            double rawY = index.getResolvedColumn(chY, qg.getCompartmentY(), qg.getStatisticY())[cellIdx];
-            if (node.isExcludeOutliers()) {
-                double loX = stats.getPercentileValue(keyX, node.getClipPercentileLow());
-                double hiX = stats.getPercentileValue(keyX, node.getClipPercentileHigh());
-                if (!Double.isNaN(loX) && !Double.isNaN(hiX) && (rawX < loX || rawX > hiX)) return -1;
-                double loY = stats.getPercentileValue(keyY, node.getClipPercentileLow());
-                double hiY = stats.getPercentileValue(keyY, node.getClipPercentileHigh());
-                if (!Double.isNaN(loY) && !Double.isNaN(hiY) && (rawY < loY || rawY > hiY)) return -1;
-            }
-            // Use each gate's own z-score flag for consistent evaluation
-            boolean gateZScore = qg.isThresholdIsZScore();
-            double cx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
-            double cy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-            return qg.evaluateQuadrant(cx, cy);
-        } else if (node instanceof Region2DGate) {
-            List<String> channels = node.getChannels();
-            if (channels.size() < 2) return -1;
-            String chX = channels.get(0);
-            String chY = channels.get(1);
-            if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) return -1;
-            Compartment cX = node.compartmentAt(0), cY = node.compartmentAt(1);
-            Statistic sX = node.statisticAt(0), sY = node.statisticAt(1);
-            String keyX = index.resolvedKey(chX, cX, sX);
-            String keyY = index.resolvedKey(chY, cY, sY);
-            double rawX = index.getResolvedColumn(chX, cX, sX)[cellIdx];
-            double rawY = index.getResolvedColumn(chY, cY, sY)[cellIdx];
-            if (node.isExcludeOutliers()) {
-                double loX = stats.getPercentileValue(keyX, node.getClipPercentileLow());
-                double hiX = stats.getPercentileValue(keyX, node.getClipPercentileHigh());
-                if (!Double.isNaN(loX) && !Double.isNaN(hiX) && (rawX < loX || rawX > hiX)) return -1;
-                double loY = stats.getPercentileValue(keyY, node.getClipPercentileLow());
-                double hiY = stats.getPercentileValue(keyY, node.getClipPercentileHigh());
-                if (!Double.isNaN(loY) && !Double.isNaN(hiY) && (rawY < loY || rawY > hiY)) return -1;
-            }
-            // Use each gate's own z-score flag — boundaries match the scatter plot coordinate space
-            boolean gateZScore = node.isThresholdIsZScore();
-            double vx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
-            double vy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-            return ((Region2DGate) node).contains(vx, vy) ? 0 : 1;
-        } else {
-            // Threshold gate
-            String channel = node.getChannel();
-            if (index.getMarkerIndex(channel) < 0) return -1;
-            Compartment c = node.getCompartment();
-            Statistic s = node.getStatistic();
-            String key = index.resolvedKey(channel, c, s);
-            double rawValue = index.getResolvedColumn(channel, c, s)[cellIdx];
-            if (node.isExcludeOutliers()) {
-                double lo = stats.getPercentileValue(key, node.getClipPercentileLow());
-                double hi = stats.getPercentileValue(key, node.getClipPercentileHigh());
-                if (!Double.isNaN(lo) && !Double.isNaN(hi) && (rawValue < lo || rawValue > hi)) return -1;
-            }
-            // Use each gate's own z-score flag for consistent evaluation
-            boolean gateZScore = node.isThresholdIsZScore();
-            double compareValue = gateZScore ? stats.toZScore(key, rawValue) : rawValue;
-            return compareValue >= node.getThreshold() ? 0 : 1;
-        }
-    }
-
-    // ---- compartment resolution helpers ----
-
-    /**
-     * Register {@link MarkerStats} columns for every non-default compartment/statistic
-     * selection referenced by the gate tree, before the per-cell walk. Whole-cell mean
-     * selections resolve to the bare marker key, whose stats already exist.
-     */
-    private static void prepareResolvedColumns(List<GateNode> nodes, CellIndex index, MarkerStats stats) {
-        if (nodes == null || stats == null) return;
-        for (GateNode node : nodes) {
-            List<String> channels = node.getChannels();
-            for (int k = 0; k < channels.size(); k++) {
-                String ch = channels.get(k);
-                Compartment c = node.compartmentAt(k);
-                Statistic s = node.statisticAt(k);
-                String key = index.resolvedKey(ch, c, s);
-                if (!key.equals(ch) && index.getMarkerIndex(ch) >= 0) {
-                    stats.ensureColumn(key, index.getResolvedColumn(ch, c, s));
-                }
-            }
-            for (Branch b : node.getBranches()) {
-                prepareResolvedColumns(b.getChildren(), index, stats);
-            }
-        }
-    }
-
     // ---- private helpers ----
 
-    private static void walkRoots(List<GateNode> roots, int cellIdx,
-                                  CellIndex index, MarkerStats stats,
+    private static void walkRoots(List<ResolvedGate> roots, int cellIdx,
                                   String[] phenotypes, boolean[] excluded, boolean[] outlier,
                                   int[] colors, List<int[]> perRootColors) {
         if (perRootColors == null) {
             // Single-root fast path — walk all roots regardless of exclusion so excluded
             // cells still get a phenotype for CSV. Count increments inside walkNode are
             // guarded by excluded[] to keep UI counts consistent.
-            for (GateNode root : roots) {
-                walkNode(root, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
+            for (ResolvedGate root : roots) {
+                walkNode(root, cellIdx, phenotypes, excluded, outlier, colors);
             }
             return;
         }
@@ -497,14 +398,14 @@ public final class GatingEngine {
         List<Integer> contributedColors = new ArrayList<>();
         int enabledIdx = 0;
 
-        for (GateNode root : roots) {
-            if (!root.isEnabled()) continue;
+        for (ResolvedGate root : roots) {
+            if (!root.node.isEnabled()) continue;
 
             // Clean slate for this root's walk
             phenotypes[cellIdx] = "Unclassified";
             colors[cellIdx] = 0;
 
-            walkNode(root, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
+            walkNode(root, cellIdx, phenotypes, excluded, outlier, colors);
 
             // Capture this root's per-cell color
             perRootColors.get(enabledIdx)[cellIdx] = colors[cellIdx];
@@ -532,162 +433,44 @@ public final class GatingEngine {
         }
     }
 
-    private static void walkNode(GateNode node, int cellIdx,
-                                 CellIndex index, MarkerStats stats,
+    /**
+     * Walk one gate for one cell: ask the single predicate which branch the cell is in,
+     * then do the side effects. There is deliberately no per-gate-type walk method — the
+     * branch decision is {@link ResolvedGate#branchOf} for every gate type, and the only
+     * thing left here is bookkeeping.
+     */
+    private static void walkNode(ResolvedGate rg, int cellIdx,
                                  String[] phenotypes, boolean[] excluded, boolean[] outlier, int[] colors) {
-        if (!node.isEnabled()) return;
-        if (node instanceof QuadrantGate qg) {
-            walkQuadrantNode(qg, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-        } else if (node instanceof Region2DGate) {
-            walk2DNode(node, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-        } else {
-            walkThresholdNode(node, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
+        if (!rg.node.isEnabled()) return;
+        if (!rg.usable) return;
+
+        int branchIdx = rg.branchOf(cellIdx);
+        if (branchIdx < 0) {
+            // Outlier exclusion based on this gate's percentile clip bounds. Flag the cell
+            // but keep walking, so the CSV still receives a phenotype for it; the branch
+            // counts skip it because assignBranch checks excluded[].
+            outlier[cellIdx] = true;
+            excluded[cellIdx] = true;
+            branchIdx = rg.branchIgnoringClip(cellIdx);
         }
+        assignBranch(rg, branchIdx, cellIdx, phenotypes, excluded, outlier, colors);
     }
 
-    private static void walkThresholdNode(GateNode node, int cellIdx,
-                                           CellIndex index, MarkerStats stats,
-                                           String[] phenotypes, boolean[] excluded, boolean[] outlier,
-                                           int[] colors) {
-        String channel = node.getChannel();
-        int markerIdx = index.getMarkerIndex(channel);
-        if (markerIdx < 0) {
-            return;
-        }
-
-        Compartment comp = node.getCompartment();
-        Statistic stat = node.getStatistic();
-        String key = index.resolvedKey(channel, comp, stat);
-        double rawValue = index.getResolvedColumn(channel, comp, stat)[cellIdx];
-
-        // Outlier exclusion based on percentile clip bounds — flag but continue walking so
-        // the CSV still receives a phenotype for this cell.
-        if (node.isExcludeOutliers()) {
-            double lo = stats.getPercentileValue(key, node.getClipPercentileLow());
-            double hi = stats.getPercentileValue(key, node.getClipPercentileHigh());
-            if (!Double.isNaN(lo) && !Double.isNaN(hi) && (rawValue < lo || rawValue > hi)) {
-                outlier[cellIdx] = true;
-                excluded[cellIdx] = true;
-            }
-        }
-
-        // Use each gate's own z-score flag for consistent evaluation
-        boolean gateZScore = node.isThresholdIsZScore();
-        double compareValue = gateZScore ? stats.toZScore(key, rawValue) : rawValue;
-        double threshold = node.getThreshold();
-
-        Branch branch;
-        if (compareValue >= threshold) {
-            branch = node.getBranches().get(0); // positive
-        } else {
-            branch = node.getBranches().get(1); // negative
-        }
-        if (!excluded[cellIdx]) {
-            branch.setCount(branch.getCount() + 1);
-        }
-        assignBranch(branch, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-    }
-
-    private static void walkQuadrantNode(QuadrantGate gate, int cellIdx,
-                                          CellIndex index, MarkerStats stats,
-                                          String[] phenotypes, boolean[] excluded, boolean[] outlier,
-                                          int[] colors) {
-        String chX = gate.getChannelX();
-        String chY = gate.getChannelY();
-        if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) {
-            return;
-        }
-
-        String keyX = index.resolvedKey(chX, gate.getCompartmentX(), gate.getStatisticX());
-        String keyY = index.resolvedKey(chY, gate.getCompartmentY(), gate.getStatisticY());
-        double rawX = index.getResolvedColumn(chX, gate.getCompartmentX(), gate.getStatisticX())[cellIdx];
-        double rawY = index.getResolvedColumn(chY, gate.getCompartmentY(), gate.getStatisticY())[cellIdx];
-
-        // Outlier exclusion — flag but continue walking
-        if (gate.isExcludeOutliers()) {
-            double loX = stats.getPercentileValue(keyX, gate.getClipPercentileLow());
-            double hiX = stats.getPercentileValue(keyX, gate.getClipPercentileHigh());
-            if (!Double.isNaN(loX) && !Double.isNaN(hiX) && (rawX < loX || rawX > hiX)) {
-                outlier[cellIdx] = true;
-                excluded[cellIdx] = true;
-            }
-            double loY = stats.getPercentileValue(keyY, gate.getClipPercentileLow());
-            double hiY = stats.getPercentileValue(keyY, gate.getClipPercentileHigh());
-            if (!Double.isNaN(loY) && !Double.isNaN(hiY) && (rawY < loY || rawY > hiY)) {
-                outlier[cellIdx] = true;
-                excluded[cellIdx] = true;
-            }
-        }
-
-        // Use each gate's own z-score flag for consistent evaluation
-        boolean gateZScore = gate.isThresholdIsZScore();
-        double compareX = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
-        double compareY = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-
-        int quadrant = gate.evaluateQuadrant(compareX, compareY);
-        Branch branch = gate.getBranches().get(quadrant);
-        if (!excluded[cellIdx]) {
-            branch.setCount(branch.getCount() + 1);
-        }
-        assignBranch(branch, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-    }
-
-    private static void walk2DNode(GateNode node, int cellIdx,
-                                      CellIndex index, MarkerStats stats,
-                                      String[] phenotypes, boolean[] excluded, boolean[] outlier,
-                                      int[] colors) {
-        List<String> channels = node.getChannels();
-        if (channels.size() < 2) return;
-        String chX = channels.get(0);
-        String chY = channels.get(1);
-        if (index.getMarkerIndex(chX) < 0 || index.getMarkerIndex(chY) < 0) return;
-
-        Compartment cX = node.compartmentAt(0), cY = node.compartmentAt(1);
-        Statistic sX = node.statisticAt(0), sY = node.statisticAt(1);
-        String keyX = index.resolvedKey(chX, cX, sX);
-        String keyY = index.resolvedKey(chY, cY, sY);
-        double rawX = index.getResolvedColumn(chX, cX, sX)[cellIdx];
-        double rawY = index.getResolvedColumn(chY, cY, sY)[cellIdx];
-
-        // Outlier exclusion (same semantics as threshold/quadrant gates) — flag but continue
-        if (node.isExcludeOutliers()) {
-            double loX = stats.getPercentileValue(keyX, node.getClipPercentileLow());
-            double hiX = stats.getPercentileValue(keyX, node.getClipPercentileHigh());
-            if (!Double.isNaN(loX) && !Double.isNaN(hiX) && (rawX < loX || rawX > hiX)) {
-                outlier[cellIdx] = true;
-                excluded[cellIdx] = true;
-            }
-            double loY = stats.getPercentileValue(keyY, node.getClipPercentileLow());
-            double hiY = stats.getPercentileValue(keyY, node.getClipPercentileHigh());
-            if (!Double.isNaN(loY) && !Double.isNaN(hiY) && (rawY < loY || rawY > hiY)) {
-                outlier[cellIdx] = true;
-                excluded[cellIdx] = true;
-            }
-        }
-
-        // Use each gate's own z-score flag — boundaries match the scatter plot coordinate space
-        boolean gateZScore = node.isThresholdIsZScore();
-        double vx = gateZScore ? stats.toZScore(keyX, rawX) : rawX;
-        double vy = gateZScore ? stats.toZScore(keyY, rawY) : rawY;
-        boolean inside = ((Region2DGate) node).contains(vx, vy);
-
-        Branch branch = inside ? node.getBranches().get(0) : node.getBranches().get(1);
-        if (!excluded[cellIdx]) {
-            branch.setCount(branch.getCount() + 1);
-        }
-        assignBranch(branch, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-    }
-
-    private static void assignBranch(Branch branch, int cellIdx,
-                                      CellIndex index, MarkerStats stats,
+    /**
+     * Land a cell in one of the gate's branches: count it (unless excluded), label it,
+     * then descend into that branch's children.
+     */
+    private static void assignBranch(ResolvedGate rg, int branchIdx, int cellIdx,
                                       String[] phenotypes,
                                       boolean[] excluded, boolean[] outlier, int[] colors) {
+        Branch branch = rg.branches[branchIdx];
+        if (!excluded[cellIdx]) {
+            branch.setCount(branch.getCount() + 1);
+        }
         phenotypes[cellIdx] = branch.getName();
         colors[cellIdx] = branch.getColor();
-        if (!branch.getChildren().isEmpty()) {
-            for (GateNode child : branch.getChildren()) {
-                walkNode(child, cellIdx, index, stats, phenotypes, excluded, outlier, colors);
-            }
+        for (ResolvedGate child : rg.children[branchIdx]) {
+            walkNode(child, cellIdx, phenotypes, excluded, outlier, colors);
         }
     }
 

@@ -169,12 +169,23 @@ public class QuadrantGate extends GateNode {
      * Returns the branch index: 0=PP, 1=NP, 2=PN, 3=NN.
      */
     public int evaluateQuadrant(double valueX, double valueY) {
-        boolean xPos = valueX >= thresholdX;
-        boolean yPos = valueY >= thresholdY;
+        boolean xPos = isPositiveAt(0, valueX);
+        boolean yPos = isPositiveAt(1, valueY);
         if (xPos && yPos) return 0;   // PP
         if (!xPos && yPos) return 1;  // NP
         if (xPos) return 2;           // PN
         return 3;                      // NN
+    }
+
+    /** Axis 0 is the X cut, axis 1 the Y cut. */
+    @Override
+    public boolean isPositiveAt(int axis, double value) {
+        return isAtOrAbove(value, axis == 1 ? thresholdY : thresholdX);
+    }
+
+    @Override
+    public int branchFor(double x, double y) {
+        return evaluateQuadrant(x, y);
     }
 
     @Override

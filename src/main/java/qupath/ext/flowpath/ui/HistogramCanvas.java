@@ -5,6 +5,7 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
+import qupath.ext.flowpath.model.GateNode;
 
 import java.util.function.DoubleConsumer;
 
@@ -26,6 +27,7 @@ public class HistogramCanvas extends Canvas {
     private double displayMin;
     private double displayMax;
     private double threshold = Double.NaN;
+    private GateNode gate;
     private Color posColor = Color.rgb(0, 200, 0);
     private Color negColor = Color.rgb(160, 160, 160);
     private double maxCount;
@@ -139,6 +141,15 @@ public class HistogramCanvas extends Canvas {
         repaint();
     }
 
+    /**
+     * The gate this histogram is showing. Held so the bar colours come from the gate's
+     * own geometry rather than a second copy of the threshold comparison.
+     */
+    public void setGate(GateNode gate) {
+        this.gate = gate;
+        repaint();
+    }
+
     public void setThreshold(double threshold) {
         this.threshold = threshold;
         repaint();
@@ -205,7 +216,7 @@ public class HistogramCanvas extends Canvas {
         // Draw bins
         for (int i = 0; i < NUM_BINS; i++) {
             double binCenter = (binEdges[i] + binEdges[i + 1]) / 2.0;
-            boolean isPositive = !Double.isNaN(threshold) && binCenter >= threshold;
+            boolean isPositive = isPositiveAt(binCenter);
 
             Color barColor = isPositive ? posColor.deriveColor(0, 1, 1, 0.8) : negColor.deriveColor(0, 1, 1, 0.8);
             gc.setFill(barColor);
@@ -262,6 +273,20 @@ public class HistogramCanvas extends Canvas {
         gc.setStroke(Color.gray(0.3));
         gc.setLineWidth(1);
         gc.strokeRect(PADDING_LEFT, PADDING_TOP, plotW, plotH);
+    }
+
+    /**
+     * Does a value at {@code v} fall in the positive branch of the gate this histogram is
+     * showing? The gate answers — this is the same {@link GateNode#isPositiveAt} the
+     * engine classifies with, so a bar can never be coloured positive while the cells
+     * under it are classified negative. Without a gate (nothing to show yet) the
+     * standalone threshold is compared through the same primitive.
+     * <p>
+     * Package-private so the display/classification agreement test can call it directly.
+     */
+    boolean isPositiveAt(double v) {
+        if (gate != null) return gate.isPositiveAt(0, v);
+        return !Double.isNaN(threshold) && GateNode.isAtOrAbove(v, threshold);
     }
 
     private double xToValue(double x) {

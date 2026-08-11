@@ -19,6 +19,7 @@ import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
@@ -112,27 +113,25 @@ public class GateEditorPane extends VBox {
                     // same resolved column the engine compares on. updateHistogram then
                     // re-ranges the axis and re-pins the slider/field to the new value,
                     // so the gate lands on the same cells and stays freely draggable.
-                    String key = thresholdStatsKey(currentNode);
-                    if (markerStats != null && key != null && markerStats.getStd(key) > 1e-10) {
+                    MeasuredColumn col = thresholdColumn(currentNode);
+                    if (col != null && col.hasSpread()) {
                         double oldVal = currentNode.getThreshold();
                         currentNode.setThreshold(toZScore
-                                ? markerStats.toZScore(key, oldVal)
-                                : markerStats.fromZScore(key, oldVal));
+                                ? col.toZScore(oldVal)
+                                : col.fromZScore(oldVal));
                     }
                     updateHistogram();
                 } else if (currentNode instanceof QuadrantGate qg) {
                     // Transform quadrant thresholds between coordinate spaces
-                    String keyX = statsKeyX(qg);
-                    String keyY = statsKeyY(qg);
-                    if (markerStats != null && keyX != null && keyY != null
-                            && markerStats.getStd(keyX) > 1e-10
-                            && markerStats.getStd(keyY) > 1e-10) {
+                    MeasuredColumn colX = columnX(qg);
+                    MeasuredColumn colY = columnY(qg);
+                    if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
                         if (toZScore) {
-                            qg.setThresholdX(markerStats.toZScore(keyX, qg.getThresholdX()));
-                            qg.setThresholdY(markerStats.toZScore(keyY, qg.getThresholdY()));
+                            qg.setThresholdX(colX.toZScore(qg.getThresholdX()));
+                            qg.setThresholdY(colY.toZScore(qg.getThresholdY()));
                         } else {
-                            qg.setThresholdX(markerStats.fromZScore(keyX, qg.getThresholdX()));
-                            qg.setThresholdY(markerStats.fromZScore(keyY, qg.getThresholdY()));
+                            qg.setThresholdX(colX.fromZScore(qg.getThresholdX()));
+                            qg.setThresholdY(colY.fromZScore(qg.getThresholdY()));
                         }
                     }
                     fireNodeChanged();
@@ -140,43 +139,42 @@ public class GateEditorPane extends VBox {
                     return;
                 } else if (currentNode instanceof Region2DGate) {
                     // Transform shape coordinates between raw and z-score space
-                    String chX = statsKeyX(currentNode);
-                    String chY = statsKeyY(currentNode);
-                    if (markerStats != null && chX != null && chY != null
-                            && markerStats.getStd(chX) > 1e-10 && markerStats.getStd(chY) > 1e-10) {
+                    MeasuredColumn colX = columnX(currentNode);
+                    MeasuredColumn colY = columnY(currentNode);
+                    if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
                         if (currentNode instanceof PolygonGate pg && !pg.getVertices().isEmpty()) {
                             List<double[]> transformed = new ArrayList<>();
                             for (double[] v : pg.getVertices()) {
                                 transformed.add(new double[]{
-                                        toZScore ? markerStats.toZScore(chX, v[0]) : markerStats.fromZScore(chX, v[0]),
-                                        toZScore ? markerStats.toZScore(chY, v[1]) : markerStats.fromZScore(chY, v[1])
+                                        toZScore ? colX.toZScore(v[0]) : colX.fromZScore(v[0]),
+                                        toZScore ? colY.toZScore(v[1]) : colY.fromZScore(v[1])
                                 });
                             }
                             pg.setVertices(transformed);
                         } else if (currentNode instanceof RectangleGate rg
                                 && rg.getMaxX() - rg.getMinX() > 1e-10) {
                             if (toZScore) {
-                                rg.setMinX(markerStats.toZScore(chX, rg.getMinX()));
-                                rg.setMaxX(markerStats.toZScore(chX, rg.getMaxX()));
-                                rg.setMinY(markerStats.toZScore(chY, rg.getMinY()));
-                                rg.setMaxY(markerStats.toZScore(chY, rg.getMaxY()));
+                                rg.setMinX(colX.toZScore(rg.getMinX()));
+                                rg.setMaxX(colX.toZScore(rg.getMaxX()));
+                                rg.setMinY(colY.toZScore(rg.getMinY()));
+                                rg.setMaxY(colY.toZScore(rg.getMaxY()));
                             } else {
-                                rg.setMinX(markerStats.fromZScore(chX, rg.getMinX()));
-                                rg.setMaxX(markerStats.fromZScore(chX, rg.getMaxX()));
-                                rg.setMinY(markerStats.fromZScore(chY, rg.getMinY()));
-                                rg.setMaxY(markerStats.fromZScore(chY, rg.getMaxY()));
+                                rg.setMinX(colX.fromZScore(rg.getMinX()));
+                                rg.setMaxX(colX.fromZScore(rg.getMaxX()));
+                                rg.setMinY(colY.fromZScore(rg.getMinY()));
+                                rg.setMaxY(colY.fromZScore(rg.getMaxY()));
                             }
                         } else if (currentNode instanceof EllipseGate eg && eg.getRadiusX() > 1e-10) {
-                            double stdX = markerStats.getStd(chX);
-                            double stdY = markerStats.getStd(chY);
+                            double stdX = colX.std();
+                            double stdY = colY.std();
                             if (toZScore) {
-                                eg.setCenterX(markerStats.toZScore(chX, eg.getCenterX()));
-                                eg.setCenterY(markerStats.toZScore(chY, eg.getCenterY()));
+                                eg.setCenterX(colX.toZScore(eg.getCenterX()));
+                                eg.setCenterY(colY.toZScore(eg.getCenterY()));
                                 eg.setRadiusX(eg.getRadiusX() / stdX);
                                 eg.setRadiusY(eg.getRadiusY() / stdY);
                             } else {
-                                eg.setCenterX(markerStats.fromZScore(chX, eg.getCenterX()));
-                                eg.setCenterY(markerStats.fromZScore(chY, eg.getCenterY()));
+                                eg.setCenterX(colX.fromZScore(eg.getCenterX()));
+                                eg.setCenterY(colY.fromZScore(eg.getCenterY()));
                                 eg.setRadiusX(eg.getRadiusX() * stdX);
                                 eg.setRadiusY(eg.getRadiusY() * stdY);
                             }
@@ -392,6 +390,7 @@ public class GateEditorPane extends VBox {
         Label populationLabel = new Label("Positive: -- | Negative: --");
         populationLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
 
+        histogram.setGate(node);
         histogram.setPosColor(ColorUtils.intToColor(node.getPositiveColor()));
         histogram.setNegColor(ColorUtils.intToColor(node.getNegativeColor()));
 
@@ -530,7 +529,7 @@ public class GateEditorPane extends VBox {
             if (!suppressEvents) {
                 gate.setThresholdX(val.doubleValue());
                 valX.setText(String.format(Locale.US, "%.3f", val.doubleValue()));
-                if (scatterRef[0] != null) scatterRef[0].setCrosshairOverlay(gate.getThresholdX(), gate.getThresholdY());
+                if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
                 fireNodeChanged();
             }
         });
@@ -539,7 +538,7 @@ public class GateEditorPane extends VBox {
             if (!suppressEvents) {
                 gate.setThresholdY(val.doubleValue());
                 valY.setText(String.format(Locale.US, "%.3f", val.doubleValue()));
-                if (scatterRef[0] != null) scatterRef[0].setCrosshairOverlay(gate.getThresholdX(), gate.getThresholdY());
+                if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
                 fireNodeChanged();
             }
         });
@@ -578,7 +577,7 @@ public class GateEditorPane extends VBox {
                 }
                 ScatterPlotCanvas scatter = new ScatterPlotCanvas();
                 scatter.setData(filtered[0], filtered[1], gate.getChannelX(), gate.getChannelY());
-                scatter.setCrosshairOverlay(gate.getThresholdX(), gate.getThresholdY());
+                scatter.setGateOverlay(gate);
                 if (markerStats != null) {
                     applyAxisRangeFor(scatter, gate);
                 }
@@ -727,13 +726,10 @@ public class GateEditorPane extends VBox {
                 // Apply branch colors to scatter plot
                 applyBranchColorsToScatter(scatter, node);
 
-                if (node instanceof PolygonGate pg && pg.getVertices().size() >= 3) {
-                    scatter.setPolygonOverlay(pg.getVertices());
-                } else if (node instanceof RectangleGate rg && rg.getMaxX() - rg.getMinX() > 1e-10) {
-                    scatter.setRectangleOverlay(rg.getMinX(), rg.getMaxX(), rg.getMinY(), rg.getMaxY());
-                } else if (node instanceof EllipseGate eg && eg.getRadiusX() > 1e-10) {
-                    scatter.setEllipseOverlay(eg.getCenterX(), eg.getCenterY(), eg.getRadiusX(), eg.getRadiusY());
-                }
+                // The gate itself is the overlay — including a gate whose shape is not
+                // drawable yet. It classifies every cell as outside, and the plot now says
+                // so instead of painting the whole population as if it were selected.
+                scatter.setGateOverlay(node);
 
                 // Wire toolbar to drawing mode
                 toolGroup.selectedToggleProperty().addListener((obs, old, val) -> {
@@ -759,7 +755,7 @@ public class GateEditorPane extends VBox {
                         replaced = true;
                     }
                     ((PolygonGate) target).setVertices(new ArrayList<>(vertices));
-                    scatter.setPolygonOverlay(((PolygonGate) target).getVertices());
+                    scatter.setGateOverlay(target);
                     fireNodeChanged();
                     if (replaced) {
                         Platform.runLater(() -> setGateNode(currentNode));
@@ -782,7 +778,7 @@ public class GateEditorPane extends VBox {
                         rg.setMinX(bounds[0]); rg.setMaxX(bounds[1]);
                         rg.setMinY(bounds[2]); rg.setMaxY(bounds[3]);
                     }
-                    scatter.setRectangleOverlay(bounds[0], bounds[1], bounds[2], bounds[3]);
+                    scatter.setGateOverlay(target);
                     fireNodeChanged();
                     if (replaced) {
                         Platform.runLater(() -> setGateNode(currentNode));
@@ -805,7 +801,7 @@ public class GateEditorPane extends VBox {
                         eg.setCenterX(params[0]); eg.setCenterY(params[1]);
                         eg.setRadiusX(params[2]); eg.setRadiusY(params[3]);
                     }
-                    scatter.setEllipseOverlay(params[0], params[1], params[2], params[3]);
+                    scatter.setGateOverlay(target);
                     fireNodeChanged();
                     if (replaced) {
                         Platform.runLater(() -> setGateNode(currentNode));
@@ -1054,29 +1050,29 @@ public class GateEditorPane extends VBox {
      * its bounding box: percentile mapping is not linear, so an exact ellipse cannot be
      * preserved, and the box is the sensible approximation.
      */
-    private void remapRegionShape(Region2DGate gate, String oldKeyX, String newKeyX,
-                                  String oldKeyY, String newKeyY) {
+    private void remapRegionShape(Region2DGate gate, MeasuredColumn oldX, MeasuredColumn newX,
+                                  MeasuredColumn oldY, MeasuredColumn newY) {
         if (gate instanceof PolygonGate pg) {
             if (pg.getVertices().isEmpty()) return;
             List<double[]> out = new ArrayList<>();
             for (double[] v : pg.getVertices()) {
                 out.add(new double[]{
-                        remapRawThreshold(oldKeyX, newKeyX, v[0]),
-                        remapRawThreshold(oldKeyY, newKeyY, v[1])});
+                        remapRawThreshold(oldX, newX, v[0]),
+                        remapRawThreshold(oldY, newY, v[1])});
             }
             pg.setVertices(out);
         } else if (gate instanceof RectangleGate rg) {
             if (rg.getMaxX() - rg.getMinX() <= 1e-10) return;
-            rg.setMinX(remapRawThreshold(oldKeyX, newKeyX, rg.getMinX()));
-            rg.setMaxX(remapRawThreshold(oldKeyX, newKeyX, rg.getMaxX()));
-            rg.setMinY(remapRawThreshold(oldKeyY, newKeyY, rg.getMinY()));
-            rg.setMaxY(remapRawThreshold(oldKeyY, newKeyY, rg.getMaxY()));
+            rg.setMinX(remapRawThreshold(oldX, newX, rg.getMinX()));
+            rg.setMaxX(remapRawThreshold(oldX, newX, rg.getMaxX()));
+            rg.setMinY(remapRawThreshold(oldY, newY, rg.getMinY()));
+            rg.setMaxY(remapRawThreshold(oldY, newY, rg.getMaxY()));
         } else if (gate instanceof EllipseGate eg) {
             if (eg.getRadiusX() <= 1e-10) return;
-            double loX = remapRawThreshold(oldKeyX, newKeyX, eg.getCenterX() - eg.getRadiusX());
-            double hiX = remapRawThreshold(oldKeyX, newKeyX, eg.getCenterX() + eg.getRadiusX());
-            double loY = remapRawThreshold(oldKeyY, newKeyY, eg.getCenterY() - eg.getRadiusY());
-            double hiY = remapRawThreshold(oldKeyY, newKeyY, eg.getCenterY() + eg.getRadiusY());
+            double loX = remapRawThreshold(oldX, newX, eg.getCenterX() - eg.getRadiusX());
+            double hiX = remapRawThreshold(oldX, newX, eg.getCenterX() + eg.getRadiusX());
+            double loY = remapRawThreshold(oldY, newY, eg.getCenterY() - eg.getRadiusY());
+            double hiY = remapRawThreshold(oldY, newY, eg.getCenterY() + eg.getRadiusY());
             eg.setCenterX((loX + hiX) / 2);
             eg.setRadiusX(Math.abs(hiX - loX) / 2);
             eg.setCenterY((loY + hiY) / 2);
@@ -1103,21 +1099,21 @@ public class GateEditorPane extends VBox {
         if (node == null) return;
         boolean threshold = isThresholdGate(node);
         boolean raw = !node.isThresholdIsZScore();
-        String oldKey = threshold ? thresholdStatsKey(node) : null;
-        String oldKeyX = threshold ? null : statsKeyX(node);
-        String oldKeyY = threshold ? null : statsKeyY(node);
+        MeasuredColumn oldCol = threshold ? thresholdColumn(node) : null;
+        MeasuredColumn oldColX = threshold ? null : columnX(node);
+        MeasuredColumn oldColY = threshold ? null : columnY(node);
         double oldThreshold = node.getThreshold();
 
         mutation.run();
 
         if (raw) {
             if (threshold) {
-                node.setThreshold(remapRawThreshold(oldKey, thresholdStatsKey(node), oldThreshold));
+                node.setThreshold(remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
             } else if (node instanceof QuadrantGate qg) {
-                qg.setThresholdX(remapRawThreshold(oldKeyX, statsKeyX(node), qg.getThresholdX()));
-                qg.setThresholdY(remapRawThreshold(oldKeyY, statsKeyY(node), qg.getThresholdY()));
+                qg.setThresholdX(remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
+                qg.setThresholdY(remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
             } else if (node instanceof Region2DGate region) {
-                remapRegionShape(region, oldKeyX, statsKeyX(node), oldKeyY, statsKeyY(node));
+                remapRegionShape(region, oldColX, columnX(node), oldColY, columnY(node));
             }
         }
 
@@ -1280,58 +1276,57 @@ public class GateEditorPane extends VBox {
         }
     }
 
-    // ---- resolved measurement keys (must match GatingEngine) ----
+    // ---- resolved measurement columns (must match GatingEngine) ----
 
     /**
-     * The {@link MarkerStats} key for a channel + compartment + statistic, registering
-     * the column on first use.
+     * The measurement column for a channel + compartment + statistic, statistics included.
      * <p>
-     * {@code GatingEngine.evaluateGate} z-scores and percentile-clips against
-     * {@code CellIndex.resolvedKey(...)} — {@code "CD3: Nucleus: Median"} rather than
-     * the bare {@code "CD3"}. The editor must use the same key or the histogram axis,
-     * the threshold line and the actual classification all describe different columns.
+     * {@code GatingEngine} z-scores and percentile-clips against the column
+     * {@code CellIndex} resolves — {@code "CD3: Nucleus: Median"} rather than the bare
+     * {@code "CD3"}. The editor must read the same column, or the histogram axis, the
+     * threshold line and the actual classification all describe different data.
+     * {@link CellIndex#column} is that one resolution, shared with the engine.
      * <p>
-     * {@link MarkerStats#compute} only summarises the bare markers, and the engine's
-     * {@code prepareResolvedColumns} pre-pass has not necessarily run by the time the
-     * editor draws (a fresh {@code MarkerStats} arrives on image load, QC change and
-     * ROI change), so register here instead of assuming. {@code ensureColumn} is
-     * idempotent and re-uses the quality mask captured at compute time.
+     * {@link MarkerStats#compute} only summarises the bare markers, and a fresh
+     * {@code MarkerStats} arrives on image load, QC change and ROI change, so the
+     * compartment columns this editor needs may not be registered yet.
+     * {@code CellIndex.column} registers them; that is the point of holding a
+     * {@link MeasuredColumn} rather than a key.
+     *
+     * @return the column, or {@code null} when there is nothing to resolve against yet
+     *         (no channel, no index, or no statistics)
      */
-    private String statsKey(String channel, Compartment comp, Statistic stat) {
-        if (channel == null || cellIndex == null) return channel;
-        String key = cellIndex.resolvedKey(channel, comp, stat);
-        if (markerStats != null && !markerStats.hasColumn(key)) {
-            markerStats.ensureColumn(key, cellIndex.getResolvedColumn(channel, comp, stat));
-        }
-        return key;
+    private MeasuredColumn column(String channel, Compartment comp, Statistic stat) {
+        if (channel == null || cellIndex == null || markerStats == null) return null;
+        return cellIndex.column(channel, comp, stat, markerStats);
     }
 
-    /** Resolved stats key for a threshold gate's single channel. */
-    private String thresholdStatsKey(GateNode node) {
-        return statsKey(node.getChannel(), node.getCompartment(), node.getStatistic());
+    /** Resolved column for a threshold gate's single channel. */
+    private MeasuredColumn thresholdColumn(GateNode node) {
+        return column(node.getChannel(), node.getCompartment(), node.getStatistic());
     }
 
-    /** Resolved stats key for a 2D gate's X axis. */
-    private String statsKeyX(GateNode node) {
-        return statsKey(get2DChannelX(node), get2DCompartmentX(node), get2DStatisticX(node));
+    /** Resolved column for a 2D gate's X axis. */
+    private MeasuredColumn columnX(GateNode node) {
+        return column(get2DChannelX(node), get2DCompartmentX(node), get2DStatisticX(node));
     }
 
-    /** Resolved stats key for a 2D gate's Y axis. */
-    private String statsKeyY(GateNode node) {
-        return statsKey(get2DChannelY(node), get2DCompartmentY(node), get2DStatisticY(node));
+    /** Resolved column for a 2D gate's Y axis. */
+    private MeasuredColumn columnY(GateNode node) {
+        return column(get2DChannelY(node), get2DCompartmentY(node), get2DStatisticY(node));
     }
 
     /**
-     * A raw threshold remapped to the same percentile of {@code newKey}, so a
+     * A raw threshold remapped to the same percentile of {@code newCol}, so a
      * compartment/statistic switch keeps the gate splitting the population the same
      * way instead of leaving a number that means nothing in the new column. Returns
-     * {@code value} unchanged when the key is unchanged or the remap is not possible.
+     * {@code value} unchanged when the column is unchanged or the remap is not possible.
      */
-    private double remapRawThreshold(String oldKey, String newKey, double value) {
-        if (markerStats == null || oldKey == null || newKey == null || newKey.equals(oldKey)) return value;
-        double pct = markerStats.percentileRankOf(oldKey, value);
+    private double remapRawThreshold(MeasuredColumn oldCol, MeasuredColumn newCol, double value) {
+        if (oldCol == null || newCol == null || newCol.key().equals(oldCol.key())) return value;
+        double pct = oldCol.percentileRankOf(value);
         if (Double.isNaN(pct)) return value;
-        double mapped = markerStats.getPercentileValue(newKey, pct);
+        double mapped = newCol.percentile(pct);
         return Double.isNaN(mapped) ? value : mapped;
     }
 
@@ -1364,16 +1359,16 @@ public class GateEditorPane extends VBox {
     private double[][] getFilteredXYWithZScore(String chX, Compartment compX, Statistic statX,
                                                String chY, Compartment compY, Statistic statY) {
         double[][] raw = getFilteredXY(chX, compX, statX, chY, compY, statY);
-        if (markerStats == null) return raw;
-        String keyX = statsKey(chX, compX, statX);
-        String keyY = statsKey(chY, compY, statY);
+        MeasuredColumn colX = column(chX, compX, statX);
+        MeasuredColumn colY = column(chY, compY, statY);
+        if (colX == null || colY == null) return raw;
         double[] fx = raw[0];
         double[] fy = raw[1];
         double[] zx = new double[fx.length];
         double[] zy = new double[fy.length];
         for (int i = 0; i < fx.length; i++) {
-            zx[i] = markerStats.toZScore(keyX, fx[i]);
-            zy[i] = markerStats.toZScore(keyY, fy[i]);
+            zx[i] = colX.toZScore(fx[i]);
+            zy[i] = colY.toZScore(fy[i]);
         }
         return new double[][]{zx, zy};
     }
@@ -1393,13 +1388,12 @@ public class GateEditorPane extends VBox {
         int markerIdx = cellIndex.getMarkerIndex(channel);
         if (markerIdx < 0) return;
 
-        Compartment comp = currentNode.getCompartment();
-        Statistic stat = currentNode.getStatistic();
-        double[] allValues = cellIndex.getResolvedColumn(channel, comp, stat);
-        // The column the engine will actually gate on. Everything below — z-score
-        // transform, clip percentiles, slider range — is derived from this key so the
-        // histogram shows exactly what GatingEngine.evaluateGate compares against.
-        String key = thresholdStatsKey(currentNode);
+        // The column the engine will actually gate on. Everything below — values, z-score
+        // transform, clip percentiles, slider range — comes off this one handle, so the
+        // histogram shows exactly what GatingEngine compares against.
+        MeasuredColumn col = thresholdColumn(currentNode);
+        if (col == null) return;
+        double[] allValues = col.values();
         // Filter by ROI mask and ancestor mask, excluding NaN channel values
         // so downstream percentile/clip logic cannot produce NaN bounds.
         boolean hasMask = roiMask != null || ancestorMask != null;
@@ -1425,13 +1419,13 @@ public class GateEditorPane extends VBox {
                 for (double v : allValues) if (!Double.isNaN(v)) rawValues[j++] = v;
             }
         }
-        boolean useZ = currentNode.isThresholdIsZScore() && markerStats.getStd(key) > 1e-10;
+        boolean useZ = currentNode.isThresholdIsZScore() && col.hasSpread();
 
         double[] displayValues;
         if (useZ) {
             displayValues = new double[rawValues.length];
-            double mean = markerStats.getMean(key);
-            double std = markerStats.getStd(key);
+            double mean = col.mean();
+            double std = col.std();
             for (int i = 0; i < rawValues.length; i++) {
                 displayValues[i] = (rawValues[i] - mean) / std;
             }
@@ -1450,11 +1444,11 @@ public class GateEditorPane extends VBox {
         double pctHi = currentNode.getClipPercentileHigh();
         // Global per-column percentiles, so the same channel+compartment+statistic
         // uses one axis everywhere it appears in the gate tree.
-        double clipLo = markerStats.getPercentileValue(key, pctLo);
-        double clipHi = markerStats.getPercentileValue(key, pctHi);
+        double clipLo = col.percentile(pctLo);
+        double clipHi = col.percentile(pctHi);
         if (useZ) {
-            clipLo = markerStats.toZScore(key, clipLo);
-            clipHi = markerStats.toZScore(key, clipHi);
+            clipLo = col.toZScore(clipLo);
+            clipHi = col.toZScore(clipHi);
         }
 
         // Defensive fallback only when the global percentile is unusable
@@ -1594,24 +1588,24 @@ public class GateEditorPane extends VBox {
     /**
      * Anchor the scatter axes on the clip percentiles of each axis' own resolved
      * column, matching whichever coordinate space the gate is in. {@code node} is
-     * only read for its clip percentiles; the keys come from {@link #statsKeyX}/
-     * {@link #statsKeyY} so a nuclear or median axis anchors on its own distribution.
+     * only read for its clip percentiles; the columns come from {@link #columnX}/
+     * {@link #columnY} so a nuclear or median axis anchors on its own distribution.
      */
-    private void applyClipAxisRange(ScatterPlotCanvas scatter, String keyX, String keyY,
+    private void applyClipAxisRange(ScatterPlotCanvas scatter, MeasuredColumn colX, MeasuredColumn colY,
                                     GateNode node, boolean zScore) {
-        if (markerStats == null || keyX == null || keyY == null) {
+        if (colX == null || colY == null) {
             scatter.clearAxisRange();
             return;
         }
-        double loX = markerStats.getPercentileValue(keyX, node.getClipPercentileLow());
-        double hiX = markerStats.getPercentileValue(keyX, node.getClipPercentileHigh());
-        double loY = markerStats.getPercentileValue(keyY, node.getClipPercentileLow());
-        double hiY = markerStats.getPercentileValue(keyY, node.getClipPercentileHigh());
+        double loX = colX.percentile(node.getClipPercentileLow());
+        double hiX = colX.percentile(node.getClipPercentileHigh());
+        double loY = colY.percentile(node.getClipPercentileLow());
+        double hiY = colY.percentile(node.getClipPercentileHigh());
         if (zScore) {
-            loX = markerStats.toZScore(keyX, loX);
-            hiX = markerStats.toZScore(keyX, hiX);
-            loY = markerStats.toZScore(keyY, loY);
-            hiY = markerStats.toZScore(keyY, hiY);
+            loX = colX.toZScore(loX);
+            hiX = colX.toZScore(hiX);
+            loY = colY.toZScore(loY);
+            hiY = colY.toZScore(hiY);
         }
         if (Double.isNaN(loX) || Double.isNaN(hiX) || Double.isNaN(loY) || Double.isNaN(hiY)
                 || !(hiX > loX) || !(hiY > loY)) {
@@ -1623,7 +1617,7 @@ public class GateEditorPane extends VBox {
 
     /** Re-anchor {@code scatter}'s axes for {@code node}'s current axis selection. */
     private void applyAxisRangeFor(ScatterPlotCanvas scatter, GateNode node) {
-        applyClipAxisRange(scatter, statsKeyX(node), statsKeyY(node), node, node.isThresholdIsZScore());
+        applyClipAxisRange(scatter, columnX(node), columnY(node), node, node.isThresholdIsZScore());
     }
 
     private void refreshScatterPlot() {

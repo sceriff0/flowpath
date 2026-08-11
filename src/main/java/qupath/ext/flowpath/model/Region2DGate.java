@@ -44,6 +44,24 @@ public abstract class Region2DGate extends GateNode {
     /** Does the point fall inside this gate's region, in the gate's own coordinate space? */
     public abstract boolean contains(double x, double y);
 
+    /** Branch 0 is inside the region, branch 1 outside. */
+    @Override
+    public int branchFor(double x, double y) {
+        return contains(x, y) ? 0 : 1;
+    }
+
+    /**
+     * A region gate has no 1-D cut — positivity on a single axis is not defined for it,
+     * and answering anyway (with the unused inherited {@code threshold} field, which is
+     * always 0) would look like a real answer. Callers that mix 1-D cuts and regions
+     * (the CSV {@code _sign} column) must ask {@link #branchFor} with both axes instead.
+     */
+    @Override
+    public boolean isPositiveAt(int axis, double value) {
+        throw new UnsupportedOperationException(
+                getGateType() + " gates have no 1-D cut; use branchFor(x, y)");
+    }
+
     @Override
     public List<Branch> getBranches() {
         return List.of(insideBranch, outsideBranch);

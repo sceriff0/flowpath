@@ -116,6 +116,47 @@ public class GateNode {
         return k >= 0 && k < stats.size() ? stats.get(k) : Statistic.MEAN;
     }
 
+    // ========== Geometry: which branch does a point fall into? ==========
+
+    /**
+     * The one spelling of "on the positive side of a 1-D cut": {@code value >= threshold}.
+     * <p>
+     * Whether a cell exactly <em>on</em> a threshold counts as positive is a decision, not
+     * an accident, and it used to be re-typed at every site that drew or classified — the
+     * engine walk, the CSV sign column, the histogram bar colours and the scatter plot's
+     * quadrant colours. One of them only had to be written {@code >} for the plot to paint
+     * a cell in one colour while the phenotype said the other.
+     */
+    public static boolean isAtOrAbove(double value, double threshold) {
+        return value >= threshold;
+    }
+
+    /**
+     * Is {@code value} on the positive side of this gate's {@code axis}-th 1-D cut?
+     * <p>
+     * Axes are numbered as in {@link #getChannels()}. Only gate types that impose a
+     * per-axis cut answer this — a threshold gate (one axis) and a quadrant gate (two);
+     * a region gate has no 1-D cut and refuses (see {@link Region2DGate}).
+     */
+    public boolean isPositiveAt(int axis, double value) {
+        return isAtOrAbove(value, getThreshold());
+    }
+
+    /**
+     * Which branch of {@link #getBranches()} does a point at plot-space {@code (x, y)}
+     * land in? This is the gate's geometry and nothing else: {@code x} and {@code y} are
+     * already resolved to this gate's measurement columns and already in the gate's own
+     * coordinate space (raw or z-scored, per {@link #isThresholdIsZScore()}).
+     * <p>
+     * <b>This is the single geometry predicate.</b> {@code GatingEngine} calls it (through
+     * {@code ResolvedGate}) to classify; {@code ScatterPlotCanvas} calls it to colour a
+     * dot. Sharing it is what stops the plot and the phenotype from disagreeing about a
+     * cell on a boundary. A 1-D gate ignores {@code y}.
+     */
+    public int branchFor(double x, double y) {
+        return isPositiveAt(0, x) ? 0 : 1;
+    }
+
     /**
      * Gate type discriminator for serialization.
      */

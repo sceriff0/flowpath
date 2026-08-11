@@ -5,6 +5,11 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
+import qupath.ext.flowpath.model.EllipseGate;
+import qupath.ext.flowpath.model.GateNode;
+import qupath.ext.flowpath.model.PolygonGate;
+import qupath.ext.flowpath.model.QuadrantGate;
+import qupath.ext.flowpath.model.RectangleGate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,11 +35,16 @@ public class ScatterPlotCanvas extends Canvas {
     private String labelX = "X";
     private String labelY = "Y";
 
-    // Gate overlays
-    private List<double[]> polygonVertices;
-    private double[] rectBounds;  // [minX, maxX, minY, maxY]
-    private double[] ellipseParams; // [centerX, centerY, radiusX, radiusY]
-    private double[] crosshairThresholds; // [thresholdX, thresholdY]
+    /**
+     * The gate whose geometry both outlines the overlay and decides every dot's colour.
+     * <p>
+     * One field, not four parallel shape arrays: the shapes were always mutually
+     * exclusive, and holding the gate itself is what makes {@link #branchAt} literally
+     * the model's {@link GateNode#branchFor} rather than a second copy of it. When
+     * {@link #setGateOverlay} is used, this <em>is</em> the gate the engine classifies
+     * with, so plot and phenotype cannot drift apart.
+     */
+    private GateNode overlayGate;
 
     // Axis range overrides (null = use auto-computed from data)
     private Double overrideMinX, overrideMaxX, overrideMinY, overrideMaxY;
@@ -119,44 +129,87 @@ public class ScatterPlotCanvas extends Canvas {
         repaint();
     }
 
-    public void setPolygonOverlay(List<double[]> vertices) {
-        this.polygonVertices = vertices;
-        this.rectBounds = null;
-        this.ellipseParams = null;
-        this.crosshairThresholds = null;
+    /**
+     * Show {@code gate} — its shape as the overlay outline, its geometry as the rule that
+     * colours every dot. Pass the live gate: an in-place edit followed by a repaint is
+     * then reflected without any copying, and the plot can never describe a different
+     * shape than the one being gated on.
+     * <p>
+     * A gate whose shape is not drawable yet (a polygon with fewer than three vertices, a
+     * rectangle or ellipse with no extent) is still installed. It classifies every cell as
+     * outside, so the plot must draw every dot that way; leaving the overlay unset instead
+     * painted the whole population as selected.
+     */
+    public void setGateOverlay(GateNode gate) {
+        this.overlayGate = gate;
         repaint();
+    }
+
+    /** Show a standalone polygon. {@code vertices} is held live, not copied. */
+    public void setPolygonOverlay(List<double[]> vertices) {
+        PolygonGate gate = new PolygonGate();
+        gate.setVertices(vertices);
+        setGateOverlay(gate);
     }
 
     public void setRectangleOverlay(double minX, double maxX, double minY, double maxY) {
-        this.rectBounds = new double[]{minX, maxX, minY, maxY};
-        this.polygonVertices = null;
-        this.ellipseParams = null;
-        this.crosshairThresholds = null;
-        repaint();
+        RectangleGate gate = new RectangleGate();
+        gate.setMinX(minX); gate.setMaxX(maxX);
+        gate.setMinY(minY); gate.setMaxY(maxY);
+        setGateOverlay(gate);
     }
 
     public void setEllipseOverlay(double cx, double cy, double rx, double ry) {
-        this.ellipseParams = new double[]{cx, cy, rx, ry};
-        this.polygonVertices = null;
-        this.rectBounds = null;
-        this.crosshairThresholds = null;
-        repaint();
+        EllipseGate gate = new EllipseGate();
+        gate.setCenterX(cx); gate.setCenterY(cy);
+        gate.setRadiusX(rx); gate.setRadiusY(ry);
+        setGateOverlay(gate);
     }
 
     public void setCrosshairOverlay(double thresholdX, double thresholdY) {
-        this.crosshairThresholds = new double[]{thresholdX, thresholdY};
-        this.polygonVertices = null;
-        this.rectBounds = null;
-        this.ellipseParams = null;
-        repaint();
+        QuadrantGate gate = new QuadrantGate();
+        gate.setThresholdX(thresholdX);
+        gate.setThresholdY(thresholdY);
+        setGateOverlay(gate);
     }
 
     public void clearOverlay() {
-        this.polygonVertices = null;
-        this.rectBounds = null;
-        this.ellipseParams = null;
-        this.crosshairThresholds = null;
-        repaint();
+        setGateOverlay(null);
+    }
+
+    // ---- Typed views of the overlay, for drawing and handle editing ----
+
+    private PolygonGate polygonOverlay() {
+        return overlayGate instanceof PolygonGate g ? g : null;
+    }
+
+    private RectangleGate rectOverlay() {
+        return overlayGate instanceof RectangleGate g ? g : null;
+    }
+
+    private EllipseGate ellipseOverlay() {
+        return overlayGate instanceof EllipseGate g ? g : null;
+    }
+
+    private QuadrantGate crosshairOverlay() {
+        return overlayGate instanceof QuadrantGate g ? g : null;
+    }
+
+    /**
+     * Is there enough shape to draw an outline and offer edit handles? Colouring never
+     * asks this — a degenerate region gate colours every dot "outside", which is what it
+     * classifies — but stroking a two-vertex polygon or hanging drag handles off a
+     * zero-size rectangle at the origin would only mislead.
+     */
+    private boolean hasDrawableShape() {
+        if (overlayGate instanceof PolygonGate g) return g.getVertices().size() >= 3;
+        if (overlayGate instanceof RectangleGate g) {
+            return g.getMaxX() - g.getMinX() > 1e-10 && g.getMaxY() - g.getMinY() > 1e-10;
+        }
+        if (overlayGate instanceof EllipseGate g) {
+            return g.getRadiusX() > 1e-10 && g.getRadiusY() > 1e-10;
+        }
+        return overlayGate != null;
     }
 
     public void setAxisRange(Double minX, Double maxX, Double minY, Double maxY) {
@@ -362,21 +415,24 @@ public class ScatterPlotCanvas extends Canvas {
     // ---- Handle hit-testing and dragging ----
 
     private int findHandle(double sx, double sy) {
-        if (polygonVertices != null && polygonVertices.size() >= 3) {
-            for (int i = 0; i < polygonVertices.size(); i++) {
-                double hx = dataXToScreenX(polygonVertices.get(i)[0]);
-                double hy = dataYToScreenY(polygonVertices.get(i)[1]);
+        if (!hasDrawableShape()) return -1;
+        PolygonGate polygon = polygonOverlay();
+        if (polygon != null) {
+            List<double[]> vertices = polygon.getVertices();
+            for (int i = 0; i < vertices.size(); i++) {
+                double hx = dataXToScreenX(vertices.get(i)[0]);
+                double hy = dataYToScreenY(vertices.get(i)[1]);
                 if (Math.hypot(sx - hx, sy - hy) <= HANDLE_HIT_RADIUS) return i;
             }
         }
-        if (rectBounds != null) {
+        if (rectOverlay() != null) {
             // Handles: 0=topLeft, 1=topRight, 2=bottomRight, 3=bottomLeft
             double[][] corners = getRectHandleScreenPositions();
             for (int i = 0; i < corners.length; i++) {
                 if (Math.hypot(sx - corners[i][0], sy - corners[i][1]) <= HANDLE_HIT_RADIUS) return i;
             }
         }
-        if (ellipseParams != null) {
+        if (ellipseOverlay() != null) {
             // Handles: 0=top, 1=right, 2=bottom, 3=left (cardinal points)
             double[][] cardinals = getEllipseHandleScreenPositions();
             for (int i = 0; i < cardinals.length; i++) {
@@ -387,22 +443,24 @@ public class ScatterPlotCanvas extends Canvas {
     }
 
     private double[][] getRectHandleScreenPositions() {
-        if (rectBounds == null) return new double[0][];
-        double x0 = dataXToScreenX(rectBounds[0]);
-        double x1 = dataXToScreenX(rectBounds[1]);
-        double y0 = dataYToScreenY(rectBounds[3]); // maxY -> top of screen
-        double y1 = dataYToScreenY(rectBounds[2]); // minY -> bottom of screen
+        RectangleGate rect = rectOverlay();
+        if (rect == null) return new double[0][];
+        double x0 = dataXToScreenX(rect.getMinX());
+        double x1 = dataXToScreenX(rect.getMaxX());
+        double y0 = dataYToScreenY(rect.getMaxY()); // maxY -> top of screen
+        double y1 = dataYToScreenY(rect.getMinY()); // minY -> bottom of screen
         return new double[][]{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
     }
 
     private double[][] getEllipseHandleScreenPositions() {
-        if (ellipseParams == null) return new double[0][];
-        double cx = dataXToScreenX(ellipseParams[0]);
-        double cy = dataYToScreenY(ellipseParams[1]);
+        EllipseGate ellipse = ellipseOverlay();
+        if (ellipse == null) return new double[0][];
+        double cx = dataXToScreenX(ellipse.getCenterX());
+        double cy = dataYToScreenY(ellipse.getCenterY());
         double plotW = getWidth() - PADDING_LEFT - PADDING_RIGHT;
         double plotH = getHeight() - PADDING_TOP - PADDING_BOTTOM;
-        double erx = valueToPixel(ellipseParams[2], 0, effectiveMaxX() - effectiveMinX(), plotW);
-        double ery = valueToPixel(ellipseParams[3], 0, effectiveMaxY() - effectiveMinY(), plotH);
+        double erx = valueToPixel(ellipse.getRadiusX(), 0, effectiveMaxX() - effectiveMinX(), plotW);
+        double ery = valueToPixel(ellipse.getRadiusY(), 0, effectiveMaxY() - effectiveMinY(), plotH);
         // top, right, bottom, left
         return new double[][]{{cx, cy - ery}, {cx + erx, cy}, {cx, cy + ery}, {cx - erx, cy}};
     }
@@ -411,38 +469,50 @@ public class ScatterPlotCanvas extends Canvas {
         double dx = screenXToDataX(sx);
         double dy = screenYToDataY(sy);
 
-        if (polygonVertices != null && dragHandleIndex >= 0 && dragHandleIndex < polygonVertices.size()) {
-            polygonVertices.get(dragHandleIndex)[0] = dx;
-            polygonVertices.get(dragHandleIndex)[1] = dy;
-        } else if (rectBounds != null && dragHandleIndex >= 0 && dragHandleIndex < 4) {
+        PolygonGate polygon = polygonOverlay();
+        RectangleGate rect = rectOverlay();
+        EllipseGate ellipse = ellipseOverlay();
+
+        if (polygon != null && dragHandleIndex >= 0 && dragHandleIndex < polygon.getVertices().size()) {
+            polygon.getVertices().get(dragHandleIndex)[0] = dx;
+            polygon.getVertices().get(dragHandleIndex)[1] = dy;
+        } else if (rect != null && dragHandleIndex >= 0 && dragHandleIndex < 4) {
             // Move corner: 0=topLeft, 1=topRight, 2=bottomRight, 3=bottomLeft
             switch (dragHandleIndex) {
-                case 0 -> { rectBounds[0] = dx; rectBounds[3] = dy; }
-                case 1 -> { rectBounds[1] = dx; rectBounds[3] = dy; }
-                case 2 -> { rectBounds[1] = dx; rectBounds[2] = dy; }
-                case 3 -> { rectBounds[0] = dx; rectBounds[2] = dy; }
+                case 0 -> { rect.setMinX(dx); rect.setMaxY(dy); }
+                case 1 -> { rect.setMaxX(dx); rect.setMaxY(dy); }
+                case 2 -> { rect.setMaxX(dx); rect.setMinY(dy); }
+                case 3 -> { rect.setMinX(dx); rect.setMinY(dy); }
             }
             // Ensure min < max
-            if (rectBounds[0] > rectBounds[1]) { double t = rectBounds[0]; rectBounds[0] = rectBounds[1]; rectBounds[1] = t; }
-            if (rectBounds[2] > rectBounds[3]) { double t = rectBounds[2]; rectBounds[2] = rectBounds[3]; rectBounds[3] = t; }
-        } else if (ellipseParams != null && dragHandleIndex >= 0 && dragHandleIndex < 4) {
+            if (rect.getMinX() > rect.getMaxX()) {
+                double t = rect.getMinX(); rect.setMinX(rect.getMaxX()); rect.setMaxX(t);
+            }
+            if (rect.getMinY() > rect.getMaxY()) {
+                double t = rect.getMinY(); rect.setMinY(rect.getMaxY()); rect.setMaxY(t);
+            }
+        } else if (ellipse != null && dragHandleIndex >= 0 && dragHandleIndex < 4) {
             // Cardinal points: 0=top, 1=right, 2=bottom, 3=left
             switch (dragHandleIndex) {
-                case 0 -> ellipseParams[3] = Math.abs(ellipseParams[1] - dy); // top: adjust ry
-                case 1 -> ellipseParams[2] = Math.abs(dx - ellipseParams[0]); // right: adjust rx
-                case 2 -> ellipseParams[3] = Math.abs(dy - ellipseParams[1]); // bottom: adjust ry
-                case 3 -> ellipseParams[2] = Math.abs(ellipseParams[0] - dx); // left: adjust rx
+                case 0 -> ellipse.setRadiusY(Math.abs(ellipse.getCenterY() - dy)); // top
+                case 1 -> ellipse.setRadiusX(Math.abs(dx - ellipse.getCenterX())); // right
+                case 2 -> ellipse.setRadiusY(Math.abs(dy - ellipse.getCenterY())); // bottom
+                case 3 -> ellipse.setRadiusX(Math.abs(ellipse.getCenterX() - dx)); // left
             }
         }
     }
 
     private void fireHandleDragComplete() {
-        if (polygonVertices != null && polygonVertices.size() >= 3 && onPolygonDrawn != null) {
-            onPolygonDrawn.accept(new ArrayList<>(polygonVertices));
-        } else if (rectBounds != null && onRectangleDrawn != null) {
-            onRectangleDrawn.accept(new double[]{rectBounds[0], rectBounds[1], rectBounds[2], rectBounds[3]});
-        } else if (ellipseParams != null && onEllipseDrawn != null) {
-            onEllipseDrawn.accept(new double[]{ellipseParams[0], ellipseParams[1], ellipseParams[2], ellipseParams[3]});
+        PolygonGate polygon = polygonOverlay();
+        RectangleGate rect = rectOverlay();
+        EllipseGate ellipse = ellipseOverlay();
+        if (polygon != null && polygon.getVertices().size() >= 3 && onPolygonDrawn != null) {
+            onPolygonDrawn.accept(new ArrayList<>(polygon.getVertices()));
+        } else if (rect != null && onRectangleDrawn != null) {
+            onRectangleDrawn.accept(new double[]{rect.getMinX(), rect.getMaxX(), rect.getMinY(), rect.getMaxY()});
+        } else if (ellipse != null && onEllipseDrawn != null) {
+            onEllipseDrawn.accept(new double[]{ellipse.getCenterX(), ellipse.getCenterY(),
+                    ellipse.getRadiusX(), ellipse.getRadiusY()});
         }
     }
 
@@ -525,46 +595,39 @@ public class ScatterPlotCanvas extends Canvas {
     }
 
     private Color getPointColor(double x, double y) {
-        // Quadrant mode: 4 colors based on crosshair thresholds
-        if (crosshairThresholds != null && quadrantColors != null) {
-            boolean xPos = x >= crosshairThresholds[0];
-            boolean yPos = y >= crosshairThresholds[1];
-            if (xPos && yPos) return quadrantColors[0];       // Q1 (++)
-            if (!xPos && yPos) return quadrantColors[1];       // Q2 (-+)
-            if (xPos) return quadrantColors[2];                // Q3 (+-)
-            return quadrantColors[3];                          // Q4 (--)
+        int branch = branchAt(x, y);
+        if (quadrantColors != null && overlayGate instanceof QuadrantGate) {
+            return quadrantColors[branch];
         }
-        return isInsideOverlay(x, y) ? insideColor : outsideColor;
+        return branch == 0 ? insideColor : outsideColor;
     }
 
-    private boolean isInsideOverlay(double x, double y) {
-        if (polygonVertices != null && polygonVertices.size() >= 3) {
-            return pointInPolygon(x, y, polygonVertices);
-        }
-        if (rectBounds != null) {
-            return x >= rectBounds[0] && x <= rectBounds[1] && y >= rectBounds[2] && y <= rectBounds[3];
-        }
-        if (ellipseParams != null) {
-            double dx = (x - ellipseParams[0]) / ellipseParams[2];
-            double dy = (y - ellipseParams[1]) / ellipseParams[3];
-            return dx * dx + dy * dy <= 1.0;
-        }
-        if (crosshairThresholds != null) {
-            return x >= crosshairThresholds[0] && y >= crosshairThresholds[1];
-        }
-        return true; // No overlay = all inside
+    /**
+     * Which branch of the overlay gate a point at plot-space {@code (x, y)} is drawn as.
+     * <p>
+     * This is the whole hit test, and it is one delegation: the geometry belongs to the
+     * gate. The canvas used to re-implement rectangle bounds, the ellipse equation,
+     * polygon ray casting and the quadrant comparison here, which is how a dot could be
+     * painted as selected while {@code GatingEngine} put the same cell in another branch.
+     * With no overlay at all, everything is branch 0.
+     */
+    int branchAt(double x, double y) {
+        return overlayGate == null ? 0 : overlayGate.branchFor(x, y);
     }
 
     private void drawOverlay(GraphicsContext gc, double plotW, double plotH) {
+        if (!hasDrawableShape()) return;
         gc.setStroke(Color.YELLOW);
         gc.setLineWidth(1.5);
 
-        if (polygonVertices != null && polygonVertices.size() >= 3) {
-            double[] xp = new double[polygonVertices.size()];
-            double[] yp = new double[polygonVertices.size()];
-            for (int i = 0; i < polygonVertices.size(); i++) {
-                xp[i] = dataXToScreenX(polygonVertices.get(i)[0]);
-                yp[i] = dataYToScreenY(polygonVertices.get(i)[1]);
+        PolygonGate polygon = polygonOverlay();
+        if (polygon != null) {
+            List<double[]> vertices = polygon.getVertices();
+            double[] xp = new double[vertices.size()];
+            double[] yp = new double[vertices.size()];
+            for (int i = 0; i < vertices.size(); i++) {
+                xp[i] = dataXToScreenX(vertices.get(i)[0]);
+                yp[i] = dataYToScreenY(vertices.get(i)[1]);
             }
             gc.strokePolygon(xp, yp, xp.length);
 
@@ -572,11 +635,14 @@ public class ScatterPlotCanvas extends Canvas {
             drawHandles(gc, xp, yp);
         }
 
-        if (rectBounds != null) {
-            double rx = dataXToScreenX(rectBounds[0]);
-            double ry = dataYToScreenY(rectBounds[3]);
-            double rw = valueToPixel(rectBounds[1], effectiveMinX(), effectiveMaxX(), plotW) - valueToPixel(rectBounds[0], effectiveMinX(), effectiveMaxX(), plotW);
-            double rh = valueToPixel(rectBounds[3], effectiveMinY(), effectiveMaxY(), plotH) - valueToPixel(rectBounds[2], effectiveMinY(), effectiveMaxY(), plotH);
+        RectangleGate rect = rectOverlay();
+        if (rect != null) {
+            double rx = dataXToScreenX(rect.getMinX());
+            double ry = dataYToScreenY(rect.getMaxY());
+            double rw = valueToPixel(rect.getMaxX(), effectiveMinX(), effectiveMaxX(), plotW)
+                    - valueToPixel(rect.getMinX(), effectiveMinX(), effectiveMaxX(), plotW);
+            double rh = valueToPixel(rect.getMaxY(), effectiveMinY(), effectiveMaxY(), plotH)
+                    - valueToPixel(rect.getMinY(), effectiveMinY(), effectiveMaxY(), plotH);
             gc.strokeRect(rx, ry, rw, rh);
 
             // Draw handles at corners
@@ -584,11 +650,12 @@ public class ScatterPlotCanvas extends Canvas {
             drawHandles(gc, arrayCol(corners, 0), arrayCol(corners, 1));
         }
 
-        if (ellipseParams != null) {
-            double cx = dataXToScreenX(ellipseParams[0]);
-            double cy = dataYToScreenY(ellipseParams[1]);
-            double erx = valueToPixel(ellipseParams[2], 0, effectiveMaxX() - effectiveMinX(), plotW);
-            double ery = valueToPixel(ellipseParams[3], 0, effectiveMaxY() - effectiveMinY(), plotH);
+        EllipseGate ellipse = ellipseOverlay();
+        if (ellipse != null) {
+            double cx = dataXToScreenX(ellipse.getCenterX());
+            double cy = dataYToScreenY(ellipse.getCenterY());
+            double erx = valueToPixel(ellipse.getRadiusX(), 0, effectiveMaxX() - effectiveMinX(), plotW);
+            double ery = valueToPixel(ellipse.getRadiusY(), 0, effectiveMaxY() - effectiveMinY(), plotH);
             gc.strokeOval(cx - erx, cy - ery, erx * 2, ery * 2);
 
             // Draw handles at cardinal points
@@ -596,9 +663,10 @@ public class ScatterPlotCanvas extends Canvas {
             drawHandles(gc, arrayCol(cardinals, 0), arrayCol(cardinals, 1));
         }
 
-        if (crosshairThresholds != null) {
-            double vx = dataXToScreenX(crosshairThresholds[0]);
-            double hy = dataYToScreenY(crosshairThresholds[1]);
+        QuadrantGate crosshair = crosshairOverlay();
+        if (crosshair != null) {
+            double vx = dataXToScreenX(crosshair.getThresholdX());
+            double hy = dataYToScreenY(crosshair.getThresholdY());
             gc.strokeLine(vx, PADDING_TOP, vx, PADDING_TOP + plotH);
             gc.strokeLine(PADDING_LEFT, hy, PADDING_LEFT + plotW, hy);
         }
@@ -661,18 +729,5 @@ public class ScatterPlotCanvas extends Canvas {
         }
 
         gc.setLineDashes(null);
-    }
-
-    private static boolean pointInPolygon(double x, double y, List<double[]> vertices) {
-        boolean inside = false;
-        int n = vertices.size();
-        for (int i = 0, j = n - 1; i < n; j = i++) {
-            double xi = vertices.get(i)[0], yi = vertices.get(i)[1];
-            double xj = vertices.get(j)[0], yj = vertices.get(j)[1];
-            if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-                inside = !inside;
-            }
-        }
-        return inside;
     }
 }
