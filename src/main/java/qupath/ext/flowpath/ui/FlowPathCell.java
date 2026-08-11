@@ -24,6 +24,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
 
 import java.util.function.Consumer;
@@ -138,6 +139,49 @@ public class FlowPathCell extends TreeCell<Object> {
         return badge;
     }
 
+    /** Bold white channel name, as used in every gate bar. */
+    private static Label channelLabel(String name) {
+        Label label = new Label(name);
+        label.setFont(Font.font(null, FontWeight.BOLD, 13));
+        label.setTextFill(Color.WHITE);
+        return label;
+    }
+
+    /** Muted secondary text (threshold readout, gate-type word). */
+    private static Label detailLabel(String text, int size) {
+        Label label = new Label(text);
+        label.setFont(Font.font(null, FontWeight.NORMAL, size));
+        label.setTextFill(Color.web("#a0b0c0"));
+        return label;
+    }
+
+    /** The gate-type word shown on a 2D region gate. */
+    private static String regionTypeName(Region2DGate gate) {
+        if (gate instanceof PolygonGate) return "polygon";
+        if (gate instanceof RectangleGate) return "rectangle";
+        if (gate instanceof EllipseGate) return "ellipse";
+        return "region";
+    }
+
+    /**
+     * Append {@code X <badge> / Y <badge>} for a two-axis gate. Shared by the quadrant
+     * and region gates so both report their signal compartment the same way.
+     */
+    private static void addAxisLabels(HBox bar,
+                                      String channelX, Compartment compX, Statistic statX,
+                                      String channelY, Compartment compY, Statistic statY) {
+        Label badgeX = compartmentBadge(compX, statX);
+        Label badgeY = compartmentBadge(compY, statY);
+        Label sep = new Label("/");
+        sep.setTextFill(Color.web("#a0b0c0"));
+
+        bar.getChildren().add(channelLabel(channelX));
+        if (badgeX != null) bar.getChildren().add(badgeX);
+        bar.getChildren().add(sep);
+        bar.getChildren().add(channelLabel(channelY));
+        if (badgeY != null) bar.getChildren().add(badgeY);
+    }
+
     private HBox buildGateNodeGraphic(GateNode node) {
         HBox bar = new HBox(6);
         bar.setAlignment(Pos.CENTER_LEFT);
@@ -161,78 +205,33 @@ public class FlowPathCell extends TreeCell<Object> {
         });
 
         if (node instanceof QuadrantGate qg) {
-            Label chXLabel = new Label(qg.getChannelX());
-            chXLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            chXLabel.setTextFill(Color.WHITE);
-            Label sep = new Label("/");
-            sep.setTextFill(Color.web("#a0b0c0"));
-            Label chYLabel = new Label(qg.getChannelY());
-            chYLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            chYLabel.setTextFill(Color.WHITE);
-            Label badgeX = compartmentBadge(qg.getCompartmentX(), qg.getStatisticX());
-            Label badgeY = compartmentBadge(qg.getCompartmentY(), qg.getStatisticY());
-
             String threshText = qg.isThresholdIsZScore()
                     ? String.format("X:%.2f Y:%.2f", qg.getThresholdX(), qg.getThresholdY())
                     : String.format("X=%.2f Y=%.2f", qg.getThresholdX(), qg.getThresholdY());
-            Label threshLabel = new Label(threshText);
-            threshLabel.setFont(Font.font(null, FontWeight.NORMAL, 10));
-            threshLabel.setTextFill(Color.web("#a0b0c0"));
 
             bar.getChildren().add(enabledBox);
-            bar.getChildren().add(chXLabel);
-            if (badgeX != null) bar.getChildren().add(badgeX);
-            bar.getChildren().add(sep);
-            bar.getChildren().add(chYLabel);
-            if (badgeY != null) bar.getChildren().add(badgeY);
-            bar.getChildren().add(threshLabel);
-        } else if (node instanceof PolygonGate pg) {
-            Label channelLabel = new Label(pg.getChannelX() + " / " + pg.getChannelY());
-            channelLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            channelLabel.setTextFill(Color.WHITE);
-
-            Label typeLabel = new Label("polygon");
-            typeLabel.setFont(Font.font(null, FontWeight.NORMAL, 10));
-            typeLabel.setTextFill(Color.web("#a0b0c0"));
-
-            bar.getChildren().addAll(enabledBox, channelLabel, typeLabel);
-        } else if (node instanceof RectangleGate rg) {
-            Label channelLabel = new Label(rg.getChannelX() + " / " + rg.getChannelY());
-            channelLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            channelLabel.setTextFill(Color.WHITE);
-
-            Label typeLabel = new Label("rectangle");
-            typeLabel.setFont(Font.font(null, FontWeight.NORMAL, 10));
-            typeLabel.setTextFill(Color.web("#a0b0c0"));
-
-            bar.getChildren().addAll(enabledBox, channelLabel, typeLabel);
-        } else if (node instanceof EllipseGate eg) {
-            Label channelLabel = new Label(eg.getChannelX() + " / " + eg.getChannelY());
-            channelLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            channelLabel.setTextFill(Color.WHITE);
-
-            Label typeLabel = new Label("ellipse");
-            typeLabel.setFont(Font.font(null, FontWeight.NORMAL, 10));
-            typeLabel.setTextFill(Color.web("#a0b0c0"));
-
-            bar.getChildren().addAll(enabledBox, channelLabel, typeLabel);
+            addAxisLabels(bar, qg.getChannelX(), qg.getCompartmentX(), qg.getStatisticX(),
+                    qg.getChannelY(), qg.getCompartmentY(), qg.getStatisticY());
+            bar.getChildren().add(detailLabel(threshText, 10));
+        } else if (node instanceof Region2DGate rg) {
+            // Polygon / rectangle / ellipse render identically apart from the type word.
+            // They go through the same two-axis layout as the quadrant gate so their
+            // compartment badges show too: a nuclear-vs-cytoplasmic region gate was
+            // previously indistinguishable from a whole-cell one in the tree.
+            bar.getChildren().add(enabledBox);
+            addAxisLabels(bar, rg.getChannelX(), rg.getCompartmentX(), rg.getStatisticX(),
+                    rg.getChannelY(), rg.getCompartmentY(), rg.getStatisticY());
+            bar.getChildren().add(detailLabel(regionTypeName(rg), 10));
         } else {
-            Label channelLabel = new Label(node.getChannel());
-            channelLabel.setFont(Font.font(null, FontWeight.BOLD, 13));
-            channelLabel.setTextFill(Color.WHITE);
-
             String thresholdText = node.isThresholdIsZScore()
                     ? String.format("z = %.3f", node.getThreshold())
                     : String.format("t = %.3f", node.getThreshold());
-            Label thresholdLabel = new Label(thresholdText);
-            thresholdLabel.setFont(Font.font(null, FontWeight.NORMAL, 11));
-            thresholdLabel.setTextFill(Color.web("#a0b0c0"));
 
             Label badge = compartmentBadge(node.getCompartment(), node.getStatistic());
             bar.getChildren().add(enabledBox);
-            bar.getChildren().add(channelLabel);
+            bar.getChildren().add(channelLabel(node.getChannel()));
             if (badge != null) bar.getChildren().add(badge);
-            bar.getChildren().add(thresholdLabel);
+            bar.getChildren().add(detailLabel(thresholdText, 11));
         }
 
         return bar;

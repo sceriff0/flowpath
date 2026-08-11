@@ -281,7 +281,7 @@ public class FlowPathPane extends BorderPane {
 
         // Detect per-compartment measurements (rich vs legacy GeoJSON) so the editor
         // can enable/disable compartment + statistic selectors per channel.
-        compartmentCapability = CompartmentCapability.scan(detections, 100);
+        compartmentCapability = CompartmentCapability.scan(detections);
 
         cellIndex = CellIndex.build(detections, markerNames);
 
@@ -564,12 +564,17 @@ public class FlowPathPane extends BorderPane {
         String ch = markerNames.get(0);
         String ch2 = markerNames.size() > 1 ? markerNames.get(1) : ch;
 
-        return switch (result.get()) {
+        GateNode gate = switch (result.get()) {
             case "Threshold" -> new GateNode(ch);
             case "Quadrant" -> new QuadrantGate(ch, ch2);
             case "Region" -> new PolygonGate(ch, ch2);
             default -> new GateNode(ch);
         };
+        // Resolve the signal selection against this image's measurements before the gate
+        // reaches the tree, so it never renders a compartment/statistic badge that the
+        // editor then has to correct.
+        GateEditorPane.applyAvailableSignal(gate, compartmentCapability);
+        return gate;
     }
 
     private void removeSelectedGate() {

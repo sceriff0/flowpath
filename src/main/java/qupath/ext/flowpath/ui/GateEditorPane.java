@@ -993,8 +993,7 @@ public class GateEditorPane extends VBox {
         for (Compartment c : Compartment.values()) {
             if (compartmentCapability.compartmentsFor(channel).contains(c)) comps.add(c);
         }
-        Compartment selComp = comps.contains(getComp.get()) ? getComp.get() : Compartment.WHOLE_CELL;
-        if (!comps.contains(selComp)) selComp = comps.get(comps.size() - 1);
+        Compartment selComp = compartmentCapability.resolveCompartment(channel, getComp.get());
         setComp.accept(selComp);
 
         ComboBox<Compartment> compCombo = new ComboBox<>(FXCollections.observableArrayList(comps));
@@ -1013,15 +1012,21 @@ public class GateEditorPane extends VBox {
         sigLabel.setStyle("-fx-text-fill: white;");
         row.getChildren().addAll(sigLabel, compCombo);
 
-        // Statistic selector — only when expanded quantification gave more than one stat.
+        // Statistic selector — shown only when the export carries more than one, but the
+        // gate is pinned to an available statistic either way. It must never be pinned to
+        // one the export lacks: MIRAGE's default compartment quantification emits Median
+        // only (Mean and Sum are --expanded_quantification), so forcing Mean here resolved
+        // the axis to "<marker>: <Compartment>: Mean" — a column that is not in the file.
+        // The gate then read NaN for every cell: an empty histogram, a gate classifying
+        // nothing, and the slowest path through CellIndex.getResolvedColumn, over
+        // measurements sitting right there in the GeoJSON.
         List<Statistic> stats = new ArrayList<>();
         for (Statistic s : Statistic.values()) {
             if (compartmentCapability.statisticsFor(channel).contains(s)) stats.add(s);
         }
+        Statistic selStat = compartmentCapability.resolveStatistic(channel, getStat.get());
+        setStat.accept(selStat);
         if (stats.size() > 1) {
-            Statistic selStat = stats.contains(getStat.get()) ? getStat.get() : Statistic.MEAN;
-            if (!stats.contains(selStat)) selStat = stats.get(0);
-            setStat.accept(selStat);
             ComboBox<Statistic> statCombo = new ComboBox<>(FXCollections.observableArrayList(stats));
             statCombo.setValue(selStat);
             statCombo.setConverter(new StringConverter<>() {
@@ -1035,10 +1040,9 @@ public class GateEditorPane extends VBox {
                 }
             });
             row.getChildren().add(statCombo);
-        } else {
-            setStat.accept(Statistic.MEAN);
         }
     }
+
 
     /**
      * Carry a drawn region across a raw-mode compartment/statistic switch by remapping
@@ -1216,23 +1220,63 @@ public class GateEditorPane extends VBox {
      * Copy each axis' compartment + statistic across a gate-type change, reading the
      * source through the same parallel {@code getChannels()} / {@code compartmentAt(k)}
      * / {@code statisticAt(k)} contract {@code GatingEngine} resolves columns with.
-     * Axes the source does not have (a threshold gate converted to a 2D gate) fall
-     * back to whole-cell mean, which is what {@code compartmentAt} returns out of range.
+     * <p>
+     * Only axes the source actually has are copied. Reading past the source's channel
+     * count returns {@code compartmentAt}/{@code statisticAt}'s out-of-range fallback of
+     * whole-cell <em>mean</em>, so converting a threshold gate to a 2D gate used to stamp
+     * a Mean Y axis onto the new gate — a column that does not exist in a default
+     * (Median-only) MIRAGE export. Leaving the axis at the target's own default lets
+     * {@link #addCompartmentControls} pick one the export contains.
      */
     private static void copyAxisSelection(GateNode from, GateNode to) {
-        if (to instanceof Region2DGate region) {
-            region.setCompartmentX(from.compartmentAt(0));
-            region.setStatisticX(from.statisticAt(0));
-            region.setCompartmentY(from.compartmentAt(1));
-            region.setStatisticY(from.statisticAt(1));
-        } else if (to instanceof QuadrantGate quad) {
-            quad.setCompartmentX(from.compartmentAt(0));
-            quad.setStatisticX(from.statisticAt(0));
-            quad.setCompartmentY(from.compartmentAt(1));
-            quad.setStatisticY(from.statisticAt(1));
+        int axes = Math.min(from.getChannels().size(), to.getChannels().size());
+        for (int k = 0; k < axes; k++) {
+            setAxisSignal(to, k, from.compartmentAt(k), from.statisticAt(k));
+        }
+    }
+
+    /**
+     * Set the {@code k}-th axis' compartment + statistic on whichever gate type
+     * {@code gate} is, matching the axis order of {@code getChannels()}. The single
+     * place that maps an axis index onto the per-type X/Y setters.
+     */
+    private static void setAxisSignal(GateNode gate, int k, Compartment comp, Statistic stat) {
+        if (gate instanceof Region2DGate region) {
+            if (k == 0) { region.setCompartmentX(comp); region.setStatisticX(stat); }
+            else { region.setCompartmentY(comp); region.setStatisticY(stat); }
+        } else if (gate instanceof QuadrantGate quad) {
+            if (k == 0) { quad.setCompartmentX(comp); quad.setStatisticX(stat); }
+            else { quad.setCompartmentY(comp); quad.setStatisticY(stat); }
         } else {
-            to.setCompartment(from.compartmentAt(0));
-            to.setStatistic(from.statisticAt(0));
+            gate.setCompartment(comp);
+            gate.setStatistic(stat);
+        }
+    }
+
+    /**
+     * Pin every axis of a freshly created gate to a (compartment, statistic) the loaded
+     * export actually carries, before it is ever shown.
+     * <p>
+     * The gate model defaults to whole-cell Median because that is what MIRAGE writes by
+     * default, but a legacy or mean-only export has no Median column. Without this the
+     * gate was created on Median, rendered its {@code W·med} badge in the tree, and then
+     * had the statistic corrected the moment the editor opened — the badge appearing and
+     * vanishing on every new gate. Deciding up front means the tree never shows a
+     * selection the data cannot honour.
+     */
+    static void applyAvailableSignal(GateNode gate, CompartmentCapability capability) {
+        if (gate == null) return;
+        List<String> channels = gate.getChannels();
+        for (int k = 0; k < channels.size(); k++) {
+            String ch = channels.get(k);
+            if (capability == null || ch == null || !capability.hasCompartments(ch)) {
+                // Legacy / mean-only: the bare marker column is the whole-cell mean.
+                setAxisSignal(gate, k, Compartment.WHOLE_CELL, Statistic.MEAN);
+                continue;
+            }
+            setAxisSignal(gate, k,
+                    capability.resolveCompartment(ch, gate.compartmentAt(k)),
+                    capability.resolveStatistic(ch, gate.statisticAt(k)));
         }
     }
 

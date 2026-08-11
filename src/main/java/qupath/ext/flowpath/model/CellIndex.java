@@ -5,7 +5,7 @@ import qupath.lib.roi.interfaces.ROI;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,6 +43,10 @@ public class CellIndex {
     private final double[] centroidX;
     private final double[] centroidY;
     private final int size;
+    // Union of measurement keys over a sample of the detections, in first-seen order.
+    // Kept so a lazily-built compartment column can resolve its concrete key once
+    // instead of re-deriving it per cell (see getResolvedColumn).
+    private final Set<String> sampleKeys;
 
     private CellIndex(PathObject[] objects, String[] markerNames, double[][] values,
                       double[] areas, double[] perimeters, double[] eccentricities,
@@ -67,6 +71,7 @@ public class CellIndex {
         this.centroidX = centroidX;
         this.centroidY = centroidY;
         this.size = objects.length;
+        this.sampleKeys = sampleMeasurementKeys(objects);
     }
 
     /**
@@ -124,14 +129,28 @@ public class CellIndex {
             markerKeys[j] = resolveMarkerKey(sampleKeys, markers[j], comps[j], stats[j]);
         }
 
+        // Morphology columns get the same treatment, and need it more: their lookup
+        // names ("area", "convex_area", "Centroid X") never match the exported names
+        // ("Area µm²", "Centroid X µm") exactly, so findMeasurement's exact-match step
+        // always missed and every cell fell through to two case-folding scans of its
+        // whole measurement map — seven times over. On a per-compartment export
+        // (~170 measurements/cell) that alone was the bulk of index-build time.
+        String areaKey = resolveMeasurementKey(sampleKeys, "area");
+        String convexAreaKey = resolveMeasurementKey(sampleKeys, "convex_area");
+        String eccentricityKey = resolveMeasurementKey(sampleKeys, "eccentricity");
+        String perimeterKey = resolveMeasurementKey(sampleKeys, "perimeter");
+        String solidityKey = resolveMeasurementKey(sampleKeys, "solidity");
+        String centroidXKey = resolveMeasurementKey(sampleKeys, "Centroid X");
+        String centroidYKey = resolveMeasurementKey(sampleKeys, "Centroid Y");
+
         int i = 0;
         for (PathObject obj : objects) {
             Map<String, Number> measurements = getMeasurements(obj);
 
-            double area = findMeasurement(measurements, "area");
-            double convexArea = findMeasurement(measurements, "convex_area");
-            double eccentricity = findMeasurement(measurements, "eccentricity");
-            double perimeter = findMeasurement(measurements, "perimeter");
+            double area = lookupMeasurement(measurements, areaKey, "area");
+            double convexArea = lookupMeasurement(measurements, convexAreaKey, "convex_area");
+            double eccentricity = lookupMeasurement(measurements, eccentricityKey, "eccentricity");
+            double perimeter = lookupMeasurement(measurements, perimeterKey, "perimeter");
 
             areas[i] = area;
             perimeters[i] = perimeter;
@@ -143,7 +162,7 @@ public class CellIndex {
             if (!Double.isNaN(area) && !Double.isNaN(convexArea) && convexArea > 0) {
                 solidities[i] = area / convexArea;
             } else {
-                solidities[i] = findMeasurement(measurements, "solidity");
+                solidities[i] = lookupMeasurement(measurements, solidityKey, "solidity");
             }
 
             // An explicit centroid measurement wins (it round-trips FlowPath exports
@@ -152,8 +171,8 @@ public class CellIndex {
             // is the fallback. Without it every centroid is NaN for QuPath-detected
             // cells, which blanks the CSV's centroid columns and leaves nothing to map
             // a UMAP point back to tissue coordinates.
-            centroidX[i] = findMeasurement(measurements, "Centroid X");
-            centroidY[i] = findMeasurement(measurements, "Centroid Y");
+            centroidX[i] = lookupMeasurement(measurements, centroidXKey, "Centroid X");
+            centroidY[i] = lookupMeasurement(measurements, centroidYKey, "Centroid Y");
             if (Double.isNaN(centroidX[i]) || Double.isNaN(centroidY[i])) {
                 ROI roi = obj.getROI();
                 if (roi != null) {
@@ -197,15 +216,56 @@ public class CellIndex {
      * Union of measurement keys across the first {@link #KEY_SAMPLE_SIZE} detections.
      * Matches the sampling depth marker discovery already uses, so a marker that was
      * discoverable is also resolvable here.
+     * <p>
+     * Insertion-ordered: the fuzzy passes in {@link #resolveMeasurementKey} and
+     * {@link #matchKey} return the <em>first</em> matching key, so iteration order
+     * decides which column a prefix like {@code "area"} resolves to. A hash set made
+     * that choice depend on string hashes; first-seen order reproduces the per-cell
+     * scan these resolvers replaced.
      */
     private static Set<String> sampleMeasurementKeys(PathObject[] objects) {
-        Set<String> keys = new HashSet<>();
+        Set<String> keys = new LinkedHashSet<>();
         int sampled = 0;
         for (PathObject obj : objects) {
             keys.addAll(getMeasurements(obj).keySet());
             if (++sampled >= KEY_SAMPLE_SIZE) break;
         }
         return keys;
+    }
+
+    /**
+     * Resolve the concrete measurement key a morphology lookup name maps to, mirroring
+     * the priority order of {@link #findMeasurement(Map, String)}: exact match, then the
+     * layer-prefixed form, then a case-insensitive prefix match (so {@code "area"} finds
+     * {@code "Area µm²"}). Returns {@code null} when nothing in {@code keys} matches.
+     */
+    private static String resolveMeasurementKey(Set<String> keys, String key) {
+        if (keys.contains(key)) return key;
+
+        String suffixLower = ("] " + key).toLowerCase();
+        for (String k : keys) {
+            if (k.toLowerCase().endsWith(suffixLower)) return k;
+        }
+
+        String keyLower = key.toLowerCase().replace('_', ' ');
+        for (String k : keys) {
+            String candidate = MeasurementKeys.stripLayerPrefix(k).toLowerCase().replace('_', ' ');
+            if (candidate.startsWith(keyLower)) return k;
+        }
+        return null;
+    }
+
+    /**
+     * Read a measurement through a key resolved once for the whole build, falling back
+     * to the per-cell {@link #findMeasurement} scan only when the sample resolved
+     * nothing. Mirrors the marker path's tradeoff: a cell that lacks an otherwise
+     * resolved key reads NaN rather than triggering a rescan.
+     */
+    private static double lookupMeasurement(Map<String, Number> measurements,
+                                            String resolvedKey, String fallbackKey) {
+        if (resolvedKey == null) return findMeasurement(measurements, fallbackKey);
+        Number val = measurements.get(resolvedKey);
+        return val != null ? val.doubleValue() : Double.NaN;
     }
 
     /**
@@ -421,6 +481,13 @@ public class CellIndex {
      * For whole-cell mean this returns the pre-built base column; other selections
      * build the column from the objects' measurements on first use and cache it.
      * Returns a NaN-filled column if the channel/compartment is absent.
+     * <p>
+     * The concrete key is resolved once against {@link #sampleKeys} and then read with a
+     * single map lookup per cell, the same way {@link #build} resolves its columns. The
+     * per-cell {@link #findMarkerValue} scan remains as the fallback for a key the sample
+     * did not cover, but it is the expensive path: it walks every measurement of every
+     * cell up to three times, which on a per-compartment export costs ~100x the resolved
+     * path. Selections offered by {@code CompartmentCapability} always resolve.
      */
     public double[] getResolvedColumn(String channel, Compartment compartment, Statistic statistic) {
         int mi = getMarkerIndex(channel);
@@ -432,8 +499,16 @@ public class CellIndex {
         if (cached != null) return cached;
 
         double[] col = new double[size];
-        for (int i = 0; i < size; i++) {
-            col[i] = findMarkerValue(getMeasurements(objects[i]), channel, compartment, statistic);
+        String resolved = resolveMarkerKey(sampleKeys, channel, compartment, statistic);
+        if (resolved != null) {
+            for (int i = 0; i < size; i++) {
+                Number val = getMeasurements(objects[i]).get(resolved);
+                col[i] = val != null ? val.doubleValue() : Double.NaN;
+            }
+        } else {
+            for (int i = 0; i < size; i++) {
+                col[i] = findMarkerValue(getMeasurements(objects[i]), channel, compartment, statistic);
+            }
         }
         resolvedColumns.put(key, col);
         return col;

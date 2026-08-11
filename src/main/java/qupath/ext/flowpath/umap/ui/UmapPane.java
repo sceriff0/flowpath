@@ -817,28 +817,19 @@ public class UmapPane extends BorderPane {
             boolean isGated = gated.contains(marker);
             if (isGated) {
                 var e = gateSel.entryFor(marker);
-                // Only honour a compartment/statistic the image actually carries;
-                // otherwise the column resolves to NaN for every cell.
-                Compartment c = capabilityAllows(incoming.capability(), marker, e.compartment())
-                        ? e.compartment() : Compartment.defaultCompartment();
-                Statistic st = capabilityAllowsStat(incoming.capability(), marker, e.statistic())
-                        ? e.statistic() : Statistic.defaultStatistic();
+                // Only honour a compartment/statistic the image actually carries; otherwise
+                // the column resolves to NaN for every cell. The fallback has to come from
+                // the capability too — hardcoding Statistic.defaultStatistic() here landed
+                // on Mean, which a default (Median-only) MIRAGE export does not contain, so
+                // the guard against a NaN column produced one.
+                Compartment c = incoming.capability().resolveCompartment(marker, e.compartment());
+                Statistic st = incoming.capability().resolveStatistic(marker, e.statistic());
                 sel.put(marker, new MarkerSelection.Entry(c, st, true));
             } else {
                 sel.put(marker, sel.entryFor(marker).withIncluded(false));
             }
         }
         return sel;
-    }
-
-    private static boolean capabilityAllows(CompartmentCapability cap, String marker, Compartment c) {
-        return !cap.isRich() ? c == Compartment.defaultCompartment()
-                : cap.compartmentsFor(marker).contains(c);
-    }
-
-    private static boolean capabilityAllowsStat(CompartmentCapability cap, String marker, Statistic st) {
-        return !cap.isRich() ? st == Statistic.defaultStatistic()
-                : cap.statisticsFor(marker).contains(st);
     }
 
     /** One-line summary of a snapshot for the status bar. */
@@ -987,7 +978,7 @@ public class UmapPane extends BorderPane {
 
         // Scan per-compartment capability from a sample of detections. Drives
         // whether the feature picker's compartment/statistic combos are live.
-        CompartmentCapability builtCapability = CompartmentCapability.scan(detections, 20);
+        CompartmentCapability builtCapability = CompartmentCapability.scan(detections);
 
         // Load any persisted per-marker selection for this image; legacy / v1
         // images (no property, or no rich keys) fall back to whole-cell mean.

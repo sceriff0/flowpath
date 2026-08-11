@@ -48,6 +48,19 @@ public final class CompartmentCapability {
         return cap;
     }
 
+    /**
+     * How many detections to inspect by default. Both halves of FlowPath must use the
+     * same depth: gating scanned 100 cells and the UMAP 20, so a marker whose compartment
+     * keys first appeared past cell 20 was offered in the gate editor and silently
+     * downgraded to whole-cell in the UMAP's feature selection.
+     */
+    public static final int DEFAULT_SAMPLE_SIZE = 100;
+
+    /** Scan the default number of detections. */
+    public static CompartmentCapability scan(Collection<PathObject> detections) {
+        return scan(detections, DEFAULT_SAMPLE_SIZE);
+    }
+
     /** Scan up to {@code sampleLimit} detections' measurement keys. */
     public static CompartmentCapability scan(Collection<PathObject> detections, int sampleLimit) {
         java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>();
@@ -84,5 +97,41 @@ public final class CompartmentCapability {
     public Set<Statistic> statisticsFor(String marker) {
         EnumSet<Statistic> set = statistics.get(MeasurementKeys.stripLayerPrefix(marker));
         return set == null ? EnumSet.noneOf(Statistic.class) : EnumSet.copyOf(set);
+    }
+
+    /**
+     * The compartment to read {@code marker} in, given what this export actually carries.
+     * <p>
+     * Keeps {@code preferred} when the export has it, so a configured gate is never
+     * silently moved. Otherwise prefers whole-cell, then whatever exists. A channel
+     * quantified without a nuclear mask has only {@code Cell} and must land there.
+     */
+    public Compartment resolveCompartment(String marker, Compartment preferred) {
+        java.util.List<Compartment> available =
+                new java.util.ArrayList<>(compartmentsFor(marker));
+        if (available.isEmpty()) return Compartment.WHOLE_CELL;
+        if (preferred != null && available.contains(preferred)) return preferred;
+        if (available.contains(Compartment.WHOLE_CELL)) return Compartment.WHOLE_CELL;
+        return available.get(available.size() - 1);
+    }
+
+    /**
+     * The statistic to read {@code marker} with, given what this export actually carries.
+     * <p>
+     * The one rule that matters: never return a statistic this export lacks. MIRAGE's
+     * default compartment quantification emits {@code Median} only — {@code Mean} and
+     * {@code Sum} are {@code --expanded_quantification} — so falling back to a hardcoded
+     * Mean resolves the column to a measurement key that is not in the file, and every
+     * cell reads NaN. Prefers the current selection, then Median, then Mean, then
+     * whatever exists; Mean is the answer only for a legacy channel with no structured
+     * statistics at all, whose bare column <em>is</em> the whole-cell mean.
+     */
+    public Statistic resolveStatistic(String marker, Statistic preferred) {
+        java.util.List<Statistic> available = new java.util.ArrayList<>(statisticsFor(marker));
+        if (available.isEmpty()) return Statistic.MEAN;
+        if (preferred != null && available.contains(preferred)) return preferred;
+        if (available.contains(Statistic.MEDIAN)) return Statistic.MEDIAN;
+        if (available.contains(Statistic.MEAN)) return Statistic.MEAN;
+        return available.get(0);
     }
 }
