@@ -12,8 +12,14 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>The filter runs whenever image channel metadata is missing or does not
  * validate against the detections — the common path for GeoJSON imported without
  * a matching OME-TIFF. A marker that the filter rejects never reaches the gate
- * editor and there is no warning, so an over-eager rule silently removes a
- * channel from the panel.
+ * editor, so an over-eager rule removes a channel from the panel.
+ *
+ * <p>That removal is no longer silent: {@code DetectionIngest} now owns the single
+ * copy of this rule (which {@code FlowPathPane.isMorphologyName} delegates to) and
+ * names every dropped channel in its {@code IngestReport}. The rule still has to be
+ * right — a marker filtered out here is filtered out before the report can see it as
+ * a "channel", so these cases remain the first line of defence. See
+ * {@code DetectionIngestTest} for the reporting side.
  */
 class MarkerDiscoveryTest {
 

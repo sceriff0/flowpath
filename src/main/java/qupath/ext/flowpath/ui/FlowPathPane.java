@@ -14,11 +14,13 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.io.FlowPathSerializer;
+import qupath.ext.flowpath.ingest.DetectionIngest;
+import qupath.ext.flowpath.ingest.IngestReport;
+import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.io.PhenotypeCsvExporter;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
-import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
@@ -26,6 +28,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.UndoHistory;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
 import qupath.lib.display.ChannelDisplayInfo;
@@ -42,9 +45,6 @@ import qupath.lib.roi.interfaces.ROI;
 
 import java.io.File;
 import java.util.*;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.stream.Collectors;
 
 /**
  * Main panel for the FlowPath extension.
@@ -70,16 +70,16 @@ public class FlowPathPane extends BorderPane {
      */
     private final UmapWindow umapWindow = new UmapWindow();
 
-    private static final int MAX_UNDO = 50;
-    private final Deque<GateTree> undoStack = new ArrayDeque<>();
-    private final Deque<GateTree> redoStack = new ArrayDeque<>();
-    private long lastUndoPushTime = 0;
+    private final UndoHistory<GateTree> undoHistory =
+        new UndoHistory<>(UndoHistory.DEFAULT_MAX_DEPTH, GateTree::deepCopy, System::currentTimeMillis);
 
     private GateTree gateTree;
     private CellIndex cellIndex;
     private MarkerStats markerStats;
     private List<String> markerNames;
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
+    /** What the last ingest could not resolve. Surfaced in the status bar, never modally. */
+    private IngestReport ingestReport = IngestReport.empty();
     private boolean[] cachedQualityMask;
     private boolean[] cachedRoiMask;
     private PathObjectHierarchyListener hierarchyListener;
@@ -276,14 +276,16 @@ public class FlowPathPane extends BorderPane {
             return;
         }
 
-        // Discover marker names from image channels (OME-TIFF metadata)
-        markerNames = discoverMarkerNames(imageData, detections);
-
-        // Detect per-compartment measurements (rich vs legacy GeoJSON) so the editor
-        // can enable/disable compartment + statistic selectors per channel.
-        compartmentCapability = CompartmentCapability.scan(detections);
-
-        cellIndex = CellIndex.build(detections, markerNames);
+        // One read of the hierarchy: the panel, the per-compartment capability, the index
+        // and the report all come from a single measurement-key sample, so the gate editor
+        // can no longer offer a compartment the index resolved to nothing. The pixel
+        // calibration rides along inside — it is the only thing FlowPath holds that MIRAGE
+        // does not, and it is what makes ScaleVerdict possible.
+        IngestResult ingest = DetectionIngest.read(detections, imageData);
+        markerNames = ingest.markerNames();
+        compartmentCapability = ingest.capability();
+        cellIndex = ingest.index();
+        ingestReport = ingest.report();
 
         // Compute ROI mask (if filter is enabled)
         recomputeRoiMask();
@@ -376,6 +378,7 @@ public class FlowPathPane extends BorderPane {
         cellIndex = null;
         markerStats = null;
         markerNames = Collections.emptyList();
+        ingestReport = IngestReport.empty();
         cachedQualityMask = null;
         cachedRoiMask = null;
         previewService.setCellIndex(null);
@@ -385,94 +388,13 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * Discover marker names from the image's channel metadata.
-     * Falls back to detection measurements if no image channels are found.
-     */
-    private List<String> discoverMarkerNames(ImageData<?> imageData, Collection<PathObject> detections) {
-        // Sample measurement keys from multiple cells (not just first) because
-        // cells exported with NaN values (e.g. Mirage pipeline) may lack some keys
-        Set<String> measurementKeys = new LinkedHashSet<>();
-        int sampled = 0;
-        for (PathObject obj : detections) {
-            var m = obj.getMeasurements();
-            if (m != null) measurementKeys.addAll(m.keySet());
-            if (++sampled >= 100) break;
-        }
-
-        // Primary: get channel names from image metadata, validate against measurements
-        var server = imageData.getServer();
-        var channels = server.getMetadata().getChannels();
-        if (channels != null && !channels.isEmpty()) {
-            List<String> validated = new ArrayList<>();
-            for (var ch : channels) {
-                String name = ch.getName();
-                if (name == null || name.isEmpty()) continue;
-                if (hasMeasurement(measurementKeys, name)) {
-                    validated.add(name);
-                }
-            }
-            if (!validated.isEmpty()) return validated;
-        }
-
-        // Fallback: extract from detection measurements (minus morphology fields)
-        if (measurementKeys.isEmpty()) return Collections.emptyList();
-
-        // Collapse per-compartment keys ("CD3: Nucleus: Mean") down to their base
-        // marker ("CD3") and de-duplicate, so a structured-only GeoJSON (no bare
-        // marker keys) still yields one entry per marker rather than one per compartment.
-        return measurementKeys.stream()
-            .map(name -> {
-                MeasurementKeys.Parsed parsed = MeasurementKeys.parse(name);
-                return parsed != null ? parsed.marker() : name;
-            })
-            .filter(name -> !name.startsWith("["))
-            .filter(name -> !name.startsWith("_"))
-            .filter(name -> !isMorphologyName(name))
-            .distinct()
-            .sorted()
-            .collect(Collectors.toList());
-    }
-
-    /**
-     * Morphology and geometry columns, matched by lowercase prefix so both naming
-     * conventions are covered:
-     *   QuPath default — "Area µm²", "Centroid X µm", "Eccentricity", "Perimeter µm",
-     *   "Solidity", "Convex Area µm²", "Major Axis Length µm", "Minor Axis Length µm";
-     *   import_phenotype.groovy — "area µm²", "eccentricity", "perimeter",
-     *   "convex_area", "axis_major_length", "axis_minor_length".
-     */
-    private static final Set<String> MORPHOLOGY_PREFIXES = Set.of(
-        "centroid", "area", "eccentricity", "perimeter", "convex",
-        "solidity", "axis_major", "axis_minor", "major axis", "minor axis",
-        "label", "fov", "cell_size"
-    );
-
-    /**
-     * Spatial-coordinate columns whose names are a single letter. These must be
-     * matched exactly, never by prefix: prefix-matching "x" and "y" also swallowed
-     * real panel markers such as YAP1, XBP1 and Xist, which then vanished from the
-     * channel list with no warning shown to the user.
-     */
-    private static final Set<String> MORPHOLOGY_EXACT = Set.of("x", "y");
-
-    /**
-     * True if a measurement name is a morphology/identity column rather than a
-     * marker channel. Package-private so the rule is testable without a QuPath GUI.
+     * True if a measurement name is a morphology/identity column rather than a marker
+     * channel. Delegates to {@link DetectionIngest}, which owns the single copy of the
+     * rule; this pane and {@code UmapSession} each used to carry their own, and they did
+     * not agree. Package-private so the rule stays testable without a QuPath GUI.
      */
     static boolean isMorphologyName(String name) {
-        if (name == null || name.isEmpty()) return false;
-        String lower = name.toLowerCase(Locale.ROOT);
-        if (MORPHOLOGY_EXACT.contains(lower)) return true;
-        return MORPHOLOGY_PREFIXES.stream().anyMatch(lower::startsWith);
-    }
-
-    private boolean hasMeasurement(Set<String> keys, String channel) {
-        if (keys.contains(channel)) return true;
-        String suffix = "] " + channel;
-        for (String key : keys) {
-            if (key.endsWith(suffix)) return true;
-        }
-        return false;
+        return DetectionIngest.isMorphologyName(name);
     }
 
     // --- Tree building ---
@@ -1013,8 +935,28 @@ public class FlowPathPane extends BorderPane {
         String roiInfo = gateTree.isRoiFilterEnabled()
             ? " | ROI: annotations"
             : "";
-        statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s",
-            total, excluded, gateCount, roiInfo));
+        statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s%s",
+            total, excluded, gateCount, roiInfo, ingestWarning()));
+        // The full report goes in the tooltip rather than a dialog: an ingest finding is
+        // context for reading the histograms, not an event that should block the user.
+        statusBar.setTooltip(cellIndex == null ? null : new Tooltip(ingestReport.describe()));
+    }
+
+    /**
+     * The ingest report, condensed to one line and shown only when something failed to
+     * resolve. An empty histogram used to be the only symptom of an unresolved axis; this
+     * is where the cause is now named. Deliberately not a modal — a channel dropped for
+     * want of a measurement is extremely common on a partially quantified panel and a
+     * dialog on every image load would train the user to dismiss it unread.
+     * <p>
+     * This subsumes the separate scale-mismatch warning that used to sit beside it: the
+     * ScaleVerdict is one of the report's findings, and printing it twice in one status
+     * line was the same duplication the whole ingest seam exists to remove.
+     */
+    private String ingestWarning() {
+        if (cellIndex == null) return "";
+        String summary = ingestReport.summary();
+        return summary.isEmpty() ? "" : " | \u26a0 " + summary;
     }
 
     private int countGates(List<GateNode> nodes) {
@@ -1176,35 +1118,28 @@ public class FlowPathPane extends BorderPane {
     // --- Undo / Redo ---
 
     private void pushUndo() {
-        undoStack.push(gateTree.deepCopy());
-        if (undoStack.size() > MAX_UNDO) undoStack.removeLast();
-        redoStack.clear();
+        undoHistory.record(gateTree);
     }
 
     private void pushUndoCoalesced() {
-        long now = System.currentTimeMillis();
-        if (now - lastUndoPushTime > 500) {
-            pushUndo();
-            lastUndoPushTime = now;
-        }
+        undoHistory.recordCoalesced(gateTree);
     }
 
     private void undo() {
-        if (undoStack.isEmpty()) return;
-        redoStack.push(gateTree.deepCopy());
-        gateTree = undoStack.pop();
-        afterUndoRedo();
+        undoHistory.undo(gateTree).ifPresent(previous -> {
+            gateTree = previous;
+            afterUndoRedo();
+        });
     }
 
     private void redo() {
-        if (redoStack.isEmpty()) return;
-        undoStack.push(gateTree.deepCopy());
-        gateTree = redoStack.pop();
-        afterUndoRedo();
+        undoHistory.redo(gateTree).ifPresent(next -> {
+            gateTree = next;
+            afterUndoRedo();
+        });
     }
 
     private void afterUndoRedo() {
-        lastUndoPushTime = 0;
         currentNode = null;
         qualityFilterPane.setFilter(gateTree.getQualityFilter());
         editorPane.setGateNode(null);

@@ -3,12 +3,13 @@ package qupath.ext.flowpath.io;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
+import qupath.ext.flowpath.ingest.DetectionIngest;
+import qupath.ext.flowpath.ingest.IngestOptions;
+import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.model.*;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
 
 import java.io.File;
 import java.io.IOException;
@@ -48,40 +49,17 @@ class MirageInputFidelityTest {
     // ---- fixtures: cells shaped exactly like a MIRAGE export --------------------
 
     /**
-     * One cell as {@code export_geojson.py} writes it. {@code markers} supplies the
-     * per-marker whole-cell means; per-compartment keys are derived so nuclear is
-     * 2x and cytoplasmic 0.5x the whole-cell value, giving each compartment a
-     * distinguishable column.
+     * Cells as {@code export_geojson.py} writes them: micrometre centroids taken from the
+     * ROI, {@link Cells#mirageMarker} for each marker's bare + per-compartment family
+     * (nuclear 2x, cytoplasmic 0.5x, the {@code --expanded} Nucleus Median and Cell Sum),
+     * and {@link Cells#mirageMorphology} for the µm-suffixed shape block.
+     * <p>
+     * This shape is the reason the shared fixture speaks the MIRAGE key grammar at all:
+     * this class is the pin on what QuPath actually hands FlowPath, so the builder had to
+     * absorb its shape rather than the other way round.
      */
-    private static PathObject mirageCell(double centroidX, double centroidY,
-                                         double areaUm2, Map<String, Double> markers) {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(centroidX, centroidY, ImagePlane.getDefaultPlane()));
-        var m = o.getMeasurements();
-        m.put("Centroid X µm", centroidX);
-        m.put("Centroid Y µm", centroidY);
-        markers.forEach((name, value) -> {
-            m.put(name, value);                                 // bare == whole-cell mean
-            m.put(name + ": Cell: Mean", value);
-            m.put(name + ": Nucleus: Mean", value * 2.0);
-            m.put(name + ": Cytoplasm: Mean", value * 0.5);
-            m.put(name + ": Nucleus: Median", value * 1.5);     // --expanded
-            m.put(name + ": Cell: Sum", value * areaUm2);       // --expanded
-        });
-        m.put("Area µm²", areaUm2);
-        m.put("Eccentricity", 0.6);
-        m.put("Perimeter µm", 30.0);
-        m.put("Solidity", 0.84);
-        m.put("Convex Area µm²", areaUm2 / 0.84);
-        m.put("Major Axis Length µm", 10.0);
-        m.put("Minor Axis Length µm", 5.0);
-        return o;
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] m = new boolean[n];
-        Arrays.fill(m, true);
-        return m;
+    private static Cells mirageCells(int n) {
+        return Cells.of(n).centroidsMicronsFromRoi(1.0);
     }
 
     private record Csv(List<String> header, List<List<String>> rows) {
@@ -114,9 +92,10 @@ class MirageInputFidelityTest {
 
     @Test
     void qupathNativeMorphologyKeysResolve() {
-        CellIndex idx = CellIndex.build(
-                List.of(mirageCell(12.5, 25.0, 42.0, Map.of("DAPI", 100.0))),
-                List.of("DAPI"));
+        CellIndex idx = mirageCells(1).at(new double[]{12.5}, new double[]{25.0})
+                .mirageMarker("DAPI", 100.0)
+                .mirageMorphology(42.0)
+                .build();
 
         assertEquals(42.0, idx.getArea(0), 1e-4, "\"Area µm²\" must resolve via prefix match");
         assertEquals(30.0, idx.getPerimeter(0), 1e-4, "\"Perimeter µm\"");
@@ -131,25 +110,21 @@ class MirageInputFidelityTest {
     void solidityFallsBackToTheExportedMeasurementWhenConvexAreaIsAbsent() {
         // MIRAGE only emits Convex Area when the upstream column survives; Solidity
         // is emitted independently. Losing solidity strips it from the quality filter.
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3", 10.0);
-        o.getMeasurements().put("Area µm²", 42.0);
-        o.getMeasurements().put("Solidity", 0.9);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = Cells.of(1)
+                .marker("CD3", 10.0)
+                .morphology("Area µm²", 42.0)
+                .morphology("Solidity", 0.9)
+                .build();
         assertEquals(0.9, idx.getSolidity(0), 1e-4,
                 "with no Convex Area, the directly exported Solidity must be used");
     }
 
     @Test
     void solidityIsNaNWhenNeitherConvexAreaNorSolidityIsPresent() {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3", 10.0);
-        o.getMeasurements().put("Area µm²", 42.0);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = Cells.of(1)
+                .marker("CD3", 10.0)
+                .morphology("Area µm²", 42.0)
+                .build();
         assertTrue(Double.isNaN(idx.getSolidity(0)),
                 "absent solidity must stay NaN, never a fabricated 0 or 1");
     }
@@ -158,9 +133,7 @@ class MirageInputFidelityTest {
 
     @Test
     void perCompartmentKeysResolveToDistinctColumns() {
-        CellIndex idx = CellIndex.build(
-                List.of(mirageCell(0, 0, 100.0, Map.of("CD3", 50.0))),
-                List.of("CD3"));
+        CellIndex idx = mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).build();
 
         assertEquals(50.0, idx.getResolvedColumn("CD3", Compartment.WHOLE_CELL, Statistic.MEAN)[0], 1e-4);
         assertEquals(100.0, idx.getResolvedColumn("CD3", Compartment.NUCLEAR, Statistic.MEAN)[0], 1e-4);
@@ -172,7 +145,7 @@ class MirageInputFidelityTest {
     @Test
     void capabilityScanReportsExactlyWhatMirageWrote() {
         var cap = CompartmentCapability.scan(
-                List.of(mirageCell(0, 0, 100.0, Map.of("CD3", 50.0))), 10);
+                mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections(), 10);
 
         assertTrue(cap.isRich(), "a MIRAGE compartment export is a rich GeoJSON");
         assertEquals(EnumSet.allOf(Compartment.class), EnumSet.copyOf(cap.compartmentsFor("CD3")));
@@ -183,12 +156,8 @@ class MirageInputFidelityTest {
 
     @Test
     void legacyWholeCellOnlyExportIsNotMistakenForRich() {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3", 50.0);
-        o.getMeasurements().put("Area µm²", 100.0);
-
-        var cap = CompartmentCapability.scan(List.of(o), 10);
+        var cap = CompartmentCapability.scan(
+                Cells.of(1).marker("CD3", 50.0).morphology("Area µm²", 100.0).detections(), 10);
         assertFalse(cap.isRich(), "no compartment keys -> legacy, selectors stay pinned");
         assertTrue(cap.compartmentsFor("CD3").isEmpty());
     }
@@ -198,13 +167,11 @@ class MirageInputFidelityTest {
         // "CD3: Cell: Mean" *is* the whole-cell mean. If a producer emits only the
         // structured keys, the default selection must read them rather than go NaN
         // while CompartmentCapability advertises the marker as available.
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3: Cell: Mean", 50.0);
-        o.getMeasurements().put("CD3: Nucleus: Mean", 80.0);
-        o.getMeasurements().put("Area µm²", 100.0);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = Cells.of(1)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, 50.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, 80.0)
+                .morphology("Area µm²", 100.0)
+                .build();
         assertEquals(50.0, idx.getMarkerValues(0)[0], 1e-4,
                 "the base column must fall back to the structured whole-cell mean");
         assertEquals(50.0, idx.getResolvedColumn("CD3", Compartment.WHOLE_CELL, Statistic.MEAN)[0], 1e-4);
@@ -217,19 +184,18 @@ class MirageInputFidelityTest {
         // for every compartment, plus the bare whole-cell mean, but NOT Cell Mean/Sum.
         // FlowPath's new default statistic is Median, so a freshly created gate must read
         // that structured column rather than go NaN. This is now the common production input.
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3", 50.0);                 // bare == whole-cell mean
-        o.getMeasurements().put("CD3: Cell: Median", 30.0);   // always present, even non-expanded
-        o.getMeasurements().put("Area µm²", 100.0);
+        Cells cells = Cells.of(1)
+                .marker("CD3", 50.0)                                                   // bare == whole-cell mean
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, 30.0)         // always present, even non-expanded
+                .morphology("Area µm²", 100.0);
 
         // Discovery advertises exactly Median for the Cell compartment (no Mean/Sum columns).
-        var cap = CompartmentCapability.scan(List.of(o), 10);
+        var cap = CompartmentCapability.scan(cells.detections(), 10);
         assertTrue(cap.isRich(), "a per-compartment Median key makes this a rich export");
         assertEquals(EnumSet.of(Statistic.MEDIAN), EnumSet.copyOf(cap.statisticsFor("CD3")),
                 "a default (non-expanded) run exposes only Median");
 
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = cells.build();
         // The bare base column is still the whole-cell mean.
         assertEquals(50.0, idx.getMarkerValues(0)[0], 1e-4);
 
@@ -245,13 +211,12 @@ class MirageInputFidelityTest {
     @Test
     void layerPrefixedCompartmentKeysResolve() {
         // import_phenotype.groovy prefixes measurements with "[Layer0] ".
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("[Layer0] CD3", 50.0);
-        o.getMeasurements().put("[Layer0] CD3: Nucleus: Mean", 80.0);
-        o.getMeasurements().put("[Layer0] Area µm²", 100.0);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = Cells.of(1)
+                .marker("CD3", 50.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, 80.0)
+                .morphology("Area µm²", 100.0)
+                .layerPrefixed()
+                .build();
         assertEquals(50.0, idx.getMarkerValues(0)[0], 1e-4);
         assertEquals(80.0, idx.getResolvedColumn("CD3", Compartment.NUCLEAR, Statistic.MEAN)[0], 1e-4);
         assertEquals(100.0, idx.getArea(0), 1e-4);
@@ -263,14 +228,13 @@ class MirageInputFidelityTest {
     void mirageShapedCellsGateAndExportEndToEnd() throws IOException {
         // Four cells whose whole-cell CD3 rises 10, 20, 30, 40; nuclear is 2x.
         // A nuclear raw gate at 50 splits after the second cell.
-        List<PathObject> cells = new ArrayList<>();
         double[] cd3 = {10, 20, 30, 40};
-        for (int i = 0; i < 4; i++) {
-            cells.add(mirageCell(i * 10.0, i * 20.0, 100.0 + i,
-                    Map.of("CD3", cd3[i], "DAPI", 500.0)));
-        }
-        CellIndex idx = CellIndex.build(cells, List.of("CD3", "DAPI"));
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(4));
+        CellIndex idx = mirageCells(4).at(i -> i * 10.0, i -> i * 20.0)
+                .mirageMarker("CD3", cd3)
+                .mirageMarker("DAPI", 500.0)
+                .mirageMorphology(i -> 100.0 + i)
+                .build();
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(4));
 
         GateNode gate = new GateNode("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
@@ -322,11 +286,12 @@ class MirageInputFidelityTest {
         try {
             Locale.setDefault(Locale.GERMANY);
 
-            CellIndex idx = CellIndex.build(
-                    List.of(mirageCell(1.5, 2.5, 3.25, Map.of("CD3", 3.14159)),
-                            mirageCell(4.5, 5.5, 6.75, Map.of("CD3", 2.71828))),
-                    List.of("CD3"));
-            MarkerStats stats = MarkerStats.compute(idx, allTrue(2));
+            CellIndex idx = mirageCells(2)
+                    .at(new double[]{1.5, 4.5}, new double[]{2.5, 5.5})
+                    .mirageMarker("CD3", 3.14159, 2.71828)
+                    .mirageMorphology(3.25, 6.75)
+                    .build();
+            MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(2));
 
             GateNode gate = new GateNode("CD3", 3.0);
             gate.setThresholdIsZScore(false);
@@ -356,13 +321,11 @@ class MirageInputFidelityTest {
         // The suffix must live inside the quotes: `"CD3, clone UCHT1_raw"`, never
         // `"CD3, clone UCHT1"_raw` — text after a closing quote is not valid CSV.
         String marker = "CD3, clone UCHT1";
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put(marker, 10.0);
-        o.getMeasurements().put("Area µm²", 100.0);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of(marker));
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(1));
+        CellIndex idx = Cells.of(1)
+                .marker(marker, 10.0)
+                .morphology("Area µm²", 100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(1));
 
         GateNode gate = new GateNode(marker, 5.0);
         gate.setThresholdIsZScore(false);
@@ -381,6 +344,58 @@ class MirageInputFidelityTest {
                 "quote must not close before the suffix; header was: " + header);
     }
 
+    // ---- the ingest report: a clean export must say nothing ---------------------
+
+    @Test
+    void aCleanMirageExportIngestsWithAnEmptyReport() {
+        // The other side of every assertion above. Those pin that a MIRAGE export
+        // RESOLVES; this pins that resolving it produces no complaint, so the report is
+        // additive information rather than a new gate on whether data loads. If a future
+        // change makes a clean export "dirty", the status bar starts crying wolf on every
+        // image and the warning stops meaning anything.
+        List<PathObject> cells = mirageCells(5).at(i -> i * 10.0, i -> i * 20.0)
+                .mirageMarker("CD3", i -> 10.0 + i)
+                .mirageMarker("DAPI", i -> 500.0 + i)
+                .mirageMorphology(i -> 100.0 + i)
+                .detections();
+
+        IngestResult result = DetectionIngest.read(cells,
+                IngestOptions.none().withChannelNames(List.of("CD3", "DAPI")));
+
+        assertEquals(List.of("CD3", "DAPI"), result.markerNames());
+        assertTrue(result.capability().isRich());
+        assertTrue(result.report().isClean(),
+                "a clean MIRAGE export must ingest silently; got: " + result.report().findings());
+        assertEquals("", result.report().summary());
+    }
+
+    @Test
+    void anOmittedMeasurementIsReportedWhileAGenuineZeroIsNot() {
+        // The two things export_geojson.py and quantify.py write that look alike and mean
+        // opposite things. export_geojson.py:112-114 OMITS a measurement whose value is
+        // NaN — a failed upstream join, so the value is UNKNOWN. quantify.py writes a
+        // literal 0.0 for a compartment with genuinely zero pixels — the value is KNOWN,
+        // and it is zero. FlowPath's gating collapses them; the report does not.
+        List<PathObject> cells = mirageCells(4).at(i -> i, i -> i)
+                .mirageMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(100.0)
+                // quantify.py's `default=0.0` for an anucleate cell.
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, 0.0)
+                // export_geojson.py simply never appends a NaN, so the key is absent on 2 of 4.
+                .marker("DAPI", 500.0).absentOn(i -> i >= 2)
+                .detections();
+
+        IngestResult result = DetectionIngest.read(cells,
+                IngestOptions.none().withChannelNames(List.of("CD3", "DAPI")));
+
+        assertEquals(Map.of("DAPI", 2), result.report().cellsMissingResolvedKey(),
+                "omitted upstream: NaN, and a NaN criterion PASSES the quality filter");
+        assertFalse(result.report().isClean(), "the omission is a finding");
+        assertTrue(result.report().sampledZeroValueCells().isEmpty(),
+                "the whole-cell CD3 column carries no zeros — only the nuclear one does, "
+                        + "and the default selection does not read it");
+    }
+
     // ---- documented precision limit ---------------------------------------------
 
     @Test
@@ -389,13 +404,11 @@ class MirageInputFidelityTest {
         // this is invisible there, but --expanded Sum (integrated density) routinely
         // exceeds 2^24, where float spacing is > 1. This test states the limit so the
         // loss is a known property of the CSV rather than a suspected export bug.
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        o.getMeasurements().put("CD3", 1234.5679);
-        o.getMeasurements().put("CD3: Cell: Sum", 123456789.0);
-        o.getMeasurements().put("Area µm²", 100.0);
-
-        CellIndex idx = CellIndex.build(List.of(o), List.of("CD3"));
+        CellIndex idx = Cells.of(1)
+                .marker("CD3", 1234.5679)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.SUM, 123456789.0)
+                .morphology("Area µm²", 100.0)
+                .build();
 
         assertEquals(1234.5679, idx.getMarkerValues(0)[0], 1e-3,
                 "a 4-decimal Mean survives float storage at CSV precision");
