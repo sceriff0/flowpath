@@ -1,10 +1,12 @@
 package qupath.ext.flowpath.model;
 
+import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
-import qupath.lib.roi.interfaces.ROI;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -40,27 +42,55 @@ public class CellIndex {
     private final double[] eccentricities;
     private final double[] solidities;
     private final double[] totalIntensities;
-    private final double[] centroidX;
-    private final double[] centroidY;
+    /**
+     * Segmentation label — the cell's identity in the mask MIRAGE segmented, as opposed
+     * to {@code cell_id}, which is only this collection's index. {@code NaN} where the
+     * export carried no label. Held as {@code double} so it shares the columnar
+     * representation of every other measurement; it is written back out as an integer.
+     */
+    private final double[] labels;
+    private final boolean hasLabels;
+    /** Both coordinate spaces, resolved once. Replaces the old raw centroid arrays. */
+    private final CellGeometry geometry;
     private final int size;
     // Union of measurement keys over a sample of the detections, in first-seen order.
     // Kept so a lazily-built compartment column can resolve its concrete key once
     // instead of re-deriving it per cell (see getResolvedColumn).
     private final Set<String> sampleKeys;
+    private final BuildDiagnostics diagnostics;
+
+    /** Marker names that appeared more than once in the requested panel (collapsed). */
+    private final List<String> duplicateMarkerNames;
+    /** How many requested marker names were null and therefore skipped. */
+    private final int nullMarkerNames;
 
     private CellIndex(PathObject[] objects, String[] markerNames, double[][] values,
                       double[] areas, double[] perimeters, double[] eccentricities,
                       double[] solidities, double[] totalIntensities,
-                      double[] centroidX, double[] centroidY) {
+                      double[] labels, CellGeometry geometry, Set<String> sampleKeys,
+                      BuildDiagnostics partialDiagnostics) {
         this.objects = objects;
         this.markerNames = markerNames;
         // putIfAbsent keeps first-declared-wins, matching the scan this replaced;
         // a null name is skipped rather than rejected, because the scan simply never
         // matched one and callers should not start seeing an NPE from the constructor.
+        // Both collapses used to be entirely silent — a panel carrying "CD3" twice kept
+        // only the first column and a null name vanished — so they are counted here and
+        // surfaced through BuildDiagnostics rather than merely tolerated.
         Map<String, Integer> byName = new HashMap<>(Math.max(1, markerNames.length * 2));
+        List<String> duplicates = new ArrayList<>(0);
+        int nulls = 0;
         for (int i = 0; i < markerNames.length; i++) {
-            if (markerNames[i] != null) byName.putIfAbsent(markerNames[i], i);
+            if (markerNames[i] == null) {
+                nulls++;
+                continue;
+            }
+            if (byName.putIfAbsent(markerNames[i], i) != null && !duplicates.contains(markerNames[i])) {
+                duplicates.add(markerNames[i]);
+            }
         }
+        this.duplicateMarkerNames = List.copyOf(duplicates);
+        this.nullMarkerNames = nulls;
         this.markerIndexByName = Map.copyOf(byName);
         this.values = values;
         this.areas = areas;
@@ -68,10 +98,22 @@ public class CellIndex {
         this.eccentricities = eccentricities;
         this.solidities = solidities;
         this.totalIntensities = totalIntensities;
-        this.centroidX = centroidX;
-        this.centroidY = centroidY;
+        this.labels = labels;
+        boolean anyLabel = false;
+        for (double label : labels) {
+            if (!Double.isNaN(label)) {
+                anyLabel = true;
+                break;
+            }
+        }
+        this.hasLabels = anyLabel;
+        this.geometry = geometry;
         this.size = objects.length;
-        this.sampleKeys = sampleMeasurementKeys(objects);
+        // Handed in rather than re-derived: build already sampled these, and taking the
+        // sample twice would re-walk the measurement maps of the sampled detections.
+        this.sampleKeys = sampleKeys;
+        this.diagnostics = partialDiagnostics.withNameCollapses(this.duplicateMarkerNames,
+                this.nullMarkerNames);
     }
 
     /**
@@ -89,6 +131,23 @@ public class CellIndex {
      */
     public static CellIndex build(Collection<PathObject> detections, List<String> markerNames,
                                   MarkerSelection selection) {
+        return build(detections, markerNames, selection, null);
+    }
+
+    /**
+     * Build an index that also knows the image's pixel calibration, so its
+     * {@link CellGeometry} can express positions in <em>both</em> coordinate spaces and
+     * can cross-check the exported micrometres against the image's own scale.
+     * <p>
+     * Pass the calibration whenever it is available — {@code imageData.getServer()
+     * .getPixelCalibration()}. A {@code null} calibration is not an error; the geometry
+     * simply reports {@link ScaleVerdict.Status#NO_CALIBRATION} and cannot convert
+     * between spaces.
+     *
+     * @param calibration the image's pixel calibration, or {@code null} when unknown
+     */
+    public static CellIndex build(Collection<PathObject> detections, List<String> markerNames,
+                                  MarkerSelection selection, PixelCalibration calibration) {
         int n = detections.size();
         int m = markerNames.size();
 
@@ -100,8 +159,7 @@ public class CellIndex {
         double[] eccentricities = new double[n];
         double[] solidities = new double[n];
         double[] totalIntensities = new double[n];
-        double[] centroidX = new double[n];
-        double[] centroidY = new double[n];
+        double[] labels = new double[n];
 
         // Resolve each marker's (compartment, statistic) once up front.
         Compartment[] comps = new Compartment[m];
@@ -129,6 +187,17 @@ public class CellIndex {
             markerKeys[j] = resolveMarkerKey(sampleKeys, markers[j], comps[j], stats[j]);
         }
 
+        // Adapter bookkeeping, gathered INSIDE this one pass. Every counter below is
+        // either on a branch that is not the hot path (a null measurement, i.e. a key the
+        // sample resolved but this cell lacks) or bounded to the first KEY_SAMPLE_SIZE
+        // cells. Nothing here adds a second walk over the detections, and nothing adds a
+        // per-cell string scan — see the v2.0.1 note above for why that matters.
+        int[] missingPerMarker = new int[m];
+        int[] sampledZerosPerMarker = new int[m];
+        int cellObjects = 0;
+        int tileObjects = 0;
+        int otherObjects = 0;
+
         // Morphology columns get the same treatment, and need it more: their lookup
         // names ("area", "convex_area", "Centroid X") never match the exported names
         // ("Area µm²", "Centroid X µm") exactly, so findMeasurement's exact-match step
@@ -140,12 +209,20 @@ public class CellIndex {
         String eccentricityKey = resolveMeasurementKey(sampleKeys, "eccentricity");
         String perimeterKey = resolveMeasurementKey(sampleKeys, "perimeter");
         String solidityKey = resolveMeasurementKey(sampleKeys, "solidity");
-        String centroidXKey = resolveMeasurementKey(sampleKeys, "Centroid X");
-        String centroidYKey = resolveMeasurementKey(sampleKeys, "Centroid Y");
+        // Segmentation label, when the export carries one. Resolved the same way and for
+        // the same reason as the morphology keys — once, not per cell.
+        String labelKey = resolveMeasurementKey(sampleKeys, "label");
 
         int i = 0;
         for (PathObject obj : objects) {
             Map<String, Number> measurements = getMeasurements(obj);
+
+            // Object-type census. getDetectionObjects() returns cells, tiles and plain
+            // detections alike, so a superpixel or tile silently became a "cell". Counted,
+            // not filtered: filtering would change which cells an existing project gates.
+            if (obj.isTile()) tileObjects++;
+            else if (obj.isCell()) cellObjects++;
+            else otherObjects++;
 
             double area = lookupMeasurement(measurements, areaKey, "area");
             double convexArea = lookupMeasurement(measurements, convexAreaKey, "convex_area");
@@ -165,21 +242,21 @@ public class CellIndex {
                 solidities[i] = lookupMeasurement(measurements, solidityKey, "solidity");
             }
 
-            // An explicit centroid measurement wins (it round-trips FlowPath exports
-            // faithfully, including their units). Native QuPath detections carry no
-            // such measurement — their position lives on the ROI — so the ROI centroid
-            // is the fallback. Without it every centroid is NaN for QuPath-detected
-            // cells, which blanks the CSV's centroid columns and leaves nothing to map
-            // a UMAP point back to tissue coordinates.
-            centroidX[i] = lookupMeasurement(measurements, centroidXKey, "Centroid X");
-            centroidY[i] = lookupMeasurement(measurements, centroidYKey, "Centroid Y");
-            if (Double.isNaN(centroidX[i]) || Double.isNaN(centroidY[i])) {
-                ROI roi = obj.getROI();
-                if (roi != null) {
-                    if (Double.isNaN(centroidX[i])) centroidX[i] = roi.getCentroidX();
-                    if (Double.isNaN(centroidY[i])) centroidY[i] = roi.getCentroidY();
-                }
+            // Deliberately NOT routed through lookupMeasurement: its null-key fallback is
+            // a full per-cell scan of the measurement map, and no label key is the common
+            // case (MIRAGE's export_geojson.py does not currently write one). Paying a
+            // scan per cell to rediscover an absence would undo the v2.0.1 build speedup.
+            if (labelKey != null) {
+                Number labelValue = measurements.get(labelKey);
+                labels[i] = labelValue != null ? labelValue.doubleValue() : Double.NaN;
+            } else {
+                labels[i] = Double.NaN;
             }
+
+            // Bounded to the key sample: a literal-zero census over every cell would put
+            // an extra compare on the m x n inner loop, and a scale error or a failed
+            // upstream join is uniform enough that the sample settles it.
+            boolean census = i < KEY_SAMPLE_SIZE;
 
             double totalIntensity = 0;
             for (int j = 0; j < m; j++) {
@@ -187,7 +264,22 @@ public class CellIndex {
                 double v;
                 if (key != null) {
                     Number num = measurements.get(key);
-                    v = num != null ? num.doubleValue() : Double.NaN;
+                    if (num != null) {
+                        v = num.doubleValue();
+                        // MIRAGE's export_geojson.py OMITS a NaN measurement entirely
+                        // (bin/export_geojson.py, `if pd.notna(val)`), while quantify.py
+                        // writes a literal 0.0 for a genuinely empty compartment. The two
+                        // mean opposite things; this counter is what lets the report say
+                        // which of them a marker's blank cells actually are.
+                        if (census && v == 0.0) sampledZerosPerMarker[j]++;
+                    } else {
+                        // The sample resolved this key but this cell does not carry it.
+                        // Reads NaN with no rescan (the v2.0.1 tradeoff) and, because
+                        // QualityFilter.passes skips every NaN criterion, such a cell
+                        // PASSES QC rather than being excluded.
+                        v = Double.NaN;
+                        missingPerMarker[j]++;
+                    }
                 } else {
                     // Unresolved against the sample. Fall back to exhaustive per-cell
                     // resolution so a heterogeneous measurement list (a marker present
@@ -205,12 +297,95 @@ public class CellIndex {
             i++;
         }
 
+        // Positions are resolved by CellGeometry, which reuses the key sample taken
+        // above and settles both coordinate spaces at once — including the joint
+        // (never per-axis) ROI fallback that keeps a row from mixing µm and pixels.
+        CellGeometry geometry = CellGeometry.of(objects, sampleKeys, calibration);
+
+        // Assemble what the pass observed. Marker-keyed rather than index-keyed so a
+        // duplicate name collapses the same way markerIndexByName does.
+        Map<String, String> resolved = new LinkedHashMap<>();
+        List<String> unresolved = new ArrayList<>(0);
+        Map<String, Integer> missing = new LinkedHashMap<>();
+        Map<String, Integer> zeros = new LinkedHashMap<>();
+        for (int j = 0; j < m; j++) {
+            String marker = markers[j];
+            if (marker == null) continue;
+            if (markerKeys[j] != null) {
+                resolved.putIfAbsent(marker, markerKeys[j]);
+                if (missingPerMarker[j] > 0) missing.putIfAbsent(marker, missingPerMarker[j]);
+                if (sampledZerosPerMarker[j] > 0) zeros.putIfAbsent(marker, sampledZerosPerMarker[j]);
+            } else if (!unresolved.contains(marker)) {
+                unresolved.add(marker);
+            }
+        }
+        BuildDiagnostics partial = new BuildDiagnostics(
+                n, cellObjects, tileObjects, otherObjects,
+                Math.min(n, KEY_SAMPLE_SIZE), KEY_SAMPLE_SIZE,
+                Map.copyOf(resolved), List.copyOf(unresolved),
+                Map.copyOf(missing), Map.copyOf(zeros),
+                List.of(), 0);
+
         return new CellIndex(objects, markers, values, areas, perimeters, eccentricities,
-                solidities, totalIntensities, centroidX, centroidY);
+                solidities, totalIntensities, labels, geometry, sampleKeys, partial);
     }
 
-    /** How many detections to inspect when resolving measurement keys. */
-    private static final int KEY_SAMPLE_SIZE = 20;
+    /**
+     * How many detections to inspect when resolving measurement keys.
+     * <p>
+     * Deliberately equal to {@link CompartmentCapability#DEFAULT_SAMPLE_SIZE}. It was 20
+     * while capability scanning was 100, which is the drift 2.0.1 documented but only
+     * half-fixed: a marker whose structured keys first appeared past cell 20 was offered
+     * by the capability scan and then resolved to {@code null} here, so the gate editor
+     * listed a compartment whose column read NaN for every cell. Sampling 100 cells' key
+     * sets once per build costs well under a millisecond and cannot be the hot path — the
+     * hot path is the {@code cells x markers} loop, which is untouched by this constant.
+     */
+    public static final int KEY_SAMPLE_SIZE = CompartmentCapability.DEFAULT_SAMPLE_SIZE;
+
+    /**
+     * What {@link #build} observed about the data it was handed but could not act on —
+     * the raw material for {@code IngestReport}.
+     * <p>
+     * Every field is gathered inside the single build pass. This record deliberately
+     * states no policy: it does not decide whether a missing key is an error, only that
+     * one was missing. {@code qupath.ext.flowpath.ingest.IngestReport} applies the policy.
+     *
+     * @param detectionCount          objects handed to the build
+     * @param cellObjects             of those, true {@code PathCellObject}s
+     * @param tileObjects             of those, tiles/superpixels — never really cells
+     * @param otherObjects            of those, plain detections (the legacy import shape)
+     * @param sampledCells            cells whose key sets formed the resolution sample
+     * @param sampleSize              the sample ceiling, {@link #KEY_SAMPLE_SIZE}
+     * @param resolvedMarkerKeys      marker -&gt; the one concrete measurement key it reads
+     * @param unresolvedMarkers       markers the sample offered no key for at all
+     * @param cellsMissingResolvedKey marker -&gt; cells lacking a key the sample resolved
+     * @param sampledZeroValueCells   marker -&gt; sampled cells whose value was literally 0.0
+     * @param duplicateMarkerNames    names requested more than once (only the first kept)
+     * @param nullMarkerNames         null names requested, silently skipped
+     */
+    public record BuildDiagnostics(int detectionCount,
+                                   int cellObjects, int tileObjects, int otherObjects,
+                                   int sampledCells, int sampleSize,
+                                   Map<String, String> resolvedMarkerKeys,
+                                   List<String> unresolvedMarkers,
+                                   Map<String, Integer> cellsMissingResolvedKey,
+                                   Map<String, Integer> sampledZeroValueCells,
+                                   List<String> duplicateMarkerNames,
+                                   int nullMarkerNames) {
+
+        /** Completed in the constructor, which is where the name collapses are detected. */
+        BuildDiagnostics withNameCollapses(List<String> duplicates, int nulls) {
+            return new BuildDiagnostics(detectionCount, cellObjects, tileObjects, otherObjects,
+                    sampledCells, sampleSize, resolvedMarkerKeys, unresolvedMarkers,
+                    cellsMissingResolvedKey, sampledZeroValueCells, duplicates, nulls);
+        }
+    }
+
+    /** What the build pass observed but could not act on. Never {@code null}. */
+    public BuildDiagnostics diagnostics() {
+        return diagnostics;
+    }
 
     /**
      * Union of measurement keys across the first {@link #KEY_SAMPLE_SIZE} detections.
@@ -223,7 +398,7 @@ public class CellIndex {
      * that choice depend on string hashes; first-seen order reproduces the per-cell
      * scan these resolvers replaced.
      */
-    private static Set<String> sampleMeasurementKeys(PathObject[] objects) {
+    static Set<String> sampleMeasurementKeys(PathObject[] objects) {
         Set<String> keys = new LinkedHashSet<>();
         int sampled = 0;
         for (PathObject obj : objects) {
@@ -239,7 +414,7 @@ public class CellIndex {
      * layer-prefixed form, then a case-insensitive prefix match (so {@code "area"} finds
      * {@code "Area µm²"}). Returns {@code null} when nothing in {@code keys} matches.
      */
-    private static String resolveMeasurementKey(Set<String> keys, String key) {
+    static String resolveMeasurementKey(Set<String> keys, String key) {
         if (keys.contains(key)) return key;
 
         String suffixLower = ("] " + key).toLowerCase();
@@ -277,13 +452,14 @@ public class CellIndex {
      */
     private static String resolveMarkerKey(Set<String> keys, String marker,
                                            Compartment compartment, Statistic statistic) {
-        if (compartment == null) compartment = Compartment.defaultCompartment();
-        if (statistic == null) statistic = Statistic.defaultStatistic();
-
-        String hit = matchKey(keys, MeasurementKeys.build(marker, compartment, statistic));
+        String hit = matchKey(keys, MeasurementKeys.build(
+                marker,
+                compartment != null ? compartment : Compartment.defaultCompartment(),
+                statistic != null ? statistic : Statistic.defaultStatistic()));
         if (hit != null) return hit;
 
-        if (compartment == Compartment.WHOLE_CELL && statistic == Statistic.MEAN) {
+        // Only the default selection has a second, bare address — see isDefault.
+        if (isDefault(compartment, statistic)) {
             return matchKey(keys, marker);
         }
         return null;
@@ -299,7 +475,7 @@ public class CellIndex {
         return null;
     }
 
-    private static Map<String, Number> getMeasurements(PathObject obj) {
+    static Map<String, Number> getMeasurements(PathObject obj) {
         try {
             var m = obj.getMeasurements();
             if (m != null) return m;
@@ -309,59 +485,42 @@ public class CellIndex {
     }
 
     /**
-     * Find a marker intensity value by channel name.
-     * Tries exact match first, then looks for "[layer] channel" patterns
-     * (from import_phenotype.groovy layer-prefixed measurements), and finally the
-     * structured whole-cell mean key {@code "<channel>: Cell: Mean"}.
-     * <p>
-     * The last step matters for a <em>structured-only</em> GeoJSON: MIRAGE currently
-     * writes a bare {@code "CD3"} column alongside the per-compartment keys, but
-     * {@code "CD3: Cell: Mean"} <em>is</em> the whole-cell mean by definition. Without
-     * this fallback such a file resolves the default (whole-cell/mean) selection to
-     * NaN for every cell while {@link CompartmentCapability} still advertises the
-     * marker — an empty histogram over data that is right there.
-     */
-    private static double findMarkerValue(Map<String, Number> measurements, String channel) {
-        // Exact match
-        Number val = measurements.get(channel);
-        if (val != null) return val.doubleValue();
-
-        // Layer-prefixed match: "[something] channel"
-        String suffix = "] " + channel;
-        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            if (entry.getKey().endsWith(suffix) && entry.getValue() != null) {
-                return entry.getValue().doubleValue();
-            }
-        }
-
-        // Structured whole-cell mean, exact then layer-prefixed.
-        String structured = MeasurementKeys.build(channel, Compartment.WHOLE_CELL, Statistic.MEAN);
-        val = measurements.get(structured);
-        if (val != null) return val.doubleValue();
-        String structuredSuffix = "] " + structured;
-        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            if (entry.getKey().endsWith(structuredSuffix) && entry.getValue() != null) {
-                return entry.getValue().doubleValue();
-            }
-        }
-        return Double.NaN;
-    }
-
-    /**
      * Resolve a marker value for a specific compartment and statistic, using the
      * QuPath-native key {@code "<channel>: <Compartment>: <Stat>"}.
      * <p>
-     * Resolution order: exact key, then layer-prefixed key, then — only for
-     * whole-cell mean — the bare {@code channel} key so legacy GeoJSONs (which
-     * carry a single {@code "CD3"} measurement) keep working unchanged. Returns
-     * {@code NaN} if nothing matches.
+     * Resolution order: the structured key (exact, then layer-prefixed), then — only for
+     * the default selection, per {@link #isDefault} — the bare {@code channel} key
+     * (exact, then layer-prefixed) so legacy GeoJSONs carrying a single {@code "CD3"}
+     * measurement keep working unchanged. Returns {@code NaN} if nothing matches.
+     * <p>
+     * This is the per-cell fallback scan used when a key could not be resolved once for
+     * the whole build against {@link #sampleKeys}; it applies the same two rules
+     * {@link #resolveMarkerKey} applies to a key set, so the two cannot drift apart.
+     * The <em>bare</em> address matters in both directions: a structured-only GeoJSON
+     * (MIRAGE with {@code "CD3: Cell: Mean"} but no {@code "CD3"}) resolves through the
+     * structured step, a legacy bare-only GeoJSON through the fallback.
      */
     public static double findMarkerValue(Map<String, Number> measurements, String channel,
                                          Compartment compartment, Statistic statistic) {
         Compartment comp = compartment != null ? compartment : Compartment.WHOLE_CELL;
         Statistic stat = statistic != null ? statistic : Statistic.MEAN;
 
-        String key = MeasurementKeys.build(channel, comp, stat);
+        double v = lookupKey(measurements, MeasurementKeys.build(channel, comp, stat));
+        if (!Double.isNaN(v)) return v;
+
+        // Backward compatibility: the default selection also answers to the bare key.
+        if (isDefault(comp, stat)) {
+            return lookupKey(measurements, channel);
+        }
+        return Double.NaN;
+    }
+
+    /**
+     * Read one measurement: exact key, then the layer-prefixed {@code "[layer] key"} form
+     * written by {@code import_phenotype.groovy}. The per-cell twin of {@link #matchKey},
+     * which applies the same rule to a key set.
+     */
+    private static double lookupKey(Map<String, Number> measurements, String key) {
         Number val = measurements.get(key);
         if (val != null) return val.doubleValue();
 
@@ -370,11 +529,6 @@ public class CellIndex {
             if (entry.getKey().endsWith(suffix) && entry.getValue() != null) {
                 return entry.getValue().doubleValue();
             }
-        }
-
-        // Backward compatibility: whole-cell mean falls back to the bare marker key.
-        if (comp == Compartment.WHOLE_CELL && stat == Statistic.MEAN) {
-            return findMarkerValue(measurements, channel);
         }
         return Double.NaN;
     }
@@ -477,7 +631,12 @@ public class CellIndex {
     }
 
     /**
-     * Column of per-cell values for a channel + compartment + statistic.
+     * Column of per-cell values for a channel + compartment + statistic — <b>values
+     * only</b>. If you are going to z-score, percentile-clip or otherwise summarise these
+     * numbers, call {@link #column(String, Compartment, Statistic, MarkerStats)} instead:
+     * it returns the same array inside a {@link MeasuredColumn} whose statistics are
+     * guaranteed to be registered.
+     * <p>
      * For whole-cell mean this returns the pre-built base column; other selections
      * build the column from the objects' measurements on first use and cache it.
      * Returns a NaN-filled column if the channel/compartment is absent.
@@ -514,9 +673,66 @@ public class CellIndex {
         return col;
     }
 
+    /**
+     * The one place that knows the bare-key rule: <b>whole-cell mean is the default
+     * selection, and the default selection is also addressed by the bare marker name.</b>
+     * <p>
+     * {@code null} means "unspecified", which is the default. Every other consumer of the
+     * rule — {@link #resolvedKey}, {@link #getResolvedColumn}, {@link #resolveMarkerKey}
+     * and {@link #findMarkerValue} — routes through here rather than restating it, so a
+     * legacy GeoJSON carrying only {@code "CD3"} and a structured export carrying only
+     * {@code "CD3: Cell: Mean"} cannot disagree about which column a default gate reads.
+     */
     private static boolean isDefault(Compartment compartment, Statistic statistic) {
         return (compartment == null || compartment == Compartment.WHOLE_CELL)
                 && (statistic == null || statistic == Statistic.MEAN);
+    }
+
+    /**
+     * The measurement column for a channel + compartment + statistic, <b>with its
+     * statistics registered</b> — the single call that replaces the old four-step
+     * resolve / materialise / {@code ensureColumn} / read protocol.
+     * <p>
+     * Skipping the registration step used to be silent and wrong (see
+     * {@link MeasuredColumn}); a {@code MeasuredColumn} cannot exist without it, so the
+     * mistake is no longer expressible. Cheap to call repeatedly: the column itself and
+     * its statistics are cached, and only the small handle is allocated. Resolve it once
+     * outside a per-cell loop, then index it.
+     *
+     * @param stats the statistics instance to register against and read through;
+     *              must not be {@code null}
+     */
+    public MeasuredColumn column(String channel, Compartment compartment, Statistic statistic,
+                                 MarkerStats stats) {
+        if (stats == null) {
+            throw new NullPointerException("MarkerStats is required to resolve a MeasuredColumn");
+        }
+        String key = resolvedKey(channel, compartment, statistic);
+        double[] values = getResolvedColumn(channel, compartment, statistic);
+        // Idempotent, and safe to lose the check-then-act race: two threads may both
+        // compute this column and publish identical numbers. See MarkerStats.ensureColumn.
+        stats.ensureColumn(key, values);
+        return new MeasuredColumn(key, values, stats);
+    }
+
+    /**
+     * The measurement column one gate axis reads, resolved through
+     * {@link GateNode#compartmentAt(int)} / {@link GateNode#statisticAt(int)} so callers
+     * stop re-deriving the {@code (channel, compartment, statistic)} triple — the
+     * re-derivation that let {@code GatingEngine}, the gate editor and the CSV exporter
+     * drift apart on which column a gate was actually cutting.
+     *
+     * @param axis index into {@link GateNode#getChannels()}: 0 for a threshold gate or a
+     *             2D gate's X axis, 1 for its Y axis
+     * @return the column, or {@code null} when the gate has no usable channel on that axis
+     */
+    public MeasuredColumn column(GateNode gate, int axis, MarkerStats stats) {
+        if (gate == null) return null;
+        List<String> channels = gate.getChannels();
+        if (axis < 0 || axis >= channels.size()) return null;
+        String channel = channels.get(axis);
+        if (channel == null || channel.isEmpty()) return null;
+        return column(channel, gate.compartmentAt(axis), gate.statisticAt(axis), stats);
     }
 
     /** Column index for a marker name, or {@code -1} if this index has no such marker. */
@@ -585,11 +801,53 @@ public class CellIndex {
         return totalIntensities[i];
     }
 
+    /**
+     * Cell {@code i}'s X position <b>in {@code geometry().sourceSpace()}</b> — the value
+     * exactly as the export supplied it, which for a MIRAGE {@code cells.geojson} is
+     * micrometres and for a native QuPath detection is pixels.
+     * <p>
+     * Kept for callers that only round-trip the number. Anything that reasons about
+     * <em>where</em> a cell is should ask {@link #geometry()} for a named space instead:
+     * {@link CellGeometry#micronsX(int)} or {@link CellGeometry#pixelsX(int)}.
+     */
     public double getCentroidX(int i) {
-        return centroidX[i];
+        return geometry.sourceX(i);
     }
 
+    /** Cell {@code i}'s Y position in {@code geometry().sourceSpace()}. See {@link #getCentroidX(int)}. */
     public double getCentroidY(int i) {
-        return centroidY[i];
+        return geometry.sourceY(i);
+    }
+
+    /**
+     * Both coordinate spaces for these cells, plus the verdict on whether the exported
+     * micrometres match the image's own pixel calibration.
+     */
+    public CellGeometry geometry() {
+        return geometry;
+    }
+
+    /**
+     * The segmentation label of cell {@code i}, or {@code NaN} when the export carried
+     * none.
+     * <p>
+     * This is the cell's <em>identity</em> in the mask it was segmented from — unlike the
+     * {@code cell_id} the CSV writes, which is merely this collection's index and cannot
+     * be joined against anything. {@code mirage/bin/join_flowpath.py} joins exactly on
+     * this value when FlowPath emits it, and explicitly refuses to align positionally
+     * when it does not.
+     */
+    public double getLabel(int i) {
+        return labels[i];
+    }
+
+    /**
+     * Whether any cell carries a segmentation label. False for exports with no label
+     * measurement, in which case consumers should omit the column entirely rather than
+     * write a blank one — an all-empty {@code label} column would make
+     * {@code join_flowpath.py} attempt an exact join and match nothing.
+     */
+    public boolean hasLabels() {
+        return hasLabels;
     }
 }
