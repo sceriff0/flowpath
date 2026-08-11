@@ -7,13 +7,10 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.lang.reflect.Field;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -28,45 +25,41 @@ import static org.junit.jupiter.api.Assertions.*;
 class UmapComputeServiceTest {
 
     @BeforeAll
-    static void initJfx() {
-        try {
-            Platform.startup(() -> {});
-        } catch (IllegalStateException already) {
-            // Already started
-        }
+    static void initJfx() throws InterruptedException {
+        FxTestSupport.startToolkit();
     }
 
-    private static PathObject createCell(double... values) {
-        var obj = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        obj.getMeasurements().put("CD45", values[0]);
-        if (values.length > 1) obj.getMeasurements().put("CD8", values[1]);
-        if (values.length > 2) obj.getMeasurements().put("CD4", values[2]);
-        return obj;
-    }
+    /** The panel {@code createCell} used to hard-code, in the same order. */
+    private static final List<String> PANEL = List.of("CD45", "CD8", "CD4");
 
-    private static CellIndex buildIndex(int n) {
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            cells.add(createCell(i * 1.0));
-        }
-        return CellIndex.build(cells, List.of("CD45"));
-    }
-
-    /** Build a synthetic CellIndex with multiple markers (random values) for realistic UMAP tests. */
+    /**
+     * A synthetic index of {@code markers} markers of standard-normal values.
+     * <p>
+     * Values are drawn cell-major, marker-minor — the order the per-cell construction
+     * loop this replaced used — so a given seed still yields exactly the same population.
+     */
     private static CellIndex buildSyntheticIndex(int n, int markers, long seed) {
+        return randomIndex(n, seed, PANEL.subList(0, Math.min(3, markers)), new double[]{1, 1, 1});
+    }
+
+    /** Synthetic index whose markers live on very different scales (1x, 1000x, 0.01x). */
+    private static CellIndex buildMultiScaleIndex(int n, long seed) {
+        return randomIndex(n, seed, PANEL, new double[]{1.0, 1000.0, 0.01});
+    }
+
+    private static CellIndex randomIndex(int n, long seed, List<String> markers, double[] scales) {
         Random rng = new Random(seed);
-        List<PathObject> cells = new ArrayList<>(n);
-        List<String> markerNames = new ArrayList<>();
-        markerNames.add("CD45");
-        if (markers > 1) markerNames.add("CD8");
-        if (markers > 2) markerNames.add("CD4");
+        double[][] values = new double[markers.size()][n];
         for (int i = 0; i < n; i++) {
-            double[] vals = new double[Math.min(3, markers)];
-            for (int j = 0; j < vals.length; j++) vals[j] = rng.nextGaussian();
-            cells.add(createCell(vals));
+            for (int j = 0; j < markers.size(); j++) {
+                values[j][i] = rng.nextGaussian() * scales[j];
+            }
         }
-        return CellIndex.build(cells, markerNames);
+        Cells cells = Cells.of(n);
+        for (int j = 0; j < markers.size(); j++) {
+            cells.marker(markers.get(j), values[j]);
+        }
+        return cells.build();
     }
 
     /** Wait for a UMAP computation to complete (success or error) up to the given timeout. */
@@ -199,19 +192,6 @@ class UmapComputeServiceTest {
         } finally {
             service.shutdown();
         }
-    }
-
-    /** Synthetic index whose markers live on very different scales (1x, 1000x, 0.01x). */
-    private static CellIndex buildMultiScaleIndex(int n, long seed) {
-        Random rng = new Random(seed);
-        List<PathObject> cells = new ArrayList<>(n);
-        double[] scales = {1.0, 1000.0, 0.01};
-        for (int i = 0; i < n; i++) {
-            double[] vals = new double[3];
-            for (int j = 0; j < 3; j++) vals[j] = rng.nextGaussian() * scales[j];
-            cells.add(createCell(vals));
-        }
-        return CellIndex.build(cells, List.of("CD45", "CD8", "CD4"));
     }
 
     @Test

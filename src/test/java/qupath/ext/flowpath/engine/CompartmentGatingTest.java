@@ -9,14 +9,9 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -29,31 +24,17 @@ class CompartmentGatingTest {
     /** Two cells carrying bare + per-compartment CD3 keys. Cell A is nuclear-high,
      *  cell B is cytoplasm-high; whole-cell mean is identical (50) for both. */
     private static CellIndex twoCellIndex() {
-        PathObject a = cell(Map.of(
-                "CD3", 50.0, "CD3: Cell: Mean", 50.0,
-                "CD3: Nucleus: Mean", 100.0, "CD3: Cytoplasm: Mean", 1.0));
-        PathObject b = cell(Map.of(
-                "CD3", 50.0, "CD3: Cell: Mean", 50.0,
-                "CD3: Nucleus: Mean", 1.0, "CD3: Cytoplasm: Mean", 100.0));
-        return CellIndex.build(List.of(a, b), List.of("CD3"));
-    }
-
-    private static PathObject cell(Map<String, Double> meas) {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        meas.forEach((k, v) -> o.getMeasurements().put(k, v));
-        o.getMeasurements().put("area", 100.0);
-        return o;
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] m = new boolean[n];
-        Arrays.fill(m, true);
-        return m;
+        return Cells.of(2)
+                .marker("CD3", 50.0)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, 50.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, 100.0, 1.0)
+                .marker("CD3", Compartment.CYTOPLASMIC, Statistic.MEAN, 1.0, 100.0)
+                .area(100.0)
+                .build();
     }
 
     private static AssignmentResult run(CellIndex index, GateNode gate) {
-        MarkerStats stats = MarkerStats.compute(index, allTrue(index.size()));
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);

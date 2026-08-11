@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.umap.ui;
+package qupath.ext.flowpath.testing;
 
 import javafx.application.Platform;
 
@@ -14,8 +14,12 @@ import java.util.function.Supplier;
  * fails to start; {@link #toolkitAvailable()} then returns {@code false} so callers
  * can {@code assumeTrue(...)} and skip rather than fail. This keeps pure-logic
  * coverage running everywhere while real-control tests run wherever a display exists.
+ * <p>
+ * One copy, shared by both halves of the suite. It previously existed twice —
+ * byte-for-byte identical but for the package line — once under {@code ui} and once
+ * under {@code umap.ui}.
  */
-final class FxTestSupport {
+public final class FxTestSupport {
 
     private FxTestSupport() {}
 
@@ -29,7 +33,7 @@ final class FxTestSupport {
      * than a skip — otherwise a broken display setup would silently skip every
      * UI test and leave CI falsely green.
      */
-    static synchronized boolean toolkitAvailable() {
+    public static synchronized boolean toolkitAvailable() {
         boolean ready = computeAvailable();
         if (!ready && fxRequired()) {
             throw new IllegalStateException(
@@ -37,6 +41,26 @@ final class FxTestSupport {
                 + "display (xvfb) is not working, so UI tests would silently skip. Failing loudly.");
         }
         return ready;
+    }
+
+    /**
+     * Start the toolkit and block until it is up, tolerating one that another test class
+     * already started.
+     * <p>
+     * Deliberately <em>not</em> {@link #toolkitAvailable()}: this makes no judgement about
+     * whether graphics work and hands the caller no way to skip. Tests that only need the
+     * FX thread — building bare controls with no scene, where a {@code ColorPicker} touches
+     * CSS during construction — use this from {@code @BeforeAll} and must keep running
+     * everywhere rather than gaining a silent skip.
+     */
+    public static void startToolkit() throws InterruptedException {
+        try {
+            CountDownLatch latch = new CountDownLatch(1);
+            Platform.startup(latch::countDown);
+            latch.await();
+        } catch (IllegalStateException alreadyStarted) {
+            // Toolkit was already initialized (e.g. by a previous test class) — fine.
+        }
     }
 
     private static boolean fxRequired() {
@@ -73,7 +97,7 @@ final class FxTestSupport {
     }
 
     /** Run {@code action} on the FX application thread and block for its result. */
-    static <T> T onFx(Supplier<T> action) {
+    public static <T> T onFx(Supplier<T> action) {
         if (Platform.isFxApplicationThread()) {
             return action.get();
         }
@@ -87,7 +111,7 @@ final class FxTestSupport {
     }
 
     /** Run {@code action} on the FX application thread and block until it finishes. */
-    static void onFxRun(Runnable action) {
+    public static void onFxRun(Runnable action) {
         AtomicReference<RuntimeException> err = new AtomicReference<>();
         onFx(() -> {
             try {

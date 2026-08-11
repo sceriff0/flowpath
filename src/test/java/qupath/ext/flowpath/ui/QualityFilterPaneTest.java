@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.ui;
 
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.testing.FxTestSupport;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

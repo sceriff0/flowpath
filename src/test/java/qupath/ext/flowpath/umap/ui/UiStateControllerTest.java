@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.umap.ui;
 
-import javafx.application.Platform;
 import javafx.scene.control.Button;
 import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ProgressIndicator;
@@ -14,8 +13,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import qupath.ext.flowpath.umap.ui.UiStateController.UiState;
-
-import java.util.concurrent.CountDownLatch;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -43,13 +41,7 @@ class UiStateControllerTest {
 
     @BeforeAll
     static void initToolkit() throws InterruptedException {
-        try {
-            CountDownLatch latch = new CountDownLatch(1);
-            Platform.startup(latch::countDown);
-            latch.await();
-        } catch (IllegalStateException alreadyStarted) {
-            // Toolkit was already initialized (e.g. by a previous test class) — fine.
-        }
+        FxTestSupport.startToolkit();
     }
 
     @BeforeEach

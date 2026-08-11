@@ -9,10 +9,8 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.roi.ROIs;
-import qupath.lib.regions.ImagePlane;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,19 +27,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class PhenotypeSnapshotTest {
 
-    private static PathObject cell(double x, double y, double cd3) {
-        var roi = ROIs.createPointsROI(x, y, ImagePlane.getDefaultPlane());
-        var obj = PathObjects.createDetectionObject(roi);
-        obj.getMeasurements().put("CD3", cd3);
-        return obj;
-    }
-
     private static CellIndex indexOf(int n) {
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            cells.add(cell(i, i, i));
-        }
-        return CellIndex.build(cells, List.of("CD3"));
+        return Cells.of(n).at(i -> i, i -> i).marker("CD3", i -> i).build();
     }
 
     private static PhenotypeSnapshot snapshot(CellIndex index, String[] labels,

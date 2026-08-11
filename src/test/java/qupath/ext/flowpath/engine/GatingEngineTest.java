@@ -8,14 +8,11 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.regions.ImagePlane;
 import qupath.lib.roi.ROIs;
 import qupath.lib.roi.interfaces.ROI;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -24,56 +21,6 @@ class GatingEngineTest {
 
     // ---- helper ----
 
-    /**
-     * Build a synthetic CellIndex with the given markers, marker values, and area values.
-     * Each cell is placed at coordinates (i*10, i*10).
-     *
-     * @param markers      list of marker names
-     * @param markerValues [markerIndex][cellIndex] intensity values
-     * @param areas        per-cell area values, or null to default to 100.0
-     */
-    private static CellIndex buildIndex(List<String> markers, double[][] markerValues, double[] areas) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(i * 10.0, i * 10.0, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", areas != null ? areas[i] : 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    /**
-     * Build a CellIndex where cells are placed at specific (x, y) coordinates.
-     */
-    private static CellIndex buildIndexWithCoords(List<String> markers, double[][] markerValues,
-                                                   double[] xs, double[] ys) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(xs[i], ys[i], ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    /**
-     * Create an all-true quality mask of the given size.
-     */
-    private static boolean[] allTrueMask(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
 
     // ---- tests ----
 
@@ -82,8 +29,8 @@ class GatingEngineTest {
         // 10 cells, CD45 values 1..10, threshold 5.5 (raw), no z-score
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(10);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(10);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.5);
@@ -113,8 +60,8 @@ class GatingEngineTest {
         // 10 cells with values 1..10, mean=5.5, z-score threshold=0 splits at the mean
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(10);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(10);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 0.0);
@@ -146,7 +93,7 @@ class GatingEngineTest {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} };
         double[] areas = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -171,7 +118,7 @@ class GatingEngineTest {
         double[][] values = { {1, 2, 3, 4, 5, 6} };
         double[] xs = {5, 15, 25, 50, 80, 100};
         double[] ys = {5, 15, 25, 50, 80, 100};
-        CellIndex index = buildIndexWithCoords(markers, values, xs, ys);
+        CellIndex index = Cells.columns(markers, values).at(xs, ys).build();
 
         // Create a rectangular ROI from (0,0) to (55,55)
         ROI rectRoi = ROIs.createRectangleROI(0, 0, 55, 55, ImagePlane.getDefaultPlane());
@@ -200,8 +147,8 @@ class GatingEngineTest {
         vals[99] = 200.0;  // outlier high
         double[][] values = { vals };
 
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(100);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(100);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 50.0);
@@ -239,8 +186,8 @@ class GatingEngineTest {
             {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},  // CD45
             {10, 9, 8, 7, 6, 5, 4, 3, 2, 1}    // CD3
         };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(10);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(10);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode root = new GateNode("CD45", 5.5);
@@ -279,8 +226,8 @@ class GatingEngineTest {
         // Gate on "NONEXISTENT" channel. All cells should remain Unclassified.
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(5);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(5);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("NONEXISTENT", 0.0);
@@ -303,8 +250,8 @@ class GatingEngineTest {
     void emptyTreeLeavesAllUnclassified() {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(5);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(5);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateTree tree = new GateTree();
@@ -326,7 +273,7 @@ class GatingEngineTest {
         // QF with impossible minArea should exclude everything
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null); // default area=100
+        CellIndex index = Cells.columns(markers, values).build(); // default area=100
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(Double.MAX_VALUE);
@@ -339,7 +286,7 @@ class GatingEngineTest {
         tree.setQualityFilter(qf);
         tree.addRoot(gate);
 
-        boolean[] mask = allTrueMask(5);
+        boolean[] mask = Cells.allTrue(5);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
@@ -367,7 +314,7 @@ class GatingEngineTest {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3} };
         double[] areas = {50.0, Double.NaN, 150.0};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(100);
@@ -386,8 +333,8 @@ class GatingEngineTest {
     void computeAncestorMaskRootGateGetsAllCells() {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode root = new GateNode("CD45", 3.0);
         root.setStatistic(Statistic.MEAN);
@@ -412,8 +359,8 @@ class GatingEngineTest {
             {1, 2, 3, 4, 5},  // CD45
             {10, 20, 30, 40, 50}  // CD3
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
@@ -441,8 +388,8 @@ class GatingEngineTest {
     void computeAncestorMaskRespectsBaseMask() {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode root = new GateNode("CD45", 3.0);
         root.setStatistic(Statistic.MEAN);
@@ -469,8 +416,8 @@ class GatingEngineTest {
             {1, 2, 3, 4, 5},
             {10, 20, 30, 40, 50}
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
@@ -505,8 +452,8 @@ class GatingEngineTest {
             {10, 20, 30, 40, 50},
             {100, 200, 300, 400, 500}
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode grandparent = new GateNode("CD45", 3.0);
         grandparent.setStatistic(Statistic.MEAN);
@@ -540,8 +487,8 @@ class GatingEngineTest {
             {1, 2, 3, 4, 5},
             {10, 20, 30, 40, 50}
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
@@ -574,8 +521,8 @@ class GatingEngineTest {
         // Cell 3: CD45=2, PANCK=2  -> CD45-: PANCK-
         List<String> markers = List.of("CD45", "PANCK");
         double[][] values = { {8, 8, 2, 2}, {8, 2, 8, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
@@ -608,8 +555,8 @@ class GatingEngineTest {
     void perRootColorsStoredCorrectly() {
         List<String> markers = List.of("CD45", "PANCK");
         double[][] values = { {8, 2}, {8, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
@@ -651,8 +598,8 @@ class GatingEngineTest {
     void singleRootBehaviorUnchanged() {
         List<String> markers = List.of("CD45");
         double[][] values = { {8, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
@@ -674,8 +621,8 @@ class GatingEngineTest {
     void disabledRootSkippedInComposite() {
         List<String> markers = List.of("CD45", "PANCK");
         double[][] values = { {8}, {8} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
@@ -700,8 +647,8 @@ class GatingEngineTest {
     void threeRootsProduceTripleComposite() {
         List<String> markers = List.of("A", "B", "C");
         double[][] values = { {8}, {2}, {8} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
 
         GateNode r1 = new GateNode("A", 5.0);
         r1.setStatistic(Statistic.MEAN);
@@ -734,8 +681,8 @@ class GatingEngineTest {
             {-500, 5, 6, 7, 8},  // CD45: cell 0 is far outside p1-p99
             {8, 8, 8, 8, 8}      // PANCK: all high
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);

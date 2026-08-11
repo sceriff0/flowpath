@@ -6,6 +6,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 /**
  * Scene-graph coverage for {@link UmapCanvas}: point picking (the basis of

@@ -5,11 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.model.*;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
-import qupath.lib.roi.interfaces.ROI;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,26 +26,6 @@ class CsvCorrectnessTest {
 
     // ========== Helpers ==========
 
-    private static CellIndex buildIndex(List<String> markers, double[][] markerValues, double[] areas) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(i * 10.0, i * 10.0, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", areas != null ? areas[i] : 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    private static boolean[] allTrueMask(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
 
     private static List<String> parseCsvLine(String line) {
         List<String> fields = new ArrayList<>();
@@ -100,8 +76,8 @@ class CsvCorrectnessTest {
         // Use both markers in gates so both appear in CSV columns
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {2.5, 7.3}, {1.1, 9.9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode gate1 = new GateNode("CD45", 5.0);
         gate1.setStatistic(Statistic.MEAN);
@@ -130,8 +106,8 @@ class CsvCorrectnessTest {
         // 3 markers but only CD45 is gated — CD3 and CD8 should still appear as raw+zscore columns
         List<String> markers = List.of("CD45", "CD3", "CD8");
         double[][] values = { {2, 8}, {3, 7}, {4, 6} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
@@ -159,8 +135,8 @@ class CsvCorrectnessTest {
         // 4 cells, CD45 values [2, 4, 6, 8]. mean=5, std=sqrt(5)≈2.2361
         List<String> markers = List.of("CD45");
         double[][] values = { {2, 4, 6, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 0.0);
@@ -190,8 +166,8 @@ class CsvCorrectnessTest {
     void csvUsesDotsNotCommasForDecimals() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {3.14159} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(1));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
 
         GateNode gate = new GateNode("CD45", 0.0);
         gate.setStatistic(Statistic.MEAN);
@@ -220,8 +196,8 @@ class CsvCorrectnessTest {
         cd45[98] = -500; cd3[98] = -500; // outlier
         cd45[99] = 500; cd3[99] = 500; // outlier
         double[][] values = { cd45, cd3 };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(100));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(100));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 0, 50, 0, 50);
         gate.setStatisticX(Statistic.MEAN);
@@ -247,8 +223,8 @@ class CsvCorrectnessTest {
         cd45[98] = -500; cd3[98] = 50;
         cd45[99] = 50; cd3[99] = -500;
         double[][] values = { cd45, cd3 };
-        CellIndex index = buildIndex(List.of("CD45", "CD3"), values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(100));
+        CellIndex index = Cells.columns(List.of("CD45", "CD3"), values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(100));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
@@ -278,8 +254,8 @@ class CsvCorrectnessTest {
         // CD3 values  [1,1,9,9], mean=5, so z>0 for 9, z<0 for 1
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {1, 9, 1, 9}, {1, 1, 9, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
@@ -313,8 +289,8 @@ class CsvCorrectnessTest {
         // Gate bounds [-0.5, 0.5] in z-score space → only cell 1 (z=0) is inside.
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {1, 5, 9}, {1, 5, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", -0.5, 0.5, -0.5, 0.5);
         gate.setStatisticX(Statistic.MEAN);
@@ -342,8 +318,8 @@ class CsvCorrectnessTest {
         // CD45 values [1, 5, 9] → gate bounds [3, 7] → only cell 1 (val=5) is inside.
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {1, 5, 9}, {1, 5, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 3, 7, 3, 7);
         gate.setStatisticX(Statistic.MEAN);
@@ -371,8 +347,8 @@ class CsvCorrectnessTest {
         // Rectangle gate on CD45 vs CD3. Inside → both signs "+", outside → both "-"
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {5, 20}, {5, 20} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
         gate.setStatisticX(Statistic.MEAN);
@@ -399,8 +375,8 @@ class CsvCorrectnessTest {
     void quadrantGateSignsForBothChannelsInCsv() throws IOException {
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {8, 2, 8, 2}, {8, 8, 2, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
@@ -438,8 +414,8 @@ class CsvCorrectnessTest {
         double[] vals = new double[n];
         for (int i = 0; i < n; i++) vals[i] = i;
         double[][] values = { vals };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(n));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
 
         GateNode gate = new GateNode("CD45", 250.0);
         gate.setStatistic(Statistic.MEAN);
@@ -573,8 +549,8 @@ class CsvCorrectnessTest {
         // All cells have identical CD45=5.0 → std=0 → zscore should be empty in CSV
         List<String> markers = List.of("CD45");
         double[][] values = { {5, 5, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         GateNode gate = new GateNode("CD45", 0.0);
         gate.setStatistic(Statistic.MEAN);
@@ -629,7 +605,7 @@ class CsvCorrectnessTest {
         // 1 cell that is an outlier on CD45 (passes QF)
         cd45[nNormal + 2] = -999; areas[nNormal + 2] = 100;
 
-        CellIndex index = buildIndex(markers, new double[][]{cd45}, areas);
+        CellIndex index = Cells.columns(markers, new double[][]{cd45}).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -682,7 +658,7 @@ class CsvCorrectnessTest {
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {8, 8, 2, 8, 2, 2}, {8, 8, 8, 2, 2, 2} };
         double[] areas = {10, 100, 100, 100, 100, 100};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -716,7 +692,7 @@ class CsvCorrectnessTest {
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {5, 5, 20}, {5, 5, 20} };
         double[] areas = {10, 100, 100};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -749,7 +725,7 @@ class CsvCorrectnessTest {
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {2, 8, 8}, {5, 5, 5} };
         double[] areas = {10, 100, 100};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -791,8 +767,8 @@ class CsvCorrectnessTest {
         // Cell 2: CD45=8, CD3=2, CD8=8 → CD45+ then quadrant NP (CD3-/CD8+)
         List<String> markers = List.of("CD45", "CD3", "CD8");
         double[][] values = { {2, 8, 8}, {5, 8, 2}, {5, 8, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
@@ -840,8 +816,8 @@ class CsvCorrectnessTest {
         double[][] values = {
             {8, 8, 2}, {8, 8, 2}, {5, 1, 5}, {5, 1, 5}
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         QuadrantGate quad = new QuadrantGate("CD45", "CD3");
         quad.setStatisticX(Statistic.MEAN);
@@ -883,8 +859,8 @@ class CsvCorrectnessTest {
             {3, 3, 3, -100, 3},   // CD45: cell 3 is X-outlier
             {3, 3, 3, 3, -100}    // CD3: cell 4 is Y-outlier
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 0, 10, 0, 10);
         gate.setStatisticX(Statistic.MEAN);
@@ -930,7 +906,7 @@ class CsvCorrectnessTest {
         // Cell 99 is an outlier on CD45
         cd45[n - 1] = -500;
 
-        CellIndex index = buildIndex(markers, new double[][]{cd45, cd3, cd8, cd20}, areas);
+        CellIndex index = Cells.columns(markers, new double[][]{cd45, cd3, cd8, cd20}).area(areas).build();
 
         // QF: minArea=60 → excludes cells 0,1 (areas 50, 55)
         QualityFilter qf = new QualityFilter();

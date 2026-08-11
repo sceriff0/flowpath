@@ -10,16 +10,13 @@ import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.function.IntToDoubleFunction;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,39 +47,22 @@ class MedianOnlyCompartmentTest {
      * no {@code Mean}/{@code Sum} compartment keys at all.
      */
     private static CellIndex index() {
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < N; i++) {
-            Map<String, Double> m = new LinkedHashMap<>();
-            double cell = i * 10.0;           // 0 .. 200
-            double nuc = 1000.0 + i * 100.0;  // 1000 .. 3000
-            m.put("CD3", cell);                        // bare = whole-cell mean
-            m.put("CD3: Cell: Median", cell / 2.0);
-            m.put("CD3: Nucleus: Median", nuc / 2.0);
-            m.put("CD3: Cytoplasm: Median", nuc / 4.0);
-            cells.add(cell(m));
-        }
-        return CellIndex.build(cells, List.of("CD3"));
-    }
-
-    private static PathObject cell(Map<String, Double> meas) {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        meas.forEach((k, v) -> o.getMeasurements().put(k, v));
-        o.getMeasurements().put("area", 100.0);
-        return o;
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] m = new boolean[n];
-        Arrays.fill(m, true);
-        return m;
+        IntToDoubleFunction cell = i -> i * 10.0;             // 0 .. 200
+        IntToDoubleFunction nuc = i -> 1000.0 + i * 100.0;    // 1000 .. 3000
+        return Cells.of(N)
+                .marker("CD3", cell)                          // bare = whole-cell mean
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, i -> cell.applyAsDouble(i) / 2.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, i -> nuc.applyAsDouble(i) / 2.0)
+                .marker("CD3", Compartment.CYTOPLASMIC, Statistic.MEDIAN, i -> nuc.applyAsDouble(i) / 4.0)
+                .area(100.0)
+                .build();
     }
 
     private record Fixture(GateEditorPane pane, CellIndex index) {}
 
     private static Fixture editorFor(GateNode gate) {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
@@ -223,11 +203,7 @@ class MedianOnlyCompartmentTest {
 
     /** Cells with bare marker keys only — a pre-compartment export. */
     private static CellIndex legacyIndex() {
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < N; i++) {
-            cells.add(cell(Map.of("CD3", i * 10.0)));
-        }
-        return CellIndex.build(cells, List.of("CD3"));
+        return Cells.of(N).marker("CD3", i -> i * 10.0).area(100.0).build();
     }
 
     @Test
@@ -282,7 +258,7 @@ class MedianOnlyCompartmentTest {
         tree.setQualityFilter(null);
         tree.addRoot(gate);
         String[] phenotypes = qupath.ext.flowpath.engine.GatingEngine
-                .assignAll(tree, idx, MarkerStats.compute(idx, allTrue(idx.size())))
+                .assignAll(tree, idx, MarkerStats.compute(idx, Cells.allTrue(idx.size())))
                 .getPhenotypes();
 
         long positive = Arrays.stream(phenotypes).filter("CD3+"::equals).count();

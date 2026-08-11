@@ -5,10 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.model.*;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.io.File;
 import java.io.IOException;
@@ -48,34 +45,17 @@ class CompartmentCsvTest {
         double[] nuc = {10, 20, 200, 300};
         double[] cyt = {300, 200, 20, 10};
         double[] cd8 = {10, 20, 30, 40};
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            Map<String, Double> m = new LinkedHashMap<>();
-            m.put("CD3", 50.0);
-            m.put("CD3: Cell: Mean", 50.0);
-            m.put("CD3: Nucleus: Mean", nuc[i]);
-            m.put("CD3: Nucleus: Median", nuc[i] / 2.0);
-            m.put("CD3: Cytoplasm: Mean", cyt[i]);
-            m.put("CD8", cd8[i]);
-            m.put("CD8: Cell: Mean", cd8[i]);
-            m.put("CD8: Nucleus: Mean", cd8[i] * 10.0);
-            cells.add(cell(m));
-        }
-        return CellIndex.build(cells, List.of("CD3", "CD8"));
-    }
-
-    private static PathObject cell(Map<String, Double> meas) {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        meas.forEach((k, v) -> o.getMeasurements().put(k, v));
-        o.getMeasurements().put("area", 100.0);
-        return o;
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] m = new boolean[n];
-        Arrays.fill(m, true);
-        return m;
+        return Cells.of(4)
+                .marker("CD3", 50.0)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, 50.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, nuc)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, i -> nuc[i] / 2.0)
+                .marker("CD3", Compartment.CYTOPLASMIC, Statistic.MEAN, cyt)
+                .marker("CD8", cd8)
+                .marker("CD8", Compartment.WHOLE_CELL, Statistic.MEAN, cd8)
+                .marker("CD8", Compartment.NUCLEAR, Statistic.MEAN, i -> cd8[i] * 10.0)
+                .area(100.0)
+                .build();
     }
 
     private static GateNode thresholdGate(String channel, Compartment c, Statistic s,
@@ -122,7 +102,7 @@ class CompartmentCsvTest {
     @Test
     void nuclearRawGateExportsNuclearValuesAndConsistentSigns() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100));
 
         assertEquals(10.0, csv.num(0, "CD3_Nucleus_Mean_raw"), 1e-6,
@@ -145,7 +125,7 @@ class CompartmentCsvTest {
     @Test
     void nuclearZScoreGateExportsZScoreOfTheNuclearColumn() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, true, 0.0));
 
         String key = "CD3: Nucleus: Mean";
@@ -159,7 +139,7 @@ class CompartmentCsvTest {
     @Test
     void statisticSelectionGetsItsOwnColumn() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, false, 50));
 
         assertEquals(5.0, csv.num(0, "CD3_Nucleus_Median_raw"), 1e-6);
@@ -172,7 +152,7 @@ class CompartmentCsvTest {
     @Test
     void twoCompartmentsOfOneMarkerGetSeparateTriplets() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
 
         GateNode nuc = thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100);
         nuc.getBranches().get(0).setName("nucHigh");
@@ -201,7 +181,7 @@ class CompartmentCsvTest {
     @Test
     void wholeCellMeanGateKeepsTheHistoricalBareColumnNames() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD8", Compartment.WHOLE_CELL, Statistic.MEAN, false, 25));
 
         assertTrue(csv.header().contains("CD8_raw"), "whole-cell mean must not be renamed");
@@ -214,7 +194,7 @@ class CompartmentCsvTest {
     @Test
     void ungatedMarkersStillGetTheirBareColumns() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100));
 
         assertTrue(csv.header().contains("CD3_raw"), "bare CD3 column must survive");
@@ -228,7 +208,7 @@ class CompartmentCsvTest {
     @Test
     void rectangleGateHonoursPerAxisCompartment() throws IOException {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
 
         // X = nuclear CD3 in [150, 400], Y = whole-cell CD8 in [0, 100] -> cells 2 and 3.
         RectangleGate rg = new RectangleGate("CD3", "CD8", 150, 400, 0, 100);

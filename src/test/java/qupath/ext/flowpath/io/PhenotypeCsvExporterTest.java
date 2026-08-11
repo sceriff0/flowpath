@@ -10,10 +10,7 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.io.File;
@@ -21,7 +18,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,26 +29,6 @@ class PhenotypeCsvExporterTest {
 
     // ---- helpers ----
 
-    private static CellIndex buildIndex(List<String> markers, double[][] markerValues, double[] areas) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(i * 10.0, i * 10.0, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", areas != null ? areas[i] : 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    private static boolean[] allTrueMask(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
 
     /**
      * Parse a CSV line respecting quoted fields (handles commas inside quotes).
@@ -95,8 +71,8 @@ class PhenotypeCsvExporterTest {
     void basicExportHasCorrectHeaderAndRowCount() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {2, 4, 6, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
@@ -143,7 +119,7 @@ class PhenotypeCsvExporterTest {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5, 6} };
         double[] areas = {10, 20, 30, 60, 70, 80};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(50);
@@ -194,8 +170,8 @@ class PhenotypeCsvExporterTest {
         // CD45 values [1,3,7,9], threshold=5 (raw). Cells 0,1 negative, cells 2,3 positive.
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 3, 7, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
@@ -241,8 +217,8 @@ class PhenotypeCsvExporterTest {
                 {1, 6, 7, 8},  // CD45
                 {1, 2, 4, 5}   // CD3
         };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode root = new GateNode("CD45", 5.0);
@@ -299,8 +275,8 @@ class PhenotypeCsvExporterTest {
     void csvEscapesSpecialCharacters() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(2);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(2);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);
@@ -340,8 +316,8 @@ class PhenotypeCsvExporterTest {
     void emptyTreeExportsAllAsUnclassified() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateTree tree = new GateTree();
@@ -371,7 +347,7 @@ class PhenotypeCsvExporterTest {
     void allCellsExcludedStillExportedWithOutlierFlag() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3} };
-        CellIndex index = buildIndex(markers, values, null); // default area=100
+        CellIndex index = Cells.columns(markers, values).build(); // default area=100
 
         // QF with impossible minArea excludes everything
         QualityFilter qf = new QualityFilter();
@@ -415,8 +391,8 @@ class PhenotypeCsvExporterTest {
         // 4 cells; we pass a hand-rolled ROI mask that excludes cells 0 and 1.
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 7, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         GateNode gate = new GateNode("CD45", 5.0);

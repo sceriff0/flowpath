@@ -2,9 +2,7 @@ package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.util.List;
 
@@ -15,11 +13,6 @@ import static org.junit.jupiter.api.Assertions.*;
  * and M4.1: CellIndex.build resolving via a selection.
  */
 class MarkerSelectionTest {
-
-    private static PathObject createCell() {
-        return PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-    }
 
     // ---- defaults ----
 
@@ -90,7 +83,7 @@ class MarkerSelectionTest {
 
     @Test
     void buildResolvesSelectionPerMarker() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD3: Nucleus: Mean", 100.0);
         c.getMeasurements().put("CD3: Cell: Mean", 24.0);
 
@@ -103,7 +96,7 @@ class MarkerSelectionTest {
 
     @Test
     void buildNullSelectionUsesWholeCellMeanFallback() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD3", 7.0); // legacy bare key
         var index = CellIndex.build(List.of(c), List.of("CD3"), null);
         assertEquals(7.0, index.getMarkerValues(0)[0]);

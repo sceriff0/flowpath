@@ -2,9 +2,7 @@ package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.roi.ROIs;
-import qupath.lib.regions.ImagePlane;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.util.Collections;
 import java.util.List;
@@ -13,16 +11,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CellIndexTest {
 
-    private static PathObject createCell() {
-        return PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-    }
-
     @Test
     void buildWithBasicMeasurements() {
-        var c1 = createCell();
-        var c2 = createCell();
-        var c3 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
+        var c3 = Cells.detection();
         c1.getMeasurements().put("CD45", 1.0);
         c2.getMeasurements().put("CD45", 2.0);
         c3.getMeasurements().put("CD45", 3.0);
@@ -42,7 +35,7 @@ class CellIndexTest {
 
     @Test
     void markerIndexReturnsMinusOneForUnknown() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 1.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -51,8 +44,8 @@ class CellIndexTest {
 
     @Test
     void getObjectReturnsOriginalPathObject() {
-        var c1 = createCell();
-        var c2 = createCell();
+        var c1 = Cells.detection();
+        var c2 = Cells.detection();
         var index = CellIndex.build(List.of(c1, c2), List.of());
 
         assertSame(c1, index.getObject(0));
@@ -61,7 +54,7 @@ class CellIndexTest {
 
     @Test
     void areaFromExactMeasurementKey() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("area", 42.0);
         var index = CellIndex.build(List.of(c), List.of());
 
@@ -70,7 +63,7 @@ class CellIndexTest {
 
     @Test
     void areaFromPrefixMatch() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("area \u00b5m\u00b2", 55.0);
         var index = CellIndex.build(List.of(c), List.of());
 
@@ -79,7 +72,7 @@ class CellIndexTest {
 
     @Test
     void areaFromLayerPrefixMatch() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("[Layer0] area", 77.0);
         var index = CellIndex.build(List.of(c), List.of());
 
@@ -88,7 +81,7 @@ class CellIndexTest {
 
     @Test
     void missingAreaReturnsNaN() {
-        var c = createCell();
+        var c = Cells.detection();
         var index = CellIndex.build(List.of(c), List.of());
 
         assertTrue(Double.isNaN(index.getArea(0)));
@@ -96,7 +89,7 @@ class CellIndexTest {
 
     @Test
     void solidityComputedFromAreaAndConvexArea() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("area", 10.0);
         c.getMeasurements().put("convex_area", 20.0);
         var index = CellIndex.build(List.of(c), List.of());
@@ -106,7 +99,7 @@ class CellIndexTest {
 
     @Test
     void solidityNaNWhenConvexAreaMissing() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("area", 10.0);
         var index = CellIndex.build(List.of(c), List.of());
 
@@ -115,7 +108,7 @@ class CellIndexTest {
 
     @Test
     void solidityNaNWhenConvexAreaZero() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("area", 10.0);
         c.getMeasurements().put("convex_area", 0.0);
         var index = CellIndex.build(List.of(c), List.of());
@@ -125,7 +118,7 @@ class CellIndexTest {
 
     @Test
     void totalIntensitySumsAllMarkers() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("CD45", 3.0);
         c.getMeasurements().put("CD3", 7.0);
         var index = CellIndex.build(List.of(c), List.of("CD45", "CD3"));
@@ -135,7 +128,7 @@ class CellIndexTest {
 
     @Test
     void markerValueFromLayerPrefix() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("[Layer0] CD45", 5.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
@@ -144,7 +137,7 @@ class CellIndexTest {
 
     @Test
     void missingMarkerValueReturnsNaN() {
-        var c = createCell();
+        var c = Cells.detection();
         var index = CellIndex.build(List.of(c), List.of("MISSING"));
 
         assertTrue(Double.isNaN(index.getMarkerValues(0)[0]),
@@ -160,7 +153,7 @@ class CellIndexTest {
 
     @Test
     void centroidFromMeasurements() {
-        var c = createCell();
+        var c = Cells.detection();
         c.getMeasurements().put("Centroid X", 100.0);
         c.getMeasurements().put("Centroid Y", 200.0);
         var index = CellIndex.build(List.of(c), List.of());
@@ -174,7 +167,7 @@ class CellIndexTest {
         // getMarkerIndex sits in the gating hot path (once per cell per gate), so it
         // is backed by a lookup map rather than a scan. Pin the semantics that the
         // scan provided: first-declared wins, unknown/null yields -1.
-        PathObject cell = createCell();
+        PathObject cell = Cells.detection();
         List<String> markers = List.of("CD3", "CD8", "CD19", "Ki67");
         for (String m : markers) {
             cell.getMeasurements().put(m, 1.0);
@@ -190,7 +183,7 @@ class CellIndexTest {
 
     @Test
     void getMarkerIndexReturnsTheFirstOccurrenceOfADuplicatedMarker() {
-        PathObject cell = createCell();
+        PathObject cell = Cells.detection();
         cell.getMeasurements().put("CD3", 1.0);
         CellIndex index = CellIndex.build(List.of(cell), List.of("CD3", "CD8", "CD3"));
 

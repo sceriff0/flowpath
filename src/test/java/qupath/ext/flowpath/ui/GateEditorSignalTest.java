@@ -14,17 +14,14 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
+import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
+import java.util.function.IntToDoubleFunction;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -58,45 +55,28 @@ class GateEditorSignalTest {
      * their mean, sums 100x.
      */
     private static CellIndex index() {
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < N; i++) {
-            Map<String, Double> m = new LinkedHashMap<>();
-            double cell = i * 10.0;              // 0 .. 200
-            double nuc = 1000.0 + i * 100.0;     // 1000 .. 3000
-            m.put("CD3", cell);
-            m.put("CD3: Cell: Mean", cell);
-            m.put("CD3: Cell: Median", cell / 2.0);
-            m.put("CD3: Cell: Sum", cell * 100.0);
-            m.put("CD3: Nucleus: Mean", nuc);
-            m.put("CD3: Nucleus: Median", nuc / 2.0);
-            m.put("CD3: Nucleus: Sum", nuc * 100.0);
-            m.put("CD8", cell);
-            m.put("CD8: Cell: Mean", cell);
-            m.put("CD8: Nucleus: Mean", nuc);
-            cells.add(cell(m));
-        }
-        return CellIndex.build(cells, List.of("CD3", "CD8"));
-    }
-
-    private static PathObject cell(Map<String, Double> meas) {
-        PathObject o = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(0, 0, ImagePlane.getDefaultPlane()));
-        meas.forEach((k, v) -> o.getMeasurements().put(k, v));
-        o.getMeasurements().put("area", 100.0);
-        return o;
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] m = new boolean[n];
-        Arrays.fill(m, true);
-        return m;
+        IntToDoubleFunction cell = i -> i * 10.0;             // 0 .. 200
+        IntToDoubleFunction nuc = i -> 1000.0 + i * 100.0;    // 1000 .. 3000
+        return Cells.of(N)
+                .marker("CD3", cell)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, cell)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, i -> cell.applyAsDouble(i) / 2.0)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.SUM, i -> cell.applyAsDouble(i) * 100.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, nuc)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, i -> nuc.applyAsDouble(i) / 2.0)
+                .marker("CD3", Compartment.NUCLEAR, Statistic.SUM, i -> nuc.applyAsDouble(i) * 100.0)
+                .marker("CD8", cell)
+                .marker("CD8", Compartment.WHOLE_CELL, Statistic.MEAN, cell)
+                .marker("CD8", Compartment.NUCLEAR, Statistic.MEAN, nuc)
+                .area(100.0)
+                .build();
     }
 
     private record Fixture(GateEditorPane pane, CellIndex index, MarkerStats stats) {}
 
     private static Fixture editorFor(GateNode gate) {
         CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, allTrue(idx.size()));
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {

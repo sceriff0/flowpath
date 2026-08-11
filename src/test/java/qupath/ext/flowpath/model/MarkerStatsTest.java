@@ -1,45 +1,19 @@
 package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
-import qupath.lib.roi.interfaces.ROI;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import qupath.ext.flowpath.testing.Cells;
 
 class MarkerStatsTest {
 
-    private static CellIndex buildIndex(List<String> markers, double[][] values) {
-        int n = values[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            ROI roi = ROIs.createPointsROI(i, i, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), values[m][i]);
-            }
-            obj.getMeasurements().put("area", 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    private static boolean[] allTrue(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
-
     @Test
     void computeWithKnownDistribution() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         assertEquals(3.0, stats.getMean("CD45"), 0.001);
         assertEquals(Math.sqrt(2.0), stats.getStd("CD45"), 0.001);
@@ -49,8 +23,8 @@ class MarkerStatsTest {
 
     @Test
     void zScoreConversion() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         assertEquals(0.0, stats.toZScore("CD45", 3.0), 0.001);
         assertEquals(Math.sqrt(2.0), stats.toZScore("CD45", 5.0), 0.001);
@@ -58,8 +32,8 @@ class MarkerStatsTest {
 
     @Test
     void fromZScoreRoundTrips() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         double rawValue = 4.2;
         double z = stats.toZScore("CD45", rawValue);
@@ -69,7 +43,7 @@ class MarkerStatsTest {
 
     @Test
     void zeroPassingCellsReturnsZeroStats() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{1, 2, 3}});
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{1, 2, 3}}).atGrid(1, 1).build();
         boolean[] mask = new boolean[3]; // all false
 
         MarkerStats stats = MarkerStats.compute(index, mask);
@@ -82,8 +56,8 @@ class MarkerStatsTest {
 
     @Test
     void singlePassingCell() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{7.0}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(1));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{7.0}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
 
         assertEquals(7.0, stats.getMean("CD45"), 0.001);
         assertEquals(0.0, stats.getStd("CD45"), 0.001);
@@ -93,8 +67,8 @@ class MarkerStatsTest {
     void constantValuesGiveZeroStd() {
         double[] vals = new double[10];
         Arrays.fill(vals, 5.0);
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{vals});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(10));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{vals}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
 
         assertEquals(0.0, stats.getStd("CD45"), 0.001);
         assertEquals(0.0, stats.toZScore("CD45", 5.0), 0.001);
@@ -104,8 +78,8 @@ class MarkerStatsTest {
     void percentileInterpolation() {
         double[] vals = new double[100];
         for (int i = 0; i < 100; i++) vals[i] = i + 1;
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{vals});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(100));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{vals}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(100));
 
         assertEquals(1.0, stats.getPercentileValue("CD45", 0), 0.001);
         assertEquals(50.5, stats.getPercentileValue("CD45", 50), 0.001);
@@ -114,8 +88,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileWithFewCells() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(2));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{10, 20}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         assertEquals(10.0, stats.getPercentileValue("CD45", 0), 0.001);
         assertEquals(15.0, stats.getPercentileValue("CD45", 50), 0.001);
@@ -126,7 +100,7 @@ class MarkerStatsTest {
     void partialMaskExcludesCells() {
         double[] vals = new double[10];
         for (int i = 0; i < 10; i++) vals[i] = i + 1;
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{vals});
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{vals}).atGrid(1, 1).build();
 
         // Only odd-indexed cells pass (indices 1,3,5,7,9 -> values 2,4,6,8,10)
         boolean[] mask = new boolean[10];
@@ -149,8 +123,8 @@ class MarkerStatsTest {
     void histogramHasCorrectBinCount() {
         double[] vals = new double[50];
         for (int i = 0; i < 50; i++) vals[i] = i;
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{vals});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(50));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{vals}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(50));
 
         double[] bins = stats.getHistogramBins("CD45");
         double[] counts = stats.getHistogramCounts("CD45");
@@ -165,8 +139,8 @@ class MarkerStatsTest {
     void multipleMarkersComputedIndependently() {
         double[] cd45Vals = {1, 2, 3, 4, 5};
         double[] cd3Vals = {10, 20, 30, 40, 50};
-        CellIndex index = buildIndex(List.of("CD45", "CD3"), new double[][]{cd45Vals, cd3Vals});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45", "CD3"), new double[][]{cd45Vals, cd3Vals}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         assertEquals(3.0, stats.getMean("CD45"), 0.001);
         assertEquals(30.0, stats.getMean("CD3"), 0.001);
@@ -178,8 +152,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileRankIsInverseOfPercentileValue() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         for (double pct : new double[]{0, 12.5, 25, 50, 70, 99, 100}) {
             double value = stats.getPercentileValue("CD45", pct);
@@ -190,8 +164,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileRankInterpolatesAndClampsToTheEnds() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         assertEquals(12.5, stats.percentileRankOf("CD45", 15.0), 1e-9, "halfway between ranks 0 and 25");
         assertEquals(0.0, stats.percentileRankOf("CD45", -100.0), 1e-9, "below the minimum clamps to 0");
@@ -200,8 +174,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileRankReturnsNaNWhenTheColumnIsUnusable() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(3));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{10, 20, 30}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         assertTrue(Double.isNaN(stats.percentileRankOf("NoSuchMarker", 5.0)));
         assertTrue(Double.isNaN(stats.percentileRankOf("CD45", Double.NaN)));
@@ -209,8 +183,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileRankHandlesAConstantColumn() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{7, 7, 7, 7}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(4));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{7, 7, 7, 7}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         // Every value equals the min, so the rank pins to 0 rather than dividing by zero.
         assertEquals(0.0, stats.percentileRankOf("CD45", 7.0), 1e-9);
@@ -219,8 +193,8 @@ class MarkerStatsTest {
 
     @Test
     void percentileRankTracksLazilyRegisteredCompartmentColumns() {
-        CellIndex index = buildIndex(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}});
-        MarkerStats stats = MarkerStats.compute(index, allTrue(5));
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{10, 20, 30, 40, 50}}).atGrid(1, 1).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         // The editor and GatingEngine both register resolved columns this way.
         stats.ensureColumn("CD45: Nucleus: Sum", new double[]{1000, 2000, 3000, 4000, 5000});

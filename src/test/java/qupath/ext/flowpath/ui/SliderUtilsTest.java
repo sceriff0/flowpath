@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 /**
  * Covers the range-proportional "speed" contract shared by every slider in the

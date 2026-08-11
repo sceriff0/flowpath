@@ -6,17 +6,12 @@ import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
-import qupath.lib.roi.interfaces.ROI;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -28,26 +23,6 @@ class NewGateTypesTest {
 
     // ---- helpers ----
 
-    private static CellIndex buildIndex(List<String> markers, double[][] markerValues, double[] areas) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(i * 10.0, i * 10.0, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", areas != null ? areas[i] : 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    private static boolean[] allTrueMask(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
 
     // =====================================================================
     //  QuadrantGate Tests
@@ -82,8 +57,8 @@ class NewGateTypesTest {
             {1, 2, 8, 9, 1, 2, 8, 9},   // CD45
             {1, 2, 1, 2, 8, 9, 8, 9}    // CD3
         };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(8);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(8);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3", 5.0, 5.0);
@@ -267,8 +242,8 @@ class NewGateTypesTest {
             {5, 1, 5, 10},  // CD45
             {5, 5, 1, 5}    // CD3
         };
-        CellIndex index = buildIndex(markers, values, null);
-        boolean[] mask = allTrueMask(4);
+        CellIndex index = Cells.columns(markers, values).build();
+        boolean[] mask = Cells.allTrue(4);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2.0, 8.0, 2.0, 8.0);

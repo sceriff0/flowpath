@@ -5,11 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
 import qupath.ext.flowpath.model.*;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
-import qupath.lib.roi.interfaces.ROI;
+import qupath.ext.flowpath.testing.Cells;
 
 import java.io.File;
 import java.io.IOException;
@@ -34,26 +30,6 @@ class EndToEndGatingCsvTest {
 
     // ========== Helpers ==========
 
-    private static CellIndex buildIndex(List<String> markers, double[][] markerValues, double[] areas) {
-        int nCells = markerValues[0].length;
-        List<PathObject> cells = new ArrayList<>();
-        for (int i = 0; i < nCells; i++) {
-            ROI roi = ROIs.createPointsROI(i * 10.0, i * 10.0, ImagePlane.getDefaultPlane());
-            PathObject obj = PathObjects.createDetectionObject(roi);
-            for (int m = 0; m < markers.size(); m++) {
-                obj.getMeasurements().put(markers.get(m), markerValues[m][i]);
-            }
-            obj.getMeasurements().put("area", areas != null ? areas[i] : 100.0);
-            cells.add(obj);
-        }
-        return CellIndex.build(cells, markers);
-    }
-
-    private static boolean[] allTrueMask(int n) {
-        boolean[] mask = new boolean[n];
-        Arrays.fill(mask, true);
-        return mask;
-    }
 
     private static List<String> parseCsvLine(String line) {
         List<String> fields = new ArrayList<>();
@@ -119,8 +95,8 @@ class EndToEndGatingCsvTest {
         // Expected: cells 0-2 (values 2,4,6) -> CD45-; cells 3-5 (values 8,10,12) -> CD45+
         List<String> markers = List.of("CD45");
         double[][] values = { {2, 4, 6, 8, 10, 12} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(6));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(6));
 
         GateNode gate = new GateNode("CD45", 7.0);
         gate.setStatistic(Statistic.MEAN);
@@ -161,8 +137,8 @@ class EndToEndGatingCsvTest {
         // CD3 threshold, so CD3_sign="-" even though the cell's leaf phenotype didn't traverse the CD3 gate.
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {1, 6, 7, 8}, {1, 2, 4, 5} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
@@ -205,8 +181,8 @@ class EndToEndGatingCsvTest {
         // Cell 3: CD45=2, CD3=2 -> Q4 (--)
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {8, 2, 8, 2}, {8, 8, 2, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         QuadrantGate gate = new QuadrantGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
@@ -250,8 +226,8 @@ class EndToEndGatingCsvTest {
         // Cell 1: CD45=20, CD3=20 -> outside triangle
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {5, 20}, {3, 20} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         PolygonGate gate = new PolygonGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
@@ -290,8 +266,8 @@ class EndToEndGatingCsvTest {
         // Cell 0: (5,5) -> inside; Cell 1: (1,1) -> outside; Cell 2: (10,10) -> outside
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {5, 1, 10}, {5, 1, 10} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
         gate.setStatisticX(Statistic.MEAN);
@@ -321,8 +297,8 @@ class EndToEndGatingCsvTest {
         // Cell 2: (5,9) -> outside (distance=4 > radius 3)
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {5, 5, 5}, {5, 7, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         EllipseGate gate = new EllipseGate("CD45", "CD3", 5, 5, 3, 3);
         gate.setStatisticX(Statistic.MEAN);
@@ -350,8 +326,8 @@ class EndToEndGatingCsvTest {
         // Same setup as threshold test, but gate is disabled
         List<String> markers = List.of("CD45");
         double[][] values = { {2, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
@@ -380,8 +356,8 @@ class EndToEndGatingCsvTest {
         // Cell 1: CD45=8, CD3=2 -> CD45+ (CD3 gate skipped)
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = { {2, 8}, {8, 2} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(2));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
 
         GateNode gate1 = new GateNode("CD45", 5.0);
         gate1.setStatistic(Statistic.MEAN);
@@ -417,7 +393,7 @@ class EndToEndGatingCsvTest {
         List<String> markers = List.of("CD45");
         double[][] values = { {3, 3, 7, 7} };
         double[] areas = {10, 50, 100, 200};
-        CellIndex index = buildIndex(markers, values, areas);
+        CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
         qf.setMinArea(40);
@@ -459,8 +435,8 @@ class EndToEndGatingCsvTest {
         // Cell 3: CD45=8, CD3=5, CD8=6 -> CD8+
         List<String> markers = List.of("CD45", "CD3", "CD8");
         double[][] values = { {2, 6, 7, 8}, {1, 2, 4, 5}, {1, 1, 3, 6} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(4));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
@@ -517,8 +493,8 @@ class EndToEndGatingCsvTest {
         // Cell 2: CD45=2, CD3=8, CD8=9 -> Q2(-+) (no child) -> stays Q2(-+)
         List<String> markers = List.of("CD45", "CD3", "CD8");
         double[][] values = { {8, 8, 2}, {8, 8, 8}, {6, 2, 9} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         QuadrantGate qgate = new QuadrantGate("CD45", "CD3");
         qgate.setStatisticX(Statistic.MEAN);
@@ -578,8 +554,8 @@ class EndToEndGatingCsvTest {
             {1, 1, 5, 1, 7},   // CD8
             {1, 1, 5, 1, 7}    // CD4
         };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(5));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
@@ -625,8 +601,8 @@ class EndToEndGatingCsvTest {
         // Cell 2: CD45=2, PANCK=8  -> "CD45-: PANCK+"
         List<String> markers = List.of("CD45", "PANCK");
         double[][] values = { {8, 8, 2}, {8, 2, 8} };
-        CellIndex index = buildIndex(markers, values, null);
-        MarkerStats stats = MarkerStats.compute(index, allTrueMask(3));
+        CellIndex index = Cells.columns(markers, values).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);

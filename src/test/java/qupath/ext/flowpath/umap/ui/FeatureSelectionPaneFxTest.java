@@ -5,6 +5,7 @@ import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.util.List;
 

@@ -3,11 +3,9 @@ package qupath.ext.flowpath.umap.model;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
-import qupath.lib.regions.ImagePlane;
-import qupath.lib.roi.ROIs;
 
 import java.io.File;
 import java.io.IOException;
@@ -20,9 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class UmapResultTest {
 
     private static PathObject createCell(String classification, double markerValue) {
-        var obj = PathObjects.createDetectionObject(
-                ROIs.createPointsROI(10, 20, ImagePlane.getDefaultPlane()));
-        obj.getMeasurements().put("CD45", markerValue);
+        var obj = Cells.of(1).at(10, 20).marker("CD45", markerValue).only();
         if (classification != null) {
             obj.setPathClass(PathClass.fromString(classification));
         }

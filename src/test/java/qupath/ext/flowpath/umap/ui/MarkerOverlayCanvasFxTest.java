@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import qupath.ext.flowpath.testing.FxTestSupport;
 
 /**
  * Real scene-graph coverage for {@link MarkerOverlayCanvas}. Unlike the pure-logic
