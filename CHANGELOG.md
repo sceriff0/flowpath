@@ -5,10 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.1.0] - 11/08/2026
 
 Architectural deepening across the gating engine, measurement resolution and the
-MIRAGE ingest seam. One user-visible bug fixed; no format or contract changed.
+MIRAGE ingest seam. Three defects fixed; no format or contract changed.
 
 ### Fixed
 - **A freshly created or just-cleared 2D gate drew every cell in the *Inside*
