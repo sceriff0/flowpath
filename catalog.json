@@ -1,6 +1,6 @@
 {
   "name": "FlowPath",
-  "description": "FlowJo-style single-cell analysis for multiplexed tissue imaging in QuPath. Gate cells into named phenotypes with a hierarchical gate tree, then explore them in a UMAP coloured by those same phenotypes.",
+  "description": "FlowJo-style single-cell analysis for multiplexed tissue imaging in QuPath.",
   "extensions": [
     {
       "name": "FlowPath",
