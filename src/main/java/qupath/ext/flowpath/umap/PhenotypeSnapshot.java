@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.lib.objects.PathObject;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -98,6 +99,65 @@ public record PhenotypeSnapshot(
     /** Number of cells the snapshot covers, including excluded ones. */
     public int cellCount() {
         return index.size();
+    }
+
+    /**
+     * {@code true} when {@code other} indexes exactly the cells this snapshot describes:
+     * the same {@link qupath.lib.objects.PathObject} instances, in the same order.
+     * <p>
+     * <b>Why this is not {@code other == index}.</b> The constructor's length check turns
+     * a positional misalignment into a loud failure, but it can only see the arrays it is
+     * handed — it cannot see a consumer that keeps the snapshot while replacing the index
+     * underneath it. The UMAP view does exactly that: changing the feature picker rebuilds
+     * the index from the snapshot's own cells at a different compartment/statistic, which
+     * is a <em>new instance describing the same cells</em>. Answering "same cells?" by
+     * instance identity gets that case wrong in both directions — it invalidates a still
+     * valid embedding, and, once a stale snapshot is compared instead of the live index,
+     * it green-lights recolouring against cells the labels were never computed for.
+     * <p>
+     * Comparing the object arrays inspects the data instead of trusting a remembered
+     * pointer, so it cannot be falsified by a field going stale. Cost is O(1) for the
+     * overwhelmingly common cases — the same instance, or a different cell count — and a
+     * single pass of reference comparisons only when two distinct indices happen to agree
+     * on size, which is the derived case this exists to recognise.
+     */
+    public boolean describesSameCells(CellIndex other) {
+        if (other == index) return true;
+        if (other == null || other.size() != index.size()) return false;
+        PathObject[] mine = index.getObjects();
+        PathObject[] theirs = other.getObjects();
+        for (int i = 0; i < mine.length; i++) {
+            if (mine[i] != theirs[i]) return false;
+        }
+        return true;
+    }
+
+    /**
+     * This snapshot's labels, re-seated onto an index that covers the same cells.
+     * <p>
+     * The reconciliation step a consumer owes the handoff when it rebuilds the index: it
+     * keeps the phenotypes, colours and exclusion mask — which are properties of the
+     * gating, not of the feature resolution — while making the snapshot name the index
+     * that is actually in use. Holding both at once is the drift this prevents.
+     *
+     * @param other      an index over the same cells, in the same order
+     * @param otherStats statistics computed over {@code other}; {@code null} keeps the current ones
+     * @return {@code this} when {@code other} is already the named index, else a re-seated copy
+     * @throws IllegalArgumentException when {@code other} does not cover the same cells,
+     *         because re-seating onto a different cell set would mislabel every one of them
+     */
+    public PhenotypeSnapshot rebindTo(CellIndex other, MarkerStats otherStats) {
+        if (other == index) return this;
+        if (!describesSameCells(other)) {
+            throw new IllegalArgumentException(
+                    "Cannot rebind a phenotype snapshot onto an index covering different cells: "
+                            + "this snapshot describes " + index.size() + " cell(s), the candidate "
+                            + "index has " + (other == null ? "none" : String.valueOf(other.size()))
+                            + " and its objects are not the same instances in the same order.");
+        }
+        return new PhenotypeSnapshot(other, otherStats != null ? otherStats : stats,
+                markerNames, capability, phenotypes, colors, excluded,
+                gatedMarkers, gateSelection, gateCount, imageKey);
     }
 
     /** Number of cells that survived the ROI, quality and outlier filters. */
