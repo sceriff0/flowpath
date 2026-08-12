@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
+import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
@@ -216,7 +217,7 @@ class MedianOnlyCompartmentTest {
         GateNode gate = new GateNode("CD3", 10.0);
         assertEquals(Statistic.MEDIAN, gate.getStatistic(), "model default before resolution");
 
-        GateEditorPane.applyAvailableSignal(gate, cap);
+        GateAxis.pinAll(gate, cap);
 
         assertEquals(Compartment.WHOLE_CELL, gate.getCompartment());
         assertEquals(Statistic.MEAN, gate.getStatistic(),
@@ -230,7 +231,7 @@ class MedianOnlyCompartmentTest {
                 CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
 
         GateNode gate = new GateNode("CD3", 10.0);
-        GateEditorPane.applyAvailableSignal(gate, cap);
+        GateAxis.pinAll(gate, cap);
 
         assertEquals(Compartment.WHOLE_CELL, gate.getCompartment());
         assertEquals(Statistic.MEDIAN, gate.getStatistic());
@@ -249,7 +250,7 @@ class MedianOnlyCompartmentTest {
         GateNode gate = new GateNode("CD3", 0.0);
         gate.setChannel("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
-        GateEditorPane.applyAvailableSignal(gate, cap);
+        GateAxis.pinAll(gate, cap);
         gate.setThresholdIsZScore(false);
         // Nuclear medians run 500..1500; split them down the middle.
         gate.setThreshold(1000.0);

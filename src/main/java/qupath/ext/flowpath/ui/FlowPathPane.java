@@ -22,6 +22,7 @@ import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.EllipseGate;
+import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
@@ -495,7 +496,7 @@ public class FlowPathPane extends BorderPane {
         // Resolve the signal selection against this image's measurements before the gate
         // reaches the tree, so it never renders a compartment/statistic badge that the
         // editor then has to correct.
-        GateEditorPane.applyAvailableSignal(gate, compartmentCapability);
+        GateAxis.pinAll(gate, compartmentCapability);
         return gate;
     }
 

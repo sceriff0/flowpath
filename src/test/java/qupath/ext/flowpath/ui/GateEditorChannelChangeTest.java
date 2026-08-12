@@ -286,6 +286,43 @@ class GateEditorChannelChangeTest {
     }
 
     /**
+     * The region editor never renamed its branches at all, so a gate drawn on CD3/CD4 and
+     * then repointed kept a label naming a channel it no longer read. The rename is the
+     * same decision for all three gate types, so it is now made in the same place.
+     */
+    @Test
+    void regionChannelChangeMovesTheDefaultBranchLabels() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        RectangleGate gate = new RectangleGate("CD3", "CD4", -1, 1, -1, 1);
+        Fixture f = editorFor(gate);
+        assertEquals(List.of("CD3/CD4 (in)", "CD3/CD4 (out)"), branchNames(gate));
+
+        selectChannel(channelCombo(f.pane(), 0), "CD8");
+
+        assertEquals(List.of("CD8/CD4 (in)", "CD8/CD4 (out)"), branchNames(gate),
+                "a region gate's labels name the plane it is drawn on, so they follow it");
+    }
+
+    /**
+     * The quadrant editor rewrote its labels by substring: {@code name.replace("CD3+",
+     * "CD8+")}. That is not a test of whether the label is still the default — it is a
+     * blind edit of whatever the user had typed, and it mangled any name that happened to
+     * contain the old channel.
+     */
+    @Test
+    void quadrantChannelChangeDoesNotRewriteInsideAUserTypedLabel() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
+        gate.getBranches().get(0).setName("CD3+ blasts");
+        Fixture f = editorFor(gate);
+
+        selectChannel(channelCombo(f.pane(), 0), "CD8");
+
+        assertEquals("CD3+ blasts", branchNames(gate).get(0),
+                "the user named this population; it is not a caption to be find-and-replaced");
+    }
+
+    /**
      * A statistic the new channel does not carry must not survive the change. CD3 is
      * quantified with {@code Median} only here, so an axis switched onto it from a
      * whole-cell {@code Mean} legacy channel has to land on {@code "CD3: Cell: Median"}.

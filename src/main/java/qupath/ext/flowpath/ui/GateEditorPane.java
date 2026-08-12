@@ -585,6 +585,13 @@ public class GateEditorPane extends VBox {
         HBox rowY = new HBox(8, chYLabel, chYCombo);
         addSignalControls(rowY, GateAxis.of(node, 1));
 
+        // Redraws the scatter, once there is one. Wired before the plot is built because a
+        // gate whose channels this image does not carry still has to accept a channel
+        // change — that is the only way to point it at one the image does carry.
+        final Runnable[] redraw = {() -> { }};
+        wireChannelCombo(chXCombo, node, 0, () -> redraw[0].run());
+        wireChannelCombo(chYCombo, node, 1, () -> redraw[0].run());
+
         gateSpecificArea.getChildren().addAll(
             rowX, rowY,
             modeRow,
@@ -592,23 +599,11 @@ public class GateEditorPane extends VBox {
         );
 
         // Scatter plot if data available
-        String chX = chXCombo.getValue();
-        String chY = chYCombo.getValue();
-        if (cellIndex != null && chX != null && chY != null) {
-            int mxIdx = cellIndex.getMarkerIndex(chX);
-            int myIdx = cellIndex.getMarkerIndex(chY);
-            if (mxIdx >= 0 && myIdx >= 0) {
+        if (hasPlottableAxes(node)) {
+            {
                 ScatterPlotCanvas scatter = new ScatterPlotCanvas();
-                // Transform data to z-score space when z-score mode is active
-                double[][] filtered;
-                if (node.isThresholdIsZScore() && markerStats != null) {
-                    filtered = getFilteredXYWithZScore(chX, get2DCompartmentX(node), get2DStatisticX(node),
-                            chY, get2DCompartmentY(node), get2DStatisticY(node));
-                } else {
-                    filtered = getFilteredXY(chX, get2DCompartmentX(node), get2DStatisticX(node),
-                            chY, get2DCompartmentY(node), get2DStatisticY(node));
-                }
-                scatter.setData(filtered[0], filtered[1], chX, chY);
+                double[][] filtered = plotData(node);
+                scatter.setData(filtered[0], filtered[1], node.getChannelX(), node.getChannelY());
                 if (markerStats != null) {
                     applyAxisRangeFor(scatter, node);
                 }
@@ -631,8 +626,6 @@ public class GateEditorPane extends VBox {
                 });
 
                 // Wire callbacks — convert gate type if needed, then update model
-                String chXVal = chXCombo.getValue();
-                String chYVal = chYCombo.getValue();
                 scatter.setOnPolygonDrawn(vertices -> {
                     GateNode target = currentNode;
                     boolean replaced = false;
@@ -705,31 +698,7 @@ public class GateEditorPane extends VBox {
 
                 gateSpecificArea.getChildren().add(scatter);
 
-                // Channel change: update scatter data and rebuild editor to re-wire channels on the gate
-                Runnable refreshScatter = () -> {
-                    String cx = chXCombo.getValue(), cy = chYCombo.getValue();
-                    if (cx == null || cy == null) return;
-                    if (node instanceof Region2DGate region) { region.setChannelX(cx); region.setChannelY(cy); }
-                    int mx = cellIndex.getMarkerIndex(cx), my = cellIndex.getMarkerIndex(cy);
-                    if (mx >= 0 && my >= 0) {
-                        double[][] f;
-                        if (node.isThresholdIsZScore() && markerStats != null) {
-                            f = getFilteredXYWithZScore(cx, get2DCompartmentX(node), get2DStatisticX(node),
-                                    cy, get2DCompartmentY(node), get2DStatisticY(node));
-                        } else {
-                            f = getFilteredXY(cx, get2DCompartmentX(node), get2DStatisticX(node),
-                                    cy, get2DCompartmentY(node), get2DStatisticY(node));
-                        }
-                        scatter.setData(f[0], f[1], cx, cy);
-                        if (markerStats != null) {
-                            applyAxisRangeFor(scatter, node);
-                        }
-                    }
-                    fireNodeChanged();
-                    rebuildForChannelChange();
-                };
-                chXCombo.setOnAction(e -> { if (!suppressEvents) refreshScatter.run(); });
-                chYCombo.setOnAction(e -> { if (!suppressEvents) refreshScatter.run(); });
+                redraw[0] = () -> redrawScatter(scatter, node);
                 return;
             }
         }
@@ -1103,7 +1072,7 @@ public class GateEditorPane extends VBox {
         to.setClipPercentileHigh(from.getClipPercentileHigh());
         to.setExcludeOutliers(from.isExcludeOutliers());
         to.setThresholdIsZScore(from.isThresholdIsZScore());
-        copyAxisSelection(from, to);
+        GateAxis.copySignals(from, to);
         // Copy branch children, colors, and names from old gate to new gate
         for (int i = 0; i < Math.min(from.getBranches().size(), to.getBranches().size()); i++) {
             Branch srcBranch = from.getBranches().get(i);
@@ -1111,70 +1080,6 @@ public class GateEditorPane extends VBox {
             dstBranch.setChildren(new ArrayList<>(srcBranch.getChildren()));
             dstBranch.setColor(srcBranch.getColor());
             dstBranch.setName(srcBranch.getName());
-        }
-    }
-
-    /**
-     * Copy each axis' compartment + statistic across a gate-type change, reading the
-     * source through the same parallel {@code getChannels()} / {@code compartmentAt(k)}
-     * / {@code statisticAt(k)} contract {@code GatingEngine} resolves columns with.
-     * <p>
-     * Only axes the source actually has are copied. Reading past the source's channel
-     * count returns {@code compartmentAt}/{@code statisticAt}'s out-of-range fallback of
-     * whole-cell <em>mean</em>, so converting a threshold gate to a 2D gate used to stamp
-     * a Mean Y axis onto the new gate — a column that does not exist in a default
-     * (Median-only) MIRAGE export. Leaving the axis at the target's own default lets
-     * {@link #addCompartmentControls} pick one the export contains.
-     */
-    private static void copyAxisSelection(GateNode from, GateNode to) {
-        int axes = Math.min(from.getChannels().size(), to.getChannels().size());
-        for (int k = 0; k < axes; k++) {
-            setAxisSignal(to, k, from.compartmentAt(k), from.statisticAt(k));
-        }
-    }
-
-    /**
-     * Set the {@code k}-th axis' compartment + statistic on whichever gate type
-     * {@code gate} is, matching the axis order of {@code getChannels()}. The single
-     * place that maps an axis index onto the per-type X/Y setters.
-     */
-    private static void setAxisSignal(GateNode gate, int k, Compartment comp, Statistic stat) {
-        if (gate instanceof Region2DGate region) {
-            if (k == 0) { region.setCompartmentX(comp); region.setStatisticX(stat); }
-            else { region.setCompartmentY(comp); region.setStatisticY(stat); }
-        } else if (gate instanceof QuadrantGate quad) {
-            if (k == 0) { quad.setCompartmentX(comp); quad.setStatisticX(stat); }
-            else { quad.setCompartmentY(comp); quad.setStatisticY(stat); }
-        } else {
-            gate.setCompartment(comp);
-            gate.setStatistic(stat);
-        }
-    }
-
-    /**
-     * Pin every axis of a freshly created gate to a (compartment, statistic) the loaded
-     * export actually carries, before it is ever shown.
-     * <p>
-     * The gate model defaults to whole-cell Median because that is what MIRAGE writes by
-     * default, but a legacy or mean-only export has no Median column. Without this the
-     * gate was created on Median, rendered its {@code W·med} badge in the tree, and then
-     * had the statistic corrected the moment the editor opened — the badge appearing and
-     * vanishing on every new gate. Deciding up front means the tree never shows a
-     * selection the data cannot honour.
-     */
-    static void applyAvailableSignal(GateNode gate, CompartmentCapability capability) {
-        if (gate == null) return;
-        List<String> channels = gate.getChannels();
-        for (int k = 0; k < channels.size(); k++) {
-            String ch = channels.get(k);
-            if (capability == null || ch == null || !capability.hasCompartments(ch)) {
-                // Legacy / mean-only: the bare marker column is the whole-cell mean.
-                setAxisSignal(gate, k, Compartment.WHOLE_CELL, Statistic.MEAN);
-                continue;
-            }
-            setAxisSignal(gate, k,
-                    capability.resolveCompartment(ch, gate.compartmentAt(k)),
-                    capability.resolveStatistic(ch, gate.statisticAt(k)));
         }
     }
 
@@ -1203,19 +1108,34 @@ public class GateEditorPane extends VBox {
         return cellIndex.column(channel, comp, stat, markerStats);
     }
 
+    /**
+     * Resolved column for one axis <em>slot</em> of {@code node}, or null when the gate
+     * type has no such axis.
+     * <p>
+     * Addressed by slot rather than by position in {@code getChannels()}, which omits an
+     * unset channel: on a gate whose X channel is null, {@code compartmentAt(0)} answers
+     * with the <em>Y</em> axis' compartment, and {@code compartmentAt(1)} with an
+     * out-of-range whole-cell Mean. {@link GateAxis} reads and writes the same slot by
+     * construction, so that skew is not expressible.
+     */
+    private MeasuredColumn axisColumn(GateNode node, int slot) {
+        if (node == null || slot >= GateAxis.axisCount(node)) return null;
+        return GateAxis.of(node, slot).columnIn(cellIndex, markerStats);
+    }
+
     /** Resolved column for a threshold gate's single channel. */
     private MeasuredColumn thresholdColumn(GateNode node) {
-        return column(node.getChannel(), node.getCompartment(), node.getStatistic());
+        return axisColumn(node, 0);
     }
 
     /** Resolved column for a 2D gate's X axis. */
     private MeasuredColumn columnX(GateNode node) {
-        return column(get2DChannelX(node), get2DCompartmentX(node), get2DStatisticX(node));
+        return axisColumn(node, 0);
     }
 
     /** Resolved column for a 2D gate's Y axis. */
     private MeasuredColumn columnY(GateNode node) {
-        return column(get2DChannelY(node), get2DCompartmentY(node), get2DStatisticY(node));
+        return axisColumn(node, 1);
     }
 
     /**
@@ -1568,29 +1488,9 @@ public class GateEditorPane extends VBox {
         applyClipAxisRange(scatter, columnX(node), columnY(node), node, node.isThresholdIsZScore());
     }
 
+    /** Re-read the scatter currently on screen, for whichever gate it is showing. */
     private void refreshScatterPlot() {
-        if (currentScatter == null || cellIndex == null || currentNode == null) return;
-        String chX = get2DChannelX(currentNode);
-        String chY = get2DChannelY(currentNode);
-        if (chX == null || chY == null) return;
-        int mxIdx = cellIndex.getMarkerIndex(chX);
-        int myIdx = cellIndex.getMarkerIndex(chY);
-        if (mxIdx < 0 || myIdx < 0) return;
-        Compartment compX = get2DCompartmentX(currentNode);
-        Compartment compY = get2DCompartmentY(currentNode);
-        Statistic statX = get2DStatisticX(currentNode);
-        Statistic statY = get2DStatisticY(currentNode);
-        // All 2D gate types (quadrant, polygon, rectangle, ellipse) use per-gate z-score flag
-        double[][] filtered;
-        if (currentNode.isThresholdIsZScore() && markerStats != null) {
-            filtered = getFilteredXYWithZScore(chX, compX, statX, chY, compY, statY);
-        } else {
-            filtered = getFilteredXY(chX, compX, statX, chY, compY, statY);
-        }
-        currentScatter.setData(filtered[0], filtered[1], chX, chY);
-        if (markerStats != null) {
-            applyAxisRangeFor(currentScatter, currentNode);
-        }
+        redrawScatter(currentScatter, currentNode);
     }
 
     private void applyBranchColorsToScatter(ScatterPlotCanvas scatter, GateNode node) {
@@ -1607,28 +1507,4 @@ public class GateEditorPane extends VBox {
         }
     }
 
-    private String get2DChannelX(GateNode node) {
-        if (node instanceof Region2DGate region) return region.getChannelX();
-        if (node instanceof QuadrantGate qg) return qg.getChannelX();
-        return null;
-    }
-
-    private String get2DChannelY(GateNode node) {
-        if (node instanceof Region2DGate region) return region.getChannelY();
-        if (node instanceof QuadrantGate qg) return qg.getChannelY();
-        return null;
-    }
-
-    // Per-axis compartment/statistic, read through the gate's parallel
-    // getCompartments()/getStatistics() lists exactly as GatingEngine.compAt and
-    // statAt do — quadrant gates carry one per axis; shape gates carry none yet and
-    // fall back to whole-cell mean in both layers.
-
-    private Compartment get2DCompartmentX(GateNode node) { return node.compartmentAt(0); }
-
-    private Compartment get2DCompartmentY(GateNode node) { return node.compartmentAt(1); }
-
-    private Statistic get2DStatisticX(GateNode node) { return node.statisticAt(0); }
-
-    private Statistic get2DStatisticY(GateNode node) { return node.statisticAt(1); }
 }
