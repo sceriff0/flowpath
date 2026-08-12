@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.OptionalInt;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * What a successful UMAP run had to degrade in order to succeed.
@@ -37,8 +38,22 @@ import java.util.OptionalInt;
  * As in {@code IngestReport}: {@link #findings()} are things the run could not do
  * properly — they make {@link #isClean()} false and earn space in the status bar.
  * {@link #notes()} are things it did that are worth recording but are not defects.
- * Subsampling is the note: it is the default, the user asked for it, and the cells it
- * holds out are placed by a documented rule rather than left undefined.
+ *
+ * <p>Two things sit on the notes side, by the same rule. <b>Subsampling</b> is the
+ * default, the user asked for it, and the cells it holds out are placed by a documented
+ * rule rather than left undefined. <b>Steering</b> is a note for the same reason only
+ * more so: it is not user-configurable at all but unconditional policy for any connected
+ * training graph at or below the spectral limit, and where subsampling can place two
+ * thirds of the population by projection, steering fabricates exactly one position and
+ * perturbs the edge weights — not the positions — of a few per cent of rows. Applying
+ * {@code IngestReport}'s own test settles it: a finding is something the stage could
+ * <em>not</em> do, and steering is something it did, deliberately. The alternative to
+ * steering is not a better embedding; it is a {@code NoClassDefFoundError}.
+ *
+ * <p>Both still reach {@link #describe()}, which concatenates findings and notes, so
+ * the provenance is in the log, the tooltip and anything that later exports it. What
+ * they no longer do is spend the status bar's one line, which is reserved for the things
+ * that genuinely cast doubt on the picture.
  *
  * <h2>The distinction this stage can represent and the gating cannot</h2>
  * A marker that reaches the embedding as a constant is inert either way — UMAP is
@@ -144,6 +159,54 @@ public final class EmbeddingReport {
     }
 
     /**
+     * The tally of cells the projection of held-out cells could not place, kept by the
+     * stage that fails to place them.
+     * <p>
+     * A count is the one fact on this report that cannot be derived from an artefact
+     * afterwards, because after the fact a cell at {@code (0,0)} because nothing could
+     * be blended for it is byte-identical to a cell the optimiser genuinely put there.
+     * So it is not a number a caller states: {@link Training#completedWith} takes this
+     * object, and the only way to raise it is to be the code doing the placing. From
+     * outside this package the sole spelling is {@link #none()}, which says the run
+     * projected nothing at all — which the constructor then checks against the subsample.
+     */
+    public static final class Projection {
+
+        private final AtomicInteger unplaced = new AtomicInteger();
+
+        private Projection() {
+        }
+
+        /** The layout was optimised over every cell, so nothing was projected. */
+        public static Projection none() {
+            return new Projection();
+        }
+
+        /** A fresh tally for a projection stage about to run. */
+        static Projection tally() {
+            return new Projection();
+        }
+
+        /**
+         * Record one cell no neighbour could be blended for. Atomic because the
+         * projection runs as a parallel stream.
+         */
+        void unplaceable() {
+            unplaced.incrementAndGet();
+        }
+
+        /** Record {@code cells} at once, for a stage that fails as a whole. */
+        void unplaceable(int cells) {
+            unplaced.addAndGet(cells);
+        }
+
+        /** How many cells this projection left at {@code (0,0)}. */
+        public int unplacedCells() {
+            return unplaced.get();
+        }
+    }
+
+    /**
      * The half of the report that is known before the layout runs: how much of the
      * population the embedding is being trained on, and which of its markers carry no
      * usable variation in that training set.
@@ -178,17 +241,18 @@ public final class EmbeddingReport {
         /**
          * Close the report with what the run cost, once that is known.
          *
-         * @param steering          the initialisation's own account of itself, from
-         *                          {@code EmbeddingInitialisation.steering()}
-         * @param cellsAtOrigin     how many cells the projection could not place and left
-         *                          at {@code (0,0)}. Counted where they are parked, not
-         *                          estimated afterwards
+         * @param steering   the initialisation's own account of itself, from
+         *                   {@code EmbeddingInitialisation.steering()}
+         * @param projection the tally kept by the projection stage, from
+         *                   {@code UmapComputeService.projectRemaining}, or
+         *                   {@link Projection#none()} when nothing was held out
          * @throws IllegalArgumentException if the two halves cannot describe one run —
          *         a cell parked at the origin when nothing was held out of training, more
          *         parked than were held out, or a detached row outside the training matrix
          */
-        public EmbeddingReport completedWith(Steering steering, int cellsAtOrigin) {
+        public EmbeddingReport completedWith(Steering steering, Projection projection) {
             Objects.requireNonNull(steering, "steering");
+            Objects.requireNonNull(projection, "projection");
             OptionalInt imputedCell = OptionalInt.empty();
             if (steering.isSteered()) {
                 int row = steering.detachedRow().getAsInt();
@@ -200,7 +264,7 @@ public final class EmbeddingReport {
             }
             return new EmbeddingReport(totalCells, trainedCells, markerCount,
                     unmeasuredMarkers, constantMarkers, imputedCell,
-                    steering.reweightedRows(), cellsAtOrigin);
+                    steering.reweightedRows(), projection.unplacedCells());
         }
     }
 
@@ -356,6 +420,14 @@ public final class EmbeddingReport {
     /**
      * Cells the projection could not place, left at exactly {@code (0,0)} where they are
      * indistinguishable from a real cluster.
+     * <p>
+     * <b>Zero is the expected reading, and is not evidence of anything.</b> The blend
+     * gives up only when no neighbour carries any weight, which needs every one of a
+     * cell's five nearest sampled neighbours to be at an infinite distance — in practice
+     * a squared distance that saturated, i.e. marker magnitudes past about
+     * {@code 1e154}, or a non-finite value in the column. Finite data reads zero here on
+     * every run. Read this number as "nothing was silently dumped at the origin", never
+     * as "the projection went well".
      */
     public int cellsAtOrigin() { return cellsAtOrigin; }
 
@@ -387,19 +459,22 @@ public final class EmbeddingReport {
                     + "— known data, unlike the unmeasured case, but a feature with no "
                     + "variance moves no distance: " + preview(constantMarkers));
         }
-        if (imputedCell.isPresent()) {
-            String line = String.format(Locale.US,
-                    "cell %,d imputed from its neighbours", imputedCell.getAsInt());
-            out.add(reweightedCells == 0 ? line
-                    : String.format(Locale.US, "%s, %,d neighbourhoods reweighted",
-                            line, reweightedCells));
-        }
         return out;
     }
 
     /** What the run did that is worth recording but is not a defect. */
     public List<String> notes() {
         List<String> out = new ArrayList<>();
+        if (imputedCell.isPresent()) {
+            // Deliberately not a finding. Steering is unconditional policy below the
+            // spectral limit, not a shortfall — see the class javadoc. The numbers still
+            // travel, on describe(); what they no longer do is spend the status bar.
+            String line = String.format(Locale.US,
+                    "cell %,d imputed from its neighbours", imputedCell.getAsInt());
+            out.add(reweightedCells == 0 ? line
+                    : String.format(Locale.US, "%s, %,d neighbourhoods reweighted",
+                            line, reweightedCells));
+        }
         if (subsampled()) {
             out.add(String.format(Locale.US,
                     "trained on %,d of %,d cells; the other %,d were placed by "

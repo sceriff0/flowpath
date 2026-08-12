@@ -234,7 +234,14 @@ public class UmapPane extends BorderPane {
                 session::index,
                 this::computeRestingState,
                 this::onUmapResultReady,
-                this::setStatus,
+                new StatusReporter() {
+                    @Override public void report(String text, StatusLevel level) {
+                        setStatus(text, level);
+                    }
+                    @Override public void detail(String text) {
+                        setStatusDetail(text);
+                    }
+                },
                 dotSize -> {
                     umapCanvas.setDotSize(dotSize);
                     markerOverlay.setDotSize(dotSize);
@@ -1676,13 +1683,30 @@ public class UmapPane extends BorderPane {
     }
 
     /**
-     * Functional bridge that lets sibling controllers (e.g. {@link ComputeController})
-     * push colored / auto-clearing status messages without exposing the raw
-     * {@code statusLabel}.
+     * Bridge that lets sibling controllers (e.g. {@link ComputeController}) push status
+     * into the bar without exposing the raw {@code statusLabel}.
+     * <p>
+     * Two channels, because the bar has two lifetimes. {@link #report} is the one line,
+     * coloured by severity and wiped after five seconds for anything that is not INFO.
+     * {@link #detail} is what stands behind it and stays: a UMAP run's full report is
+     * several lines and includes the subsample size, which the user needs after the
+     * status line has cleared and which a five-second message cannot carry.
+     * {@code FlowPathPane} does the same thing with the ingest report.
      */
-    @FunctionalInterface
     interface StatusReporter {
         void report(String text, StatusLevel level);
+
+        /** The persistent long form behind the status line; null or blank removes it. */
+        void detail(String text);
+    }
+
+    /**
+     * The tooltip behind the status bar. Deliberately persistent where
+     * {@link #setStatus} is transient — see {@link StatusReporter}.
+     */
+    private void setStatusDetail(String detail) {
+        statusLabel.setTooltip(detail == null || detail.isBlank()
+                ? null : new javafx.scene.control.Tooltip(detail));
     }
 
     private void setStatus(String text, StatusLevel level) {

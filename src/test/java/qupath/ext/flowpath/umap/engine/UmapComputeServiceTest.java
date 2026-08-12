@@ -106,7 +106,8 @@ class UmapComputeServiceTest {
     private static UmapOutcome stubSuccess(CellIndex idx) {
         return UmapOutcome.succeeded(stubResult(idx),
                 EmbeddingReport.training(idx, null)
-                        .completedWith(EmbeddingReport.Steering.none(), 0));
+                        .completedWith(EmbeddingReport.Steering.none(),
+                                EmbeddingReport.Projection.none()));
     }
 
     /** A service whose callbacks run inline and whose embedding is replaced by {@code work}. */
@@ -528,6 +529,67 @@ class UmapComputeServiceTest {
             assertFalse(succeeded.report().isClean());
             assertTrue(succeeded.report().describe().contains("FoxP3"),
                     succeeded.report().describe());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void aCellTheProjectionCannotPlaceIsCountedRatherThanLeftLookingLikeACluster()
+            throws Exception {
+        // The brief's headline number, exercised through the real projection. A cell is
+        // left at (0,0) only when no neighbour carries any weight, which needs every one
+        // of its five nearest sampled neighbours to be at an infinite distance — in
+        // practice a squared distance that saturated. So one held-out cell is given a
+        // marker at 1e200 while every sampled cell reads 0.0 on it: the training matrix
+        // stays finite and UMAP runs normally, and only that one query blows up.
+        //
+        // Which cell is held out is asked, not guessed. The subsample depends on the
+        // population size, the class proportions and a seed, and a test that assumed an
+        // answer would silently stop covering this the moment any of the three moved.
+        int cells = 600;
+        int trainOn = 200;
+        var service = new UmapComputeService();
+        try {
+            var probe = Cells.of(cells)
+                    .marker("CD45", i -> Math.sin(i))
+                    .marker("CD8", i -> Math.cos(i * 0.7))
+                    .marker("Rogue", i -> 0.0)
+                    .build();
+            int[] sample = service.stratifiedSample(probe, trainOn);
+            boolean[] sampled = new boolean[cells];
+            for (int idx : sample) sampled[idx] = true;
+            int stranded = -1;
+            for (int i = 0; i < cells && stranded < 0; i++) {
+                if (!sampled[i]) stranded = i;
+            }
+            assertTrue(stranded >= 0, "training on 200 of 600 must hold something out");
+
+            final int rogue = stranded;
+            var idx = Cells.of(cells)
+                    .marker("CD45", i -> Math.sin(i))
+                    .marker("CD8", i -> Math.cos(i * 0.7))
+                    .marker("Rogue", i -> i == rogue ? 1e200 : 0.0)
+                    .build();
+
+            AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
+            service.compute(idx, new UmapParameters(15, 0.1, 1.0, 30, 5), trainOn);
+            assertTrue(latch.await(180, TimeUnit.SECONDS), "the run must terminate");
+
+            var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
+                    "an unplaceable cell degrades the run, it does not fail it: "
+                            + outcomeRef.get().describe());
+            assertEquals(trainOn, succeeded.report().trainedCells(),
+                    "the run must have held cells out, or there is nothing to project");
+            assertEquals(1, succeeded.report().cellsAtOrigin(),
+                    "the one cell no neighbour could be blended for must be counted");
+            assertTrue(succeeded.report().summary().contains("(0,0)"),
+                    succeeded.report().summary());
+            assertEquals(0.0, succeeded.result().getUmapXRaw()[rogue],
+                    "the stranded cell really is sitting at the origin");
+            assertEquals(0.0, succeeded.result().getUmapYRaw()[rogue]);
         } finally {
             service.shutdown();
         }

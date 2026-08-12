@@ -166,8 +166,13 @@ final class EmbeddingInitialisation {
      * The node detached to force the pure-Java branch, as a row index into the training
      * matrix. Empty when no steering was needed — and so also the answer to "did any cell
      * pay for this run".
+     *
+     * <p>Private. It and {@link #reweightedRows()} are the two halves of one fact, and
+     * while both were reachable separately {@code Steering.detaching(init.detachedNode()
+     * .orElse(0), 0)} — a centre reported without its blast radius — was spellable at
+     * every call site. {@link #steering()} is the only way out, so it is not.
      */
-    OptionalInt detachedNode() {
+    private OptionalInt detachedNode() {
         return detached < 0 ? OptionalInt.empty() : OptionalInt.of(detached);
     }
 
@@ -181,8 +186,11 @@ final class EmbeddingInitialisation {
      * because the alternative — an outcome naming one affected cell when the real number
      * is nearer 4% of them — is an understatement, and understatements in an instrument
      * are how people end up trusting a number they should have questioned.
+     *
+     * <p>Private, for the reason given on {@link #detachedNode()}: it leaves only in
+     * {@link #steering()}'s company.
      */
-    int reweightedRows() {
+    private int reweightedRows() {
         return reweightedRows;
     }
 

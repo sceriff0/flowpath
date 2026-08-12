@@ -28,6 +28,21 @@ class EmbeddingReportTest {
                 .build();
     }
 
+    /** Nothing was held out, so nothing was projected. */
+    private static EmbeddingReport.Projection placedEverything() {
+        return EmbeddingReport.Projection.none();
+    }
+
+    /**
+     * A projection that failed to place {@code cells}. Built through the tally rather
+     * than as a number, because that is the only way the count can be spelled at all.
+     */
+    private static EmbeddingReport.Projection unplaced(int cells) {
+        EmbeddingReport.Projection projection = EmbeddingReport.Projection.tally();
+        for (int i = 0; i < cells; i++) projection.unplaceable();
+        return projection;
+    }
+
     /** Indices {@code 0..trained-1}, i.e. a subsample that is a prefix of the population. */
     private static int[] firstRows(int trained) {
         int[] rows = new int[trained];
@@ -38,7 +53,7 @@ class EmbeddingReportTest {
     @Test
     void aRunThatDegradedNothingReportsNothing() {
         EmbeddingReport report = EmbeddingReport.training(healthy(6), null)
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertTrue(report.isClean());
         assertTrue(report.findings().isEmpty(), report.findings().toString());
@@ -61,7 +76,7 @@ class EmbeddingReportTest {
                 .build();
 
         EmbeddingReport report = EmbeddingReport.training(index, null)
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("FoxP3"), report.unmeasuredMarkers());
         assertTrue(report.constantMarkers().isEmpty(),
@@ -82,7 +97,7 @@ class EmbeddingReportTest {
                 .build();
 
         EmbeddingReport report = EmbeddingReport.training(index, null)
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("FoxP3"), report.unmeasuredMarkers());
         assertEquals(java.util.List.of("CD3"), report.constantMarkers());
@@ -102,9 +117,9 @@ class EmbeddingReportTest {
                 .build();
 
         EmbeddingReport onSubsample = EmbeddingReport.training(index, firstRows(4))
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
         EmbeddingReport onEverything = EmbeddingReport.training(index, null)
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("CD3"), onSubsample.constantMarkers());
         assertTrue(onEverything.constantMarkers().isEmpty());
@@ -113,7 +128,7 @@ class EmbeddingReportTest {
     @Test
     void cellsLeftAtTheOriginAreCountedAndNamedAsTheFakeStructureTheyAre() {
         EmbeddingReport report = EmbeddingReport.training(healthy(2000), firstRows(500))
-                .completedWith(EmbeddingReport.Steering.none(), 1204);
+                .completedWith(EmbeddingReport.Steering.none(), unplaced(1204));
 
         assertEquals(1204, report.cellsAtOrigin());
         assertFalse(report.isClean());
@@ -129,14 +144,14 @@ class EmbeddingReportTest {
         // count without a subsample describes a run that cannot have happened.
         EmbeddingReport.Training training = EmbeddingReport.training(healthy(6), null);
         assertThrows(IllegalArgumentException.class,
-                () -> training.completedWith(EmbeddingReport.Steering.none(), 1));
+                () -> training.completedWith(EmbeddingReport.Steering.none(), unplaced(1)));
     }
 
     @Test
     void moreCellsCannotBeParkedThanWereHeldOut() {
         EmbeddingReport.Training training = EmbeddingReport.training(healthy(10), firstRows(4));
         assertThrows(IllegalArgumentException.class,
-                () -> training.completedWith(EmbeddingReport.Steering.none(), 7));
+                () -> training.completedWith(EmbeddingReport.Steering.none(), unplaced(7)));
     }
 
     @Test
@@ -147,7 +162,7 @@ class EmbeddingReportTest {
         // could forget it.
         int[] sample = {2, 5, 7};
         EmbeddingReport report = EmbeddingReport.training(healthy(10), sample)
-                .completedWith(EmbeddingReport.Steering.detaching(1, 4), 0);
+                .completedWith(EmbeddingReport.Steering.detaching(1, 4), placedEverything());
 
         assertEquals(OptionalInt.of(5), report.imputedCell());
         assertEquals(4, report.reweightedCells());
@@ -159,7 +174,7 @@ class EmbeddingReportTest {
     void aDetachedRowOutsideTheTrainingMatrixIsRefused() {
         EmbeddingReport.Training training = EmbeddingReport.training(healthy(10), firstRows(3));
         assertThrows(IllegalArgumentException.class,
-                () -> training.completedWith(EmbeddingReport.Steering.detaching(3, 1), 0));
+                () -> training.completedWith(EmbeddingReport.Steering.detaching(3, 1), placedEverything()));
     }
 
     @Test
@@ -176,11 +191,25 @@ class EmbeddingReportTest {
     }
 
     @Test
-    void theSteeringLineReadsExactlyAsItDidWhenItLivedOnTheOutcome() {
+    void steeringIsProvenanceRatherThanADoubtCastOnThePicture() {
+        // Subsampling is a note because it is the default and its held-out cells are
+        // placed by a documented rule. Steering is more default still — unconditional
+        // policy for any connected training graph at or below the spectral limit — and
+        // costs one fabricated position against subsampling's two thirds of the
+        // population. If subsampling is a note, steering cannot be a finding. The
+        // sentence itself is unchanged; only which list it is on.
         EmbeddingReport report = EmbeddingReport.training(healthy(500), null)
-                .completedWith(EmbeddingReport.Steering.detaching(241, 15), 0);
-        assertEquals("cell 241 imputed from its neighbours, 15 neighbourhoods reweighted",
-                report.summary());
+                .completedWith(EmbeddingReport.Steering.detaching(241, 15), placedEverything());
+
+        assertTrue(report.isClean(), report.findings().toString());
+        assertEquals("", report.summary(),
+                "the status bar's one line is reserved for things that cast doubt");
+        assertEquals(java.util.List.of(
+                        "cell 241 imputed from its neighbours, 15 neighbourhoods reweighted"),
+                report.notes());
+        assertTrue(report.describe().contains(
+                "cell 241 imputed from its neighbours, 15 neighbourhoods reweighted"),
+                "the numbers must still reach the log and the tooltip: " + report.describe());
     }
 
     @Test
@@ -189,7 +218,7 @@ class EmbeddingReportTest {
         // failure — so it belongs where IngestReport puts a literal 0.0: on the record,
         // out of the findings.
         EmbeddingReport report = EmbeddingReport.training(healthy(900), firstRows(300))
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertTrue(report.isClean(), report.findings().toString());
         assertTrue(report.subsampled());
@@ -206,10 +235,10 @@ class EmbeddingReportTest {
                 .marker("CD3", i -> 7.0)
                 .build();
         EmbeddingReport report = EmbeddingReport.training(index, firstRows(500))
-                .completedWith(EmbeddingReport.Steering.detaching(1, 9), 12);
+                .completedWith(EmbeddingReport.Steering.detaching(1, 9), unplaced(12));
 
-        assertEquals(3, report.findings().size(), report.findings().toString());
-        assertTrue(report.summary().endsWith("(+2 more)"), report.summary());
+        assertEquals(2, report.findings().size(), report.findings().toString());
+        assertTrue(report.summary().endsWith("(+1 more)"), report.summary());
         assertTrue(report.describe().contains("\n"),
                 "describe() is the long form: every finding and every note");
     }

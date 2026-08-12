@@ -350,6 +350,10 @@ final class ComputeController {
         // cannot strand the pane. Both calls happen on the FX thread, so the
         // outcome callback queues behind the rest of this method either way.
         computeStartTime = System.currentTimeMillis();
+        // The tooltip describes the run whose result is on screen. A new run invalidates
+        // it immediately, rather than leaving the previous run's provenance hanging behind
+        // a status line that is now about something else.
+        statusReporter.detail(null);
         computeService.compute(cellIndex, params, maxCells, scaling);
 
         uiState.setState(UiStateController.UiState.COMPUTING);
@@ -400,7 +404,8 @@ final class ComputeController {
      * measured for, or bought its layout with one fabricated cell position produces a
      * picture that looks exactly like a clean one. This method decides nothing about
      * which of those happened — {@code EmbeddingReport} does, and is tested without a
-     * toolkit — it only puts the answer where the user is already looking.
+     * toolkit — it only puts the answer where the user is already looking: the first
+     * finding on the line, the whole report in the tooltip behind it.
      */
     void onUmapComplete(UmapResult result, EmbeddingReport report) {
         // Enables gating + export, disables tag controls (await polygon), hides cancel/progress
@@ -417,9 +422,12 @@ final class ComputeController {
         String qualifier = report.summary();
         statusReporter.report(qualifier.isEmpty() ? base : base + " — " + qualifier,
                 qualifier.isEmpty() ? UmapPane.StatusLevel.SUCCESS : UmapPane.StatusLevel.WARN);
-        if (!report.isClean() || report.subsampled()) {
-            // The status line holds one finding; the log holds every finding and every
-            // note. Same channel the compute service already logs its phase timings on.
+        // The one line carries the first finding and self-clears; the tooltip carries the
+        // whole report and stays. Without it the subsample size — which the brief requires
+        // be reported, and which decides how much of the picture was optimised rather than
+        // projected — would never be visible in the UI at all.
+        statusReporter.detail(report.describe());
+        if (!report.isClean()) {
             System.err.println("FlowPath UMAP: " + report.describe());
         }
     }

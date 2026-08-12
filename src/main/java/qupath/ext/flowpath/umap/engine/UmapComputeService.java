@@ -392,7 +392,7 @@ public class UmapComputeService {
         nng = null;
         init = null;
 
-        int cellsAtOrigin = 0;
+        EmbeddingReport.Projection projection = EmbeddingReport.Projection.none();
         if (subsampled) {
             // Fill sampled cells
             for (int i = 0; i < sampleIndices.length; i++) {
@@ -403,7 +403,7 @@ public class UmapComputeService {
             // Project remaining cells via kNN
             postStatus("Projecting remaining %,d cells...".formatted(n - computeN));
             long projStart = System.nanoTime();
-            cellsAtOrigin = projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY,
+            projection = projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY,
                     imputationMeans, scaler);
             long projMs = (System.nanoTime() - projStart) / 1_000_000L;
             String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
@@ -432,13 +432,20 @@ public class UmapComputeService {
         // The embedding and the account of what it cost leave together. Translating the
         // detached row into a cell index is the report's job, not this method's: it is
         // the piece that holds both the row and the subsample it addresses.
-        return UmapOutcome.succeeded(result, training.completedWith(steering, cellsAtOrigin));
+        return UmapOutcome.succeeded(result, training.completedWith(steering, projection));
     }
 
     /**
      * Stratified random sample preserving phenotype proportions.
+     * <p>
+     * Package-private rather than private so a test can ask which cells a run will hold
+     * out <em>before</em> running it. The projection's give-up branch can only be reached
+     * by a held-out cell that is unreachably far from every sampled one, and guessing
+     * which cells those are is not something a test should do: the answer depends on the
+     * population size, the class proportions and the seed. Asking is honest and stays
+     * correct if the sampler changes; guessing quietly stops covering anything.
      */
-    private int[] stratifiedSample(CellIndex cellIndex, int targetN) {
+    int[] stratifiedSample(CellIndex cellIndex, int targetN) {
         int n = cellIndex.size();
         if (targetN >= n) {
             int[] all = new int[n];
@@ -525,25 +532,29 @@ public class UmapComputeService {
      * (using a KD-tree for fast lookup) and averaging those neighbors' UMAP coordinates
      * weighted by inverse distance.
      *
-     * @return how many cells this could not place, and so left at {@code (0,0)}. Returned
-     *         rather than logged: a cell at the origin is drawn in the same colour, in the
+     * @return the tally of cells this could not place, and so left at {@code (0,0)}.
+     *         Returned rather than logged, and returned as the counter itself rather than
+     *         as an {@code int}: a cell at the origin is drawn in the same colour, in the
      *         same plot, as one the optimiser actually put there, so the only thing that
      *         separates "no usable neighbour" from "a real tight cluster" is this count
-     *         reaching the report
+     *         reaching the report — and the only code that can raise it is the code here
+     *         that fails to place a cell
      */
-    private int projectRemaining(CellIndex cellIndex, int[] sampleIndices,
-                                 double[][] sampleEmbedding,
-                                 double[] umapX, double[] umapY,
-                                 double[] imputationMeans,
-                                 FeatureScaler scaler) {
+    private EmbeddingReport.Projection projectRemaining(CellIndex cellIndex, int[] sampleIndices,
+                                                        double[][] sampleEmbedding,
+                                                        double[] umapX, double[] umapY,
+                                                        double[] imputationMeans,
+                                                        FeatureScaler scaler) {
         int n = cellIndex.size();
         int m = cellIndex.getMarkerNames().length;
+        EmbeddingReport.Projection projection = EmbeddingReport.Projection.tally();
         int knn = Math.min(5, sampleIndices.length);
         if (knn == 0) {
             // An empty subsample. Nothing was trained on, so nothing can be projected and
             // every cell in the image stays at the origin — the worst version of this
             // failure, and the one that used to return in silence.
-            return n;
+            projection.unplaceable(n);
+            return projection;
         }
 
         boolean[] isSampled = new boolean[n];
@@ -603,10 +614,6 @@ public class UmapComputeService {
         final int totalRemaining = remaining;
         final int progressStep = Math.max(1, remaining / 10);
         AtomicInteger progressCount = new AtomicInteger(0);
-        // Counted where the cells are parked rather than inferred afterwards by scanning
-        // for coordinates that happen to be (0,0): a cell the optimiser genuinely placed
-        // at the origin is not a defect, and the two are indistinguishable after the fact.
-        AtomicInteger parkedAtOrigin = new AtomicInteger(0);
 
         IntStream.range(0, remaining).parallel().forEach(q -> {
             // A cancelled run leaves the rest of the queries unplaced, but it also reports
@@ -641,10 +648,11 @@ public class UmapComputeService {
                 umapX[ci] = placed[0];
                 umapY[ci] = placed[1];
             } else {
-                // No neighbour carried any weight, so this cell stays at (0,0). It is
-                // counted, not merely left: the point is indistinguishable from real
-                // structure once it is on the canvas.
-                parkedAtOrigin.incrementAndGet();
+                // No neighbour carried any weight, so this cell stays at (0,0). Counted
+                // here, where it happens, rather than inferred afterwards by scanning for
+                // coordinates that are (0,0): a cell the optimiser genuinely placed at the
+                // origin is not a defect, and the two are indistinguishable after the fact.
+                projection.unplaceable();
             }
 
             // Progress update every ~10%
@@ -654,7 +662,7 @@ public class UmapComputeService {
                 postStatus("Projecting remaining cells... %d%%".formatted(pct));
             }
         });
-        return parkedAtOrigin.get();
+        return projection;
     }
 
     /**

@@ -85,7 +85,7 @@ class EmbeddingInitialisationTest {
     @Test
     void exactlyOneNodeIsDetachedAndItIsTheDensestOne() {
         var init = EmbeddingInitialisation.forGraph(ring(8, 3));
-        assertEquals(OptionalInt.of(3), init.detachedNode(),
+        assertEquals(EmbeddingReport.Steering.detaching(3, 2), init.steering(),
                 "node 3 has the smallest total neighbour distance, so it is the best-constrained");
 
         int[][] cc = init.graph().graph(false).bfcc();
@@ -102,7 +102,7 @@ class EmbeddingInitialisationTest {
         // other. Rows that named it are compacted and padded, never truncated — a short
         // row would change k for that cell alone.
         var init = EmbeddingInitialisation.forGraph(ring(8, 3));
-        int detached = init.detachedNode().orElseThrow();
+        int detached = init.steering().detachedRow().orElseThrow();
         int[][] neighbours = init.graph().neighbors();
         for (int i = 0; i < neighbours.length; i++) {
             assertEquals(2, neighbours[i].length, "row " + i + " must keep k entries");
@@ -124,9 +124,8 @@ class EmbeddingInitialisationTest {
         // Rows 1 and 2 listed node 0; rows 3 and 4 did not.
         var original = unevenlyWeighted();
         var init = EmbeddingInitialisation.forGraph(original);
-        assertEquals(OptionalInt.of(0), init.detachedNode(), "node 0 is the densest");
-        assertEquals(2, init.reweightedRows(),
-                "exactly the rows that listed the detached node are rewritten");
+        assertEquals(EmbeddingReport.Steering.detaching(0, 2), init.steering(),
+                "node 0 is the densest, and exactly the rows that listed it are rewritten");
 
         double[][] before = original.distances();
         double[][] after = init.graph().distances();
@@ -154,7 +153,7 @@ class EmbeddingInitialisationTest {
         // exactly two rows — and the count is what the outcome reports, so it must be the
         // number of OTHER cells affected, not including the detached one itself.
         var init = EmbeddingInitialisation.forGraph(ring(8, 3));
-        assertEquals(2, init.reweightedRows());
+        assertEquals(2, init.steering().reweightedRows());
     }
 
     @Test
@@ -163,7 +162,7 @@ class EmbeddingInitialisationTest {
         double[][] distances = { {1}, {1}, {1}, {1} };
         var init = EmbeddingInitialisation.forGraph(new NearestNeighborGraph(1, neighbours, distances));
         assertFalse(init.isSteered());
-        assertEquals(0, init.reweightedRows());
+        assertEquals(EmbeddingReport.Steering.none(), init.steering());
     }
 
     @Test
@@ -179,7 +178,7 @@ class EmbeddingInitialisationTest {
         assertEquals(EmbeddingInitialisation.Route.PCA, init.natural());
         assertFalse(init.isSteered());
         assertSame(original, init.graph(), "no steering means no copy");
-        assertEquals(OptionalInt.empty(), init.detachedNode());
+        assertEquals(EmbeddingReport.Steering.none(), init.steering());
     }
 
     @Test
@@ -215,7 +214,7 @@ class EmbeddingInitialisationTest {
         var init = EmbeddingInitialisation.forGraph(ring(n, 0));
         assertEquals(EmbeddingInitialisation.Route.PCA, init.natural());
         assertFalse(init.isSteered());
-        assertEquals(OptionalInt.empty(), init.detachedNode());
+        assertEquals(EmbeddingReport.Steering.none(), init.steering());
     }
 
     @Test
@@ -257,13 +256,14 @@ class EmbeddingInitialisationTest {
         // iteration order.
         for (int attempt = 0; attempt < 5; attempt++) {
             assertEquals(OptionalInt.of(3),
-                    EmbeddingInitialisation.forGraph(ring(8, 3)).detachedNode());
+                    EmbeddingInitialisation.forGraph(ring(8, 3)).steering().detachedRow());
         }
     }
 
     @Test
     void aTieIsBrokenByTheLowerIndexRatherThanLeftToChance() {
         var uniform = ring(8, -1);   // every node equally dense
-        assertEquals(OptionalInt.of(0), EmbeddingInitialisation.forGraph(uniform).detachedNode());
+        assertEquals(OptionalInt.of(0),
+                EmbeddingInitialisation.forGraph(uniform).steering().detachedRow());
     }
 }

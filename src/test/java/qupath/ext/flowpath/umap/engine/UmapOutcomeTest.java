@@ -48,13 +48,15 @@ class UmapOutcomeTest {
 
     private static EmbeddingReport cleanReport(CellIndex index) {
         return EmbeddingReport.training(index, null)
-                .completedWith(EmbeddingReport.Steering.none(), 0);
+                .completedWith(EmbeddingReport.Steering.none(),
+                        EmbeddingReport.Projection.none());
     }
 
     /** A run that bought its layout by detaching one node, and what that cost. */
     private static EmbeddingReport steeredReport(CellIndex index, int detachedRow, int reweighted) {
         return EmbeddingReport.training(index, null)
-                .completedWith(EmbeddingReport.Steering.detaching(detachedRow, reweighted), 0);
+                .completedWith(EmbeddingReport.Steering.detaching(detachedRow, reweighted),
+                        EmbeddingReport.Projection.none());
     }
 
     private static UmapOutcome.Succeeded succeededOn(int cells) {
@@ -146,13 +148,18 @@ class UmapOutcomeTest {
         // cell's position and shifts the edge weights of every cell that listed it — at
         // k=15, typically 3-4% of a small dataset. An outcome that named only the first
         // would be an understatement, and this is an instrument people draw conclusions
-        // from. The facts now live on the report; the sentence the user reads is unchanged.
+        // from. The facts now live on the report, and the sentence is unchanged — but it
+        // reads out of describe() rather than out of the status line. Steering is
+        // unconditional policy below the spectral limit, so it is provenance, not a
+        // qualification: see EmbeddingReport's "findings versus notes".
         CellIndex index = indexOf(500);
         var steered = UmapOutcome.succeeded(resultOn(index), steeredReport(index, 241, 15));
         assertEquals(OptionalInt.of(241), steered.report().imputedCell());
         assertEquals(15, steered.report().reweightedCells());
-        assertEquals("UMAP computed: 500 cells (k=15); cell 241 imputed from its "
-                + "neighbours, 15 neighbourhoods reweighted", steered.describe());
+        assertEquals("cell 241 imputed from its neighbours, 15 neighbourhoods reweighted",
+                steered.report().describe());
+        assertEquals("UMAP computed: 500 cells (k=15)", steered.describe(),
+                "a run whose only qualification is policy does not spend the status line");
     }
 
     @Test
