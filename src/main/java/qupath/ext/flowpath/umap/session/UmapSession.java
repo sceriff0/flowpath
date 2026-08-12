@@ -11,7 +11,9 @@ import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
+import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.umap.model.PopulationTag;
+import qupath.ext.flowpath.umap.model.UmapResult;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
 
@@ -76,6 +78,18 @@ public final class UmapSession {
     private MarkerStats markerStats;
     private PhenotypeSnapshot snapshot;
 
+    /**
+     * The embedding on screen, or {@code null}. Held here rather than in {@code UmapPane}
+     * because every rule that asks "may the user do this?" asks about it, and while it was
+     * a pane field those rules could only be answered through a live JavaFX toolkit.
+     */
+    private UmapResult embedding;
+
+    // --- Run lifecycle ---
+    private boolean running;
+    private String failure;
+    private boolean exporting;
+
     // --- Feature selection ---
     private List<String> markers = new ArrayList<>();
     private CompartmentCapability capability = CompartmentCapability.empty();
@@ -122,6 +136,24 @@ public final class UmapSession {
     public Set<String> hiddenPhenotypes() { return hiddenPhenotypes; }
 
     public boolean[] gateMask() { return gateMask; }
+
+    /** The embedding currently on screen, or {@code null} when there is none. */
+    public UmapResult embedding() { return embedding; }
+
+    /** {@code true} while a UMAP run is in flight. */
+    public boolean isRunning() { return running; }
+
+    /** Why the last run failed, or {@code null}. */
+    public String failure() { return failure; }
+
+    /**
+     * How many markers the feature picker leaves ticked — asked of the same filter the
+     * embedding runs through, so the count the rail promises, the count the empty state
+     * quotes and the count that decides whether Run UMAP is clickable are one number.
+     */
+    public int includedMarkerCount() {
+        return EmbeddingFeatures.includedMarkers(markers, selection).size();
+    }
 
     // ------------------------------------------------------------------
     // Generation guards
@@ -231,6 +263,15 @@ public final class UmapSession {
         gateMask = null;
         baseColors = null;
         populationTags.clear();
+        // The embedding is positional against the cell set too — its coordinate arrays and
+        // its PathObject array are indexed the same way the gate mask and the tag masks
+        // are. It used to be dropped by three separate `umapResult = null` lines in the
+        // pane, one beside each caller of this method; a fourth caller would simply not
+        // have had one.
+        embedding = null;
+        // A failure describes a run over the cells being retired, so it stops meaning
+        // anything about the ones arriving.
+        failure = null;
     }
 
     /**
@@ -327,6 +368,138 @@ public final class UmapSession {
                     "Session index and snapshot index have diverged: the snapshot's per-cell "
                             + "arrays are positional against an index this session no longer holds.");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Run lifecycle and the derived view state
+    // ------------------------------------------------------------------
+
+    /**
+     * A UMAP run has been submitted. Clears any previous failure — the panel is no longer
+     * describing that run — and puts the session into the one phase in which Cancel exists.
+     */
+    public void beginRun() {
+        running = true;
+        failure = null;
+    }
+
+    /**
+     * The user pressed Cancel. Leaves the running phase immediately so the click feels
+     * responsive; the run's own {@link UmapOutcome.Cancelled} arrives later and is
+     * idempotent with this.
+     */
+    public void cancelRun() {
+        running = false;
+    }
+
+    /**
+     * Fold a run's single terminal outcome into the session, and return the state the view
+     * must now show.
+     * <p>
+     * This is the whole outcome-to-UI mapping, in one toolkit-free place, and it is why
+     * {@code Superseded} is safe. That branch does not "do nothing" by convention any more:
+     * it leaves {@code running} set, so the state it returns is still
+     * {@link ViewState.Stage#COMPUTING} and the newer run keeps the busy UI it owns. An
+     * edit that made this branch clear the phase would show up as a changed return value in
+     * a test that needs no JavaFX toolkit — where previously the only symptom was a live
+     * run whose progress bar had vanished.
+     * <p>
+     * {@code Failed} is the reason {@link ViewState.Stage#FAILED} exists. The reason string
+     * outlives the modal alert and the five-second status line, so the overlay over the
+     * empty plot can go on saying that the last attempt broke rather than reverting to
+     * "Ready to embed" — which is what the panel said after a crash before.
+     *
+     * @param outcome the run's one ending
+     * @return {@link #viewState()} after the fold, for the caller to apply
+     */
+    public ViewState record(UmapOutcome outcome) {
+        Objects.requireNonNull(outcome, "outcome");
+        switch (outcome) {
+            case UmapOutcome.Succeeded succeeded -> {
+                embedding = succeeded.result();
+                failure = null;
+                running = false;
+            }
+            case UmapOutcome.Failed failed -> {
+                failure = failed.describe();
+                running = false;
+            }
+            case UmapOutcome.Cancelled ignored -> {
+                running = false;
+            }
+            case UmapOutcome.Superseded ignored -> {
+                // A newer run owns the busy state. Touching `running` here would drive the
+                // panel out of a COMPUTING that is still true.
+            }
+        }
+        return viewState();
+    }
+
+    /** A CSV export is writing; Export must not be clickable again until it finishes. */
+    public void beginExport() {
+        exporting = true;
+    }
+
+    /** The CSV export finished, successfully or not. */
+    public void endExport() {
+        exporting = false;
+    }
+
+    /**
+     * Everything the panel may currently offer, derived from the facts above and from
+     * nothing else.
+     * <p>
+     * The rules, stated once:
+     * <ul>
+     *   <li><b>Stage</b> — a run in flight wins; then a failure the user has not moved past;
+     *       then the presence of an embedding, and within that whether a polygon is closed
+     *       (GATING) or a tag has been applied (TAGGED).</li>
+     *   <li><b>Compute</b> — needs cells, needs {@link EmbeddingFeatures#MINIMUM_FEATURES}
+     *       markers ticked, and needs nothing already running. The marker count is the
+     *       carry-forward from the feature picker: the toolbar button used to ignore it and
+     *       invite a click whose only possible ending was a failure dialog.</li>
+     *   <li><b>Inputs</b> — the feature picker and every embedding parameter are locked
+     *       while a run is in flight. {@code onFeatureSelectionChanged} installs a rebuilt
+     *       {@link CellIndex} on this session; doing that under a compute thread still
+     *       reading the old one is the mid-run-edit hole, and a control the user cannot
+     *       reach is the only fix that does not depend on a cancel arriving in time.</li>
+     * </ul>
+     */
+    public ViewState viewState() {
+        boolean hasCells = cellIndex != null && cellIndex.size() > 0;
+        boolean hasEmbedding = embedding != null;
+        boolean gateOpen = hasEmbedding && gateMask != null;
+
+        ViewState.Stage stage;
+        if (running) {
+            stage = ViewState.Stage.COMPUTING;
+        } else if (!hasEmbedding) {
+            // A failure with nothing on the plot is the case the panel used to misreport as
+            // READY. A failure over a surviving embedding leaves the stage alone — the plot
+            // still shows something true — and travels in `failure` instead.
+            stage = failure != null ? ViewState.Stage.FAILED
+                    : hasCells ? ViewState.Stage.READY : ViewState.Stage.NO_IMAGE;
+        } else if (gateOpen) {
+            stage = ViewState.Stage.GATING;
+        } else if (!populationTags.isEmpty()) {
+            stage = ViewState.Stage.TAGGED;
+        } else {
+            stage = ViewState.Stage.COMPUTED;
+        }
+
+        boolean idle = !running;
+        return new ViewState(
+                stage,
+                idle && hasCells && includedMarkerCount() >= EmbeddingFeatures.MINIMUM_FEATURES,
+                running,
+                idle && hasEmbedding,
+                idle && stage == ViewState.Stage.GATING,
+                idle && hasEmbedding && !exporting,
+                idle,
+                !hasEmbedding,
+                !hasEmbedding && hasCells,
+                snapshot == null,
+                running ? null : failure);
     }
 
     // ------------------------------------------------------------------
