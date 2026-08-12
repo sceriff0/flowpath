@@ -258,17 +258,30 @@ public final class UmapSession {
     public CompartmentCapability capability() { return capability; }
 
     /**
-     * The feature picker's state — read here, written through
+     * The feature picker's state, as a <b>copy</b>. Writes go through
      * {@link #editSelection(String, MarkerSelection.Entry)}.
      * <p>
-     * {@code MarkerSelection} is mutable and shared with the gating half, so this cannot
-     * be an unmodifiable view the way {@link #tags()} is. What it can be is the only
-     * <em>reader</em>: the include flag decides whether Run UMAP is clickable at all, and
+     * A copy, not a view, because {@link MarkerSelection} has no unmodifiable form and the
+     * include flag decides whether Run UMAP is clickable at all —
      * {@code FeatureSelectionPane} used to {@code put} straight into this object, so
-     * ticking a marker changed that answer without the session — and therefore the panel —
-     * ever finding out.
+     * ticking a marker changed that answer without the session, and therefore the panel,
+     * ever finding out. Every selection this session holds is one it built or was handed
+     * ({@link #seedSelection}, {@link #loadSelection}, {@code new MarkerSelection()}), so
+     * nothing outside is aliased to it and the copy costs one put per marker on no hot
+     * path.
+     * <p>
+     * It also closes a live aliasing hazard: {@code onFeatureSelectionChanged} hands this
+     * to a background rebuild thread while the FX thread can still be editing rows into it.
      */
-    public MarkerSelection selection() { return selection; }
+    public MarkerSelection selection() { return selection.copy(); }
+
+    /**
+     * One marker's current entry — an immutable record, so this allocates nothing and is
+     * what the feature picker reads per row rather than copying the whole selection.
+     */
+    public MarkerSelection.Entry selectionEntry(String marker) {
+        return selection.entryFor(marker);
+    }
 
     /**
      * The population tags, in the order they were applied — an unmodifiable <em>view</em>,
@@ -552,7 +565,9 @@ public final class UmapSession {
             this.markerStats = stats;
             this.markers = List.copyOf(markers);
             this.capability = capability;
-            this.selection = selection;
+            // Copied on the way in for the same reason selection() copies on the way out:
+            // the caller keeps no handle on what this session is deriving Run UMAP from.
+            this.selection = selection.copy();
             this.baseColors = null;
         });
     }

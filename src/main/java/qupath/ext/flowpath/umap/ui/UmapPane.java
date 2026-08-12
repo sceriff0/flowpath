@@ -748,8 +748,7 @@ public class UmapPane extends BorderPane {
         markerDropdown.getItems().addAll(session.markers());
         markerDropdown.setValue(UmapSession.NO_MARKER);
 
-        featureSelectionPane.populate(session.markers(), session.capability(), session.selection(),
-                session::editSelection);
+        featureSelectionPane.populate(session);
         updateLegend();
 
         ImageData<?> imageData = qupath.getImageData();
@@ -900,8 +899,9 @@ public class UmapPane extends BorderPane {
                 markerDropdown.getItems().addAll(markersCopy);
                 markerDropdown.setValue(UmapSession.NO_MARKER);
 
-                featureSelectionPane.populate(markersCopy, builtCapability, loadedSelection,
-                        session::editSelection);
+                // Every argument this used to take is now the session's own answer, and the
+                // session has just been installed with exactly these three.
+                featureSelectionPane.populate(session);
 
                 // The reload notice rides along with the ready message rather than
                 // being posted up-front, where "Building cell index..." would wipe it

@@ -13,10 +13,10 @@ import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.ext.flowpath.umap.session.UmapSession;
 
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiConsumer;
 
 /**
  * Compact per-marker feature picker that drives which measurement key feeds the
@@ -29,12 +29,20 @@ import java.util.function.BiConsumer;
  * compartments/statistics that actually exist for that marker (from
  * {@link CompartmentCapability}).
  * <p>
- * The pane owns no persistence and no model. It <em>reads</em> a {@link MarkerSelection}
- * for its initial control values and reports every edit through the {@code writer} given
- * to {@link #populate}, then notifies its owner via {@code onChanged} so {@code UmapPane}
- * can persist and re-resolve. It used to {@code put} straight into the selection it was
- * handed, which meant the include flag — an input to whether Run UMAP is clickable at all
- * — changed without {@code UmapSession} hearing about it.
+ * The pane owns no persistence and no model. It reads {@link UmapSession#selectionEntry}
+ * for each row's initial value and reports every edit through
+ * {@link UmapSession#editSelection}, then notifies its owner via {@code onChanged} so
+ * {@code UmapPane} can persist and re-resolve.
+ * <p>
+ * <b>{@link #populate} takes the session itself, and nothing else.</b> It used to
+ * {@code put} straight into a {@link MarkerSelection} it was handed, which meant the
+ * include flag — an input to whether Run UMAP is clickable at all — changed without the
+ * session hearing about it, and therefore without the panel re-deriving. Routing that
+ * through a {@code BiConsumer} writer parameter fixed the behaviour but not the shape: the
+ * call site could still name {@code selection()::put} and silently put the leak back, with
+ * the whole suite green. There is no writer to name here. Reverting this needs a signature
+ * change in this file and at both call sites, which is a compile error rather than a
+ * one-word edit.
  */
 final class FeatureSelectionPane extends VBox {
 
@@ -70,16 +78,14 @@ final class FeatureSelectionPane extends VBox {
     }
 
     /**
-     * Rebuild the grid for the given markers, capability and selection.
-     *
-     * @param selection read for each row's initial value
-     * @param writer    where every edit goes — {@code UmapSession::editSelection} in
-     *                  production, so the session publishes the change to the panel
+     * Rebuild the grid from the session's panel, capability and selection — the only three
+     * things a row needs, and the session is the only place all three agree.
      */
-    void populate(List<String> markers, CompartmentCapability capability, MarkerSelection selection,
-                  BiConsumer<String, MarkerSelection.Entry> writer) {
+    void populate(UmapSession session) {
         grid.getChildren().clear();
 
+        List<String> markers = session.markers();
+        CompartmentCapability capability = session.capability();
         boolean rich = capability != null && capability.isRich();
         header.setText(rich
                 ? "Features (per-marker compartment + statistic)"
@@ -92,12 +98,12 @@ final class FeatureSelectionPane extends VBox {
 
         int row = 1;
         for (String marker : markers) {
-            MarkerSelection.Entry entry = selection.entryFor(marker);
+            MarkerSelection.Entry entry = session.selectionEntry(marker);
 
             CheckBox include = new CheckBox();
             include.setSelected(entry.included());
             include.selectedProperty().addListener((obs, o, n) -> {
-                writer.accept(marker, selection.entryFor(marker).withIncluded(n));
+                session.editSelection(marker, session.selectionEntry(marker).withIncluded(n));
                 onChanged.run();
             });
 
@@ -117,7 +123,8 @@ final class FeatureSelectionPane extends VBox {
                         ? entry.compartment() : firstOrDefault(comps, Compartment.defaultCompartment()));
                 compCombo.setConverter(new CompartmentStringConverter());
                 compCombo.setOnAction(e -> {
-                    writer.accept(marker, selection.entryFor(marker).withCompartment(compCombo.getValue()));
+                    session.editSelection(marker,
+                            session.selectionEntry(marker).withCompartment(compCombo.getValue()));
                     onChanged.run();
                 });
 
@@ -126,7 +133,8 @@ final class FeatureSelectionPane extends VBox {
                         ? entry.statistic() : firstOrDefaultStat(stats, Statistic.defaultStatistic()));
                 statCombo.setConverter(new StatisticStringConverter());
                 statCombo.setOnAction(e -> {
-                    writer.accept(marker, selection.entryFor(marker).withStatistic(statCombo.getValue()));
+                    session.editSelection(marker,
+                            session.selectionEntry(marker).withStatistic(statCombo.getValue()));
                     onChanged.run();
                 });
             } else {
@@ -142,7 +150,7 @@ final class FeatureSelectionPane extends VBox {
                 statCombo.setDisable(true);
 
                 // Ensure the selection reflects the pinned default.
-                writer.accept(marker, selection.entryFor(marker)
+                session.editSelection(marker, session.selectionEntry(marker)
                         .withCompartment(Compartment.WHOLE_CELL).withStatistic(Statistic.MEAN));
             }
 

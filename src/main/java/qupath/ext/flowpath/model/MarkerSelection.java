@@ -126,6 +126,20 @@ public final class MarkerSelection {
         return sel;
     }
 
+    /**
+     * An independent selection carrying the same entries.
+     * <p>
+     * {@link Entry} is an immutable record, so this is one map copy and nothing deeper.
+     * It is what lets {@code UmapSession.selection()} hand out a value rather than a
+     * handle on its own state: a thin map of records is not a hot-path allocation, and no
+     * reader of it wants to write.
+     */
+    public MarkerSelection copy() {
+        MarkerSelection out = new MarkerSelection();
+        out.entries.putAll(entries);
+        return out;
+    }
+
     /** Marker names that currently have an explicit entry (insertion order). */
     public List<String> markers() {
         return new ArrayList<>(entries.keySet());

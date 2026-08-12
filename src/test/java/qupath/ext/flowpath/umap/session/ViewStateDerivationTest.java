@@ -106,9 +106,10 @@ class ViewStateDerivationTest {
     }
 
     private static void untickAllBut(UmapSession session, int keep) {
-        var selection = session.selection();
+        // Through the session, the way the feature picker writes. Putting into what
+        // selection() returns changes a copy — which is the point of it being a copy.
         for (int i = keep; i < PANEL.size(); i++) {
-            selection.put(PANEL.get(i), MarkerSelection.defaultEntry().withIncluded(false));
+            session.editSelection(PANEL.get(i), MarkerSelection.defaultEntry().withIncluded(false));
         }
     }
 
