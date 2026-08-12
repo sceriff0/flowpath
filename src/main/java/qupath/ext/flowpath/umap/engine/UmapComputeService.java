@@ -162,6 +162,7 @@ public class UmapComputeService {
      */
     public void compute(EmbeddingFeatures features, UmapParameters params, int maxCells,
                         ScalingMode scalingMode) {
+        Objects.requireNonNull(features, "features");
         final ScalingMode mode = scalingMode == null ? ScalingMode.ZSCORE : scalingMode;
         final int myGeneration = generation.incrementAndGet();
         cancel();
@@ -180,11 +181,20 @@ public class UmapComputeService {
         // one terminal channel as every other ending. It is not a precondition the body
         // checks and could forget: the body is typed to EmbeddingFeatures.Selected, so a
         // Refused cannot be passed to it at all.
-        if (features instanceof EmbeddingFeatures.Refused refused) {
-            deliver(delivery, UmapOutcome.failed(refused.reason()), myGeneration);
-            return;
+        //
+        // An exhaustive switch with no default, not `instanceof Refused` plus a cast. The
+        // cast was total only because the interface happens to be sealed to two
+        // implementations today; a third would compile and then ClassCastException on the
+        // worker thread, which is the one place in this class an exception has no owner.
+        // This way it is a compile error at the point the third case is added.
+        final EmbeddingFeatures.Selected selected;
+        switch (features) {
+            case EmbeddingFeatures.Refused refused -> {
+                deliver(delivery, UmapOutcome.failed(refused.reason()), myGeneration);
+                return;
+            }
+            case EmbeddingFeatures.Selected s -> selected = s;
         }
-        final EmbeddingFeatures.Selected selected = (EmbeddingFeatures.Selected) features;
 
         try {
             runningTask = executor.submit(() -> {

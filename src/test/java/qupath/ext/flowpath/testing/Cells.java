@@ -5,7 +5,6 @@ import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.ext.flowpath.model.Statistic;
-import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
@@ -422,32 +421,6 @@ public final class Cells {
     /** The index over {@link #detections()}. */
     public CellIndex build() {
         return CellIndex.build(detections(), panelNames(), selection, calibration);
-    }
-
-    /**
-     * The index over {@link #detections()}, narrowed to what one UMAP run may read.
-     * <p>
-     * The embedding never takes a bare {@code CellIndex} — it takes the markers the
-     * feature picker left ticked — so a test that wants to run one needs this rather than
-     * {@link #build()}. Pass the population's own selection to exercise exclusion; the
-     * no-argument form ticks everything, which is what an image saved before the picker
-     * existed loads with.
-     */
-    public EmbeddingFeatures.Selected features() {
-        return features(build(), selection == null ? new MarkerSelection() : selection);
-    }
-
-    /** As {@link #features()}, for a test that already holds the index. */
-    public static EmbeddingFeatures.Selected features(CellIndex index) {
-        return features(index, new MarkerSelection());
-    }
-
-    /** As {@link #features()}, against an explicit picker state. */
-    public static EmbeddingFeatures.Selected features(CellIndex index, MarkerSelection selection) {
-        EmbeddingFeatures resolved = EmbeddingFeatures.of(index, selection);
-        if (resolved instanceof EmbeddingFeatures.Selected selected) return selected;
-        throw new IllegalArgumentException("this population cannot be embedded: "
-                + ((EmbeddingFeatures.Refused) resolved).reason());
     }
 
     /** The panel this population will be indexed under. */

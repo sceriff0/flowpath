@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.umap.testing.Embeddings;
 
 import java.util.OptionalInt;
 
@@ -65,7 +66,7 @@ class EmbeddingReportTest {
         picker.put("FoxP3", MarkerSelection.defaultEntry().withIncluded(false));
 
         EmbeddingReport report = EmbeddingReport
-                .training(Cells.features(index, picker), null)
+                .training(Embeddings.of(index, picker), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertTrue(report.isClean(), report.findings().toString());
@@ -89,19 +90,19 @@ class EmbeddingReportTest {
         picker.put("FoxP3", MarkerSelection.defaultEntry().withIncluded(false));
 
         assertEquals(java.util.List.of(), EmbeddingReport
-                .training(Cells.features(index, picker), null)
+                .training(Embeddings.of(index, picker), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything())
                 .unmeasuredMarkers());
         // Ticked, the same marker IS a finding — otherwise the assertion above is vacuous.
         assertEquals(java.util.List.of("FoxP3"), EmbeddingReport
-                .training(Cells.features(index), null)
+                .training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything())
                 .unmeasuredMarkers());
     }
 
     @Test
     void aRunThatDegradedNothingReportsNothing() {
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(healthy(6)), null)
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(healthy(6)), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertTrue(report.isClean());
@@ -124,7 +125,7 @@ class EmbeddingReportTest {
                 .marker("FoxP3", i -> 1.0).absentOn(i -> true)
                 .build();
 
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(index), null)
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("FoxP3"), report.unmeasuredMarkers());
@@ -145,7 +146,7 @@ class EmbeddingReportTest {
                 .marker("FoxP3", i -> 1.0).absentOn(i -> true)
                 .build();
 
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(index), null)
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("FoxP3"), report.unmeasuredMarkers());
@@ -165,9 +166,9 @@ class EmbeddingReportTest {
                 .marker("CD3", i -> i < 4 ? 2.0 : i)
                 .build();
 
-        EmbeddingReport onSubsample = EmbeddingReport.training(Cells.features(index), firstRows(4))
+        EmbeddingReport onSubsample = EmbeddingReport.training(Embeddings.of(index), firstRows(4))
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
-        EmbeddingReport onEverything = EmbeddingReport.training(Cells.features(index), null)
+        EmbeddingReport onEverything = EmbeddingReport.training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertEquals(java.util.List.of("CD3"), onSubsample.constantMarkers());
@@ -176,7 +177,7 @@ class EmbeddingReportTest {
 
     @Test
     void cellsLeftAtTheOriginAreCountedAndNamedAsTheFakeStructureTheyAre() {
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(healthy(2000)), firstRows(500))
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(healthy(2000)), firstRows(500))
                 .completedWith(EmbeddingReport.Steering.none(), unplaced(1204));
 
         assertEquals(1204, report.cellsAtOrigin());
@@ -191,14 +192,14 @@ class EmbeddingReportTest {
     void aCellCannotBeParkedAtTheOriginWhenEveryCellWasTrainedOn() {
         // Parking happens in the projection of held-out cells and nowhere else, so a
         // count without a subsample describes a run that cannot have happened.
-        EmbeddingReport.Training training = EmbeddingReport.training(Cells.features(healthy(6)), null);
+        EmbeddingReport.Training training = EmbeddingReport.training(Embeddings.of(healthy(6)), null);
         assertThrows(IllegalArgumentException.class,
                 () -> training.completedWith(EmbeddingReport.Steering.none(), unplaced(1)));
     }
 
     @Test
     void moreCellsCannotBeParkedThanWereHeldOut() {
-        EmbeddingReport.Training training = EmbeddingReport.training(Cells.features(healthy(10)), firstRows(4));
+        EmbeddingReport.Training training = EmbeddingReport.training(Embeddings.of(healthy(10)), firstRows(4));
         assertThrows(IllegalArgumentException.class,
                 () -> training.completedWith(EmbeddingReport.Steering.none(), unplaced(7)));
     }
@@ -210,7 +211,7 @@ class EmbeddingReportTest {
         // this one — so the translation happens here rather than at a call site that
         // could forget it.
         int[] sample = {2, 5, 7};
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(healthy(10)), sample)
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(healthy(10)), sample)
                 .completedWith(EmbeddingReport.Steering.detaching(1, 4), placedEverything());
 
         assertEquals(OptionalInt.of(5), report.imputedCell());
@@ -221,7 +222,7 @@ class EmbeddingReportTest {
 
     @Test
     void aDetachedRowOutsideTheTrainingMatrixIsRefused() {
-        EmbeddingReport.Training training = EmbeddingReport.training(Cells.features(healthy(10)), firstRows(3));
+        EmbeddingReport.Training training = EmbeddingReport.training(Embeddings.of(healthy(10)), firstRows(3));
         assertThrows(IllegalArgumentException.class,
                 () -> training.completedWith(EmbeddingReport.Steering.detaching(3, 1), placedEverything()));
     }
@@ -247,7 +248,7 @@ class EmbeddingReportTest {
         // costs one fabricated position against subsampling's two thirds of the
         // population. If subsampling is a note, steering cannot be a finding. The
         // sentence itself is unchanged; only which list it is on.
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(healthy(500)), null)
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(healthy(500)), null)
                 .completedWith(EmbeddingReport.Steering.detaching(241, 15), placedEverything());
 
         assertTrue(report.isClean(), report.findings().toString());
@@ -266,7 +267,7 @@ class EmbeddingReportTest {
         // Auto subsampling is the default and a deliberate speed/memory trade, not a
         // failure — so it belongs where IngestReport puts a literal 0.0: on the record,
         // out of the findings.
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(healthy(900)), firstRows(300))
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(healthy(900)), firstRows(300))
                 .completedWith(EmbeddingReport.Steering.none(), placedEverything());
 
         assertTrue(report.isClean(), report.findings().toString());
@@ -283,7 +284,7 @@ class EmbeddingReportTest {
                 .marker("CD45", i -> i)
                 .marker("CD3", i -> 7.0)
                 .build();
-        EmbeddingReport report = EmbeddingReport.training(Cells.features(index), firstRows(500))
+        EmbeddingReport report = EmbeddingReport.training(Embeddings.of(index), firstRows(500))
                 .completedWith(EmbeddingReport.Steering.detaching(1, 9), unplaced(12));
 
         assertEquals(2, report.findings().size(), report.findings().toString());

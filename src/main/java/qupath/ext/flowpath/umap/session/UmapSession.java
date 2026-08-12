@@ -10,6 +10,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
+import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
@@ -341,12 +342,30 @@ public final class UmapSession {
      * one. A 40-plex image opened cold offers 40 checkboxes and no guidance; opened from
      * a gate tree it offers the 8 markers that define the phenotypes on screen, already
      * ticked. Ungated markers stay available in the picker, just unticked.
+     * <p>
+     * <b>Below {@link EmbeddingFeatures#MINIMUM_FEATURES} the seeding does not happen at
+     * all.</b> A single {@code ThresholdGate} on CD45 — the ordinary first gate anyone
+     * draws — gates exactly one marker, and seeding it faithfully would produce a
+     * selection the embedding refuses: the pane would offer "Ready to embed, 1 marker" and
+     * a Run button that cannot succeed. Pre-selection is a convenience, so it yields to
+     * the run being possible at all; the user still sees every marker ticked and can
+     * narrow them by hand.
+     * <p>
+     * The count is taken against the <em>panel</em> rather than against the tree. A gate
+     * on a marker this image does not carry ticks nothing, so it cannot make up the
+     * shortfall either, and counting it would reintroduce the same dead Run button by a
+     * longer route.
      */
     public static MarkerSelection seedSelection(PhenotypeSnapshot incoming) {
         MarkerSelection sel = MarkerSelection.defaultFor(incoming.markerNames());
         List<String> gated = incoming.gatedMarkers();
-        if (gated.isEmpty()) {
-            return sel;   // nothing gated yet — fall back to "everything included"
+        int seedable = 0;
+        for (String marker : incoming.markerNames()) {
+            if (gated.contains(marker)) seedable++;
+        }
+        if (seedable < EmbeddingFeatures.MINIMUM_FEATURES) {
+            // Nothing gated yet, or too little to embed — fall back to "everything included".
+            return sel;
         }
         MarkerSelection gateSel = incoming.gateSelection();
         for (String marker : incoming.markerNames()) {

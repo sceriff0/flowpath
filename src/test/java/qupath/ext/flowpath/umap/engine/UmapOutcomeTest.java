@@ -3,6 +3,7 @@ package qupath.ext.flowpath.umap.engine;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.umap.testing.Embeddings;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
 
@@ -48,14 +49,14 @@ class UmapOutcomeTest {
     }
 
     private static EmbeddingReport cleanReport(CellIndex index) {
-        return EmbeddingReport.training(Cells.features(index), null)
+        return EmbeddingReport.training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.none(),
                         EmbeddingReport.Projection.none());
     }
 
     /** A run that bought its layout by detaching one node, and what that cost. */
     private static EmbeddingReport steeredReport(CellIndex index, int detachedRow, int reweighted) {
-        return EmbeddingReport.training(Cells.features(index), null)
+        return EmbeddingReport.training(Embeddings.of(index), null)
                 .completedWith(EmbeddingReport.Steering.detaching(detachedRow, reweighted),
                         EmbeddingReport.Projection.none());
     }

@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
+import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
@@ -45,10 +46,28 @@ class UmapSessionTest {
     private static PhenotypeSnapshot snapshot(CellIndex index, String[] labels,
                                               int[] colors, boolean[] excluded,
                                               List<String> gated, MarkerSelection gateSel) {
-        return new PhenotypeSnapshot(index, MarkerStats.compute(index), PANEL,
+        return snapshot(index, PANEL, labels, colors, excluded, gated, gateSel);
+    }
+
+    /** As above, over an explicit panel — the seeding tests need one wider than two. */
+    private static PhenotypeSnapshot snapshot(CellIndex index, List<String> panel, String[] labels,
+                                              int[] colors, boolean[] excluded,
+                                              List<String> gated, MarkerSelection gateSel) {
+        return new PhenotypeSnapshot(index, MarkerStats.compute(index), panel,
                 CompartmentCapability.empty(), labels, colors, excluded,
                 gated, gateSel, 2, "img");
     }
+
+    /** A three-marker population, so a two-marker gate tree can leave something unticked. */
+    private static CellIndex threeMarkerIndex() {
+        return Cells.of(2).atGrid(1, 1)
+                .marker("CD3", i -> i)
+                .marker("CD8", i -> i * 2.0)
+                .marker("FoxP3", i -> i * 3.0)
+                .build();
+    }
+
+    private static final List<String> WIDE_PANEL = List.of("CD3", "CD8", "FoxP3");
 
     private static UmapSession sessionOn(PhenotypeSnapshot s) {
         var session = new UmapSession();
@@ -182,18 +201,61 @@ class UmapSessionTest {
 
     @Test
     void seedingTicksTheGatedMarkersAndUntlicksTheRest() {
-        var objects = List.of(cell(0, null, 0), cell(1, null, 0));
-        var index = indexOf(objects);
+        var index = threeMarkerIndex();
         var gateSel = new MarkerSelection();
         gateSel.put("CD8", new MarkerSelection.Entry(Compartment.NUCLEAR, Statistic.MEDIAN, true));
+        gateSel.put("FoxP3", new MarkerSelection.Entry(Compartment.NUCLEAR, Statistic.MEDIAN, true));
 
-        var session = sessionOn(snapshot(index, new String[]{"a", "b"}, new int[2], new boolean[2],
-                List.of("CD8"), gateSel));
+        var session = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"a", "b"},
+                new int[2], new boolean[2], List.of("CD8", "FoxP3"), gateSel));
 
         assertTrue(session.selection().isIncluded("CD8"), "The gated marker is pre-selected");
+        assertTrue(session.selection().isIncluded("FoxP3"));
         assertFalse(session.selection().isIncluded("CD3"), "Ungated markers stay available but unticked");
         assertEquals("CD8", session.preferredMarker(),
                 "Colour-by-marker should land on something the user gated");
+    }
+
+    /**
+     * The day-one path. A single ThresholdGate on CD8 is the first gate anyone draws, and
+     * seeding it faithfully would tick exactly one marker — which {@code EmbeddingFeatures}
+     * refuses, so the pane would offer a Run button that could not succeed. Pre-selection
+     * yields to the run being possible.
+     */
+    @Test
+    void oneGatedMarkerDoesNotSeedASelectionTheEmbeddingWouldRefuse() {
+        var index = threeMarkerIndex();
+        var gateSel = new MarkerSelection();
+        gateSel.put("CD8", new MarkerSelection.Entry(Compartment.NUCLEAR, Statistic.MEDIAN, true));
+
+        var session = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"a", "b"},
+                new int[2], new boolean[2], List.of("CD8"), gateSel));
+
+        for (String marker : WIDE_PANEL) {
+            assertTrue(session.selection().isIncluded(marker),
+                    marker + " must stay ticked: one gated marker cannot be embedded");
+        }
+        assertInstanceOf(EmbeddingFeatures.Selected.class,
+                EmbeddingFeatures.of(index, session.selection()),
+                "the seeded selection must be one the embedding accepts");
+    }
+
+    /**
+     * The same shortfall by a longer route: two gates, but one of them on a marker this
+     * image does not carry, so seeding would still tick one.
+     */
+    @Test
+    void aGateOnAMarkerThePanelLacksCannotMakeUpTheShortfall() {
+        var index = threeMarkerIndex();
+        var gateSel = new MarkerSelection();
+        gateSel.put("CD8", new MarkerSelection.Entry(Compartment.NUCLEAR, Statistic.MEDIAN, true));
+        gateSel.put("Ghost", new MarkerSelection.Entry(Compartment.NUCLEAR, Statistic.MEDIAN, true));
+
+        var session = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"a", "b"},
+                new int[2], new boolean[2], List.of("CD8", "Ghost"), gateSel));
+
+        assertTrue(session.selection().isIncluded("CD3"));
+        assertTrue(session.selection().isIncluded("FoxP3"));
     }
 
     @Test

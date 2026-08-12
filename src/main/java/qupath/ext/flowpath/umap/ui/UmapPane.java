@@ -628,16 +628,32 @@ public class UmapPane extends BorderPane {
             return;
         }
 
-        emptyHeadline.setText("Ready to embed");
         int markers = includedMarkerCount();
+        emptyAction.setVisible(true);
+        emptyAction.setManaged(true);
+
+        // Say the shortfall here rather than let the run say it. EmbeddingFeatures refuses
+        // fewer than two ticked markers, and an empty state that reads "Ready to embed"
+        // over a Run button whose only possible outcome is a failure dialog is the same
+        // silent-plausible-wrong shape the include flag itself had.
+        if (markers < EmbeddingFeatures.MINIMUM_FEATURES) {
+            emptyHeadline.setText("Not enough markers to embed");
+            emptySubline.setText(String.format(
+                    "%,d cells, but %d of %d markers %s ticked. UMAP needs at least %d — "
+                            + "tick more under Cells.",
+                    index.size(), markers, session.markers().size(),
+                    markers == 1 ? "is" : "are", EmbeddingFeatures.MINIMUM_FEATURES));
+            emptyAction.setDisable(true);
+            return;
+        }
+
+        emptyHeadline.setText("Ready to embed");
         String base = String.format("%,d cells across %d marker%s.",
                 index.size(), markers, markers == 1 ? "" : "s");
         emptySubline.setText(snapshot != null && !snapshot.gatedMarkers().isEmpty()
                 ? base + " Features are pre-selected from your gates — adjust them under "
                         + "Cells, or run as-is."
                 : base + " Choose which markers to use under Cells, or run as-is.");
-        emptyAction.setVisible(true);
-        emptyAction.setManaged(true);
         emptyAction.setDisable(computeController.getComputeButton().isDisabled());
     }
 

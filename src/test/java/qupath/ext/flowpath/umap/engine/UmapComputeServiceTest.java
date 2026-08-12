@@ -11,6 +11,7 @@ import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.umap.testing.Embeddings;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.lang.reflect.Field;
@@ -82,7 +83,7 @@ class UmapComputeServiceTest {
             service.setOnStatusUpdate(msg -> { statusLog.add(msg); });
         }
         service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-        service.compute(Cells.features(idx), params, maxCells);
+        service.compute(Embeddings.of(idx), params, maxCells);
         if (!latch.await(timeoutSec, TimeUnit.SECONDS)) {
             throw new AssertionError("Timed out waiting for UMAP completion");
         }
@@ -144,7 +145,7 @@ class UmapComputeServiceTest {
         });
         try {
             service.setOnOutcome(outcomes::add);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);
             awaitOutcomes(outcomes, 1);
 
             assertEquals(1, outcomes.size(), "an Error must produce exactly one outcome, not silence");
@@ -170,7 +171,7 @@ class UmapComputeServiceTest {
         });
         try {
             service.setOnOutcome(outcomes::add);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);
             awaitOutcomes(outcomes, 1);
 
             var failed = assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
@@ -219,12 +220,12 @@ class UmapComputeServiceTest {
 
         try {
             service.setOnOutcome(outcomes::add);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);
 
             int expectedComputeCalls = 1;
             if (kind == UmapOutcome.Kind.SUPERSEDED) {
                 spinUntil(started);
-                service.compute(Cells.features(index), UmapParameters.defaults(), 0);
+                service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);
                 release.set(true);
                 expectedComputeCalls = 2;
             }
@@ -261,9 +262,9 @@ class UmapComputeServiceTest {
         });
         try {
             service.setOnOutcome(outcomes::add);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);   // occupies the worker
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);   // occupies the worker
             spinUntil(occupied);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);   // queued behind it
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);   // queued behind it
             service.cancel();                                       // never gets to run
             release.set(true);
 
@@ -308,10 +309,10 @@ class UmapComputeServiceTest {
                 }
             });
 
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);   // occupies the worker
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);   // occupies the worker
             spinUntil(started);
             // Ends run 1 -> the consumer throws inside cancel(), inside compute().
-            assertDoesNotThrow(() -> service.compute(Cells.features(index), UmapParameters.defaults(), 0));
+            assertDoesNotThrow(() -> service.compute(Embeddings.of(index), UmapParameters.defaults(), 0));
             release.set(true);
 
             awaitOutcomes(outcomes, 2);
@@ -334,7 +335,7 @@ class UmapComputeServiceTest {
         var service = serviceRunning((idx, p, max, mode, gen) -> stubSuccess(idx));
         service.shutdown();
 
-        assertDoesNotThrow(() -> service.compute(Cells.features(index), UmapParameters.defaults(), 0));
+        assertDoesNotThrow(() -> service.compute(Embeddings.of(index), UmapParameters.defaults(), 0));
 
         var failed = assertInstanceOf(UmapOutcome.Failed.class, service.getLastOutcome(),
                 "a rejected submit must still be recorded, even with no consumer left");
@@ -350,7 +351,7 @@ class UmapComputeServiceTest {
             throw new NoClassDefFoundError("org/bytedeco/arpackng/global/arpack");
         });
         try {
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);   // no consumer registered
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);   // no consumer registered
             spinUntil(() -> service.getLastOutcome() != null);
 
             var failed = assertInstanceOf(UmapOutcome.Failed.class, service.getLastOutcome());
@@ -369,7 +370,7 @@ class UmapComputeServiceTest {
         var service = new UmapComputeService(Runnable::run, null);
         try {
             service.setOnOutcome(outcomes::add);
-            service.compute(Cells.features(index), UmapParameters.defaults(), 0);
+            service.compute(Embeddings.of(index), UmapParameters.defaults(), 0);
             awaitOutcomes(outcomes, 1);
 
             var failed = assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
@@ -415,7 +416,7 @@ class UmapComputeServiceTest {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-            service.compute(Cells.features(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
+            service.compute(Embeddings.of(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "a 500-cell UMAP must terminate");
 
             var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
@@ -479,7 +480,7 @@ class UmapComputeServiceTest {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-            service.compute(Cells.features(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 300);
+            service.compute(Embeddings.of(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 300);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "a subsampled UMAP must terminate");
 
             var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
@@ -520,7 +521,7 @@ class UmapComputeServiceTest {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-            service.compute(Cells.features(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
+            service.compute(Embeddings.of(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "a degenerate column must not hang");
 
             var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
@@ -558,7 +559,7 @@ class UmapComputeServiceTest {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-            service.compute(Cells.features(idx, picker),
+            service.compute(Embeddings.of(idx, picker),
                     new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "the run must terminate");
 
@@ -656,7 +657,7 @@ class UmapComputeServiceTest {
                     .marker("CD8", i -> Math.cos(i * 0.7))
                     .marker("Rogue", i -> 0.0)
                     .build();
-            int[] sample = service.stratifiedSample(Cells.features(probe), trainOn);
+            int[] sample = service.stratifiedSample(Embeddings.of(probe), trainOn);
             boolean[] sampled = new boolean[cells];
             for (int idx : sample) sampled[idx] = true;
             int stranded = -1;
@@ -675,7 +676,7 @@ class UmapComputeServiceTest {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
-            service.compute(Cells.features(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), trainOn);
+            service.compute(Embeddings.of(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), trainOn);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "the run must terminate");
 
             var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
@@ -790,10 +791,10 @@ class UmapComputeServiceTest {
 
             var params = new UmapParameters(15, 0.1, 1.0, 30, 5);
             // Kick off first compute, then immediately cancel and start a second.
-            service.compute(Cells.features(idx), params, 0);
+            service.compute(Embeddings.of(idx), params, 0);
             service.cancel();
             secondStarted.set(true);
-            service.compute(Cells.features(idx), params, 0);
+            service.compute(Embeddings.of(idx), params, 0);
 
             assertTrue(secondDone.await(180, TimeUnit.SECONDS),
                     "Second compute should complete");
@@ -822,7 +823,7 @@ class UmapComputeServiceTest {
             CountDownLatch latch = new CountDownLatch(1);
             service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
 
-            service.compute(Cells.features(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0, ScalingMode.ZSCORE);
+            service.compute(Embeddings.of(idx), new UmapParameters(15, 0.1, 1.0, 30, 5), 0, ScalingMode.ZSCORE);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "z-score UMAP should complete");
             var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
                     "z-score UMAP should succeed: " + outcomeRef.get().describe());
