@@ -27,7 +27,8 @@ import java.util.OptionalInt;
 class UmapOutcomeTest {
 
     private static CellIndex indexOf(int cells) {
-        return Cells.of(cells).marker("CD45", i -> i).build();
+        // Two markers because an embedding is refused below that — see EmbeddingFeatures.
+        return Cells.of(cells).marker("CD45", i -> i).marker("CD3", i -> i * 2.0).build();
     }
 
     private static UmapResult resultOf(int cells) {
@@ -47,14 +48,14 @@ class UmapOutcomeTest {
     }
 
     private static EmbeddingReport cleanReport(CellIndex index) {
-        return EmbeddingReport.training(index, null)
+        return EmbeddingReport.training(Cells.features(index), null)
                 .completedWith(EmbeddingReport.Steering.none(),
                         EmbeddingReport.Projection.none());
     }
 
     /** A run that bought its layout by detaching one node, and what that cost. */
     private static EmbeddingReport steeredReport(CellIndex index, int detachedRow, int reweighted) {
-        return EmbeddingReport.training(index, null)
+        return EmbeddingReport.training(Cells.features(index), null)
                 .completedWith(EmbeddingReport.Steering.detaching(detachedRow, reweighted),
                         EmbeddingReport.Projection.none());
     }

@@ -13,6 +13,7 @@ import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestOptions;
 import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
@@ -232,6 +233,7 @@ public class UmapPane extends BorderPane {
         computeController = new ComputeController(
                 computeService,
                 session::index,
+                session::selection,
                 this::computeRestingState,
                 this::onUmapResultReady,
                 new StatusReporter() {
@@ -639,13 +641,13 @@ public class UmapPane extends BorderPane {
         emptyAction.setDisable(computeController.getComputeButton().isDisabled());
     }
 
-    /** How many markers are ticked in the feature picker. */
+    /**
+     * How many markers are ticked in the feature picker — asked of the same filter the
+     * embedding runs through, so the number promised here is the number of columns the
+     * run reads. This label used to be the include flag's <em>only</em> consumer.
+     */
     private int includedMarkerCount() {
-        int n = 0;
-        for (String m : session.markers()) {
-            if (session.selection().isIncluded(m)) n++;
-        }
-        return n;
+        return EmbeddingFeatures.includedMarkers(session.markers(), session.selection()).size();
     }
 
     // --- Snapshot handoff from the gating pane ---

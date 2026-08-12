@@ -587,37 +587,13 @@ public class CellIndex {
         return values[markerIndex];
     }
 
-    /**
-     * Extract marker data as a cell-by-marker matrix for UMAP input.
-     * Transposes from {@code [marker][cell]} to {@code [cell][marker]} layout and
-     * replaces NaN values with that marker's column mean, so a missing measurement
-     * lands at the centre of its distribution instead of poisoning the embedding.
-     */
-    public double[][] toMatrix() {
-        int n = size;
-        int m = markerNames.length;
-        double[][] matrix = new double[n][m];
-
-        for (int j = 0; j < m; j++) {
-            double sum = 0;
-            int count = 0;
-            for (int i = 0; i < n; i++) {
-                double v = values[j][i];
-                if (!Double.isNaN(v)) {
-                    sum += v;
-                    count++;
-                }
-            }
-            double mean = count > 0 ? sum / count : 0.0;
-
-            for (int i = 0; i < n; i++) {
-                double v = values[j][i];
-                matrix[i][j] = Double.isNaN(v) ? mean : v;
-            }
-        }
-
-        return matrix;
-    }
+    // There is deliberately no toMatrix() here any more.
+    //
+    // It transposed EVERY column into UMAP input, which is precisely how the feature
+    // picker's include flag came to mean nothing: filtering was something a caller had to
+    // remember to do, and no caller did. Building embedding input is now
+    // qupath.ext.flowpath.umap.engine.EmbeddingFeatures.Selected#toMatrix, which can only
+    // address the markers the user ticked. Nothing in the gating half ever called this.
 
     /**
      * The resolved measurement key for a channel + compartment + statistic.

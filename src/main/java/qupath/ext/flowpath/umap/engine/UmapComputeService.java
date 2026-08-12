@@ -1,10 +1,10 @@
 package qupath.ext.flowpath.umap.engine;
 
 import javafx.application.Platform;
-import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
+import qupath.lib.objects.PathObject;
 import smile.manifold.UMAP;
 import smile.graph.NearestNeighborGraph;
 
@@ -75,7 +75,7 @@ public class UmapComputeService {
      */
     @FunctionalInterface
     interface EmbeddingWork {
-        UmapOutcome run(CellIndex cellIndex, UmapParameters params, int maxCells,
+        UmapOutcome run(EmbeddingFeatures.Selected features, UmapParameters params, int maxCells,
                         ScalingMode mode, int runGeneration) throws Exception;
     }
 
@@ -136,18 +136,21 @@ public class UmapComputeService {
 
     /**
      * Compute UMAP embedding with raw (unscaled) features. Equivalent to calling
-     * {@link #compute(CellIndex, UmapParameters, int, ScalingMode)} with
+     * {@link #compute(EmbeddingFeatures, UmapParameters, int, ScalingMode)} with
      * {@link ScalingMode#NONE}; retained for callers/tests that predate feature
      * scaling. New UI paths pass an explicit mode (default {@link ScalingMode#ZSCORE}).
      */
-    public void compute(CellIndex cellIndex, UmapParameters params, int maxCells) {
-        compute(cellIndex, params, maxCells, ScalingMode.NONE);
+    public void compute(EmbeddingFeatures features, UmapParameters params, int maxCells) {
+        compute(features, params, maxCells, ScalingMode.NONE);
     }
 
     /**
      * Compute UMAP embedding. Runs in background thread.
      *
-     * @param cellIndex   cell data
+     * @param features    the cells to embed, narrowed to the markers the user ticked in
+     *                    the feature picker. A {@link EmbeddingFeatures.Refused} set —
+     *                    nothing ticked, or one thing ticked — ends the run as
+     *                    {@link UmapOutcome.Failed} without reaching the embedding
      * @param params      UMAP parameters
      * @param maxCells    maximum cells before subsampling (0 = no limit)
      * @param scalingMode per-marker feature scaling applied before UMAP. UMAP is
@@ -157,7 +160,8 @@ public class UmapComputeService {
      *                    fit on the training matrix and reused for the projection of
      *                    held-out cells so both share one coordinate frame.
      */
-    public void compute(CellIndex cellIndex, UmapParameters params, int maxCells, ScalingMode scalingMode) {
+    public void compute(EmbeddingFeatures features, UmapParameters params, int maxCells,
+                        ScalingMode scalingMode) {
         final ScalingMode mode = scalingMode == null ? ScalingMode.ZSCORE : scalingMode;
         final int myGeneration = generation.incrementAndGet();
         cancel();
@@ -172,11 +176,21 @@ public class UmapComputeService {
                 deliveryExecutor, () -> onOutcome, this::recordOutcome);
         pendingRun = new PendingRun(myGeneration, delivery);
 
+        // A feature set the picker left unembeddable ends the run here, through the same
+        // one terminal channel as every other ending. It is not a precondition the body
+        // checks and could forget: the body is typed to EmbeddingFeatures.Selected, so a
+        // Refused cannot be passed to it at all.
+        if (features instanceof EmbeddingFeatures.Refused refused) {
+            deliver(delivery, UmapOutcome.failed(refused.reason()), myGeneration);
+            return;
+        }
+        final EmbeddingFeatures.Selected selected = (EmbeddingFeatures.Selected) features;
+
         try {
             runningTask = executor.submit(() -> {
                 UmapOutcome outcome = null;
                 try {
-                    outcome = work.run(cellIndex, params, maxCells, mode, myGeneration);
+                    outcome = work.run(selected, params, maxCells, mode, myGeneration);
                 } catch (OutOfMemoryError e) {
                     // Free memory immediately, then report with the tailored advice —
                     // "UMAP failed: OutOfMemoryError" tells the user nothing actionable.
@@ -268,10 +282,10 @@ public class UmapComputeService {
      * project the held-out cells. Never delivers anything itself — it returns the
      * outcome it reached and lets {@link #compute} own the single terminal delivery.
      */
-    private UmapOutcome runEmbedding(CellIndex cellIndex, UmapParameters params,
+    private UmapOutcome runEmbedding(EmbeddingFeatures.Selected features, UmapParameters params,
                                      int maxCells, ScalingMode mode, int myGeneration) {
-        int n = cellIndex.size();
-        int m = cellIndex.getMarkerNames().length;
+        int n = features.cellCount();
+        int m = features.featureCount();
 
         // Memory estimation
         long estimatedBytes = (long) n * m * 8 + (long) n * params.k() * 32 + (long) n * 2 * 8;
@@ -287,7 +301,7 @@ public class UmapComputeService {
         if (maxCells > 0 && n > maxCells) {
             // Fixed mode: user-specified limit
             postStatus("Subsampling %,d -> %,d cells...".formatted(n, maxCells));
-            sampleIndices = stratifiedSample(cellIndex, maxCells);
+            sampleIndices = stratifiedSample(features, maxCells);
             computeN = sampleIndices.length;
             subsampled = true;
         } else if (maxCells < 0 || estimatedBytes > freeMemory * 0.6) {
@@ -298,17 +312,17 @@ public class UmapComputeService {
             if (autoLimit < n) {
                 postStatus("Auto-subsampling %,d -> %,d cells (based on available memory)..."
                         .formatted(n, autoLimit));
-                sampleIndices = stratifiedSample(cellIndex, autoLimit);
+                sampleIndices = stratifiedSample(features, autoLimit);
                 computeN = sampleIndices.length;
                 subsampled = true;
             }
         }
 
         // Read what the training set looks like before anything is built from it. This is
-        // half of the run's report and it comes from the CellIndex columns, not from the
+        // half of the run's report and it comes from the selected columns, not from the
         // matrix below — so no ordering constraint ties it to the scaler that rewrites
         // that matrix in place.
-        EmbeddingReport.Training training = EmbeddingReport.training(cellIndex, sampleIndices);
+        EmbeddingReport.Training training = EmbeddingReport.training(features, sampleIndices);
 
         // Build matrix
         postStatus("Preparing data matrix (%,d cells x %d markers)...".formatted(computeN, m));
@@ -316,9 +330,9 @@ public class UmapComputeService {
         double[] imputationMeans = null;
         if (subsampled) {
             imputationMeans = new double[m];
-            matrix = extractSubMatrix(cellIndex, sampleIndices, imputationMeans);
+            matrix = features.subMatrix(sampleIndices, imputationMeans);
         } else {
-            matrix = cellIndex.toMatrix();
+            matrix = features.toMatrix();
         }
 
         // Fit feature scaler on the training matrix and apply it in place.
@@ -403,7 +417,7 @@ public class UmapComputeService {
             // Project remaining cells via kNN
             postStatus("Projecting remaining %,d cells...".formatted(n - computeN));
             long projStart = System.nanoTime();
-            projection = projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY,
+            projection = projectRemaining(features, sampleIndices, embedding, umapX, umapY,
                     imputationMeans, scaler);
             long projMs = (System.nanoTime() - projStart) / 1_000_000L;
             String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
@@ -425,8 +439,11 @@ public class UmapComputeService {
                 ? params
                 : new UmapParameters(params.k(), params.minDist(), params.spread(),
                         effectiveEpochs, params.negativeSamples());
-        UmapResult result = new UmapResult(umapX, umapY, cellIndex.getObjects(),
-                cellIndex.getMarkerNames(), resolvedParams);
+        // The markers named on the result are the markers the layout was computed over,
+        // not the whole panel: a result that listed an unticked marker would be claiming a
+        // dimension nothing was measured along.
+        UmapResult result = new UmapResult(umapX, umapY, features.objects(),
+                features.featureNames(), resolvedParams);
         cachedResult = result;
 
         // The embedding and the account of what it cost leave together. Translating the
@@ -445,8 +462,9 @@ public class UmapComputeService {
      * population size, the class proportions and the seed. Asking is honest and stays
      * correct if the sampler changes; guessing quietly stops covering anything.
      */
-    int[] stratifiedSample(CellIndex cellIndex, int targetN) {
-        int n = cellIndex.size();
+    int[] stratifiedSample(EmbeddingFeatures.Selected features, int targetN) {
+        int n = features.cellCount();
+        PathObject[] objects = features.objects();
         if (targetN >= n) {
             int[] all = new int[n];
             for (int i = 0; i < n; i++) all[i] = i;
@@ -456,7 +474,7 @@ public class UmapComputeService {
         // Group by PathClass
         var classGroups = new java.util.LinkedHashMap<String, java.util.List<Integer>>();
         for (int i = 0; i < n; i++) {
-            var pc = cellIndex.getObject(i).getPathClass();
+            var pc = objects[i].getPathClass();
             String key = pc != null ? pc.getName() : "__unclassified__";
             classGroups.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(i);
         }
@@ -498,36 +516,6 @@ public class UmapComputeService {
     }
 
     /**
-     * Extract sub-matrix for sampled cells, returning imputation means for reuse.
-     */
-    private double[][] extractSubMatrix(CellIndex cellIndex, int[] indices, double[] imputationMeans) {
-        int m = cellIndex.getMarkerNames().length;
-        double[][] matrix = new double[indices.length][m];
-        for (int j = 0; j < m; j++) {
-            // Raw accessor: read-only gather into `matrix`. The defensive
-            // getMarkerValues would clone the full column on every iteration,
-            // copying the entire dataset to build a subsample of it.
-            double[] markerVals = cellIndex.getMarkerValuesRaw(j);
-
-            // Compute mean for NaN replacement from sampled cells only
-            double sum = 0;
-            int count = 0;
-            for (int idx : indices) {
-                double v = markerVals[idx];
-                if (!Double.isNaN(v)) { sum += v; count++; }
-            }
-            double mean = count > 0 ? sum / count : 0.0;
-            imputationMeans[j] = mean;
-
-            for (int i = 0; i < indices.length; i++) {
-                double v = markerVals[indices[i]];
-                matrix[i][j] = Double.isNaN(v) ? mean : v;
-            }
-        }
-        return matrix;
-    }
-
-    /**
      * Project non-sampled cells by finding their k nearest neighbors among the sampled cells
      * (using a KD-tree for fast lookup) and averaging those neighbors' UMAP coordinates
      * weighted by inverse distance.
@@ -540,13 +528,14 @@ public class UmapComputeService {
      *         reaching the report — and the only code that can raise it is the code here
      *         that fails to place a cell
      */
-    private EmbeddingReport.Projection projectRemaining(CellIndex cellIndex, int[] sampleIndices,
+    private EmbeddingReport.Projection projectRemaining(EmbeddingFeatures.Selected features,
+                                                        int[] sampleIndices,
                                                         double[][] sampleEmbedding,
                                                         double[] umapX, double[] umapY,
                                                         double[] imputationMeans,
                                                         FeatureScaler scaler) {
-        int n = cellIndex.size();
-        int m = cellIndex.getMarkerNames().length;
+        int n = features.cellCount();
+        int m = features.featureCount();
         EmbeddingReport.Projection projection = EmbeddingReport.Projection.tally();
         int knn = Math.min(5, sampleIndices.length);
         if (knn == 0) {
@@ -565,10 +554,7 @@ public class UmapComputeService {
         // this loop used to allocate a complete N x M duplicate of the dataset —
         // the very 1.2 GB allocation the comment further down explains we avoid
         // for the query matrix. Read-only use only.
-        double[][] allMarkerValues = new double[m][];
-        for (int j = 0; j < m; j++) {
-            allMarkerValues[j] = cellIndex.getMarkerValuesRaw(j);
-        }
+        double[][] allMarkerValues = features.columns();
 
         // Build sample marker matrix for kNN lookup (with NaN imputation), then
         // apply the SAME scaler used for UMAP training. The sample embedding was

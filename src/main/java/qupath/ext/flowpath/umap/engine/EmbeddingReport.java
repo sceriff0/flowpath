@@ -1,7 +1,5 @@
 package qupath.ext.flowpath.umap.engine;
 
-import qupath.ext.flowpath.model.CellIndex;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -25,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       real structure — a pile of them reads as a tight cluster of some rare
  *       phenotype. Counted by {@link #cellsAtOrigin()}.</li>
  *   <li>A marker no training cell carried a value for is imputed with its own column
- *       mean, and {@code CellIndex.toMatrix} computes the mean of nothing as
+ *       mean, and the matrix builder computes the mean of nothing as
  *       {@code 0.0}. The marker becomes a column of zeros: it contributes nothing to
  *       any distance, the embedding is quietly over fewer features than the user
  *       selected, and nothing says so. Counted by {@link #unmeasuredMarkers()}.</li>
@@ -79,7 +77,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * node had to be detached, how many cells the projection could not place — is known
  * only after it, by which point the training matrix has deliberately been released for
  * memory. So the report is assembled in two mandatory stages,
- * {@link #training(CellIndex, int[])} then
+ * {@link #training(EmbeddingFeatures.Selected, int[])} then
  * {@link Training#completedWith(Steering, int)}, each taking the artefacts of its own
  * end of the run. There is no other constructor, no empty report and no default:
  * a run that reached an embedding cannot report success without saying what that cost,
@@ -214,25 +212,27 @@ public final class EmbeddingReport {
      * Holds no reference to the training matrix. The matrix is released before the
      * projection stage on purpose (peak memory otherwise spans it and the projection's
      * own allocations at once), and a report that pinned it would undo that. It does not
-     * need one: degeneracy is read straight off the {@link CellIndex} columns, which the
-     * run holds anyway.
+     * need one: degeneracy is read straight off the selected {@code CellIndex} columns,
+     * which the run holds anyway.
      */
     public static final class Training {
 
         private final int totalCells;
         private final int trainedCells;
         private final int markerCount;
+        private final List<String> excludedMarkers;
         private final List<String> unmeasuredMarkers;
         private final List<String> constantMarkers;
         /** Read-only; the run's own array, not a copy. Null means "trained on every cell". */
         private final int[] sampleIndices;
 
         private Training(int totalCells, int trainedCells, int markerCount,
-                         List<String> unmeasuredMarkers, List<String> constantMarkers,
-                         int[] sampleIndices) {
+                         List<String> excludedMarkers, List<String> unmeasuredMarkers,
+                         List<String> constantMarkers, int[] sampleIndices) {
             this.totalCells = totalCells;
             this.trainedCells = trainedCells;
             this.markerCount = markerCount;
+            this.excludedMarkers = excludedMarkers;
             this.unmeasuredMarkers = unmeasuredMarkers;
             this.constantMarkers = constantMarkers;
             this.sampleIndices = sampleIndices;
@@ -263,7 +263,7 @@ public final class EmbeddingReport {
                 imputedCell = OptionalInt.of(sampleIndices == null ? row : sampleIndices[row]);
             }
             return new EmbeddingReport(totalCells, trainedCells, markerCount,
-                    unmeasuredMarkers, constantMarkers, imputedCell,
+                    excludedMarkers, unmeasuredMarkers, constantMarkers, imputedCell,
                     steering.reweightedRows(), projection.unplacedCells());
         }
     }
@@ -271,6 +271,7 @@ public final class EmbeddingReport {
     private final int totalCells;
     private final int trainedCells;
     private final int markerCount;
+    private final List<String> excludedMarkers;
     private final List<String> unmeasuredMarkers;
     private final List<String> constantMarkers;
     private final OptionalInt imputedCell;
@@ -278,7 +279,8 @@ public final class EmbeddingReport {
     private final int cellsAtOrigin;
 
     private EmbeddingReport(int totalCells, int trainedCells, int markerCount,
-                            List<String> unmeasuredMarkers, List<String> constantMarkers,
+                            List<String> excludedMarkers, List<String> unmeasuredMarkers,
+                            List<String> constantMarkers,
                             OptionalInt imputedCell, int reweightedCells, int cellsAtOrigin) {
         if (trainedCells < 0 || trainedCells > totalCells) {
             throw new IllegalArgumentException("trained on " + trainedCells
@@ -308,6 +310,7 @@ public final class EmbeddingReport {
         this.totalCells = totalCells;
         this.trainedCells = trainedCells;
         this.markerCount = markerCount;
+        this.excludedMarkers = List.copyOf(excludedMarkers);
         this.unmeasuredMarkers = List.copyOf(unmeasuredMarkers);
         this.constantMarkers = List.copyOf(constantMarkers);
         this.imputedCell = imputedCell;
@@ -326,15 +329,24 @@ public final class EmbeddingReport {
      * read: mean-imputation replaces every NaN with the mean of the values that <em>are</em>
      * present, which cannot turn a varying column constant nor a constant one varying.
      *
-     * @param source        the index the run is embedding
+     * <p>
+     * Reads {@code source}'s <em>features</em> — the markers the picker left ticked —
+     * rather than the whole panel. An excluded marker is not a degraded feature; it is
+     * not a feature. Calling a marker the user deliberately unticked "unmeasured" would
+     * put the user's own decision in the findings list and make {@link #isClean()} false
+     * for a run that did exactly what was asked. What the exclusion earns instead is a
+     * note, so the tooltip still says the embedding is over fewer columns than the panel.
+     *
+     * @param source        the features the run is embedding
      * @param sampleIndices rows of {@code source} the layout will be trained on, or null
      *                      when it trains on all of them. Retained by reference and read
      *                      only, in keeping with {@code CellIndex}'s no-copy contract
      */
-    public static Training training(CellIndex source, int[] sampleIndices) {
+    public static Training training(EmbeddingFeatures.Selected source, int[] sampleIndices) {
         Objects.requireNonNull(source, "source");
-        int totalCells = source.size();
-        String[] markers = source.getMarkerNames();
+        int totalCells = source.cellCount();
+        String[] markers = source.featureNames();
+        List<String> excluded = source.excludedMarkers();
         int trainedCells = sampleIndices == null ? totalCells : sampleIndices.length;
         List<String> unmeasured = new ArrayList<>();
         List<String> constant = new ArrayList<>();
@@ -343,12 +355,13 @@ public final class EmbeddingReport {
         // Calling every marker "unmeasured" for it would be technically true and
         // thoroughly misleading, so say nothing instead.
         if (trainedCells == 0) {
-            return new Training(totalCells, 0, markers.length, unmeasured, constant, sampleIndices);
+            return new Training(totalCells, 0, markers.length, excluded, unmeasured, constant,
+                    sampleIndices);
         }
 
         for (int j = 0; j < markers.length; j++) {
             // The backing column, per CellIndex's contract. Read-only.
-            double[] column = source.getMarkerValuesRaw(j);
+            double[] column = source.column(j);
             int measured = 0;
             double sum = 0.0;
             for (int r = 0; r < trainedCells; r++) {
@@ -375,8 +388,8 @@ public final class EmbeddingReport {
                 constant.add(markers[j]);
             }
         }
-        return new Training(totalCells, trainedCells, markers.length, unmeasured, constant,
-                sampleIndices);
+        return new Training(totalCells, trainedCells, markers.length, excluded, unmeasured,
+                constant, sampleIndices);
     }
 
     /** Cells in the index the run embedded. */
@@ -387,6 +400,15 @@ public final class EmbeddingReport {
 
     /** True when the layout was trained on a subsample and the rest were projected onto it. */
     public boolean subsampled() { return trainedCells < totalCells; }
+
+    /**
+     * Markers the feature picker left out of this run, in panel order.
+     * <p>
+     * Not a finding: the user asked for it. It is recorded because the alternative is a
+     * canvas that looks the same whether the run was over twelve markers or nine, and
+     * because a selection saved months ago on a different image is easy to forget.
+     */
+    public List<String> excludedMarkers() { return excludedMarkers; }
 
     /** Markers no training cell carried a value for — a column of imputed zeros. */
     public List<String> unmeasuredMarkers() { return unmeasuredMarkers; }
@@ -465,6 +487,12 @@ public final class EmbeddingReport {
     /** What the run did that is worth recording but is not a defect. */
     public List<String> notes() {
         List<String> out = new ArrayList<>();
+        if (!excludedMarkers.isEmpty()) {
+            out.add(count(excludedMarkers.size(), "marker", "markers")
+                    + " of " + (markerCount + excludedMarkers.size())
+                    + " were excluded from the embedding by the feature picker, so the "
+                    + "layout is over " + markerCount + ": " + preview(excludedMarkers));
+        }
         if (imputedCell.isPresent()) {
             // Deliberately not a finding. Steering is unconditional policy below the
             // spectral limit, not a shortfall — see the class javadoc. The numbers still

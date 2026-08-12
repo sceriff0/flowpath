@@ -11,6 +11,8 @@ import qupath.ext.flowpath.umap.engine.EmbeddingReport;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
 import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.MarkerSelection;
+import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
@@ -87,6 +89,7 @@ final class ComputeController {
      */
     private UiStateController uiState;
     private final Supplier<CellIndex> cellIndexSupplier;
+    private final Supplier<MarkerSelection> selectionSupplier;
     private final Supplier<UiStateController.UiState> restingStateSupplier;
     private final Consumer<UmapResult> resultConsumer;
     private final UmapPane.StatusReporter statusReporter;
@@ -97,6 +100,11 @@ final class ComputeController {
      *
      * @param computeService        the long-lived background service that runs UMAP
      * @param cellIndexSupplier     returns the current {@link CellIndex} (may be null)
+     * @param selectionSupplier     returns the feature picker's current state. Read at
+     *                              run time rather than at construction, and narrowed
+     *                              into an {@link EmbeddingFeatures} here, so an
+     *                              embedding cannot be started over a marker the user
+     *                              unticked
      * @param restingStateSupplier  resolves the UI state to fall back to after
      *                              cancel/error (e.g. COMPUTED if an old result is
      *                              still on screen; READY otherwise)
@@ -110,12 +118,14 @@ final class ComputeController {
      */
     ComputeController(UmapComputeService computeService,
                       Supplier<CellIndex> cellIndexSupplier,
+                      Supplier<MarkerSelection> selectionSupplier,
                       Supplier<UiStateController.UiState> restingStateSupplier,
                       Consumer<UmapResult> resultConsumer,
                       UmapPane.StatusReporter statusReporter,
                       Consumer<Double> dotSizeListener) {
         this.computeService = Objects.requireNonNull(computeService, "computeService");
         this.cellIndexSupplier = Objects.requireNonNull(cellIndexSupplier, "cellIndexSupplier");
+        this.selectionSupplier = Objects.requireNonNull(selectionSupplier, "selectionSupplier");
         this.restingStateSupplier = Objects.requireNonNull(restingStateSupplier, "restingStateSupplier");
         this.resultConsumer = Objects.requireNonNull(resultConsumer, "resultConsumer");
         this.statusReporter = Objects.requireNonNull(statusReporter, "statusReporter");
@@ -354,7 +364,12 @@ final class ComputeController {
         // it immediately, rather than leaving the previous run's provenance hanging behind
         // a status line that is now about something else.
         statusReporter.detail(null);
-        computeService.compute(cellIndex, params, maxCells, scaling);
+        // The feature picker's veto is applied here and only here. A selection with fewer
+        // than two markers ticked comes back Refused and the service turns it into a
+        // Failed outcome, which is why this does not check anything itself: the alternative
+        // is a second place that decides what "enough features" means.
+        computeService.compute(EmbeddingFeatures.of(cellIndex, selectionSupplier.get()),
+                params, maxCells, scaling);
 
         uiState.setState(UiStateController.UiState.COMPUTING);
         statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
