@@ -18,9 +18,9 @@ import java.util.Objects;
  * <p>
  * Here the stage says what phase the panel is in, and the affordances are separate
  * booleans, each a function of the facts that actually govern it. Nothing outside
- * {@link UmapSession#viewState()} constructs one that describes a live session, because
- * {@code UiStateController.sync()} takes no argument: there is no seam through which a
- * caller can name a state at all.
+ * {@link UmapSession#viewState()} constructs one that describes a live session: the
+ * session hands this to its subscribers itself, so there is no seam through which a caller
+ * can name a state at all — nor one through which a caller can fail to apply one.
  *
  * <h2>The invariants are checked here</h2>
  * The compact constructor rejects combinations that cannot be true of any session — a

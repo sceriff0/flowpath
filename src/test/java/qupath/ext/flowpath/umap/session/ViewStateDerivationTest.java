@@ -303,8 +303,8 @@ class ViewStateDerivationTest {
 
         assertNull(session.snapshot());
         assertTrue(session.isSnapshotMode(), "the gating pane has not handed the cells back");
-        assertEquals(!session.isSnapshotMode(), session.viewState().standalone(),
-                "one fact, not two readings of it");
+        // Deliberately no `standalone() == !isSnapshotMode()` assertion: standalone is now
+        // *defined* as that, so it could not fail.
         assertNotNull(session.detectionsForRebuild());
         assertTrue(session.detectionsForRebuild().isEmpty(),
                 "a rebuild in this window has nothing to do, rather than the new hierarchy");

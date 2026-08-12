@@ -412,6 +412,8 @@ class UmapSessionTest {
                 session.overviewLines());
         assertEquals(String.join(", ", session.overviewLines()), session.overviewLine(),
                 "the status bar is the rail's paragraph on one line, not a second one");
+        assertEquals(String.join("\n", session.overviewLines()), session.railSummary(),
+                "and the rail is the same fragments, one per line");
     }
 
     @Test
@@ -427,6 +429,10 @@ class UmapSessionTest {
 
         assertEquals("4 cells, no gates applied yet, 2 of 2 markers selected",
                 session.overviewLine());
+        // The clause the status bar wants reads as a typo when it starts its own line, so
+        // the rail — and only the rail — capitalises it.
+        assertEquals("4 cells\nNo gates applied yet\n2 of 2 markers selected",
+                session.railSummary());
     }
 
     /** Standalone there is no gating tree to report on, so the middle line is absent. */
@@ -436,6 +442,8 @@ class UmapSessionTest {
         var index = threeMarkerIndex();
         assertEquals(List.of("No cells loaded"), session.overviewLines(),
                 "and an empty session says exactly that, in both places");
+        assertEquals("No cells loaded.", session.railSummary(),
+                "a whole sentence on its own line keeps its full stop");
 
         session.installIndex(index, MarkerStats.compute(index), WIDE_PANEL,
                 CompartmentCapability.empty(), MarkerSelection.defaultFor(WIDE_PANEL));
@@ -533,6 +541,31 @@ class UmapSessionTest {
         assertNull(session.colourValues("NotOnThisPanel", false));
         assertNull(session.colourValues(null, true));
         assertNull(new UmapSession().colourValues("CD8", false), "nothing indexed, nothing to paint");
+    }
+
+    /**
+     * The empty state may only promise pre-selection when seeding actually happened.
+     * <p>
+     * {@code seedSelection} declines below {@link EmbeddingFeatures#MINIMUM_FEATURES} —
+     * a single ThresholdGate on CD8 is the first gate anyone draws — so asking "did the
+     * gate tree name any markers" made the panel claim "features are pre-selected from
+     * your gates" over a picker still sitting at everything-ticked.
+     */
+    @Test
+    void preSelectionIsOnlyClaimedWhenTheSeedingActuallyHappened() {
+        var index = threeMarkerIndex();
+        assertFalse(new UmapSession().featuresPreSeeded(), "standalone, there are no gates");
+
+        var oneGate = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"a", "b"},
+                new int[2], new boolean[2], List.of("CD8"), new MarkerSelection()));
+        assertFalse(oneGate.featuresPreSeeded(),
+                "one gated marker is below the minimum, so nothing was seeded");
+        assertTrue(oneGate.selection().isIncluded("CD3"), "and everything stayed ticked");
+
+        var twoGates = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"a", "b"},
+                new int[2], new boolean[2], List.of("CD8", "FoxP3"), new MarkerSelection()));
+        assertTrue(twoGates.featuresPreSeeded());
+        assertFalse(twoGates.selection().isIncluded("CD3"));
     }
 
     // ------------------------------------------------------------------
@@ -767,13 +800,22 @@ class UmapSessionTest {
         var session = new UmapSession();
         session.setGateMask(new boolean[]{true, false, true});
 
-        assertEquals(List.of(objects.get(0), objects.get(2)),
-                session.gatedObjects(index.getObjects(), 200_000));
-        assertEquals(1, session.gatedObjects(index.getObjects(), 1).size(),
+        var all = session.gatedObjects(index.getObjects(), 200_000);
+        assertEquals(List.of(objects.get(0), objects.get(2)), all.objects());
+        assertFalse(all.truncated());
+
+        var capped = session.gatedObjects(index.getObjects(), 1);
+        assertEquals(1, capped.objects().size(),
                 "a gate can cover millions of cells; the viewer selection is capped");
+        assertTrue(capped.truncated());
+
+        var exactlyTheCap = session.gatedObjects(index.getObjects(), 2);
+        assertEquals(2, exactlyTheCap.objects().size());
+        assertFalse(exactlyTheCap.truncated(),
+                "a gate covering exactly the cap dropped nothing, and warning about it is a lie");
 
         session.retireGate();
-        assertTrue(session.gatedObjects(index.getObjects(), 10).isEmpty());
+        assertTrue(session.gatedObjects(index.getObjects(), 10).objects().isEmpty());
     }
 
     @Test

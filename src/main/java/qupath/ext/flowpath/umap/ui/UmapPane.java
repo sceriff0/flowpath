@@ -214,9 +214,9 @@ public class UmapPane extends BorderPane {
                 featuresPopup.show(featuresButton, javafx.geometry.Side.BOTTOM, 0, 0));
 
         // ComputeController owns the compute / cancel buttons and the embedding
-        // parameters, all of which the state machine needs; it is therefore built first,
-        // the state machine second (once every widget exists), and injected back via
-        // attachUiState. Lifecycle methods on ComputeController must not run before that.
+        // parameters, all of which the state machine needs, so it is built first and the
+        // state machine second, once every widget exists. Nothing is injected back: the
+        // controller records outcomes on the session and the session drives the panel.
         computeController = new ComputeController(
                 computeService,
                 session,
@@ -430,11 +430,10 @@ public class UmapPane extends BorderPane {
         setBottom(statusBar);
 
         // Every widget now exists, so the state machine can be wired to all of them. It
-        // takes no state from anyone: sync() re-derives the panel from the session, which
-        // is why nothing below ever names a state.
-        // Not held. It subscribes to the session in its constructor, so the session is
-        // what keeps it alive and what drives it; a field here would only be a handle for
-        // someone to start calling it through again.
+        // takes no state from anyone and is not held by anyone: it subscribes to the
+        // session in its constructor, which is what keeps it alive and what drives it. A
+        // field here would only be a handle for someone to start calling it through again,
+        // and nothing below ever names a state.
         new UiStateController(session, new UiStateController.Controls(
                 computeController.getComputeButton(), computeController.getCancelButton(),
                 progressIndicator, computeProgress, computeStage, failureBanner,
@@ -620,10 +619,11 @@ public class UmapPane extends BorderPane {
         boolean hasCells = session.hasCells();
         int markers = session.includedMarkerCount();
 
-        // The same composition the status bar prints on one line. It used to be spelled out
-        // here with different wording and different arithmetic from UmapSession.describe,
-        // and the two appeared within an inch of each other quoting different numbers.
-        cellsSummary.setText(String.join("\n", session.overviewLines()));
+        // The same composition the status bar prints on one line, rendered the way a rail
+        // reads. It used to be spelled out here with different wording and different
+        // arithmetic from UmapSession.describe, and the two appeared within an inch of each
+        // other quoting different numbers about the same slide.
+        cellsSummary.setText(session.railSummary());
 
         if (!state.showEmptyState()) return;
 
@@ -683,7 +683,10 @@ public class UmapPane extends BorderPane {
         emptyHeadline.setText("Ready to embed");
         String base = String.format(java.util.Locale.US, "%,d cells across %d marker%s.",
                 index.size(), markers, markers == 1 ? "" : "s");
-        emptySubline.setText(snapshot != null && !snapshot.gatedMarkers().isEmpty()
+        // Whether seeding actually happened, not merely whether the tree named a marker:
+        // seedSelection declines below MINIMUM_FEATURES, and this promised pre-selection
+        // over a picker still sitting at everything-ticked.
+        emptySubline.setText(session.featuresPreSeeded()
                 ? base + " Features are pre-selected from your gates — adjust them under "
                         + "Cells, or run as-is."
                 : base + " Choose which markers to use under Cells, or run as-is.");
@@ -804,7 +807,8 @@ public class UmapPane extends BorderPane {
     private void clearDerivedState() {
         computeService.cancel();
         // The service's Cancelled outcome would clear the phase a moment later anyway; this
-        // makes every sync() between here and then exact rather than merely self-healing.
+        // makes every state the session publishes between here and then exact rather than
+        // merely self-healing.
         session.cancelRun();
         session.clearDerivedState();
         umapCanvas.setData(null, null);
@@ -1272,10 +1276,12 @@ public class UmapPane extends BorderPane {
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) return;
 
-        // The mask itself never leaves the session — see UmapSession#gatedObjects.
-        List<PathObject> selected =
-                session.gatedObjects(session.embedding().getObjectsRaw(), MAX_VIEWER_SELECTION);
-        boolean truncated = selected.size() == MAX_VIEWER_SELECTION;
+        // The mask itself never leaves the session — see UmapSession#gatedObjects. Whether
+        // the cap actually dropped anything comes back with the list rather than being
+        // re-derived from its size, which warned about a gate covering exactly the cap.
+        var gated = session.gatedObjects(session.embedding().getObjectsRaw(), MAX_VIEWER_SELECTION);
+        List<PathObject> selected = gated.objects();
+        boolean truncated = gated.truncated();
 
         syncingSelection = true;
         try {

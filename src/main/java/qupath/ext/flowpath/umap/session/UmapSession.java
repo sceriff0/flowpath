@@ -898,11 +898,7 @@ public final class UmapSession {
     public static MarkerSelection seedSelection(PhenotypeSnapshot incoming) {
         MarkerSelection sel = MarkerSelection.defaultFor(incoming.markerNames());
         List<String> gated = incoming.gatedMarkers();
-        int seedable = 0;
-        for (String marker : incoming.markerNames()) {
-            if (gated.contains(marker)) seedable++;
-        }
-        if (seedable < EmbeddingFeatures.MINIMUM_FEATURES) {
+        if (seedableCount(incoming) < EmbeddingFeatures.MINIMUM_FEATURES) {
             // Nothing gated yet, or too little to embed — fall back to "everything included".
             return sel;
         }
@@ -933,6 +929,20 @@ public final class UmapSession {
         Objects.requireNonNull(marker, "marker");
         Objects.requireNonNull(entry, "entry");
         mutate(() -> selection.put(marker, entry));
+    }
+
+    /**
+     * How many of the gate tree's markers this image actually carries — the count
+     * {@link #seedSelection} decides on, so {@link #featuresPreSeeded()} cannot answer a
+     * different question from the one that was asked.
+     */
+    private static int seedableCount(PhenotypeSnapshot incoming) {
+        List<String> gated = incoming.gatedMarkers();
+        int seedable = 0;
+        for (String marker : incoming.markerNames()) {
+            if (gated.contains(marker)) seedable++;
+        }
+        return seedable;
     }
 
     /**
@@ -1154,24 +1164,37 @@ public final class UmapSession {
     }
 
     /**
+     * The gated cells and whether the cap dropped any.
+     *
+     * @param objects   at most {@code limit} of them, in embedding order
+     * @param truncated {@code true} only when a cell was actually left out. Reading this
+     *                  off {@code objects.size() == limit} at the call site warned about a
+     *                  gate covering exactly the cap, where nothing was dropped
+     */
+    public record GateSelection(List<PathObject> objects, boolean truncated) {}
+
+    /**
      * The gated cells, in embedding order, capped at {@code limit}.
      * <p>
      * The last thing outside this class that iterated the gate mask, which is why there is
      * no {@code gateMask()} accessor any more: the mask is state, and handing it out is
-     * handing out the ability to change it without the session hearing.
+     * handing out the ability to change it without the session hearing. The cap and the
+     * fact that it bit are decided in the same pass, so they cannot disagree.
      *
      * @param objects the embedding's object array; read, never retained
      * @param limit   the most objects to return — a gate can cover millions of cells and
      *                QuPath's selection model is not built for that
      */
-    public List<PathObject> gatedObjects(PathObject[] objects, int limit) {
+    public GateSelection gatedObjects(PathObject[] objects, int limit) {
         List<PathObject> selected = new ArrayList<>();
-        if (gateMask == null || objects == null) return selected;
+        if (gateMask == null || objects == null) return new GateSelection(selected, false);
         int end = Math.min(objects.length, gateMask.length);
-        for (int i = 0; i < end && selected.size() < limit; i++) {
-            if (gateMask[i]) selected.add(objects[i]);
+        for (int i = 0; i < end; i++) {
+            if (!gateMask[i]) continue;
+            if (selected.size() == limit) return new GateSelection(selected, true);
+            selected.add(objects[i]);
         }
-        return selected;
+        return new GateSelection(selected, false);
     }
 
     /** Hide or show one phenotype in the plot. */
@@ -1451,8 +1474,39 @@ public final class UmapSession {
         return lines;
     }
 
-    /** {@link #overviewLines()} on one line, for the status bar. */
+    /** {@link #overviewLines()} on one line, for the status bar: a list of clauses. */
     public String overviewLine() {
         return String.join(", ", overviewLines());
+    }
+
+    /**
+     * {@link #overviewLines()} as the rail prints them: one sentence per line.
+     * <p>
+     * Two renderings of one composition, and the case is the rendering's business. The
+     * fragments are clauses because that is what the status line needs; a clause that
+     * starts its own line in the rail — "no gates applied yet" — reads as a typo, and the
+     * empty case is a whole sentence and wants its full stop.
+     */
+    public String railSummary() {
+        if (!hasCells()) return "No cells loaded.";
+        StringBuilder sb = new StringBuilder();
+        for (String line : overviewLines()) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(Character.toUpperCase(line.charAt(0))).append(line, 1, line.length());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * {@code true} when the feature picker arrived pre-ticked from the gate tree.
+     * <p>
+     * Not the same question as "did the gate tree name any markers". {@link #seedSelection}
+     * declines to seed below {@link EmbeddingFeatures#MINIMUM_FEATURES} — the ordinary
+     * first gate anyone draws names one marker, and seeding it faithfully would offer a Run
+     * button that cannot succeed — so the empty state promised "features are pre-selected
+     * from your gates" over a selection that had been left at everything-ticked.
+     */
+    public boolean featuresPreSeeded() {
+        return snapshot != null && seedableCount(snapshot) >= EmbeddingFeatures.MINIMUM_FEATURES;
     }
 }
