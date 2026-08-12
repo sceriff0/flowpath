@@ -79,11 +79,6 @@ public final class GateAxis {
         return axes;
     }
 
-    /** Which axis this is: 0 for X, 1 for Y. */
-    public int slot() {
-        return slot;
-    }
-
     // ---- what this axis reads -----------------------------------------------
 
     /** The marker channel this axis reads, or null when the slot is unset. */

@@ -28,12 +28,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * What must happen when a gate's <em>channel</em> is changed in the editor — asked of
- * all three builders, through the real controls.
+ * What must happen when a gate's <em>axis</em> is changed in the editor — its channel,
+ * or the compartment and statistic it is read in — asked of all three builders, through
+ * the real controls.
  *
  * <p>{@code GateEditorSignalTest} already drives the compartment and statistic
  * selectors. The channel pickers were the uncovered half: one axis for
@@ -55,7 +57,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * because "resolves to a key that is not in the file" reads as a perfectly ordinary
  * (Nuclear, Median) selection right up until every cell reads NaN.
  */
-class GateEditorChannelChangeTest {
+class GateEditorAxisChangeTest {
 
     private static final int N = 12;
 
@@ -69,6 +71,14 @@ class GateEditorChannelChangeTest {
         return Cells.of(N)
                 .mirageMedianMarker("CD3", i -> 10.0 + i)
                 .mirageMedianMarker("CD4", i -> 20.0 + i)
+                // CD3's nuclear median, overridden to be deliberately NOT a scalar
+                // multiple of the bare column. Cells.mirageMedianMarker builds the
+                // compartments as exact multiples (0.9x / 1.5x / 0.5x), and z-scoring is
+                // scale-invariant: on proportional columns, a plot reading the wrong one
+                // is numerically identical to one reading the right one, so the z-score
+                // path — which is the default, and the one users actually see — cannot be
+                // tested at all. A quadratic ramp breaks the proportionality.
+                .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, i -> 100.0 + i * i)
                 .marker("CD8", i -> 100.0 + i)
                 .area(100.0);
     }
@@ -125,6 +135,55 @@ class GateEditorChannelChangeTest {
             combo.fireEvent(new javafx.event.ActionEvent());
         });
         flushFx();
+    }
+
+    /** Select a value the way a user would, firing the combo's action handler. */
+    private static <T> void select(ComboBox<T> combo, T value) {
+        FxTestSupport.onFxRun(() -> {
+            combo.setValue(value);
+            combo.fireEvent(new javafx.event.ActionEvent());
+        });
+        flushFx();
+    }
+
+    private static ScatterPlotCanvas scatterIn(GateEditorPane pane) {
+        List<ScatterPlotCanvas> found = new ArrayList<>();
+        collect(pane, ScatterPlotCanvas.class, c -> true, found);
+        assertFalse(found.isEmpty(), "the editor must have laid out a scatter plot");
+        return found.get(0);
+    }
+
+    /**
+     * The scatter's effective Y axis bounds, {@code [min, max]}, read back through its
+     * public coordinate mapping.
+     * <p>
+     * The plot's padding is private, so rather than hardcode it the geometry is measured
+     * off a second canvas of the same size whose range we set ourselves: at a range of
+     * exactly 0..1, {@code dataYToScreenY} reports which pixel rows are the bottom and the
+     * top of the plot area. Feeding those two rows back through the real scatter's
+     * {@code screenYToDataY} yields its own bounds.
+     */
+    private static double[] yAxisBounds(ScatterPlotCanvas scatter) {
+        return FxTestSupport.onFx(() -> {
+            scatter.resize(400, 300);
+            ScatterPlotCanvas ruler = new ScatterPlotCanvas();
+            ruler.resize(400, 300);
+            ruler.setAxisRange(0.0, 1.0, 0.0, 1.0);
+            double bottomPx = ruler.dataYToScreenY(0.0);
+            double topPx = ruler.dataYToScreenY(1.0);
+            return new double[]{scatter.screenYToDataY(bottomPx), scatter.screenYToDataY(topPx)};
+        });
+    }
+
+    /** The clip-percentile bounds of {@code column}, z-scored, as applyClipAxisRange builds them. */
+    private static double[] zScoredClipBounds(MeasuredColumn column, GateNode gate) {
+        return new double[]{
+                column.toZScore(column.percentile(gate.getClipPercentileLow())),
+                column.toZScore(column.percentile(gate.getClipPercentileHigh()))};
+    }
+
+    private static double[] zScoresOf(MeasuredColumn column) {
+        return Arrays.stream(column.values()).map(column::toZScore).toArray();
     }
 
     private static List<String> branchNames(GateNode gate) {
@@ -344,6 +403,139 @@ class GateEditorChannelChangeTest {
         assertEquals(expectedMin, sliders.get(0).getMin(), 1e-9,
                 "the X slider spans the nuclear median column the X axis is set to");
         assertEquals(expectedMax, sliders.get(0).getMax(), 1e-9);
+    }
+
+    /**
+     * The z-score path, which is the default and so the one users actually see. The raw
+     * pin above cannot cover it: z-scoring is scale-invariant, so it only says anything at
+     * all because this fixture's nuclear column is deliberately not proportional to the
+     * bare one.
+     */
+    @Test
+    void theZScoredSliderRangeIsBuiltFromTheColumnTheAxisActuallyReads() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
+        assertTrue(gate.isThresholdIsZScore(), "z-score is the mode a new gate opens in");
+        gate.setCompartmentX(Compartment.NUCLEAR);
+        gate.setCompartmentY(Compartment.NUCLEAR);
+        Fixture f = editorFor(gate);
+
+        double[] correct = zScoresOf(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()));
+        double[] wrong = zScoresOf(f.index().column("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, f.stats()));
+        assertNotEquals(Arrays.stream(wrong).min().orElseThrow(),
+                Arrays.stream(correct).min().orElseThrow(), 1e-9,
+                "the fixture must make the two candidate columns differ AFTER z-scoring, "
+                        + "or this test passes against a plot reading either one");
+
+        List<Slider> sliders = new ArrayList<>();
+        collect(f.pane(), Slider.class, sl -> true, sliders);
+        assertEquals(Arrays.stream(correct).min().orElseThrow(), sliders.get(0).getMin(), 1e-9,
+                "the X slider spans the z-scored nuclear column the X axis is set to");
+        assertEquals(Arrays.stream(correct).max().orElseThrow(), sliders.get(0).getMax(), 1e-9);
+    }
+
+    // ---- the scatter's axes anchor per axis (commit d9c1de9) -----------------
+
+    /**
+     * Each scatter axis is anchored on the clip percentiles of <em>its own</em> resolved
+     * column. Anchoring both on the X column is commit {@code d9c1de9}'s bug: the Y axis
+     * then spans a range the Y data does not occupy, and every point is drawn at the wrong
+     * height — over an overlay that is still in the right place.
+     * <p>
+     * The two axes are given different compartments here precisely so that reading the
+     * wrong one is visible.
+     */
+    @Test
+    void eachScatterAxisIsAnchoredOnItsOwnColumn() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        RectangleGate gate = new RectangleGate("CD3", "CD4", -1, 1, -1, 1);
+        gate.setCompartmentX(Compartment.NUCLEAR);
+        gate.setCompartmentY(Compartment.WHOLE_CELL);
+        Fixture f = editorFor(gate);
+
+        double[] expected = zScoredClipBounds(GateAxis.of(gate, 1).columnIn(f.index(), f.stats()), gate);
+        double[] fromX = zScoredClipBounds(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()), gate);
+        assertNotEquals(fromX[0], expected[0], 1e-9,
+                "the fixture must make the X and Y columns anchor differently");
+
+        double[] bounds = yAxisBounds(scatterIn(f.pane()));
+
+        assertEquals(expected[0], bounds[0], 1e-6,
+                "the Y axis spans the Y column's clip percentiles, not the X column's");
+        assertEquals(expected[1], bounds[1], 1e-6);
+    }
+
+    // ---- a signal change on a 2D gate rebuilds the editor (commit 99b6e6d) --
+
+    /**
+     * Changing the compartment on a 2D gate has to rebuild the editor, because a quadrant
+     * builds its threshold sliders from the column's own data range. Commit {@code
+     * 99b6e6d} fixed the 1D half of this by refreshing in place; the 2D half is a rebuild,
+     * and without it the sliders keep spanning the column the gate no longer reads.
+     */
+    @Test
+    void aCompartmentChangeOnATwoDimensionalGateRerangesItsSliders() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
+        Fixture f = editorFor(gate);
+        assertEquals(Compartment.WHOLE_CELL, gate.getCompartmentX(), "a new gate opens whole-cell");
+
+        select(compartmentCombos(f.pane()).get(0), Compartment.NUCLEAR);
+
+        assertEquals(Compartment.NUCLEAR, gate.getCompartmentX());
+        double[] nuclear = zScoresOf(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()));
+        List<Slider> sliders = new ArrayList<>();
+        collect(f.pane(), Slider.class, sl -> true, sliders);
+        assertEquals(Arrays.stream(nuclear).min().orElseThrow(), sliders.get(0).getMin(), 1e-9,
+                "the sliders must be rebuilt against the newly selected column");
+        assertEquals(Arrays.stream(nuclear).max().orElseThrow(), sliders.get(0).getMax(), 1e-9);
+    }
+
+    // ---- a picker from a superseded build owns nothing -----------------------
+
+    /**
+     * A gate-type conversion queues its rebuild rather than running it, so for one pulse
+     * the old pickers are still there, still holding a reference to the gate they were
+     * built for. Firing one must not write to a gate the editor has moved off.
+     */
+    @Test
+    void aPickerFromASupersededBuildDoesNotWriteToItsOldGate() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate shown = new QuadrantGate("CD3", "CD4");
+        Fixture f = editorFor(shown);
+        ComboBox<String> stale = channelCombo(f.pane(), 0);
+
+        RectangleGate replacement = new RectangleGate("CD4", "CD8", -1, 1, -1, 1);
+        FxTestSupport.onFxRun(() -> f.pane().setGateNode(replacement));
+        flushFx();
+
+        selectChannel(stale, "CD8");
+
+        assertEquals("CD3", shown.getChannelX(),
+                "the editor has moved on; this picker no longer speaks for that gate");
+        assertEquals("CD4", replacement.getChannelX(), "and it must not write to the new one either");
+    }
+
+    // ---- an axis can be repointed while the other one is blank ---------------
+
+    /**
+     * The region editor's old handler read both combos and returned unless both held a
+     * value, so a half-configured gate — one axis set, the other still blank — could not
+     * be finished. Each axis is now its own decision.
+     */
+    @Test
+    void anAxisCanBeRepointedWhileTheOtherIsStillUnset() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        RectangleGate gate = new RectangleGate();
+        gate.setChannelX("CD3");
+        gate.setCompartmentX(Compartment.NUCLEAR);
+        Fixture f = editorFor(gate);
+        assertNull(gate.getChannelY(), "the Y axis is deliberately still blank");
+
+        selectChannel(channelCombo(f.pane(), 0), "CD8");
+
+        assertEquals("CD8", gate.getChannelX());
+        assertAxisReadsRealData(f, gate, 0, "CD8");
     }
 
     private static double[] bareValues(Fixture f, String channel) {
