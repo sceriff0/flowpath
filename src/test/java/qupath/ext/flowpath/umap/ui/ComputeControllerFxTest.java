@@ -1,26 +1,38 @@
 package qupath.ext.flowpath.umap.ui;
 
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
+import javafx.scene.control.Label;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.layout.StackPane;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
+import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
 import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
+import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
+import qupath.ext.flowpath.umap.session.UmapSession;
+import qupath.ext.flowpath.umap.session.ViewState;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -59,28 +71,42 @@ class ComputeControllerFxTest {
                 .build();
     }
 
+    private static final List<String> PANEL = List.of("CD3", "CD8", "FoxP3");
+
+    /** A standalone session already holding {@code index} and the picker's {@code selection}. */
+    private static UmapSession sessionOver(CellIndex index, MarkerSelection selection) {
+        var session = new UmapSession();
+        session.installIndex(index, MarkerStats.compute(index), PANEL,
+                CompartmentCapability.empty(), selection);
+        return session;
+    }
+
+    /** Wire a controller and its state machine over {@code session}, on the FX thread. */
+    private static ComputeController controllerOver(UmapComputeService service, UmapSession session) {
+        var controller = new ComputeController(
+                service,
+                session,
+                result -> { },
+                new UmapPane.StatusReporter() {
+                    @Override public void report(String text, UmapPane.StatusLevel level) { }
+                    @Override public void detail(String text) { }
+                },
+                size -> { });
+        controller.attachUiState(new UiStateController(session, new UiStateController.Controls(
+                controller.getComputeButton(), controller.getCancelButton(),
+                new ProgressIndicator(), new ProgressBar(), new Label(),
+                new ToggleButton(), new Button(),
+                new TextField(), new ColorPicker(), new Button(),
+                new Button(), new StackPane(), new Button(), new CheckBox(),
+                List.of(), () -> { })));
+        return controller;
+    }
+
     /** Build the controller, attach the state machine it needs, and click Run. */
     private static EmbeddingFeatures runWith(CellIndex index, MarkerSelection selection) {
         var service = new RecordingService();
         try {
-            FxTestSupport.onFxRun(() -> {
-                var controller = new ComputeController(
-                        service,
-                        () -> index,
-                        () -> selection,
-                        () -> UiStateController.UiState.READY,
-                        result -> { },
-                        new UmapPane.StatusReporter() {
-                            @Override public void report(String text, UmapPane.StatusLevel level) { }
-                            @Override public void detail(String text) { }
-                        },
-                        size -> { });
-                controller.attachUiState(new UiStateController(
-                        controller.getComputeButton(), controller.getCancelButton(),
-                        new ProgressIndicator(), new ToggleButton(), new Button(),
-                        new TextField(), new ColorPicker(), new Button(), new Button()));
-                controller.runUmap();
-            });
+            FxTestSupport.onFxRun(() -> controllerOver(service, sessionOver(index, selection)).runUmap());
             return service.handedOver.get();
         } finally {
             service.shutdown();
@@ -130,5 +156,68 @@ class ComputeControllerFxTest {
 
         assertNotNull(handedOver, "the run must still be submitted, not silently dropped");
         assertInstanceOf(EmbeddingFeatures.Refused.class, handedOver);
+    }
+
+    /**
+     * The wire behind {@code ViewStateDerivationTest.supersededOutcome}: the branch that
+     * must do nothing, exercised through the controller that used to be the one deciding
+     * it did nothing.
+     * <p>
+     * This mapping was untested when it was written, and {@code Superseded} is the branch
+     * where a silent regression hurts most: a newer run owns the COMPUTING state, so any
+     * edit that made this branch set a state would pull the panel out of a busy state that
+     * is still true, leaving a live run with no progress bar and no Cancel.
+     */
+    @Test
+    void asupersededEndingLeavesTheNewerRunsBusyStateAlone() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+
+        var service = new RecordingService();
+        try {
+            FxTestSupport.onFxRun(() -> {
+                var session = sessionOver(threeMarkers(), new MarkerSelection());
+                var controller = controllerOver(service, session);
+                controller.runUmap();
+                assertEquals(ViewState.Stage.COMPUTING, session.viewState().stage());
+
+                controller.onUmapOutcome(UmapOutcome.superseded());
+
+                assertEquals(ViewState.Stage.COMPUTING, session.viewState().stage(),
+                        "the newer run still owns the panel");
+                assertTrue(session.isRunning());
+            });
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /**
+     * The counterweight: an ending that <em>is</em> for this run does clear the busy state.
+     * Without this, {@link #asupersededEndingLeavesTheNewerRunsBusyStateAlone} would still
+     * pass if the controller had simply stopped reacting to outcomes altogether.
+     * <p>
+     * Cancelled rather than Failed, because {@code onUmapError} opens a modal alert and
+     * {@code showAndWait} on the FX thread would deadlock a headless test. The Failed
+     * mapping is pinned in {@code ViewStateDerivationTest}, where no toolkit is involved.
+     */
+    @Test
+    void anEndingThatBelongsToThisRunDoesClearTheBusyState() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+
+        var service = new RecordingService();
+        try {
+            FxTestSupport.onFxRun(() -> {
+                var session = sessionOver(threeMarkers(), new MarkerSelection());
+                var controller = controllerOver(service, session);
+
+                controller.runUmap();
+                controller.onUmapOutcome(UmapOutcome.cancelled());
+
+                assertEquals(ViewState.Stage.READY, session.viewState().stage());
+                assertFalse(session.isRunning());
+            });
+        } finally {
+            service.shutdown();
+        }
     }
 }

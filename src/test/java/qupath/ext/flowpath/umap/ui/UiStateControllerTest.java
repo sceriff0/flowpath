@@ -1,42 +1,90 @@
 package qupath.ext.flowpath.umap.ui;
 
+import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Label;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ProgressIndicator;
+import javafx.scene.control.Spinner;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleButton;
+import javafx.scene.layout.StackPane;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
-import qupath.ext.flowpath.umap.ui.UiStateController.UiState;
+import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.CompartmentCapability;
+import qupath.ext.flowpath.model.MarkerSelection;
+import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
+import qupath.ext.flowpath.umap.engine.EmbeddingReport;
+import qupath.ext.flowpath.umap.engine.UmapOutcome;
+import qupath.ext.flowpath.umap.model.PopulationTag;
+import qupath.ext.flowpath.umap.model.UmapParameters;
+import qupath.ext.flowpath.umap.model.UmapResult;
+import qupath.ext.flowpath.umap.session.UmapSession;
+import qupath.ext.flowpath.umap.session.ViewState;
+import qupath.ext.flowpath.umap.testing.Embeddings;
+import qupath.lib.objects.PathObject;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for {@link UiStateController} state-machine transitions.
+ * That {@link UiStateController} applies {@link UmapSession#viewState()} faithfully — and
+ * nothing else.
  * <p>
- * Strategy: instantiate bare JavaFX controls (no scene), apply each state, and
- * assert the resulting {@code disabled}/{@code visible}/{@code managed} property
- * values. The JavaFX toolkit is initialized once in {@link #initToolkit()}
- * because {@link ColorPicker} touches CSS during construction.
+ * The rule itself is not tested here; it is a pure function and lives in
+ * {@code ViewStateDerivationTest}, which needs no toolkit. What is on trial here is the
+ * wiring: that every control the panel owns is actually attached to the machine. The
+ * controls that were <em>not</em> attached are what this whole task is about — the feature
+ * picker, the marker and scale combos and every embedding parameter were ignored entirely,
+ * which is why editing features mid-run could reinstall the session's {@code CellIndex}
+ * underneath a compute thread still reading it.
+ * <p>
+ * Bare controls, no scene. The toolkit is started because {@link ColorPicker} touches CSS
+ * during construction.
  */
 class UiStateControllerTest {
+
+    private static final List<String> PANEL = List.of("CD3", "CD8", "FoxP3");
 
     private Button computeButton;
     private Button cancelButton;
     private ProgressIndicator progressIndicator;
+    private ProgressBar computeProgress;
+    private Label computeStage;
     private ToggleButton drawButton;
     private Button clearButton;
     private TextField tagNameField;
     private ColorPicker tagColorPicker;
     private Button applyTagButton;
     private Button exportButton;
+    private StackPane emptyState;
+    private Button emptyAction;
+    private CheckBox roiFilter;
 
+    private Button featuresButton;
+    private ComboBox<String> markerDropdown;
+    private ComboBox<String> colorScaleDropdown;
+    private Spinner<Integer> kSpinner;
+    private Spinner<Integer> epochsSpinner;
+    private Spinner<Integer> maxCellsSpinner;
+    private ComboBox<String> subsampleMode;
+    private ComboBox<String> scalingMode;
+    private List<Node> inputs;
+
+    private AtomicInteger popupsDismissed;
+
+    private UmapSession session;
     private UiStateController controller;
 
     @BeforeAll
@@ -49,28 +97,76 @@ class UiStateControllerTest {
         computeButton = new Button();
         cancelButton = new Button();
         progressIndicator = new ProgressIndicator();
+        computeProgress = new ProgressBar();
+        computeStage = new Label();
         drawButton = new ToggleButton();
         clearButton = new Button();
         tagNameField = new TextField();
         tagColorPicker = new ColorPicker();
         applyTagButton = new Button();
         exportButton = new Button();
+        emptyState = new StackPane();
+        emptyAction = new Button();
+        roiFilter = new CheckBox();
 
-        controller = new UiStateController(
-                computeButton, cancelButton, progressIndicator,
+        featuresButton = new Button();
+        markerDropdown = new ComboBox<>();
+        colorScaleDropdown = new ComboBox<>();
+        kSpinner = new Spinner<>(5, 50, 10);
+        epochsSpinner = new Spinner<>(50, 1000, 50);
+        maxCellsSpinner = new Spinner<>(1000, 200000, 50000);
+        subsampleMode = new ComboBox<>();
+        scalingMode = new ComboBox<>();
+        inputs = List.of(featuresButton, markerDropdown, colorScaleDropdown, kSpinner,
+                epochsSpinner, maxCellsSpinner, subsampleMode, scalingMode);
+
+        popupsDismissed = new AtomicInteger();
+        session = new UmapSession();
+        controller = new UiStateController(session, new UiStateController.Controls(
+                computeButton, cancelButton, progressIndicator, computeProgress, computeStage,
                 drawButton, clearButton,
                 tagNameField, tagColorPicker, applyTagButton,
-                exportButton);
+                exportButton, emptyState, emptyAction, roiFilter,
+                inputs, popupsDismissed::incrementAndGet));
     }
 
-    // ---------- per-state contracts ----------
+    // ---------- fixtures ----------
+
+    private static CellIndex index(int cells) {
+        return Cells.of(cells).atGrid(1, 1)
+                .marker("CD3", i -> i)
+                .marker("CD8", i -> i * 2.0)
+                .marker("FoxP3", i -> i * 3.0)
+                .build();
+    }
+
+    private void installCells(int cells) {
+        var idx = index(cells);
+        session.installIndex(idx, MarkerStats.compute(idx), PANEL,
+                CompartmentCapability.empty(), new MarkerSelection());
+        controller.sync();
+    }
+
+    private void embed() {
+        CellIndex idx = session.index();
+        PathObject[] objects = idx.getObjects();
+        var result = new UmapResult(new double[idx.size()], new double[idx.size()], objects,
+                PANEL.toArray(new String[0]), UmapParameters.defaults());
+        session.beginRun();
+        session.record(UmapOutcome.succeeded(result,
+                EmbeddingReport.training(Embeddings.of(idx), null)
+                        .completedWith(EmbeddingReport.Steering.none(),
+                                EmbeddingReport.Projection.none())));
+        controller.sync();
+    }
+
+    // ---------- per-stage contracts ----------
 
     @Test
-    @DisplayName("NO_IMAGE disables every actionable control and hides cancel/progress")
-    void noImageState() {
-        controller.setState(UiState.NO_IMAGE);
-
-        assertTrue(computeButton.isDisabled(), "computeButton should be disabled");
+    @DisplayName("A fresh session locks everything actionable and hides cancel/progress")
+    void noImage() {
+        assertEquals(ViewState.Stage.NO_IMAGE, controller.current().stage());
+        assertTrue(computeButton.isDisabled());
         assertCancelHidden();
         assertFalse(progressIndicator.isVisible());
         assertTrue(drawButton.isDisabled());
@@ -79,203 +175,258 @@ class UiStateControllerTest {
         assertTrue(tagColorPicker.isDisabled());
         assertTrue(applyTagButton.isDisabled());
         assertTrue(exportButton.isDisabled());
-        assertFalse(drawButton.isSelected());
-        assertEquals(UiState.NO_IMAGE, controller.currentState());
+        assertTrue(emptyState.isVisible(), "there is no embedding to show");
+        assertFalse(emptyAction.isVisible(), "and nothing to run over");
     }
 
     @Test
-    @DisplayName("READY enables compute only; gating/tag/export remain disabled")
-    void readyState() {
-        controller.setState(UiState.READY);
-
-        assertFalse(computeButton.isDisabled(), "computeButton should be enabled");
-        assertCancelHidden();
-        assertFalse(progressIndicator.isVisible());
-        assertTrue(drawButton.isDisabled());
-        assertTrue(clearButton.isDisabled());
-        assertTrue(tagNameField.isDisabled());
-        assertTrue(tagColorPicker.isDisabled());
-        assertTrue(applyTagButton.isDisabled());
+    @DisplayName("Indexed cells enable Run UMAP in both places it appears")
+    void ready() {
+        installCells(8);
+        assertEquals(ViewState.Stage.READY, controller.current().stage());
+        assertFalse(computeButton.isDisabled());
+        assertTrue(emptyAction.isVisible());
+        assertFalse(emptyAction.isDisabled(),
+                "the empty state's Run button used to ask the toolbar button how it felt");
         assertTrue(exportButton.isDisabled());
-        assertEquals(UiState.READY, controller.currentState());
     }
 
     @Test
-    @DisplayName("COMPUTING disables compute, exposes cancel, shows progress")
-    void computingState() {
-        controller.setState(UiState.COMPUTING);
+    @DisplayName("Fewer ticked markers than UMAP needs disables both Run affordances")
+    void notEnoughFeatures() {
+        installCells(8);
+        session.selection().put("CD8", MarkerSelection.defaultEntry().withIncluded(false));
+        session.selection().put("FoxP3", MarkerSelection.defaultEntry().withIncluded(false));
+        controller.sync();
 
+        assertTrue(computeButton.isDisabled(),
+                "the toolbar button must not invite a click whose only ending is a failure");
+        assertTrue(emptyAction.isDisabled());
+        assertTrue(emptyAction.isVisible(), "still offered, so the disabled state is legible");
+    }
+
+    @Test
+    @DisplayName("A run in flight exposes Cancel, shows progress and locks every input")
+    void computing() {
+        installCells(8);
+        session.beginRun();
+        controller.sync();
+
+        assertEquals(ViewState.Stage.COMPUTING, controller.current().stage());
         assertTrue(computeButton.isDisabled());
         assertCancelVisible();
-        assertFalse(cancelButton.isDisabled(), "cancelButton must be clickable while computing");
+        assertFalse(cancelButton.isDisabled());
         assertTrue(progressIndicator.isVisible());
+        assertTrue(computeProgress.isVisible());
+        assertTrue(computeProgress.isManaged());
+        assertEquals(ProgressBar.INDETERMINATE_PROGRESS, computeProgress.getProgress());
+        assertEquals("Starting…", computeStage.getText());
 
-        // Gating / tag / export are all locked during a compute
-        assertTrue(drawButton.isDisabled());
-        assertTrue(clearButton.isDisabled());
-        assertTrue(tagNameField.isDisabled());
-        assertTrue(tagColorPicker.isDisabled());
-        assertTrue(applyTagButton.isDisabled());
-        assertTrue(exportButton.isDisabled());
-        assertEquals(UiState.COMPUTING, controller.currentState());
+        // The mid-run-edit hole. onFeatureSelectionChanged has no computeService.cancel(),
+        // so it would call session.installRebuiltIndex(...) while the compute thread still
+        // holds the old CellIndex. None of these was attached to the machine before.
+        for (Node input : inputs) {
+            assertTrue(input.isDisabled(),
+                    input.getClass().getSimpleName() + " must be locked while a run is in flight");
+        }
+        assertEquals(1, popupsDismissed.get(),
+                "disabling the Features… button does nothing for a picker already open");
     }
 
     @Test
-    @DisplayName("COMPUTED enables gating + export; tag controls await polygon")
-    void computedState() {
-        controller.setState(UiState.COMPUTED);
+    @DisplayName("Leaving COMPUTING re-enables every input and clears the stage line")
+    void computingReleasesTheInputs() {
+        installCells(8);
+        session.beginRun();
+        controller.sync();
+        session.record(UmapOutcome.cancelled());
+        controller.sync();
 
-        assertFalse(computeButton.isDisabled(), "compute remains enabled for re-computation");
+        for (Node input : inputs) {
+            assertFalse(input.isDisabled(), input.getClass().getSimpleName());
+        }
         assertCancelHidden();
-        assertFalse(progressIndicator.isVisible());
+        assertFalse(computeProgress.isVisible());
+        assertEquals("", computeStage.getText());
+    }
+
+    @Test
+    @DisplayName("A finished embedding enables gating and export; tag fields await a polygon")
+    void computed() {
+        installCells(8);
+        embed();
+
+        assertEquals(ViewState.Stage.COMPUTED, controller.current().stage());
+        assertFalse(computeButton.isDisabled(), "compute stays available for a re-run");
         assertFalse(drawButton.isDisabled());
         assertFalse(clearButton.isDisabled());
-        // Tag controls only unlock once a polygon is closed (GATING)
-        assertTrue(tagNameField.isDisabled());
-        assertTrue(tagColorPicker.isDisabled());
         assertTrue(applyTagButton.isDisabled());
         assertFalse(exportButton.isDisabled());
-        assertFalse(drawButton.isSelected(), "drawButton starts unselected after compute");
-        assertEquals(UiState.COMPUTED, controller.currentState());
+        assertFalse(emptyState.isVisible(), "the overlay comes down when there is a plot");
     }
 
     @Test
-    @DisplayName("GATING unlocks tag fields while keeping compute/clear/draw available")
-    void gatingState() {
-        controller.setState(UiState.GATING);
+    @DisplayName("A closed polygon unlocks the tag fields, and clearing it locks them again")
+    void gatingRoundTrip() {
+        installCells(8);
+        embed();
 
-        assertFalse(computeButton.isDisabled());
-        assertCancelHidden();
-        assertFalse(drawButton.isDisabled());
-        assertFalse(clearButton.isDisabled());
-        assertFalse(tagNameField.isDisabled(), "tag name field must be writable in GATING");
+        session.setGateMask(new boolean[8]);
+        controller.sync();
+        assertEquals(ViewState.Stage.GATING, controller.current().stage());
+        assertFalse(tagNameField.isDisabled());
         assertFalse(tagColorPicker.isDisabled());
         assertFalse(applyTagButton.isDisabled());
-        assertFalse(exportButton.isDisabled());
-        assertEquals(UiState.GATING, controller.currentState());
+
+        session.setGateMask(null);
+        controller.sync();
+        assertTrue(applyTagButton.isDisabled());
+        assertEquals(ViewState.Stage.COMPUTED, controller.current().stage());
     }
 
     @Test
-    @DisplayName("TAGGED mirrors COMPUTED — tag controls re-locked after Apply Tag")
-    void taggedState() {
-        controller.setState(UiState.TAGGED);
+    @DisplayName("An applied tag keeps gating and export available")
+    void tagged() {
+        installCells(8);
+        embed();
+        session.addTag(new PopulationTag("CD4", 0xFF0000, new boolean[8]));
+        controller.sync();
 
-        assertFalse(computeButton.isDisabled());
+        assertEquals(ViewState.Stage.TAGGED, controller.current().stage());
+        assertFalse(drawButton.isDisabled());
+        assertFalse(exportButton.isDisabled());
+        assertTrue(applyTagButton.isDisabled(), "tag fields re-lock once applied");
+    }
+
+    @Test
+    @DisplayName("A cancel under an open polygon leaves Tag Selection unlocked")
+    void cancelUnderAnOpenGate() {
+        installCells(8);
+        embed();
+        session.setGateMask(new boolean[8]);
+        session.beginRun();
+        controller.sync();
+        assertTrue(applyTagButton.isDisabled(), "locked while the re-run is in flight");
+
+        session.cancelRun();
+        controller.sync();
+
+        // clearPolygon()'s copy of the resting rule dropped the gate-mask branch, so this
+        // combination used to disable Tag Selection under a user with a polygon closed.
+        assertFalse(applyTagButton.isDisabled());
+    }
+
+    @Test
+    @DisplayName("A failed run says so on the overlay and stays clickable")
+    void failed() {
+        installCells(8);
+        session.beginRun();
+        controller.sync();
+        session.record(UmapOutcome.failed("heap exhausted"));
+        controller.sync();
+
+        assertEquals(ViewState.Stage.FAILED, controller.current().stage());
+        assertEquals("heap exhausted", controller.current().failure());
+        assertTrue(emptyState.isVisible());
+        assertTrue(emptyAction.isVisible());
+        assertFalse(emptyAction.isDisabled(), "the user may try again");
         assertCancelHidden();
         assertFalse(progressIndicator.isVisible());
-        assertFalse(drawButton.isDisabled());
-        assertFalse(clearButton.isDisabled());
-        assertTrue(tagNameField.isDisabled(), "tag fields lock again after applying tag");
-        assertTrue(tagColorPicker.isDisabled());
-        assertTrue(applyTagButton.isDisabled());
-        assertFalse(exportButton.isDisabled());
-        assertFalse(drawButton.isSelected());
-        assertEquals(UiState.TAGGED, controller.currentState());
     }
 
-    // ---------- transition / invariant tests ----------
-
     @Test
-    @DisplayName("Transitioning back to NO_IMAGE re-locks every control after COMPUTED")
-    void teardownOnImageRemoval() {
-        controller.setState(UiState.COMPUTED);
-        controller.setState(UiState.NO_IMAGE);
+    @DisplayName("An export in flight withdraws only the Export button")
+    void exportInFlight() {
+        installCells(8);
+        embed();
+        session.beginExport();
+        controller.sync();
 
-        assertTrue(computeButton.isDisabled());
-        assertTrue(drawButton.isDisabled());
-        assertTrue(clearButton.isDisabled());
-        assertTrue(tagNameField.isDisabled());
-        assertTrue(tagColorPicker.isDisabled());
-        assertTrue(applyTagButton.isDisabled());
         assertTrue(exportButton.isDisabled());
-        assertFalse(drawButton.isSelected());
+        assertFalse(drawButton.isDisabled());
+        assertFalse(computeButton.isDisabled());
+
+        session.endExport();
+        controller.sync();
+        assertFalse(exportButton.isDisabled());
     }
 
     @Test
-    @DisplayName("Round-trip GATING -> COMPUTED -> GATING re-enables tag fields each time")
-    void gatingRoundTrip() {
-        controller.setState(UiState.COMPUTED);
-        assertTrue(applyTagButton.isDisabled());
+    @DisplayName("The annotation filter is shown while the panel owns its own cell set")
+    void annotationFilterVisibility() {
+        installCells(8);
+        assertTrue(roiFilter.isVisible());
+        assertTrue(roiFilter.isManaged());
+    }
 
-        controller.setState(UiState.GATING);
-        assertFalse(applyTagButton.isDisabled());
+    // ---------- invariants across every reachable state ----------
 
-        controller.setState(UiState.COMPUTED);
-        assertTrue(applyTagButton.isDisabled(), "re-clearing polygon must lock tag again");
-
-        controller.setState(UiState.GATING);
-        assertFalse(applyTagButton.isDisabled());
+    @Test
+    @DisplayName("Compute and Cancel are never both offered, and never both inert with cells")
+    void computeXorCancel() {
+        installCells(8);
+        forEachReachableState(() -> {
+            boolean computeEnabled = !computeButton.isDisabled();
+            boolean cancelVisible = cancelButton.isVisible();
+            assertFalse(computeEnabled && cancelVisible,
+                    controller.current().stage() + ": both offered");
+            assertTrue(computeEnabled || cancelVisible,
+                    controller.current().stage() + ": neither is actionable");
+        });
     }
 
     @Test
-    @DisplayName("currentStateProperty fires when state changes")
-    void propertyFiresOnTransition() {
-        var seen = new java.util.concurrent.atomic.AtomicReference<UiState>();
-        controller.currentStateProperty().addListener((obs, oldVal, newVal) -> seen.set(newVal));
-
-        controller.setState(UiState.READY);
-        assertEquals(UiState.READY, seen.get());
-
-        controller.setState(UiState.COMPUTING);
-        assertEquals(UiState.COMPUTING, seen.get());
-    }
-
-    @Test
-    @DisplayName("setState rejects null")
-    void setStateRejectsNull() {
-        assertThrows(NullPointerException.class, () -> controller.setState(null));
-    }
-
-    /**
-     * Critical invariant (universal): Compute-enabled and Cancel-visible must
-     * NEVER both be true simultaneously. Allowing both would let the user click
-     * two conflicting actions in the same frame — Compute would re-trigger a UMAP
-     * run while Cancel is asking the prior run to abort.
-     */
-    @ParameterizedTest
-    @EnumSource(UiState.class)
-    @DisplayName("Compute-enabled and Cancel-visible are never both true")
-    void computeAndCancelAreNeverBothTrue(UiState state) {
-        controller.setState(state);
-
-        boolean computeEnabled = !computeButton.isDisabled();
-        boolean cancelVisible = cancelButton.isVisible();
-
-        assertFalse(computeEnabled && cancelVisible,
-                "State " + state + ": both compute (enabled=" + computeEnabled
-                        + ") and cancel (visible=" + cancelVisible + ") cannot be active");
-    }
-
-    /**
-     * Companion invariant (interactive states): when the panel is interactive
-     * (anything other than NO_IMAGE), the user must always have a forward path —
-     * either Compute is clickable (idle) or Cancel is visible (running). Both
-     * cannot be inert at the same time, otherwise the panel deadlocks.
-     */
-    @ParameterizedTest
-    @EnumSource(value = UiState.class, names = "NO_IMAGE", mode = EnumSource.Mode.EXCLUDE)
-    @DisplayName("Compute or Cancel is always offered in interactive states")
-    void computeOrCancelOfferedInInteractiveStates(UiState state) {
-        controller.setState(state);
-
-        boolean computeEnabled = !computeButton.isDisabled();
-        boolean cancelVisible = cancelButton.isVisible();
-
-        assertTrue(computeEnabled || cancelVisible,
-                "State " + state + ": neither compute nor cancel is actionable");
-    }
-
-    /**
-     * Companion invariant: cancelButton's {@code managed} flag must track its
-     * {@code visible} flag, otherwise the layout reserves space for a hidden control.
-     */
-    @ParameterizedTest
-    @EnumSource(UiState.class)
     @DisplayName("cancelButton.managed always tracks cancelButton.visible")
-    void cancelManagedTracksVisible(UiState state) {
-        controller.setState(state);
-        assertEquals(cancelButton.isVisible(), cancelButton.isManaged(),
-                "State " + state + ": cancel managed/visible drift");
+    void cancelManagedTracksVisible() {
+        installCells(8);
+        forEachReachableState(() -> assertEquals(cancelButton.isVisible(), cancelButton.isManaged(),
+                controller.current().stage() + ": cancel managed/visible drift"));
+    }
+
+    @Test
+    @DisplayName("The empty overlay is up exactly when there is no embedding")
+    void overlayTracksTheEmbedding() {
+        installCells(8);
+        forEachReachableState(() -> assertEquals(session.embedding() == null, emptyState.isVisible(),
+                controller.current().stage() + ": overlay disagrees with the data"));
+    }
+
+    /**
+     * Walk the session through every stage reachable from an indexed image. NO_IMAGE is
+     * deliberately absent — it is the one stage in which neither Compute nor Cancel is
+     * actionable, and {@link #noImage()} pins it on its own.
+     */
+    private void forEachReachableState(Runnable assertion) {
+        controller.sync();
+        assertion.run();                                  // READY
+
+        session.beginRun();
+        controller.sync();
+        assertion.run();                                  // COMPUTING
+
+        session.record(UmapOutcome.failed("boom"));
+        controller.sync();
+        assertion.run();                                  // FAILED
+
+        embed();
+        assertion.run();                                  // COMPUTED
+
+        session.setGateMask(new boolean[8]);
+        controller.sync();
+        assertion.run();                                  // GATING
+
+        session.setGateMask(null);
+        session.addTag(new PopulationTag("CD4", 0xFF0000, new boolean[8]));
+        controller.sync();
+        assertion.run();                                  // TAGGED
+
+    }
+
+    // ---------- construction ----------
+
+    @Test
+    void constructionRejectsMissingCollaborators() {
+        assertThrows(NullPointerException.class, () -> new UiStateController(null, null));
     }
 
     // ---------- helpers ----------

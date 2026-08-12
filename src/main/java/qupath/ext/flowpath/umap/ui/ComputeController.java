@@ -11,8 +11,8 @@ import qupath.ext.flowpath.umap.engine.EmbeddingReport;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
 import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.model.CellIndex;
-import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.umap.engine.EmbeddingFeatures;
+import qupath.ext.flowpath.umap.session.UmapSession;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
@@ -20,7 +20,6 @@ import qupath.ext.flowpath.umap.model.UmapResult;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 /**
  * Owns the UMAP-computation UI controls and the compute lifecycle.
@@ -34,22 +33,26 @@ import java.util.function.Supplier;
  *       (set by the active preset) and {@code computeStartTime}.</li>
  *   <li>Wire {@code computeService}'s terminal {@code onOutcome} channel and its
  *       separate {@code onStatusUpdate} progress channel.</li>
- *   <li>Drive {@link UiStateController} into {@code COMPUTING}/{@code COMPUTED}
- *       and the appropriate resting state on cancel/error.</li>
+ *   <li>Fold each run's terminal {@link UmapOutcome} into {@link UmapSession} and ask
+ *       {@link UiStateController} to re-derive the panel from it.</li>
  * </ul>
  *
  * <p>Data and rendering surfaces (canvas, legend, markerOverlay) remain in
  * {@link UmapPane}; the controller hands a finished {@link UmapResult} back via
- * the {@code Consumer<UmapResult>} supplied at construction time, AFTER the UI
- * state has been driven to {@code COMPUTED} (so the consumer observes coherent
- * UI state).
+ * the {@code Consumer<UmapResult>} supplied at construction time, AFTER the outcome has
+ * been folded into the session and the panel re-derived from it (so the consumer observes
+ * coherent UI state).
  *
  * <h2>Design choices</h2>
  * <ul>
- *   <li><b>restingStateAfterCompute pattern:</b> Option A — UmapPane supplies a
- *       {@code Supplier<UiState>} that resolves to COMPUTED/READY/NO_IMAGE based
- *       on {@code umapResult}/{@code cellIndex} state it still owns. This keeps
- *       the resolution rule in one place for Phase B3 (GatingController) reuse.</li>
+ *   <li><b>No resting-state supplier:</b> this controller used to be handed a
+ *       {@code Supplier<UiState>} resolving to COMPUTED/READY/NO_IMAGE, because
+ *       {@code UmapPane} owned the embedding. It no longer decides anything about UI
+ *       state: it records the outcome on the session and calls
+ *       {@link UiStateController#sync()}, which re-derives the whole panel. The
+ *       {@code Superseded} branch is safe by construction rather than by comment —
+ *       {@link UmapSession#record} leaves the running phase alone for it, so the sync
+ *       re-applies the COMPUTING the newer run still owns.</li>
  *   <li><b>computeService ownership:</b> stays in UmapPane; this controller
  *       receives it via constructor and wires its callbacks. UmapPane's
  *       {@code initializeFromImage} keeps calling {@code computeService.cancel()}
@@ -88,9 +91,7 @@ final class ComputeController {
      * reference is effectively final for the lifetime of the controller.
      */
     private UiStateController uiState;
-    private final Supplier<CellIndex> cellIndexSupplier;
-    private final Supplier<MarkerSelection> selectionSupplier;
-    private final Supplier<UiStateController.UiState> restingStateSupplier;
+    private final UmapSession session;
     private final Consumer<UmapResult> resultConsumer;
     private final UmapPane.StatusReporter statusReporter;
 
@@ -99,17 +100,14 @@ final class ComputeController {
      * them via the getters for assembly into the host pane's toolbar.
      *
      * @param computeService        the long-lived background service that runs UMAP
-     * @param cellIndexSupplier     returns the current {@link CellIndex} (may be null)
-     * @param selectionSupplier     returns the feature picker's current state. Read at
-     *                              run time rather than at construction, and narrowed
-     *                              into an {@link EmbeddingFeatures} here, so an
-     *                              embedding cannot be started over a marker the user
-     *                              unticked
-     * @param restingStateSupplier  resolves the UI state to fall back to after
-     *                              cancel/error (e.g. COMPUTED if an old result is
-     *                              still on screen; READY otherwise)
+     * @param session               everything this run needs to know and everything its
+     *                              ending changes: the index, the feature picker's state
+     *                              (read at run time and narrowed into an
+     *                              {@link EmbeddingFeatures} here, so an embedding cannot
+     *                              be started over a marker the user unticked) and the
+     *                              run phase the UI state is derived from
      * @param resultConsumer        invoked with a successful {@link UmapResult}
-     *                              AFTER the UI state is set to COMPUTED
+     *                              AFTER the panel has been re-synced to it
      * @param statusReporter        accepts ({@code text}, {@link UmapPane.StatusLevel})
      *                              pairs so UmapPane can color/auto-clear consistently
      * @param dotSizeListener       called when the user adjusts the Dot Size spinner;
@@ -117,16 +115,12 @@ final class ComputeController {
      *                              callback so the controller owns no rendering surface.
      */
     ComputeController(UmapComputeService computeService,
-                      Supplier<CellIndex> cellIndexSupplier,
-                      Supplier<MarkerSelection> selectionSupplier,
-                      Supplier<UiStateController.UiState> restingStateSupplier,
+                      UmapSession session,
                       Consumer<UmapResult> resultConsumer,
                       UmapPane.StatusReporter statusReporter,
                       Consumer<Double> dotSizeListener) {
         this.computeService = Objects.requireNonNull(computeService, "computeService");
-        this.cellIndexSupplier = Objects.requireNonNull(cellIndexSupplier, "cellIndexSupplier");
-        this.selectionSupplier = Objects.requireNonNull(selectionSupplier, "selectionSupplier");
-        this.restingStateSupplier = Objects.requireNonNull(restingStateSupplier, "restingStateSupplier");
+        this.session = Objects.requireNonNull(session, "session");
         this.resultConsumer = Objects.requireNonNull(resultConsumer, "resultConsumer");
         this.statusReporter = Objects.requireNonNull(statusReporter, "statusReporter");
         Objects.requireNonNull(dotSizeListener, "dotSizeListener");
@@ -313,7 +307,7 @@ final class ComputeController {
      * submits the work to {@link UmapComputeService}.
      */
     void runUmap() {
-        CellIndex cellIndex = cellIndexSupplier.get();
+        CellIndex cellIndex = session.index();
         if (cellIndex == null) {
             statusReporter.report("No cell data available", UmapPane.StatusLevel.WARN);
             return;
@@ -368,23 +362,23 @@ final class ComputeController {
         // than two markers ticked comes back Refused and the service turns it into a
         // Failed outcome, which is why this does not check anything itself: the alternative
         // is a second place that decides what "enough features" means.
-        computeService.compute(EmbeddingFeatures.of(cellIndex, selectionSupplier.get()),
+        computeService.compute(EmbeddingFeatures.of(cellIndex, session.selection()),
                 params, maxCells, scaling);
 
-        uiState.setState(UiStateController.UiState.COMPUTING);
+        session.beginRun();
+        uiState.sync();
         statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
     }
 
     /**
-     * Cancel an in-flight UMAP run. Drives {@code uiState} back to the resting
-     * state resolved by the supplier (COMPUTED/READY/NO_IMAGE) and disposes the
-     * progress dialog.
+     * Cancel an in-flight UMAP run. Leaves the running phase immediately so the click feels
+     * responsive; the run's own {@code Cancelled} outcome arrives later and is idempotent
+     * with this.
      */
     void cancelUmap() {
         computeService.cancel();
-        // Restore the appropriate post-cancel state: COMPUTED if a prior result exists,
-        // READY if cellIndex is built but no result yet, NO_IMAGE if neither.
-        uiState.setState(restingStateSupplier.get());
+        session.cancelRun();
+        uiState.sync();
         statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
     }
 
@@ -399,6 +393,13 @@ final class ComputeController {
      * must be reacted to, because by construction nothing newer is coming.
      */
     void onUmapOutcome(UmapOutcome outcome) {
+        // Fold first, then apply. Which state the panel shows is the session's answer, not
+        // this method's, so the Superseded case needs no special handling here: the session
+        // leaves the running phase set for it and the sync re-applies the COMPUTING the
+        // newer run still owns. Reacting to a superseded ending is therefore no longer
+        // something a future edit to this switch could accidentally start doing.
+        session.record(outcome);
+        uiState.sync();
         switch (outcome) {
             case UmapOutcome.Succeeded succeeded ->
                     onUmapComplete(succeeded.result(), succeeded.report());
@@ -409,8 +410,8 @@ final class ComputeController {
     }
 
     /**
-     * Compute-success callback. The state transition to COMPUTED runs BEFORE the
-     * result consumer is invoked, so UmapPane sees coherent UI state when it
+     * Compute-success callback. {@link #onUmapOutcome} has already installed the result on
+     * the session and re-synced the panel, so UmapPane sees coherent UI state when it
      * pushes the new data into the canvases/legend.
      * <p>
      * The status line carries the run's {@link EmbeddingReport} summary as well as its
@@ -423,9 +424,6 @@ final class ComputeController {
      * finding on the line, the whole report in the tooltip behind it.
      */
     void onUmapComplete(UmapResult result, EmbeddingReport report) {
-        // Enables gating + export, disables tag controls (await polygon), hides cancel/progress
-        uiState.setState(UiStateController.UiState.COMPUTED);
-
         // Hand the result to UmapPane for rendering / coloring / legend update
         resultConsumer.accept(result);
 
@@ -448,12 +446,11 @@ final class ComputeController {
     }
 
     /**
-     * Compute-error callback. Falls back to the supplier's resting state and
-     * surfaces the message to the user via both the status bar and a modal
-     * error alert.
+     * Compute-error callback. The panel has already been re-synced, so the session's
+     * {@code FAILED} stage — and the reason with it — is on screen before this modal alert
+     * opens and remains after it is dismissed. This only surfaces the message.
      */
     void onUmapError(String message) {
-        uiState.setState(restingStateSupplier.get());
         statusReporter.report("Error: " + message, UmapPane.StatusLevel.ERROR);
 
         new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
@@ -467,7 +464,6 @@ final class ComputeController {
      * so this can never pull the pane out of a live COMPUTING state.
      */
     void onUmapCancelled() {
-        uiState.setState(restingStateSupplier.get());
         statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
     }
 

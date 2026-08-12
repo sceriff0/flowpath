@@ -24,6 +24,16 @@ public class PolygonSelector {
     private boolean completed = false;
     private int dragHandleIndex = -1;
     private Consumer<List<double[]>> onPolygonComplete;
+    /**
+     * Told whenever {@link #isActive()} changes.
+     * <p>
+     * The Draw toggle used to be set by hand at five sites — the Escape handler, the
+     * snapshot teardown, the derived-state teardown and two states of the UI machine —
+     * so any path that deactivated the selector without remembering the button left a
+     * toggle pressed over a selector that was no longer listening. The button reflects
+     * this flag now; nobody sets it.
+     */
+    private Consumer<Boolean> onActiveChanged;
 
     private final EventHandler<MouseEvent> pressHandler = this::handlePressed;
     private final EventHandler<MouseEvent> dragHandler = this::handleDragged;
@@ -37,13 +47,24 @@ public class PolygonSelector {
         this.onPolygonComplete = cb;
     }
 
+    /** Observe {@link #isActive()}. Fired only on a real change, and never on registration. */
+    public void setOnActiveChanged(Consumer<Boolean> cb) {
+        this.onActiveChanged = cb;
+    }
+
+    private void setActive(boolean now) {
+        if (active == now) return;
+        active = now;
+        if (onActiveChanged != null) onActiveChanged.accept(now);
+    }
+
     public void activate() {
         // Remove first to prevent double-registration if activate() is called while already active
         canvas.removeEventHandler(MouseEvent.MOUSE_PRESSED, pressHandler);
         canvas.removeEventHandler(MouseEvent.MOUSE_DRAGGED, dragHandler);
         canvas.removeEventHandler(MouseEvent.MOUSE_RELEASED, releaseHandler);
 
-        active = true;
+        setActive(true);
         completed = false;
         dragHandleIndex = -1;
         vertices.clear();
@@ -56,7 +77,7 @@ public class PolygonSelector {
     }
 
     public void deactivate() {
-        active = false;
+        setActive(false);
         completed = false;
         dragHandleIndex = -1;
 
