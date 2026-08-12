@@ -78,7 +78,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * only after it, by which point the training matrix has deliberately been released for
  * memory. So the report is assembled in two mandatory stages,
  * {@link #training(EmbeddingFeatures.Selected, int[])} then
- * {@link Training#completedWith(Steering, int)}, each taking the artefacts of its own
+ * {@link Training#completedWith(Steering, Projection)}, each taking the artefacts of its own
  * end of the run. There is no other constructor, no empty report and no default:
  * a run that reached an embedding cannot report success without saying what that cost,
  * because {@code UmapOutcome.succeeded} will not accept a result without one of these

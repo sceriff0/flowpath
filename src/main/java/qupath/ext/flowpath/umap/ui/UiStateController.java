@@ -121,12 +121,15 @@ public final class UiStateController {
 
     private final Controls controls;
 
-    /**
-     * Read-only to the outside. Exposing the mutable property — even typed as
-     * {@link ReadOnlyObjectProperty} — let a caller cast it back and set a fabricated state
-     * that {@link #current()} would then report to {@code UmapPane.refreshOverview}, which
-     * is the one thing this class exists to make impossible.
-     */
+    // Read-only to the outside. Exposing the mutable property — even typed as
+    // ReadOnlyObjectProperty — let a caller cast it back and set a fabricated state that
+    // current() would then report to UmapPane.refreshOverview, which is the one thing
+    // this class exists to make impossible.
+    //
+    // Deliberately not a doc comment: javadoc pairs a documented field named `state` with
+    // a documented stateProperty() as one JavaFX property and warns "Duplicate comment
+    // for property". The field is private, so the comment was never rendered anyway; the
+    // one that is belongs on the accessor.
     private final ReadOnlyObjectWrapper<ViewState> state;
 
     public UiStateController(UmapSession session, Controls controls) {

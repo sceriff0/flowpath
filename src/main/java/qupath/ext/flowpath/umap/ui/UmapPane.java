@@ -613,7 +613,6 @@ public class UmapPane extends BorderPane {
      */
     private void refreshOverview(ViewState state) {
         CellIndex index = session.index();
-        PhenotypeSnapshot snapshot = session.snapshot();
         // The session's rule, not a second copy: while it is waiting for the gating tree to
         // re-index, the CellIndex it still holds belongs to the previous image.
         boolean hasCells = session.hasCells();
@@ -621,8 +620,9 @@ public class UmapPane extends BorderPane {
 
         // The same composition the status bar prints on one line, rendered the way a rail
         // reads. It used to be spelled out here with different wording and different
-        // arithmetic from UmapSession.describe, and the two appeared within an inch of each
-        // other quoting different numbers about the same slide.
+        // arithmetic from the since-deleted {@code UmapSession.describe}, and the two
+        // appeared within an inch of each other quoting different numbers about the same
+        // slide.
         cellsSummary.setText(session.railSummary());
 
         if (!state.showEmptyState()) return;
