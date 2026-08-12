@@ -60,10 +60,25 @@ public class QuadrantGate extends GateNode {
         int orange = (200 << 16) | (150 << 8) | 0;
         int gray = (128 << 16) | (128 << 8) | 128;
 
-        this.branchPP = new Branch(channelX + "+/" + channelY + "+", green);
-        this.branchNP = new Branch(channelX + "-/" + channelY + "+", blue);
-        this.branchPN = new Branch(channelX + "+/" + channelY + "-", orange);
-        this.branchNN = new Branch(channelX + "-/" + channelY + "-", gray);
+        List<String> names = quadrantBranchNames(channelX, channelY);
+        this.branchPP = new Branch(names.get(0), green);
+        this.branchNP = new Branch(names.get(1), blue);
+        this.branchPN = new Branch(names.get(2), orange);
+        this.branchNN = new Branch(names.get(3), gray);
+    }
+
+    /** {@inheritDoc} Quadrant branches are labelled by both axes' signs. */
+    @Override
+    public List<String> defaultBranchNames(List<String> channels) {
+        return quadrantBranchNames(channelAt(channels, 0), channelAt(channels, 1));
+    }
+
+    private static List<String> quadrantBranchNames(String channelX, String channelY) {
+        return List.of(
+                channelX + "+/" + channelY + "+",
+                channelX + "-/" + channelY + "+",
+                channelX + "+/" + channelY + "-",
+                channelX + "-/" + channelY + "-");
     }
 
     @Override

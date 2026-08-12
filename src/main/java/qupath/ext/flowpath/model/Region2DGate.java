@@ -37,8 +37,25 @@ public abstract class Region2DGate extends GateNode {
     protected Region2DGate(String channelX, String channelY) {
         this.channelX = channelX;
         this.channelY = channelY;
-        this.insideBranch = new Branch(channelX + "/" + channelY + " (in)", GREEN);
-        this.outsideBranch = new Branch(channelX + "/" + channelY + " (out)", GRAY);
+        List<String> names = regionBranchNames(channelX, channelY);
+        this.insideBranch = new Branch(names.get(0), GREEN);
+        this.outsideBranch = new Branch(names.get(1), GRAY);
+    }
+
+    /**
+     * {@inheritDoc} A region gate's branches are labelled by the plane it is drawn on.
+     * A gate deserialized through the no-arg constructor carries "Inside"/"Outside"
+     * instead, which name no channel and so are never rewritten by a channel change.
+     */
+    @Override
+    public List<String> defaultBranchNames(List<String> channels) {
+        return regionBranchNames(channelAt(channels, 0), channelAt(channels, 1));
+    }
+
+    private static List<String> regionBranchNames(String channelX, String channelY) {
+        return List.of(
+                channelX + "/" + channelY + " (in)",
+                channelX + "/" + channelY + " (out)");
     }
 
     /** Does the point fall inside this gate's region, in the gate's own coordinate space? */

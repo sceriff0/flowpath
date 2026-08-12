@@ -59,8 +59,31 @@ public class GateNode {
         this.thresholdIsZScore = true;
         int defaultPosColor = (0 << 16) | (200 << 8) | 0; // green
         int defaultNegColor = (128 << 16) | (128 << 8) | 128; // gray
-        this.positiveBranch = new Branch(channel + "+", defaultPosColor);
-        this.negativeBranch = new Branch(channel + "-", defaultNegColor);
+        List<String> names = thresholdBranchNames(channel);
+        this.positiveBranch = new Branch(names.get(0), defaultPosColor);
+        this.negativeBranch = new Branch(names.get(1), defaultNegColor);
+    }
+
+    /**
+     * The names this gate's branches carry while the user has not renamed them, for a
+     * gate reading {@code channels} (one entry per axis, X first).
+     * <p>
+     * One spelling, used both by the constructor that first applies the labels and by
+     * {@link GateAxis} when an axis is pointed at a different channel — so "is this
+     * label still the default?" is answered against the same string the default was
+     * built from, for every gate type.
+     */
+    public List<String> defaultBranchNames(List<String> channels) {
+        return thresholdBranchNames(channelAt(channels, 0));
+    }
+
+    private static List<String> thresholdBranchNames(String channel) {
+        return List.of(channel + "+", channel + "-");
+    }
+
+    /** The {@code k}-th channel of a per-axis channel list, or null when absent. */
+    protected static String channelAt(List<String> channels, int k) {
+        return channels != null && k >= 0 && k < channels.size() ? channels.get(k) : null;
     }
 
     // ========== Branch-based API (new, generic) ==========
