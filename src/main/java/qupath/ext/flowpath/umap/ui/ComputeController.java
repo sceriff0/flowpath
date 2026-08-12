@@ -8,6 +8,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.Tooltip;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
+import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
@@ -27,8 +28,8 @@ import java.util.function.Supplier;
  *       subsample-mode combo, compute and cancel buttons.</li>
  *   <li>Track the {@code applyingPreset} guard, current {@code negativeSamples}
  *       (set by the active preset) and {@code computeStartTime}.</li>
- *   <li>Wire {@code computeService}'s {@code onComplete}/{@code onError}/
- *       {@code onStatusUpdate} callbacks.</li>
+ *   <li>Wire {@code computeService}'s terminal {@code onOutcome} channel and its
+ *       separate {@code onStatusUpdate} progress channel.</li>
  *   <li>Drive {@link UiStateController} into {@code COMPUTING}/{@code COMPUTED}
  *       and the appropriate resting state on cancel/error.</li>
  * </ul>
@@ -198,8 +199,7 @@ final class ComputeController {
         cancelButton.setOnAction(e -> cancelUmap());
 
         // --- Wire compute service callbacks ---
-        computeService.setOnComplete(this::onUmapComplete);
-        computeService.setOnError(this::onUmapError);
+        computeService.setOnOutcome(this::onUmapOutcome);
         // Phase messages ("Building neighbour graph…", "Projecting remaining N cells…")
         // go to the status reporter, which mirrors them into the rail beside the inline
         // progress bar. They used to also drive a floating progress dialog; that dialog
@@ -339,11 +339,19 @@ final class ComputeController {
             if (result.isEmpty() || result.get() == ButtonType.CANCEL) return;
         }
 
-        uiState.setState(UiStateController.UiState.COMPUTING);
+        // Submit BEFORE showing the busy state. The two used to be the other way
+        // round, so anything the submit threw synchronously — a compute() after the
+        // service was shut down raises RejectedExecutionException — left the UI in
+        // COMPUTING with no run behind it and no callback able to clear it. The
+        // service now converts that rejection into a failed outcome rather than
+        // throwing, and this ordering means even a throw we have not thought of
+        // cannot strand the pane. Both calls happen on the FX thread, so the
+        // outcome callback queues behind the rest of this method either way.
         computeStartTime = System.currentTimeMillis();
-        statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
-
         computeService.compute(cellIndex, params, maxCells, scaling);
+
+        uiState.setState(UiStateController.UiState.COMPUTING);
+        statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
     }
 
     /**
@@ -357,6 +365,25 @@ final class ComputeController {
         // READY if cellIndex is built but no result yet, NO_IMAGE if neither.
         uiState.setState(restingStateSupplier.get());
         statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
+    }
+
+    /**
+     * The single terminal callback from {@link UmapComputeService}. Exactly one of
+     * these arrives per {@code compute(...)} call, which is what lets the UI leave
+     * COMPUTING on every path rather than only the two that used to report.
+     * <p>
+     * The cancelled/superseded split matters here. A <em>superseded</em> run must be
+     * ignored: a newer run is in flight and owns the COMPUTING state, so reacting
+     * would drive the pane out of a state that is still true. A <em>cancelled</em> run
+     * must be reacted to, because by construction nothing newer is coming.
+     */
+    void onUmapOutcome(UmapOutcome outcome) {
+        switch (outcome) {
+            case UmapOutcome.Succeeded succeeded -> onUmapComplete(succeeded.result());
+            case UmapOutcome.Failed failed -> onUmapError(failed.describe());
+            case UmapOutcome.Cancelled ignored -> onUmapCancelled();
+            case UmapOutcome.Superseded ignored -> { /* the newer run owns the UI */ }
+        }
     }
 
     /**
@@ -388,6 +415,18 @@ final class ComputeController {
         statusReporter.report("Error: " + message, UmapPane.StatusLevel.ERROR);
 
         new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
+    }
+
+    /**
+     * Compute-cancelled callback. Idempotent with {@link #cancelUmap()}: the button
+     * handler drives the UI back immediately so the click feels responsive, and this
+     * arrives later when the background run actually notices. Both do the same thing,
+     * and a cancelled outcome is only ever delivered when no newer run has started,
+     * so this can never pull the pane out of a live COMPUTING state.
+     */
+    void onUmapCancelled() {
+        uiState.setState(restingStateSupplier.get());
+        statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
     }
 
     // --- Test seams (package-private accessors) ---

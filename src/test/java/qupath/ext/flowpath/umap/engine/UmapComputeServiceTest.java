@@ -3,6 +3,8 @@ package qupath.ext.flowpath.umap.engine;
 import javafx.application.Platform;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
@@ -62,34 +64,270 @@ class UmapComputeServiceTest {
         return cells.build();
     }
 
-    /** Wait for a UMAP computation to complete (success or error) up to the given timeout. */
+    /** Wait for a UMAP computation to terminate, whatever the outcome. */
     private static UmapResult runAndWait(UmapComputeService service, CellIndex idx,
                                          UmapParameters params, int maxCells,
                                          List<String> statusLog, long timeoutSec) throws Exception {
-        AtomicReference<UmapResult> resultRef = new AtomicReference<>();
-        AtomicReference<String> errRef = new AtomicReference<>();
+        AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
         CountDownLatch latch = new CountDownLatch(1);
         if (statusLog != null) {
             service.setOnStatusUpdate(msg -> { statusLog.add(msg); });
         }
-        service.setOnComplete(r -> { resultRef.set(r); latch.countDown(); });
-        service.setOnError(e -> { errRef.set(e); latch.countDown(); });
+        service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
         service.compute(idx, params, maxCells);
         if (!latch.await(timeoutSec, TimeUnit.SECONDS)) {
             throw new AssertionError("Timed out waiting for UMAP completion");
         }
-        if (errRef.get() != null) throw new AssertionError("UMAP errored: " + errRef.get());
-        return resultRef.get();
+        UmapOutcome outcome = outcomeRef.get();
+        if (!(outcome instanceof UmapOutcome.Succeeded succeeded)) {
+            throw new AssertionError("UMAP did not succeed: " + outcome.describe());
+        }
+        return succeeded.result();
+    }
+
+    /** A trivial embedding over {@code idx}, for work stubs that never run a real UMAP. */
+    private static UmapResult stubResult(CellIndex idx) {
+        return new UmapResult(new double[idx.size()], new double[idx.size()],
+                idx.getObjects(), idx.getMarkerNames(), new UmapParameters(15, 0.1, 1.0, 50, 5));
+    }
+
+    /** A service whose callbacks run inline and whose embedding is replaced by {@code work}. */
+    private static UmapComputeService serviceRunning(UmapComputeService.EmbeddingWork work) {
+        return new UmapComputeService(Runnable::run, work);
     }
 
     @Test
     void shutdownNullsCallbacks() {
         var service = new UmapComputeService();
-        AtomicReference<String> errorMsg = new AtomicReference<>();
-        service.setOnError(errorMsg::set);
+        service.setOnOutcome(o -> { });
         service.shutdown();
         // After shutdown, callbacks should be nulled - verify no NPE on next access
         assertDoesNotThrow(() -> service.shutdown());
+    }
+
+    // --- Terminal outcome ----------------------------------------------------
+
+    @Test
+    void anErrorInTheRunBodyEndsTheRunInsteadOfVanishing() {
+        // The bug this whole seam exists to close. SMILE's UMAP.fit reaches for an
+        // ARPACK native FlowPath deliberately does not ship and fails with
+        // NoClassDefFoundError — an Error, matched by neither catch (Exception) nor
+        // catch (OutOfMemoryError). It escaped the Runnable into a Future nobody read,
+        // no callback fired, and the UI waited forever for a call that could not come.
+        //
+        // Injected through the work seam rather than provoked with a real 500-cell
+        // UMAP: what is under test is the lifecycle around the work, not SMILE.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            throw new NoClassDefFoundError("org/bytedeco/arpackng/global/arpack");
+        });
+        try {
+            service.setOnOutcome(outcomes::add);
+            service.compute(index, UmapParameters.defaults(), 0);
+            awaitOutcomes(outcomes, 1);
+
+            assertEquals(1, outcomes.size(), "an Error must produce exactly one outcome, not silence");
+            assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
+            var failed = (UmapOutcome.Failed) outcomes.get(0);
+            assertEquals("java.lang.NoClassDefFoundError", failed.throwableClass());
+            assertTrue(failed.describe().contains("java.lang.NoClassDefFoundError"),
+                    "the throwable's class name must reach the message: " + failed.describe());
+            assertTrue(failed.describe().contains("arpack"),
+                    "the Error's own message must survive: " + failed.describe());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void outOfMemoryKeepsItsTailoredAdvice() {
+        // "UMAP failed: OutOfMemoryError" is true and useless; the advice is the point.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            throw new OutOfMemoryError("Java heap space");
+        });
+        try {
+            service.setOnOutcome(outcomes::add);
+            service.compute(index, UmapParameters.defaults(), 0);
+            awaitOutcomes(outcomes, 1);
+
+            var failed = assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
+            assertTrue(failed.reason().contains("subsampling"), failed.reason());
+            assertTrue(failed.reason().contains("Preferences"), failed.reason());
+            assertEquals("java.lang.OutOfMemoryError", failed.throwableClass());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /**
+     * Every way a run can end delivers exactly one outcome — the promise the old
+     * three-callback seam made in prose and broke on seven paths.
+     */
+    @ParameterizedTest
+    @EnumSource(UmapOutcome.Kind.class)
+    void everyTerminatingPathDeliversExactlyOneOutcomePerComputeCall(UmapOutcome.Kind kind)
+            throws Exception {
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        AtomicReference<UmapComputeService> self = new AtomicReference<>();
+        AtomicInteger runs = new AtomicInteger();
+        AtomicBoolean started = new AtomicBoolean();
+        AtomicBoolean release = new AtomicBoolean();
+
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            int run = runs.incrementAndGet();
+            switch (kind) {
+                case SUCCEEDED -> { }
+                case FAILED -> throw new NoClassDefFoundError("org/bytedeco/arpackng/global/arpack");
+                // Cancel from inside the body: the run is stopped while it still holds
+                // the thread, which is the shape a user's Cancel click really takes.
+                case CANCELLED -> self.get().cancel();
+                // Hold the first run open so the second one demonstrably overtakes it.
+                case SUPERSEDED -> {
+                    if (run == 1) {
+                        started.set(true);
+                        spinUntil(release);
+                    }
+                }
+            }
+            return UmapOutcome.succeeded(stubResult(idx));
+        });
+        self.set(service);
+
+        try {
+            service.setOnOutcome(outcomes::add);
+            service.compute(index, UmapParameters.defaults(), 0);
+
+            int expectedComputeCalls = 1;
+            if (kind == UmapOutcome.Kind.SUPERSEDED) {
+                spinUntil(started);
+                service.compute(index, UmapParameters.defaults(), 0);
+                release.set(true);
+                expectedComputeCalls = 2;
+            }
+            awaitOutcomes(outcomes, expectedComputeCalls);
+
+            assertEquals(expectedComputeCalls, outcomes.size(),
+                    "one outcome per compute() call, no more and no less: " + outcomes);
+            assertEquals(kind, outcomes.get(0).kind(),
+                    "the first run must end as " + kind + " but ended as " + outcomes.get(0).describe());
+        } finally {
+            release.set(true);
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void aRunCancelledBeforeItStartsStillEnds() {
+        // Future.cancel on a task the executor has not reached means the body never
+        // runs at all, so no `finally` inside it can save the run. Occupying the single
+        // worker with a first run makes the second one queue behind it, and cancelling
+        // then must still produce an outcome.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        AtomicBoolean release = new AtomicBoolean();
+        AtomicBoolean occupied = new AtomicBoolean();
+        AtomicInteger bodies = new AtomicInteger();
+
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            if (bodies.incrementAndGet() == 1) {
+                occupied.set(true);
+                spinUntil(release);
+            }
+            return UmapOutcome.succeeded(stubResult(idx));
+        });
+        try {
+            service.setOnOutcome(outcomes::add);
+            service.compute(index, UmapParameters.defaults(), 0);   // occupies the worker
+            spinUntil(occupied);
+            service.compute(index, UmapParameters.defaults(), 0);   // queued behind it
+            service.cancel();                                       // never gets to run
+            release.set(true);
+
+            awaitOutcomes(outcomes, 2);
+            assertEquals(2, outcomes.size(), "both compute() calls must end: " + outcomes);
+            assertEquals(UmapOutcome.Kind.SUPERSEDED, outcomes.get(0).kind());
+            assertEquals(UmapOutcome.Kind.CANCELLED, outcomes.get(1).kind());
+            assertEquals(1, bodies.get(), "the second run's body must never have executed");
+        } finally {
+            release.set(true);
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void computeAfterShutdownFailsLoudlyRatherThanThrowingAtTheCaller() {
+        // The caller has already shown a busy state by the time it calls compute();
+        // a RejectedExecutionException thrown back at it leaves that state with nothing
+        // to clear it. The rejection is an outcome like any other.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        var service = serviceRunning((idx, p, max, mode, gen) -> UmapOutcome.succeeded(stubResult(idx)));
+        service.shutdown();
+
+        assertDoesNotThrow(() -> service.compute(index, UmapParameters.defaults(), 0));
+
+        var failed = assertInstanceOf(UmapOutcome.Failed.class, service.getLastOutcome(),
+                "a rejected submit must still be recorded, even with no consumer left");
+        assertEquals("java.util.concurrent.RejectedExecutionException", failed.throwableClass());
+    }
+
+    @Test
+    void aFailureWithNoConsumerIsStillRecorded() {
+        // shutdown() nulls the consumer deliberately — a disposed UI must not be called
+        // back into. The reason the run ended must survive that anyway.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            throw new NoClassDefFoundError("org/bytedeco/arpackng/global/arpack");
+        });
+        try {
+            service.compute(index, UmapParameters.defaults(), 0);   // no consumer registered
+            spinUntil(() -> service.getLastOutcome() != null);
+
+            var failed = assertInstanceOf(UmapOutcome.Failed.class, service.getLastOutcome());
+            assertEquals("java.lang.NoClassDefFoundError", failed.throwableClass());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void tooFewCellsIsAFailedOutcomeRatherThanAnEmptyEmbedding() {
+        // Exercises the real embedding body's precondition refusal — a failure with no
+        // throwable behind it, and the one path that never reaches SMILE.
+        var index = Cells.of(2).marker("CD45", 1.0, 2.0).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        var service = new UmapComputeService(Runnable::run, null);
+        try {
+            service.setOnOutcome(outcomes::add);
+            service.compute(index, UmapParameters.defaults(), 0);
+            awaitOutcomes(outcomes, 1);
+
+            var failed = assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
+            assertTrue(failed.reason().contains("Too few cells"), failed.reason());
+            assertFalse(failed.fromThrowable(), "a refused precondition is not a throw");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /** Spin until {@code flag} is set, failing rather than hanging if it never is. */
+    private static void spinUntil(AtomicBoolean flag) {
+        spinUntil(flag::get);
+    }
+
+    private static void spinUntil(java.util.function.BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) throw new AssertionError("Timed out waiting");
+            Thread.onSpinWait();
+        }
+    }
+
+    private static void awaitOutcomes(List<UmapOutcome> outcomes, int expected) {
+        spinUntil(() -> outcomes.size() >= expected);
     }
 
     @Test
@@ -163,13 +401,13 @@ class UmapComputeServiceTest {
             AtomicBoolean secondStarted = new AtomicBoolean(false);
             CountDownLatch secondDone = new CountDownLatch(1);
 
-            service.setOnComplete(r -> {
-                int n = completeCount.incrementAndGet();
+            service.setOnOutcome(outcome -> {
+                // Only a success counts here: the first compute is expected to end as
+                // cancelled or superseded, and the contract is that it never reports
+                // an embedding of its own.
+                if (!outcome.isSuccess()) return;
+                completeCount.incrementAndGet();
                 if (secondStarted.get()) secondDone.countDown();
-            });
-            service.setOnError(e -> {
-                // ignore — first compute may surface a cancellation; the contract
-                // is only that onComplete is not called for it.
             });
 
             var params = new UmapParameters(15, 0.1, 1.0, 30, 5);
@@ -202,17 +440,16 @@ class UmapComputeServiceTest {
         var idx = buildMultiScaleIndex(10_500, 99L);
         var service = new UmapComputeService();
         try {
-            AtomicReference<UmapResult> resultRef = new AtomicReference<>();
-            AtomicReference<String> errRef = new AtomicReference<>();
+            AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
-            service.setOnComplete(r -> { resultRef.set(r); latch.countDown(); });
-            service.setOnError(e -> { errRef.set(e); latch.countDown(); });
+            service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
 
             service.compute(idx, new UmapParameters(15, 0.1, 1.0, 30, 5), 0, ScalingMode.ZSCORE);
             assertTrue(latch.await(180, TimeUnit.SECONDS), "z-score UMAP should complete");
-            assertNull(errRef.get(), "z-score UMAP should not error: " + errRef.get());
+            var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
+                    "z-score UMAP should succeed: " + outcomeRef.get().describe());
 
-            UmapResult result = resultRef.get();
+            UmapResult result = succeeded.result();
             assertNotNull(result);
             assertEquals(10_500, result.size());
             double[] xs = result.getUmapXRaw();
