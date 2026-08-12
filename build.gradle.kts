@@ -20,8 +20,15 @@ dependencies {
     // smile.graph.NearestNeighborGraph). Bundled into the fat JAR, minus three sets
     // of dependencies FlowPath never reaches:
     //
-    //  - org.bytedeco / com.epam — native BLAS backends. The pure-Java path used
-    //    here never loads them.
+    //  - org.bytedeco / com.epam — native BLAS/ARPACK backends. FlowPath declares no
+    //    bytedeco artefact of its own; the natives that reach the running extension
+    //    arrive transitively from QuPath's own opencv-platform, and ARPACK is not among
+    //    them. The UMAP path deliberately does not depend on any of it: SMILE's spectral
+    //    embedding initialisation is the one thing that would call ARPACK, and
+    //    EmbeddingInitialisation steers the neighbour graph so SMILE takes its pure-Java
+    //    PCA branch instead. Adding the natives back is not an option rather than a
+    //    preference — Maven Central publishes ARPACK for linux-arm64, linux-x86_64,
+    //    macosx-x86_64 and windows-x86_64, and no macosx-arm64 at all.
     //  - org.duckdb — pulled in for SMILE's data-loading conveniences, which nothing
     //    here calls. It ships prebuilt native libraries for four platforms and was
     //    231MB uncompressed, roughly 95% of the shaded JAR. Excluding it takes the

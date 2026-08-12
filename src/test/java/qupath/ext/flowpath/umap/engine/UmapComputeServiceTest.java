@@ -64,6 +64,13 @@ class UmapComputeServiceTest {
         return cells.build();
     }
 
+    // Note on fixture sizes. Four of the end-to-end tests below used to build 10,500
+    // cells for no reason of their own: below 10,000 SMILE tried a spectral
+    // initialisation that needed an absent ARPACK native, so an oversized fixture was
+    // the only way to reach an embedding at all. EmbeddingInitialisation now owns that
+    // decision, so they run at the size a user's first UMAP really is — faster, and
+    // covering the path that actually gets taken.
+
     /** Wait for a UMAP computation to terminate, whatever the outcome. */
     private static UmapResult runAndWait(UmapComputeService service, CellIndex idx,
                                          UmapParameters params, int maxCells,
@@ -378,6 +385,70 @@ class UmapComputeServiceTest {
     }
 
     @Test
+    void aFiveHundredCellUmapProducesAnEmbedding() throws Exception {
+        // The size a real user's first UMAP actually is, and the one that used to be
+        // impossible. At 500 cells the neighbour graph is small and connected, which is
+        // precisely the pair of conditions on which SMILE reaches for a spectral layout
+        // and, through it, an ARPACK native FlowPath cannot ship on this platform:
+        //
+        //   UMAP failed: NoClassDefFoundError: org/bytedeco/arpackng/global/arpack
+        //
+        // Every other test in this class either stubs the work out or runs above 10,000
+        // cells, where SMILE never looks at connectivity. Nobody had ever asserted that
+        // the path a user takes on day one reaches an embedding at all.
+        var idx = buildSyntheticIndex(500, 3, 5L);
+        var service = new UmapComputeService();
+        try {
+            AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
+            service.compute(idx, new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
+            assertTrue(latch.await(180, TimeUnit.SECONDS), "a 500-cell UMAP must terminate");
+
+            var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
+                    "a 500-cell UMAP must succeed: " + outcomeRef.get().describe());
+            UmapResult result = succeeded.result();
+            assertEquals(500, result.size());
+            double[] xs = result.getUmapXRaw();
+            double[] ys = result.getUmapYRaw();
+            for (int i = 0; i < xs.length; i++) {
+                assertTrue(Double.isFinite(xs[i]) && Double.isFinite(ys[i]),
+                        "embedding coordinate " + i + " must be finite");
+            }
+
+            // Getting an embedding at this size costs one cell, and the outcome says so
+            // rather than leaving the reader to find it in a log line.
+            int imputed = succeeded.imputedCell().orElseThrow(() ->
+                    new AssertionError("a small connected graph must report the cell it "
+                            + "detached to stay off the native layout"));
+            assertTrue(imputed >= 0 && imputed < 500, "imputed cell out of range: " + imputed);
+
+            // A convex combination of real positions cannot leave the population, so the
+            // imputed cell must sit inside it. That the position is the RIGHT one — the
+            // inverse-distance mean of the node's true neighbours — is pinned exactly in
+            // EmbeddingInitialisationTest, where the graph is in hand; re-deriving it
+            // here through an approximate NN-descent graph would test the tolerance, not
+            // the placement.
+            assertTrue(withinBoundsOfOthers(xs, imputed) && withinBoundsOfOthers(ys, imputed),
+                    "the imputed cell must land inside the embedding, not beside it");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /** True when {@code values[target]} lies within the range spanned by the others. */
+    private static boolean withinBoundsOfOthers(double[] values, int target) {
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        for (int i = 0; i < values.length; i++) {
+            if (i == target) continue;
+            min = Math.min(min, values[i]);
+            max = Math.max(max, values[i]);
+        }
+        return values[target] >= min && values[target] <= max;
+    }
+
+    @Test
     void cachedResultInitiallyNull() {
         var service = new UmapComputeService();
         assertNull(service.getCachedResult());
@@ -403,15 +474,16 @@ class UmapComputeServiceTest {
     @Test
     void adaptiveEpochsSubstitutedFromSentinel() throws Exception {
         // Use the sentinel ADAPTIVE_EPOCHS from defaults() and confirm the compute
-        // service substitutes a concrete count derived from training-N. With 10_500
-        // cells (between 10K and 50K), defaultsFor returns 100 epochs.
-        var idx = buildSyntheticIndex(10_500, 3, 7L);
+        // service substitutes a concrete count derived from training-N. Below 10K cells
+        // defaultsFor returns 200 epochs; the three size bands themselves are pinned in
+        // UmapParametersTest.
+        var idx = buildSyntheticIndex(500, 3, 7L);
         var service = new UmapComputeService();
         try {
             UmapResult result = runAndWait(service, idx, UmapParameters.defaults(), 0, null, 180);
             assertNotNull(result);
-            assertEquals(100, result.getParams().epochs(),
-                    "Adaptive epochs at N=10_500 should resolve to 100");
+            assertEquals(200, result.getParams().epochs(),
+                    "Adaptive epochs at N=500 should resolve to 200");
         } finally {
             service.shutdown();
         }
@@ -441,7 +513,7 @@ class UmapComputeServiceTest {
         // Compute -> Cancel -> Compute: the *first* compute's onComplete must not
         // fire after the second compute starts. The generation counter is what
         // protects against that — verify it works end-to-end.
-        var idx = buildSyntheticIndex(10_500, 3, 13L);
+        var idx = buildSyntheticIndex(500, 3, 13L);
         var service = new UmapComputeService();
         try {
             AtomicInteger completeCount = new AtomicInteger(0);
@@ -484,7 +556,7 @@ class UmapComputeServiceTest {
         // With markers on 1x/1000x/0.01x scales, z-scoring should still yield a
         // clean, all-finite embedding (the scaler must not introduce NaN/Inf and
         // the 4-arg compute path must run end to end).
-        var idx = buildMultiScaleIndex(10_500, 99L);
+        var idx = buildMultiScaleIndex(500, 99L);
         var service = new UmapComputeService();
         try {
             AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
@@ -498,7 +570,7 @@ class UmapComputeServiceTest {
 
             UmapResult result = succeeded.result();
             assertNotNull(result);
-            assertEquals(10_500, result.size());
+            assertEquals(500, result.size());
             double[] xs = result.getUmapXRaw();
             double[] ys = result.getUmapYRaw();
             for (int i = 0; i < xs.length; i++) {
@@ -512,18 +584,14 @@ class UmapComputeServiceTest {
 
     @Test
     void emitsPhaseTimingLogs() throws Exception {
-        // SMILE's UMAP attempts spectral initialization for N < 10_000. Spectral
-        // layout requires LAPACK native code (excluded from our shadow JAR), so it
-        // hangs on small datasets in the test environment. Use N >= 10_000 so SMILE
-        // falls back to random initialization.
-        var idx = buildSyntheticIndex(10_500, 3, 1L);
+        var idx = buildSyntheticIndex(500, 3, 1L);
         var service = new UmapComputeService();
         try {
             List<String> statusLog = new CopyOnWriteArrayList<>();
             var params = new UmapParameters(15, 0.1, 1.0, 30, 5);
             UmapResult result = runAndWait(service, idx, params, 0, statusLog, 180);
             assertNotNull(result);
-            assertEquals(10_500, result.size());
+            assertEquals(500, result.size());
 
             // Allow Platform.runLater queue to flush
             CountDownLatch flush = new CountDownLatch(1);

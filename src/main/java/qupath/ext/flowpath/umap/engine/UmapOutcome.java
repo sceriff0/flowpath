@@ -4,6 +4,7 @@ import qupath.ext.flowpath.umap.model.UmapResult;
 
 import java.util.Locale;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * How one {@link UmapComputeService#compute} call ended. Exactly one of these is
@@ -88,9 +89,19 @@ public sealed interface UmapOutcome
 
     // --- Factories -----------------------------------------------------------
 
-    /** A run that produced a current embedding. */
+    /** A run that produced a current embedding, with nothing to qualify it. */
     static Succeeded succeeded(UmapResult result) {
-        return new Succeeded(result);
+        return new Succeeded(result, OptionalInt.empty());
+    }
+
+    /**
+     * A run that produced a current embedding in which one cell's coordinates were
+     * imputed rather than optimised.
+     *
+     * @param imputedCell index into the {@code CellIndex} the run walked
+     */
+    static Succeeded succeeded(UmapResult result, int imputedCell) {
+        return new Succeeded(result, OptionalInt.of(imputedCell));
     }
 
     /** A failure with no throwable behind it — a precondition the run refused. */
@@ -122,12 +133,20 @@ public sealed interface UmapOutcome
     /**
      * A completed run whose embedding is current.
      *
-     * @param result the embedding, never null
+     * @param result      the embedding, never null
+     * @param imputedCell the one cell, if any, whose coordinates were imputed from its
+     *                    neighbours instead of optimised. FlowPath detaches a single node
+     *                    from the neighbour graph to keep SMILE off its native
+     *                    initialisation path (see {@code EmbeddingInitialisation}); that
+     *                    node's position is then recomputed from its true neighbours.
+     *                    Present here so the qualification travels with the embedding
+     *                    rather than living only in a log line.
      */
-    record Succeeded(UmapResult result) implements UmapOutcome {
+    record Succeeded(UmapResult result, OptionalInt imputedCell) implements UmapOutcome {
 
         public Succeeded {
             Objects.requireNonNull(result, "result");
+            Objects.requireNonNull(imputedCell, "imputedCell");
         }
 
         @Override
@@ -137,9 +156,12 @@ public sealed interface UmapOutcome
 
         @Override
         public String describe() {
-            return String.format(Locale.US, "UMAP computed: %,d cells (k=%d)",
+            String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d)",
                     result.size(),
                     result.getParams() == null ? 0 : result.getParams().k());
+            return imputedCell.isEmpty() ? base
+                    : String.format(Locale.US, "%s; cell %,d imputed from its neighbours",
+                            base, imputedCell.getAsInt());
         }
     }
 

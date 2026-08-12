@@ -33,12 +33,15 @@ import java.util.stream.IntStream;
  * callbacks. Progress messages travel on the separate, non-terminal
  * {@link #setOnStatusUpdate} channel and never end a run.
  * <p>
- * The catch is {@code Throwable}, not {@code Exception}. SMILE reaches for ARPACK
- * natives this extension deliberately does not ship and fails with
+ * The catch is {@code Throwable}, not {@code Exception}. SMILE used to reach for ARPACK
+ * natives this extension deliberately does not ship and fail with
  * {@code NoClassDefFoundError} — an {@link Error}, which the old
  * {@code catch (Exception)} / {@code catch (OutOfMemoryError)} pair matched neither
  * of. It escaped the {@code Runnable} into a {@code Future} nobody read, and the UI
- * waited forever.
+ * waited forever. {@link EmbeddingInitialisation} now keeps SMILE off that path
+ * entirely, so the {@code Error} no longer arrives; the {@code Throwable} catch stays
+ * because the lesson was about which failures a seam can afford not to see, not about
+ * that one library.
  */
 public class UmapComputeService {
 
@@ -335,12 +338,25 @@ public class UmapComputeService {
                 ? UmapParameters.defaultsFor(computeN).epochs()
                 : params.epochs();
 
+        // Decide the embedding initialisation before SMILE gets the chance to. Left to
+        // itself, UMAP.fit sends any small connected graph to a spectral layout that
+        // needs an ARPACK native this extension does not ship, and a few-hundred-cell
+        // run — the first one a user makes — died there with NoClassDefFoundError.
+        EmbeddingInitialisation init = EmbeddingInitialisation.forGraph(nng);
+        if (init.isSteered()) {
+            postStatus("Steering initialisation to PCA (spectral needs absent natives)...");
+        }
+
         // Run UMAP with pre-computed graph
         postStatus("Optimizing layout (epochs=%d)...".formatted(effectiveEpochs));
         var options = new UMAP.Options(effectiveK, 2, effectiveEpochs,
                 1.0, params.minDist(), params.spread(), params.negativeSamples(), 1.0, 1.0);
         long fitStart = System.nanoTime();
-        double[][] embedding = UMAP.fit(matrix, nng, options);
+        double[][] embedding = UMAP.fit(matrix, init.graph(), options);
+        // The detached node carried no edges into the layout, so what fit returned for it
+        // is an artefact. Replace it with where its real neighbours say it belongs.
+        init.impute(embedding);
+        int imputedRow = init.detachedNode().orElse(-1);
         long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
         String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
         postStatus(fitMsg);
@@ -356,6 +372,7 @@ public class UmapComputeService {
         // otherwise spans both at once.
         matrix = null;
         nng = null;
+        init = null;
 
         if (subsampled) {
             // Fill sampled cells
@@ -392,7 +409,11 @@ public class UmapComputeService {
                 cellIndex.getMarkerNames(), resolvedParams);
         cachedResult = result;
 
-        return UmapOutcome.succeeded(result);
+        // Report the imputation as a cell index into cellIndex, not a training-matrix
+        // row: the row number means nothing to a consumer that never saw the subsample.
+        if (imputedRow < 0) return UmapOutcome.succeeded(result);
+        return UmapOutcome.succeeded(result,
+                subsampled ? sampleIndices[imputedRow] : imputedRow);
     }
 
     /**
@@ -573,19 +594,16 @@ public class UmapComputeService {
             double[] dists = new double[knn];
             tree.kNearest(query, knn, neighbors, dists);
 
-            // Weighted average of neighbor embeddings
-            double totalWeight = 0;
-            double wx = 0, wy = 0;
-            for (int ki = 0; ki < knn; ki++) {
-                if (neighbors[ki] < 0) continue; // unfilled slot
-                double w = 1.0 / (Math.sqrt(dists[ki]) + 1e-10);
-                wx += w * sampleEmbedding[neighbors[ki]][0];
-                wy += w * sampleEmbedding[neighbors[ki]][1];
-                totalWeight += w;
-            }
-            if (totalWeight > 0) {
-                umapX[ci] = wx / totalWeight;
-                umapY[ci] = wy / totalWeight;
+            // Weighted average of neighbor embeddings. The blend is shared with
+            // EmbeddingInitialisation's repair of its detached node — same question,
+            // "where does a cell that skipped the optimisation belong", so it must not
+            // be two formulas. `dists` is a scratch array, converted in place to the
+            // Euclidean distances the blend expects.
+            for (int ki = 0; ki < knn; ki++) dists[ki] = Math.sqrt(dists[ki]);
+            double[] placed = new double[2];
+            if (InverseDistanceBlend.place(neighbors, dists, sampleEmbedding, -1, placed)) {
+                umapX[ci] = placed[0];
+                umapY[ci] = placed[1];
             }
             // else: leave at 0.0 (no valid neighbors found)
 
