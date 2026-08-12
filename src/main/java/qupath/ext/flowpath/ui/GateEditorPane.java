@@ -429,64 +429,40 @@ public class GateEditorPane extends VBox {
         ComboBox<String> chXCombo = new ComboBox<>(channelCombo.getItems());
         chXCombo.setValue(gate.getChannelX());
         chXCombo.setPrefWidth(150);
-        chXCombo.setOnAction(e -> { if (!suppressEvents) {
-            String oldX = gate.getChannelX(); String newX = chXCombo.getValue();
-            gate.setChannelX(newX);
-            if (oldX != null && newX != null) {
-                for (Branch b : gate.getBranches()) {
-                    b.setName(b.getName().replace(oldX + "+", newX + "+").replace(oldX + "-", newX + "-"));
-                }
-                buildBranchNamesEditor(gate);
-            }
-            fireNodeChanged();
-        }});
 
         Label chYLabel = new Label("Channel Y:");
         chYLabel.setStyle("-fx-text-fill: white;");
         ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
         chYCombo.setValue(gate.getChannelY());
         chYCombo.setPrefWidth(150);
-        chYCombo.setOnAction(e -> { if (!suppressEvents) {
-            String oldY = gate.getChannelY(); String newY = chYCombo.getValue();
-            gate.setChannelY(newY);
-            if (oldY != null && newY != null) {
-                for (Branch b : gate.getBranches()) {
-                    b.setName(b.getName().replace(oldY + "+", newY + "+").replace(oldY + "-", newY + "-"));
-                }
-                buildBranchNamesEditor(gate);
-            }
-            fireNodeChanged();
-        }});
+
+        // Redraws the scatter, once there is one. The handlers are wired here, before the
+        // plot is built, and used to be re-wired afterwards with a second, longer body —
+        // which is how one of the two spellings ended up without the rebuild that
+        // re-resolves the axis for its new channel. A gate whose channels the index does
+        // not carry still has to accept a channel change; it simply has nothing to redraw.
+        final Runnable[] redraw = {() -> { }};
+        wireChannelCombo(chXCombo, gate, 0, () -> redraw[0].run());
+        wireChannelCombo(chYCombo, gate, 1, () -> redraw[0].run());
 
         // Compute slider ranges from data (z-score or raw).
         // For child gates with ancestor mask, use the filtered data range for proper centering.
         double sliderMinX = -5, sliderMaxX = 5, sliderMinY = -5, sliderMaxY = 5;
-        if (cellIndex != null && gate.getChannelX() != null && gate.getChannelY() != null) {
-            int mxI = cellIndex.getMarkerIndex(gate.getChannelX());
-            int myI = cellIndex.getMarkerIndex(gate.getChannelY());
-            if (mxI >= 0 && myI >= 0) {
-                double[][] fData;
-                if (gate.isThresholdIsZScore() && markerStats != null) {
-                    fData = getFilteredXYWithZScore(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                            gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                } else {
-                    fData = getFilteredXY(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                            gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                }
-                if (fData[0].length > 0) {
-                    double dMinX = Double.MAX_VALUE, dMaxX = -Double.MAX_VALUE;
-                    double dMinY = Double.MAX_VALUE, dMaxY = -Double.MAX_VALUE;
-                    for (int i = 0; i < fData[0].length; i++) {
-                        if (!Double.isNaN(fData[0][i]) && !Double.isNaN(fData[1][i])) {
-                            dMinX = Math.min(dMinX, fData[0][i]);
-                            dMaxX = Math.max(dMaxX, fData[0][i]);
-                            dMinY = Math.min(dMinY, fData[1][i]);
-                            dMaxY = Math.max(dMaxY, fData[1][i]);
-                        }
+        if (hasPlottableAxes(gate)) {
+            double[][] fData = plotData(gate);
+            if (fData[0].length > 0) {
+                double dMinX = Double.MAX_VALUE, dMaxX = -Double.MAX_VALUE;
+                double dMinY = Double.MAX_VALUE, dMaxY = -Double.MAX_VALUE;
+                for (int i = 0; i < fData[0].length; i++) {
+                    if (!Double.isNaN(fData[0][i]) && !Double.isNaN(fData[1][i])) {
+                        dMinX = Math.min(dMinX, fData[0][i]);
+                        dMaxX = Math.max(dMaxX, fData[0][i]);
+                        dMinY = Math.min(dMinY, fData[1][i]);
+                        dMaxY = Math.max(dMaxY, fData[1][i]);
                     }
-                    if (dMaxX > dMinX) { sliderMinX = dMinX; sliderMaxX = dMaxX; }
-                    if (dMaxY > dMinY) { sliderMinY = dMinY; sliderMaxY = dMaxY; }
                 }
+                if (dMaxX > dMinX) { sliderMinX = dMinX; sliderMaxX = dMaxX; }
+                if (dMaxY > dMinY) { sliderMinY = dMinY; sliderMaxY = dMaxY; }
             }
         }
         if (sliderMinX >= sliderMaxX) { sliderMinX = -5; sliderMaxX = 5; }
@@ -539,72 +515,19 @@ public class GateEditorPane extends VBox {
         );
 
         // Add scatter plot if data is available
-        if (cellIndex != null && gate.getChannelX() != null && gate.getChannelY() != null) {
-            int mxIdx = cellIndex.getMarkerIndex(gate.getChannelX());
-            int myIdx = cellIndex.getMarkerIndex(gate.getChannelY());
-            if (mxIdx >= 0 && myIdx >= 0) {
-                // Transform data to z-score space when thresholds are z-score based
-                double[][] filtered;
-                if (gate.isThresholdIsZScore() && markerStats != null) {
-                    filtered = getFilteredXYWithZScore(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                            gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                } else {
-                    filtered = getFilteredXY(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                            gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                }
-                ScatterPlotCanvas scatter = new ScatterPlotCanvas();
-                scatter.setData(filtered[0], filtered[1], gate.getChannelX(), gate.getChannelY());
-                scatter.setGateOverlay(gate);
-                if (markerStats != null) {
-                    applyAxisRangeFor(scatter, gate);
-                }
-                applyBranchColorsToScatter(scatter, gate);
-                scatterRef[0] = scatter;
-                this.currentScatter = scatter;
-                gateSpecificArea.getChildren().addAll(createSectionHeader("Scatter Plot"), scatter);
-
-                // Refresh scatter when channels change
-                Runnable refreshScatter = () -> {
-                    int mx = cellIndex.getMarkerIndex(gate.getChannelX());
-                    int my = cellIndex.getMarkerIndex(gate.getChannelY());
-                    if (mx >= 0 && my >= 0) {
-                        double[][] f;
-                        if (gate.isThresholdIsZScore() && markerStats != null) {
-                            f = getFilteredXYWithZScore(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                                    gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                        } else {
-                            f = getFilteredXY(gate.getChannelX(), gate.getCompartmentX(), gate.getStatisticX(),
-                                    gate.getChannelY(), gate.getCompartmentY(), gate.getStatisticY());
-                        }
-                        scatter.setData(f[0], f[1], gate.getChannelX(), gate.getChannelY());
-                        if (markerStats != null) {
-                            applyAxisRangeFor(scatter, gate);
-                        }
-                    }
-                };
-                chXCombo.setOnAction(e -> { if (!suppressEvents) {
-                    String oldX = gate.getChannelX(); String newX = chXCombo.getValue();
-                    gate.setChannelX(newX);
-                    if (oldX != null && newX != null) {
-                        for (Branch b : gate.getBranches()) {
-                            b.setName(b.getName().replace(oldX + "+", newX + "+").replace(oldX + "-", newX + "-"));
-                        }
-                        buildBranchNamesEditor(gate);
-                    }
-                    refreshScatter.run(); fireNodeChanged(); rebuildForChannelChange();
-                }});
-                chYCombo.setOnAction(e -> { if (!suppressEvents) {
-                    String oldY = gate.getChannelY(); String newY = chYCombo.getValue();
-                    gate.setChannelY(newY);
-                    if (oldY != null && newY != null) {
-                        for (Branch b : gate.getBranches()) {
-                            b.setName(b.getName().replace(oldY + "+", newY + "+").replace(oldY + "-", newY + "-"));
-                        }
-                        buildBranchNamesEditor(gate);
-                    }
-                    refreshScatter.run(); fireNodeChanged(); rebuildForChannelChange();
-                }});
+        if (hasPlottableAxes(gate)) {
+            double[][] filtered = plotData(gate);
+            ScatterPlotCanvas scatter = new ScatterPlotCanvas();
+            scatter.setData(filtered[0], filtered[1], gate.getChannelX(), gate.getChannelY());
+            scatter.setGateOverlay(gate);
+            if (markerStats != null) {
+                applyAxisRangeFor(scatter, gate);
             }
+            applyBranchColorsToScatter(scatter, gate);
+            scatterRef[0] = scatter;
+            this.currentScatter = scatter;
+            gateSpecificArea.getChildren().addAll(createSectionHeader("Scatter Plot"), scatter);
+            redraw[0] = () -> redrawScatter(scatter, gate);
         }
     }
 
@@ -1307,6 +1230,52 @@ public class GateEditorPane extends VBox {
         if (Double.isNaN(pct)) return value;
         double mapped = newCol.percentile(pct);
         return Double.isNaN(mapped) ? value : mapped;
+    }
+
+    /**
+     * True when both of {@code node}'s axes name a channel the loaded index carries, so
+     * there is something to plot.
+     */
+    private boolean hasPlottableAxes(GateNode node) {
+        if (node == null || cellIndex == null || GateAxis.axisCount(node) < 2) return false;
+        for (GateAxis axis : GateAxis.axesOf(node)) {
+            String channel = axis.channel();
+            if (channel == null || cellIndex.getMarkerIndex(channel) < 0) return false;
+        }
+        return true;
+    }
+
+    /**
+     * The points to plot for a 2D gate: each axis read through its <em>own</em> resolved
+     * column, and standardised against its own distribution when the gate is in z-score
+     * space.
+     * <p>
+     * One spelling. This block existed four times — the quadrant slider range, the
+     * quadrant scatter, its channel-change refresh, and the region scatter — and a fix
+     * landing in one of them was the whole shape of commit {@code 6b66868}: three copies
+     * plotted the bare whole-cell mean while the gate classified on a nuclear median, so
+     * the overlay sat over points that were not the ones being gated.
+     */
+    private double[][] plotData(GateNode node) {
+        GateAxis x = GateAxis.of(node, 0);
+        GateAxis y = GateAxis.of(node, 1);
+        if (node.isThresholdIsZScore() && markerStats != null) {
+            return getFilteredXYWithZScore(x.channel(), x.compartment(), x.statistic(),
+                    y.channel(), y.compartment(), y.statistic());
+        }
+        return getFilteredXY(x.channel(), x.compartment(), x.statistic(),
+                y.channel(), y.compartment(), y.statistic());
+    }
+
+    /** Re-read {@code node}'s points onto {@code scatter} and re-anchor its axes. */
+    private void redrawScatter(ScatterPlotCanvas scatter, GateNode node) {
+        if (scatter == null || !hasPlottableAxes(node)) return;
+        double[][] data = plotData(node);
+        scatter.setData(data[0], data[1],
+                GateAxis.of(node, 0).channel(), GateAxis.of(node, 1).channel());
+        if (markerStats != null) {
+            applyAxisRangeFor(scatter, node);
+        }
     }
 
     private double[][] getFilteredXY(String chX, Compartment compX, Statistic statX,
