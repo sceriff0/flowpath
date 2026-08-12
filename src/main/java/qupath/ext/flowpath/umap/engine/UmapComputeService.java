@@ -151,7 +151,10 @@ public class UmapComputeService {
         cancelled = false;
 
         // Registered only after cancel() above has had its chance to end the PREVIOUS
-        // run — otherwise the new run would terminate itself before it started.
+        // run — otherwise the new run would terminate itself before it started. That
+        // ordering is why TerminalDelivery.deliver does not throw once it has claimed a
+        // run: anything escaping the cancel() above would escape compute() with this
+        // generation already claimed and no delivery in existence for it.
         TerminalDelivery delivery = new TerminalDelivery(
                 deliveryExecutor, () -> onOutcome, this::recordOutcome);
         pendingRun = new PendingRun(myGeneration, delivery);

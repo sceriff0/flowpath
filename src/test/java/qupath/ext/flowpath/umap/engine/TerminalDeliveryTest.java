@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -87,6 +88,52 @@ class TerminalDeliveryTest {
         delivery.deliver(UmapOutcome.superseded());
 
         assertEquals(1, received.size());
+    }
+
+    @Test
+    void aThrowingConsumerDoesNotEscapeTheDeliveryBoundary() {
+        // With a synchronous executor the consumer runs on the caller's thread, so its
+        // throw would otherwise propagate into whoever ended the run — including
+        // compute()'s cancel() of the PREVIOUS run, which happens before the new run's
+        // delivery exists. The run is terminated either way.
+        sink = outcome -> { throw new IllegalStateException("consumer blew up"); };
+        TerminalDelivery delivery = delivery();
+
+        assertTrue(delivery.deliver(UmapOutcome.failed("boom")));
+
+        assertTrue(delivery.isDelivered());
+        assertEquals(1, recorded.size(), "the run must still be on the record");
+    }
+
+    @Test
+    void anExecutorThatRejectsDoesNotLeaveTheRunLookingUndelivered() {
+        // Platform.runLater after the FX toolkit has exited. The compare-and-set has
+        // already spent the run by the time execute() is reached, so a throw there must
+        // not make the run appear deliverable again — a second attempt would then be a
+        // second callback rather than the no-op the contract promises.
+        TerminalDelivery delivery = new TerminalDelivery(
+                command -> { throw new RejectedExecutionException("toolkit gone"); },
+                () -> sink, recorded::add);
+
+        assertTrue(delivery.deliver(UmapOutcome.failed("boom")));
+
+        assertTrue(delivery.isDelivered());
+        assertEquals(1, recorded.size());
+        assertTrue(received.isEmpty());
+        assertFalse(delivery.deliver(UmapOutcome.cancelled()),
+                "the run was spent by the CAS, not by the executor call succeeding");
+    }
+
+    @Test
+    void bookkeepingThatThrowsStillLeavesTheRunTerminated() {
+        // The recorder is the service's own lastOutcome/logging hook; a defect there
+        // must not become a run that can never end.
+        TerminalDelivery delivery = new TerminalDelivery(
+                DIRECT, () -> sink, outcome -> { throw new IllegalStateException("recorder blew up"); });
+
+        assertTrue(delivery.deliver(UmapOutcome.superseded()));
+
+        assertTrue(delivery.isDelivered());
     }
 
     @Test

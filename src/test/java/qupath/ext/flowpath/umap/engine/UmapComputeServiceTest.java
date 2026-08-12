@@ -259,6 +259,53 @@ class UmapComputeServiceTest {
     }
 
     @Test
+    void aThrowingConsumerDoesNotPoisonTheNextRun() {
+        // compute() claims its generation, ends the previous run, and only then builds
+        // its own delivery. A consumer that throws while that previous run is being
+        // ended would otherwise escape compute() with the new generation claimed, no
+        // delivery in existence for it and nothing submitted — a run that could never
+        // terminate. The synchronous delivery executor here is what makes that
+        // reachable; production's Platform.runLater hides it, which is exactly why the
+        // guarantee must not depend on which executor is passed.
+        var index = Cells.of(4).marker("CD45", i -> i).build();
+        List<UmapOutcome> outcomes = new CopyOnWriteArrayList<>();
+        AtomicBoolean release = new AtomicBoolean();
+        AtomicBoolean started = new AtomicBoolean();
+        AtomicInteger bodies = new AtomicInteger();
+
+        var service = serviceRunning((idx, p, max, mode, gen) -> {
+            if (bodies.incrementAndGet() == 1) {
+                started.set(true);
+                spinUntil(release);
+            }
+            return UmapOutcome.succeeded(stubResult(idx));
+        });
+        try {
+            service.setOnOutcome(outcome -> {
+                outcomes.add(outcome);
+                if (outcome.kind() == UmapOutcome.Kind.SUPERSEDED) {
+                    throw new IllegalStateException("consumer blew up on the superseded run");
+                }
+            });
+
+            service.compute(index, UmapParameters.defaults(), 0);   // occupies the worker
+            spinUntil(started);
+            // Ends run 1 -> the consumer throws inside cancel(), inside compute().
+            assertDoesNotThrow(() -> service.compute(index, UmapParameters.defaults(), 0));
+            release.set(true);
+
+            awaitOutcomes(outcomes, 2);
+            assertEquals(2, outcomes.size(), "both runs must end: " + outcomes);
+            assertEquals(UmapOutcome.Kind.SUPERSEDED, outcomes.get(0).kind());
+            assertEquals(UmapOutcome.Kind.SUCCEEDED, outcomes.get(1).kind(),
+                    "the run that followed the throwing consumer must still get its outcome");
+        } finally {
+            release.set(true);
+            service.shutdown();
+        }
+    }
+
+    @Test
     void computeAfterShutdownFailsLoudlyRatherThanThrowingAtTheCaller() {
         // The caller has already shown a busy state by the time it calls compute();
         // a RejectedExecutionException thrown back at it leaves that state with nothing

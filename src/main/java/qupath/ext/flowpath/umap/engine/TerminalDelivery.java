@@ -52,6 +52,23 @@ final class TerminalDelivery {
 
     /**
      * Deliver {@code outcome} unless this run already delivered one.
+     * <p>
+     * Once the compare-and-set has claimed the run, this method does not throw. That is
+     * not politeness towards the consumer, it is what makes the enclosing guarantee
+     * unconditional. {@code compute()} ends the previous run before it creates the new
+     * run's delivery, so anything escaping here escapes {@code compute()} with the new
+     * generation already claimed, no delivery object in existence and nothing submitted
+     * — a run that can never terminate, which is the exact failure this class exists to
+     * make unexpressible. Two things can escape: the consumer itself, when the delivery
+     * executor is synchronous, and {@code executor.execute}, when the FX toolkit has
+     * exited. Neither is reachable in production today, so the guarantee held only
+     * because of the executor that happens to be passed in. Now it holds because of the
+     * shape of the code.
+     * <p>
+     * A synchronous executor consequently behaves exactly like the asynchronous one: in
+     * production a consumer that throws does so later, on the FX thread, where it cannot
+     * reach the service either way. The throwable is printed rather than swallowed,
+     * because a consumer that throws is still a defect worth seeing.
      *
      * @return true if this call was the one that delivered; false if the run was
      *         already terminated, in which case nothing happened
@@ -61,10 +78,17 @@ final class TerminalDelivery {
         if (!delivered.compareAndSet(false, true)) {
             return false;
         }
-        onDelivered.accept(outcome);
-        Consumer<UmapOutcome> consumer = sink.get();
-        if (consumer != null) {
-            executor.execute(() -> consumer.accept(outcome));
+        // The run IS terminated from here on. Nothing below may undo that or escape.
+        try {
+            onDelivered.accept(outcome);
+            Consumer<UmapOutcome> consumer = sink.get();
+            if (consumer != null) {
+                executor.execute(() -> consumer.accept(outcome));
+            }
+        } catch (Throwable t) {
+            System.err.println("FlowPath UMAP: delivering " + outcome.describe()
+                    + " threw; the run is still terminated and the service is unaffected.");
+            t.printStackTrace();
         }
         return true;
     }
