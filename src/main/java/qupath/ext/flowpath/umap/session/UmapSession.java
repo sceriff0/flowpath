@@ -142,7 +142,8 @@ public final class UmapSession {
     private int pendingRebuilds;
 
     // --- Feature selection ---
-    private List<String> markers = new ArrayList<>();
+    /** Never editable: markers() hands this out directly. Both install paths copyOf. */
+    private List<String> markers = List.of();
     private CompartmentCapability capability = CompartmentCapability.empty();
     private MarkerSelection selection = new MarkerSelection();
 
@@ -572,7 +573,11 @@ public final class UmapSession {
             awaitingSnapshot = false;
             cellIndex = null;
             markerStats = null;
-            markers = new ArrayList<>();
+            // Immutable, like both install paths' List.copyOf. A mutable empty list here
+            // was the one hole in "state never leaves this class editable": markers() hands
+            // it straight out, and a caller adding to it would change what the panel
+            // derives from without the session ever publishing.
+            markers = List.of();
             capability = CompartmentCapability.empty();
             selection = new MarkerSelection();
             retireCellSetNow();
