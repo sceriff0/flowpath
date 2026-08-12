@@ -433,15 +433,17 @@ class UmapComputeServiceTest {
 
             // Getting an embedding at this size costs one cell, and the outcome says so
             // rather than leaving the reader to find it in a log line.
+            // Range is not asserted here: completedWith already refuses a detached row
+            // outside the training matrix, and with no subsample the training matrix is
+            // all 500 cells, so "0 <= imputed < 500" cannot fail. Nor is cellsAtOrigin,
+            // for the same reason — the constructor refuses a parked cell when nothing
+            // was held out. EmbeddingReportTest pins both refusals directly.
             int imputed = succeeded.report().imputedCell().orElseThrow(() ->
                     new AssertionError("a small connected graph must report the cell it "
                             + "detached to stay off the native layout"));
-            assertTrue(imputed >= 0 && imputed < 500, "imputed cell out of range: " + imputed);
             assertEquals(EmbeddingReport.Initialisation.PCA_STEERED_FROM_SPECTRAL,
                     succeeded.report().initialisation(),
                     "the report must name the initialisation the run actually used");
-            assertEquals(0, succeeded.report().cellsAtOrigin(),
-                    "an unsubsampled run projects nothing, so nothing can be parked");
             assertTrue(succeeded.report().unmeasuredMarkers().isEmpty(),
                     "three gaussian markers are not degenerate: "
                             + succeeded.report().unmeasuredMarkers());
@@ -489,10 +491,11 @@ class UmapComputeServiceTest {
             assertEquals(cells, succeeded.result().size(),
                     "subsampling trains on 300 but must still place all 900 cells");
 
-            int imputed = succeeded.report().imputedCell().orElseThrow(() -> new AssertionError(
+            // Again no range assertion — completedWith bounds the detached row against the
+            // 300-row training matrix before it ever becomes a cell index, so any value
+            // reaching here is already inside 0..899.
+            succeeded.report().imputedCell().orElseThrow(() -> new AssertionError(
                     "a 300-row training graph is small and connected, so it must be steered"));
-            assertTrue(imputed >= 0 && imputed < cells,
-                    "the imputed cell must address the caller's index: " + imputed);
             assertTrue(succeeded.report().reweightedCells() > 0,
                     "the cells that listed the detached node must be counted, not dropped");
             assertTrue(succeeded.report().subsampled(), "300 of 900 is a subsample");
@@ -787,7 +790,6 @@ class UmapComputeServiceTest {
         var service = new UmapComputeService();
         try {
             UmapResult result = runAndWait(service, idx, UmapParameters.defaults(), 0, null, 180);
-            assertNotNull(result);
             assertEquals(200, result.getParams().epochs(),
                     "Adaptive epochs at N=500 should resolve to 200");
         } finally {
@@ -875,7 +877,6 @@ class UmapComputeServiceTest {
                     "z-score UMAP should succeed: " + outcomeRef.get().describe());
 
             UmapResult result = succeeded.result();
-            assertNotNull(result);
             assertEquals(500, result.size());
             double[] xs = result.getUmapXRaw();
             double[] ys = result.getUmapYRaw();
@@ -896,7 +897,6 @@ class UmapComputeServiceTest {
             List<String> statusLog = new CopyOnWriteArrayList<>();
             var params = new UmapParameters(15, 0.1, 1.0, 30, 5);
             UmapResult result = runAndWait(service, idx, params, 0, statusLog, 180);
-            assertNotNull(result);
             assertEquals(500, result.size());
 
             // Allow Platform.runLater queue to flush

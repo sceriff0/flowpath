@@ -198,8 +198,14 @@ class ViewStateDerivationTest {
                 "one marker is a READY panel with a Run button that must not be clickable");
         assertFalse(state.canCompute(),
                 "the toolbar button used to invite a click whose only ending was a failure");
-        assertFalse(state.offerFirstRun() && state.canCompute(),
-                "and the empty state's second Run affordance must agree with it");
+        assertTrue(state.offerFirstRun(),
+                "the overlay still offers its Run button — a panel with cells has one, and "
+                        + "withdrawing it would say 'nothing to run' when the truth is "
+                        + "'not enough markers'");
+        // The conjunction this replaces was constant-false the moment the line above it
+        // passed, so it pinned nothing. The agreement worth pinning is that BOTH Run
+        // affordances read their enabled-ness off the same canCompute: the overlay's is
+        // shown and disabled, never shown and clickable.
     }
 
     @Test

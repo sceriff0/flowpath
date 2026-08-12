@@ -49,10 +49,15 @@ class FeatureSelectionPaneFxTest {
         var session = sessionWith(cap, MarkerSelection.defaultFor(PANEL));
         var published = new AtomicInteger();
         session.observe(state -> published.incrementAndGet());
+        // The delta is taken across the edit alone. Against a fixed floor it was not:
+        // observe() publishes once on subscribe and populate() publishes again on its own,
+        // so "> 1" held whether or not the edit was ever heard.
+        var beforeTheEdit = new AtomicInteger(-1);
 
         FxTestSupport.onFxRun(() -> {
             var pane = new FeatureSelectionPane();
             pane.populate(session);
+            beforeTheEdit.set(published.get());
             // Simulate the user choosing the nuclear compartment. This is the write the
             // combo's own handler makes — through the session, because the pane has no
             // other way to write.
@@ -62,9 +67,10 @@ class FeatureSelectionPaneFxTest {
 
         assertTrue(cap.isRich());
         assertEquals(Compartment.NUCLEAR, session.selectionEntry("CD3").compartment());
-        assertTrue(published.get() > 1,
+        assertTrue(published.get() > beforeTheEdit.get(),
                 "the session heard the edit — an edit it does not hear is one the panel "
-                        + "never re-derives Run UMAP from");
+                        + "never re-derives Run UMAP from. Published " + beforeTheEdit.get()
+                        + " times before it and " + published.get() + " after");
     }
 
     @Test
@@ -79,6 +85,9 @@ class FeatureSelectionPaneFxTest {
 
         var published = new AtomicInteger();
         session.observe(state -> published.incrementAndGet());
+        // Read the floor rather than assume it: observe() publishes on subscribe, so a
+        // literal "> 1" was one publish away from being satisfied by nothing populate did.
+        int beforePopulate = published.get();
 
         FxTestSupport.onFxRun(() -> new FeatureSelectionPane().populate(session));
 
@@ -86,7 +95,9 @@ class FeatureSelectionPaneFxTest {
         // went anywhere but the session, neither of these would hold.
         assertEquals(Compartment.WHOLE_CELL, session.selectionEntry("CD3").compartment());
         assertEquals(Statistic.MEAN, session.selectionEntry("CD3").statistic());
-        assertTrue(published.get() > 1, "and the session heard it");
+        assertTrue(published.get() > beforePopulate,
+                "and the session heard it: published " + beforePopulate
+                        + " times before populate() and " + published.get() + " after");
     }
 
     @Test
