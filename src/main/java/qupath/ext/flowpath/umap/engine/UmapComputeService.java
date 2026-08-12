@@ -257,142 +257,142 @@ public class UmapComputeService {
      */
     private UmapOutcome runEmbedding(CellIndex cellIndex, UmapParameters params,
                                      int maxCells, ScalingMode mode, int myGeneration) {
-    int n = cellIndex.size();
-    int m = cellIndex.getMarkerNames().length;
+        int n = cellIndex.size();
+        int m = cellIndex.getMarkerNames().length;
 
-    // Memory estimation
-    long estimatedBytes = (long) n * m * 8 + (long) n * params.k() * 32 + (long) n * 2 * 8;
-    long freeMemory = Runtime.getRuntime().maxMemory()
-            - Runtime.getRuntime().totalMemory()
-            + Runtime.getRuntime().freeMemory();
+        // Memory estimation
+        long estimatedBytes = (long) n * m * 8 + (long) n * params.k() * 32 + (long) n * 2 * 8;
+        long freeMemory = Runtime.getRuntime().maxMemory()
+                - Runtime.getRuntime().totalMemory()
+                + Runtime.getRuntime().freeMemory();
 
-    // Determine if subsampling is needed
-    int computeN = n;
-    int[] sampleIndices = null;
-    boolean subsampled = false;
+        // Determine if subsampling is needed
+        int computeN = n;
+        int[] sampleIndices = null;
+        boolean subsampled = false;
 
-    if (maxCells > 0 && n > maxCells) {
-        // Fixed mode: user-specified limit
-        postStatus("Subsampling %,d -> %,d cells...".formatted(n, maxCells));
-        sampleIndices = stratifiedSample(cellIndex, maxCells);
-        computeN = sampleIndices.length;
-        subsampled = true;
-    } else if (maxCells < 0 || estimatedBytes > freeMemory * 0.6) {
-        // Auto mode (maxCells == -1) or memory pressure
-        int memoryLimit = (int) Math.min(n, Math.max(10000,
-                freeMemory * 0.4 / (m * 8 + params.k() * 32 + 2 * 8)));
-        int autoLimit = Math.min(memoryLimit, AUTO_SUBSAMPLE_HARD_CAP);
-        if (autoLimit < n) {
-            postStatus("Auto-subsampling %,d -> %,d cells (based on available memory)..."
-                    .formatted(n, autoLimit));
-            sampleIndices = stratifiedSample(cellIndex, autoLimit);
+        if (maxCells > 0 && n > maxCells) {
+            // Fixed mode: user-specified limit
+            postStatus("Subsampling %,d -> %,d cells...".formatted(n, maxCells));
+            sampleIndices = stratifiedSample(cellIndex, maxCells);
             computeN = sampleIndices.length;
             subsampled = true;
-        }
-    }
-
-    // Build matrix
-    postStatus("Preparing data matrix (%,d cells x %d markers)...".formatted(computeN, m));
-    double[][] matrix;
-    double[] imputationMeans = null;
-    if (subsampled) {
-        imputationMeans = new double[m];
-        matrix = extractSubMatrix(cellIndex, sampleIndices, imputationMeans);
-    } else {
-        matrix = cellIndex.toMatrix();
-    }
-
-    // Fit feature scaler on the training matrix and apply it in place.
-    // UMAP is distance-based; without scaling, high-magnitude markers
-    // dominate the neighbor graph. The same scaler is reused to project
-    // held-out cells below, so training and projection share one frame.
-    if (mode != ScalingMode.NONE) {
-        postStatus("Scaling features (%s)...".formatted(mode.label()));
-    }
-    FeatureScaler scaler = FeatureScaler.fit(matrix, mode);
-    scaler.transformInPlace(matrix);
-
-    // Clamp k to dataset size (NN-descent requires k < n)
-    int effectiveK = Math.min(params.k(), computeN - 1);
-    if (effectiveK < 2) {
-        return UmapOutcome.failed(
-                "Too few cells (%d) for UMAP. Need at least 3.".formatted(computeN));
-    }
-
-    // Build kNN graph (always use approximate NN-descent for speed)
-    postStatus("Building neighbor graph (k=%d)...".formatted(effectiveK));
-    long nnStart = System.nanoTime();
-    NearestNeighborGraph nng = NearestNeighborGraph.descent(matrix, effectiveK);
-    long nnMs = (System.nanoTime() - nnStart) / 1_000_000L;
-    String nnMsg = "NN-Descent: %dms".formatted(nnMs);
-    postStatus(nnMsg);
-    System.err.println(nnMsg);
-
-    if (cancelled || generation.get() != myGeneration) return staleOutcome();
-
-    // Resolve adaptive epochs from training-N if the caller used the sentinel.
-    int effectiveEpochs = params.epochs() == UmapParameters.ADAPTIVE_EPOCHS
-            ? UmapParameters.defaultsFor(computeN).epochs()
-            : params.epochs();
-
-    // Run UMAP with pre-computed graph
-    postStatus("Optimizing layout (epochs=%d)...".formatted(effectiveEpochs));
-    var options = new UMAP.Options(effectiveK, 2, effectiveEpochs,
-            1.0, params.minDist(), params.spread(), params.negativeSamples(), 1.0, 1.0);
-    long fitStart = System.nanoTime();
-    double[][] embedding = UMAP.fit(matrix, nng, options);
-    long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
-    String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
-    postStatus(fitMsg);
-    System.err.println(fitMsg);
-
-    // Build result arrays
-    double[] umapX = new double[n];
-    double[] umapY = new double[n];
-
-    // The training matrix and neighbour graph are dead once fit returns.
-    // Releasing them here matters: the projection stage below allocates a
-    // second [samples][markers] matrix plus its index, and peak memory
-    // otherwise spans both at once.
-    matrix = null;
-    nng = null;
-
-    if (subsampled) {
-        // Fill sampled cells
-        for (int i = 0; i < sampleIndices.length; i++) {
-            umapX[sampleIndices[i]] = embedding[i][0];
-            umapY[sampleIndices[i]] = embedding[i][1];
+        } else if (maxCells < 0 || estimatedBytes > freeMemory * 0.6) {
+            // Auto mode (maxCells == -1) or memory pressure
+            int memoryLimit = (int) Math.min(n, Math.max(10000,
+                    freeMemory * 0.4 / (m * 8 + params.k() * 32 + 2 * 8)));
+            int autoLimit = Math.min(memoryLimit, AUTO_SUBSAMPLE_HARD_CAP);
+            if (autoLimit < n) {
+                postStatus("Auto-subsampling %,d -> %,d cells (based on available memory)..."
+                        .formatted(n, autoLimit));
+                sampleIndices = stratifiedSample(cellIndex, autoLimit);
+                computeN = sampleIndices.length;
+                subsampled = true;
+            }
         }
 
-        // Project remaining cells via kNN
-        postStatus("Projecting remaining %,d cells...".formatted(n - computeN));
-        long projStart = System.nanoTime();
-        projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY, imputationMeans, scaler);
-        long projMs = (System.nanoTime() - projStart) / 1_000_000L;
-        String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
-                .formatted(nnMs, fitMs, projMs);
-        postStatus(projMsg);
-        System.err.println(projMsg);
-    } else {
-        for (int i = 0; i < n; i++) {
-            umapX[i] = embedding[i][0];
-            umapY[i] = embedding[i][1];
+        // Build matrix
+        postStatus("Preparing data matrix (%,d cells x %d markers)...".formatted(computeN, m));
+        double[][] matrix;
+        double[] imputationMeans = null;
+        if (subsampled) {
+            imputationMeans = new double[m];
+            matrix = extractSubMatrix(cellIndex, sampleIndices, imputationMeans);
+        } else {
+            matrix = cellIndex.toMatrix();
         }
-    }
 
-    if (cancelled || generation.get() != myGeneration) return staleOutcome();
+        // Fit feature scaler on the training matrix and apply it in place.
+        // UMAP is distance-based; without scaling, high-magnitude markers
+        // dominate the neighbor graph. The same scaler is reused to project
+        // held-out cells below, so training and projection share one frame.
+        if (mode != ScalingMode.NONE) {
+            postStatus("Scaling features (%s)...".formatted(mode.label()));
+        }
+        FeatureScaler scaler = FeatureScaler.fit(matrix, mode);
+        scaler.transformInPlace(matrix);
 
-    // Record the epochs actually used (resolve any adaptive sentinel) so
-    // downstream consumers see a real value rather than the sentinel.
-    UmapParameters resolvedParams = params.epochs() == effectiveEpochs
-            ? params
-            : new UmapParameters(params.k(), params.minDist(), params.spread(),
-                    effectiveEpochs, params.negativeSamples());
-    UmapResult result = new UmapResult(umapX, umapY, cellIndex.getObjects(),
-            cellIndex.getMarkerNames(), resolvedParams);
-    cachedResult = result;
+        // Clamp k to dataset size (NN-descent requires k < n)
+        int effectiveK = Math.min(params.k(), computeN - 1);
+        if (effectiveK < 2) {
+            return UmapOutcome.failed(
+                    "Too few cells (%d) for UMAP. Need at least 3.".formatted(computeN));
+        }
 
-    return UmapOutcome.succeeded(result);
+        // Build kNN graph (always use approximate NN-descent for speed)
+        postStatus("Building neighbor graph (k=%d)...".formatted(effectiveK));
+        long nnStart = System.nanoTime();
+        NearestNeighborGraph nng = NearestNeighborGraph.descent(matrix, effectiveK);
+        long nnMs = (System.nanoTime() - nnStart) / 1_000_000L;
+        String nnMsg = "NN-Descent: %dms".formatted(nnMs);
+        postStatus(nnMsg);
+        System.err.println(nnMsg);
+
+        if (cancelled || generation.get() != myGeneration) return staleOutcome();
+
+        // Resolve adaptive epochs from training-N if the caller used the sentinel.
+        int effectiveEpochs = params.epochs() == UmapParameters.ADAPTIVE_EPOCHS
+                ? UmapParameters.defaultsFor(computeN).epochs()
+                : params.epochs();
+
+        // Run UMAP with pre-computed graph
+        postStatus("Optimizing layout (epochs=%d)...".formatted(effectiveEpochs));
+        var options = new UMAP.Options(effectiveK, 2, effectiveEpochs,
+                1.0, params.minDist(), params.spread(), params.negativeSamples(), 1.0, 1.0);
+        long fitStart = System.nanoTime();
+        double[][] embedding = UMAP.fit(matrix, nng, options);
+        long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
+        String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
+        postStatus(fitMsg);
+        System.err.println(fitMsg);
+
+        // Build result arrays
+        double[] umapX = new double[n];
+        double[] umapY = new double[n];
+
+        // The training matrix and neighbour graph are dead once fit returns.
+        // Releasing them here matters: the projection stage below allocates a
+        // second [samples][markers] matrix plus its index, and peak memory
+        // otherwise spans both at once.
+        matrix = null;
+        nng = null;
+
+        if (subsampled) {
+            // Fill sampled cells
+            for (int i = 0; i < sampleIndices.length; i++) {
+                umapX[sampleIndices[i]] = embedding[i][0];
+                umapY[sampleIndices[i]] = embedding[i][1];
+            }
+
+            // Project remaining cells via kNN
+            postStatus("Projecting remaining %,d cells...".formatted(n - computeN));
+            long projStart = System.nanoTime();
+            projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY, imputationMeans, scaler);
+            long projMs = (System.nanoTime() - projStart) / 1_000_000L;
+            String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
+                    .formatted(nnMs, fitMs, projMs);
+            postStatus(projMsg);
+            System.err.println(projMsg);
+        } else {
+            for (int i = 0; i < n; i++) {
+                umapX[i] = embedding[i][0];
+                umapY[i] = embedding[i][1];
+            }
+        }
+
+        if (cancelled || generation.get() != myGeneration) return staleOutcome();
+
+        // Record the epochs actually used (resolve any adaptive sentinel) so
+        // downstream consumers see a real value rather than the sentinel.
+        UmapParameters resolvedParams = params.epochs() == effectiveEpochs
+                ? params
+                : new UmapParameters(params.k(), params.minDist(), params.spread(),
+                        effectiveEpochs, params.negativeSamples());
+        UmapResult result = new UmapResult(umapX, umapY, cellIndex.getObjects(),
+                cellIndex.getMarkerNames(), resolvedParams);
+        cachedResult = result;
+
+        return UmapOutcome.succeeded(result);
     }
 
     /**
