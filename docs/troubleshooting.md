@@ -118,6 +118,34 @@ your problem, open an issue on the
     subsampling + kNN projection — see the
     [performance table](usage.md#umap).
 
+??? failure "Run UMAP is greyed out"
+    Two reasons, and the panel says which. **Fewer than two markers are ticked** —
+    a UMAP is computed over the ticked columns and needs at least two of them, so
+    open **Features…** and tick more; the empty state reads *"Not enough markers to
+    embed"* and counts them for you. Or **a feature change is still being applied**
+    — ticking a marker rebuilds the cell index, and Run unlocks when the new
+    columns are ready (*"Rebuilding the cell index…"*). The button is also disabled
+    for the duration of a run, along with the rest of the inputs, so a preset
+    cannot be changed out from under a computation in flight.
+
+??? failure "The UMAP warns about something after computing"
+    That is the run reporting what it had to degrade — the picture would otherwise
+    look exactly like a clean one. The status line carries the first finding;
+    **hover it for the full report**, which also names the subsample size. The
+    common ones:
+
+    - *cells sitting at exactly (0,0)* — held-out cells the kNN projection found no
+      usable neighbour for. They form a dense blob that reads as a real cluster.
+      Turn subsampling down or off under *Embedding → Advanced* if the count is
+      material.
+    - *markers no training cell carried* — imputed with the mean of nothing, so
+      they are columns of zeros contributing nothing. Untick them, or check the
+      compartment/statistic they resolve to under **Features…**.
+    - *constant markers* — real data, but no variance, so no distance.
+    - *one cell imputed, N neighbourhoods reweighted* — provenance, not a defect.
+      FlowPath detaches one node so the layout starts from PCA; see
+      [layout initialisation](usage.md#what-a-run-reports-about-itself).
+
 ??? failure "The embedding isn't coloured by phenotype"
     Check the **Colour** section is set to **Phenotype** rather than **Marker**.
     If Phenotype shows one flat grey, no gate has claimed any cells yet — build at
@@ -137,8 +165,12 @@ your problem, open an issue on the
 ??? failure "Computation is very slow"
     Use the **Fast** quality preset, enable subsampling for large datasets, and
     trim the feature list under **Features…** — opening from a gate tree already
-    narrows it to your gated markers, but an ungated 40-plex will embed all forty.
-    See the [performance table](usage.md#umap).
+    narrows it to your gated markers (given at least two of them), but an ungated
+    40-plex will embed all forty. See the [performance table](usage.md#umap).
+
+    Trimming the list only started doing this in **v2.2.0**. Before that the
+    include flag was a picker preference: unticking a marker changed one label and
+    the embedding still ran over the whole panel.
 
 ## AnnoMask { #annomask }
 

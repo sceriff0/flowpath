@@ -45,7 +45,9 @@ Gating is the way in. The UMAP opens from it and inherits the phenotyping:
   tissue overlay and the embedding cannot disagree;
 - a **legend** of your populations with real counts, where clicking one hides it;
 - a **feature selection** pre-ticked to the markers you actually gated on, in the
-  compartment and statistic you gated them in.
+  compartment and statistic you gated them in — once you have gated at least two
+  of them. Below that the picker opens with everything ticked, because an
+  embedding needs two markers and a selection of one could not be run.
 
 Editing a gate does not rebuild the index, so an open UMAP **recolours live** as
 you gate rather than needing a recompute.

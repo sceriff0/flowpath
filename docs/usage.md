@@ -103,7 +103,10 @@ knowing your phenotyping — there is nothing to reconnect or re-select.
 - a **legend** listing your populations with real counts and shares;
 - a **feature selection** pre-ticked to the markers you actually gated on, in the
   compartment and statistic you gated them in — not all forty channels on the
-  slide.
+  slide. This needs **at least two gated markers**: a UMAP cannot be computed over
+  one, so a single first gate leaves the picker at everything-ticked rather than
+  pre-selecting a set that could not be run. The empty state says which of the two
+  you are looking at.
 
 Then:
 
@@ -111,15 +114,20 @@ Then:
    and how many markers are selected. Adjust with **Features…** if you want.
 2. Pick a quality preset under **Embedding** (Fast / Balanced / Best) and press
    **Run UMAP**. Progress appears inline, under the button, with a Cancel beside
-   it; the gating window stays usable throughout.
-3. Under **Colour**, switch between **Phenotype** (the default) and **Marker** to
+   it; the gating window stays usable throughout. **Run UMAP is greyed out** until
+   at least two markers are ticked, and while a feature change is still being
+   applied. The inputs lock for the duration of a run, so a preset or a marker
+   cannot be changed out from under the computation in flight.
+3. Read the status line when it finishes. A run that had to degrade something says
+   so there — see [what the warnings mean](#what-a-run-reports-about-itself) below.
+4. Under **Colour**, switch between **Phenotype** (the default) and **Marker** to
    see one marker's expression across the embedding.
-4. In the legend, **click a population to hide it** — the fastest way to dig a
+5. In the legend, **click a population to hide it** — the fastest way to dig a
    rare population out from under a dominant one — or **hover to highlight** it
    in place.
-5. Under **Select**, **draw a polygon** around a cluster, name it, and press
+6. Under **Select**, **draw a polygon** around a cluster, name it, and press
    **Tag Selection** to store it as a derived PathClass.
-6. **Export Data** → `umap_coordinates.csv`.
+7. **Export Data** → `umap_coordinates.csv`.
 
 <figure class="screenshot" markdown>
 ![UMAP embedding coloured by phenotype](assets/screenshots/placeholder.png){ .glightbox }
@@ -176,8 +184,13 @@ UMAP_X,UMAP_Y,Phenotype
 - **Quality presets** — Fast / Balanced / Best, or Custom to expose neighbours
   (`k`), epochs, subsampling mode and cell cap. Computed via the
   [SMILE](https://haifengl.github.io/) library.
-- **Feature selection** — pre-seeded from your gates; every other marker on the
-  slide stays available in the picker, just unticked.
+- **Feature selection** — pre-seeded from your gates once you have gated **two or
+  more** markers; every other marker on the slide stays available in the picker,
+  just unticked. Unticking a marker **excludes it from the embedding** — the
+  computation reads only the ticked columns — so it is the lever for trimming a
+  40-plex down to the markers a question is actually about. **Run UMAP requires at
+  least two ticked markers** and is disabled below that, and again for the moment
+  it takes to apply a change.
 - **Subsampling** — Auto / Off / Fixed, with stratified sampling that preserves
   phenotype proportions; large slides project the rest via weighted kNN, so every
   cell still gets coordinates.
@@ -191,6 +204,43 @@ UMAP_X,UMAP_Y,Phenotype
   viewer (selection only; it never changes classifications).
 - **OOM protection** — memory is estimated before computing, with a warning if a
   dataset may run out.
+- **Locked inputs during a run** — the presets, the feature picker and the
+  subsampling controls are disabled while a computation is in flight, so what the
+  result was computed from is what the panel was showing when you pressed Run.
+
+#### What a run reports about itself { #what-a-run-reports-about-itself }
+
+A UMAP that had to degrade something still produces a picture, and the picture
+looks exactly like a clean one. So every successful run now says what it cost:
+the **first finding on the status line**, the **whole report in the tooltip**
+behind it. A run with nothing to report says so and stays green.
+
+What can appear there:
+
+- **Cells the projection could not place.** Held-out cells with no usable sampled
+  neighbour are left at exactly `(0, 0)`, where they read as a real, tight cluster
+  rather than as missing data. If you see a suspiciously dense blob at the origin,
+  this is the line that tells you it is not one.
+- **Markers no training cell carried.** Imputed with the mean of nothing, so each
+  is a column of zeros contributing nothing to any distance — the embedding was
+  effectively over fewer markers than you ticked.
+- **Constant markers.** Known data, unlike the above, but a feature with no
+  variance moves no distance.
+- **The imputed cell, and the rows reweighted around it.** One node is detached
+  from the neighbour graph so the layout starts from PCA rather than a spectral
+  initialisation (see below); its position is imputed from its true neighbours,
+  and the cells that listed it have their distance vectors rewritten. This is
+  policy on every run under the spectral limit, so it is recorded as provenance
+  rather than as a warning.
+- **The subsample size**, when subsampling was applied — how much of the picture
+  was optimised rather than projected.
+
+!!! note "Layout initialisation"
+    FlowPath always initialises the layout from **PCA**. The spectral alternative
+    needs an ARPACK native library that has no `macosx-arm64` build, so a run that
+    reached it failed outright. Because FlowPath now chooses, embeddings are
+    reproducible across platforms — but coordinates for datasets of 10 000 cells
+    or fewer differ from any this extension produced before v2.2.0.
 
 | Cell count | Strategy | Expected time |
 |---|---|---|
