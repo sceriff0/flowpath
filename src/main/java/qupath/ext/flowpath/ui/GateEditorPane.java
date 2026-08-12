@@ -1380,15 +1380,20 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * Rebuild the editor after a 2D gate's channel changed, so the per-axis
-     * compartment and statistic selectors are re-derived for the new channel.
+     * Rebuild the editor after a gate's channel changed, so the per-axis signal
+     * <em>selectors</em> are re-derived for the new channel.
      * <p>
-     * Without this the gate keeps the previous channel's selection. When the new
-     * channel has no measurement for that compartment, every resolved value is NaN
-     * and the plot goes empty with no explanation. {@code addCompartmentControls} is
-     * the only place the selection is validated against {@link CompartmentCapability},
-     * and it only runs while the editor is being built — which is why the threshold
-     * editor already rebuilds itself on a channel change.
+     * Selectors, not selection. The selection itself is already correct by the time this
+     * runs: {@link GateAxis#retarget} re-pins the axis to a column the new channel is
+     * actually quantified with before it returns, which is what stopped a retarget
+     * leaving {@code Nucleus} on a whole-cell-only channel and reading NaN for every
+     * cell. What {@code retarget} cannot do is change what is on screen, and the combos
+     * are built from {@link GateAxis#choicesFrom}: whether a compartment combo exists at
+     * all, whether a statistic combo does, and which options each offers are all answers
+     * about <em>this</em> channel's {@link CompartmentCapability}. A legacy channel
+     * offers no compartment choice and one that replaces it must stop showing one; a
+     * Median-only channel must stop offering Mean. Only {@link #setGateNode} builds
+     * those, so only a rebuild re-derives them.
      * <p>
      * Deferred so the rebuild does not tear down the combo whose action is running.
      */
