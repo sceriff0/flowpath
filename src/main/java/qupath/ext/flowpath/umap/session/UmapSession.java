@@ -186,6 +186,17 @@ public final class UmapSession {
     private int mutationDepth;
 
     /**
+     * True while a notification is being delivered.
+     * <p>
+     * {@link #mutationDepth} is back to zero by then, so without this a subscriber that
+     * mutates starts a full nested publish and the outer loop afterwards resumes handing
+     * the <em>older</em> state to the subscribers it had not reached yet — the exact
+     * staleness this design replaced, reintroduced from the inside. Unreachable with
+     * today's two subscribers; a third is precisely the edit this design invites.
+     */
+    private boolean publishing;
+
+    /**
      * Subscribe to every settled change, and receive the current state immediately.
      * <p>
      * This is what replaced {@code UiStateController.sync()} being <em>called</em>.
@@ -217,16 +228,40 @@ public final class UmapSession {
         publish();
     }
 
-    /** Tell every observer, unless an enclosing mutation is still running. */
+    /**
+     * Tell every observer, unless an enclosing mutation is still running.
+     * <p>
+     * Every subscriber is told even if an earlier one threw — a panel half-updated because
+     * a legend blew up is worse than the exception, and the first failure is rethrown once
+     * the round is complete so it is still loud.
+     */
     private void publish() {
         if (mutationDepth > 0 || observers.isEmpty()) return;
-        ViewState now = viewState();
-        // Indexed rather than iterated: an observer that subscribes another during its
-        // own notification would otherwise take the whole panel down with a
-        // ConcurrentModificationException.
-        for (int i = 0; i < observers.size(); i++) {
-            observers.get(i).accept(now);
+        if (publishing) {
+            throw new IllegalStateException(
+                    "A subscriber mutated the session while its own notification was still "
+                            + "being delivered. The subscribers not yet reached would then "
+                            + "be handed the state from BEFORE that mutation. Defer the "
+                            + "mutation (Platform.runLater) instead of making it inline.");
         }
+        ViewState now = viewState();
+        publishing = true;
+        RuntimeException firstFailure = null;
+        try {
+            // Indexed rather than iterated: an observer that subscribes another during its
+            // own notification would otherwise take the whole panel down with a
+            // ConcurrentModificationException.
+            for (int i = 0; i < observers.size(); i++) {
+                try {
+                    observers.get(i).accept(now);
+                } catch (RuntimeException e) {
+                    if (firstFailure == null) firstFailure = e;
+                }
+            }
+        } finally {
+            publishing = false;
+        }
+        if (firstFailure != null) throw firstFailure;
     }
 
     // ------------------------------------------------------------------
@@ -632,6 +667,12 @@ public final class UmapSession {
         List<PathObject> kept = new ArrayList<>();
         for (PathObject d : detections) {
             PathClass pc = d.getPathClass();
+            // getName(), deliberately, and it is the leaf: an "Excluded" cell that was
+            // later tagged reads "Excluded: Rim", whose getName() is "Rim" and whose
+            // toString() is "Excluded: Rim" — so it escapes this filter under EITHER
+            // spelling. The gating half writes Excluded and this half writes tags, and a
+            // cell cannot currently be given both; changing the spelling here would only
+            // move which unreachable case is wrong.
             if (pc != null && EXCLUDED_CLASS.equals(pc.getName())) continue;
             if (!rois.isEmpty()) {
                 ROI cellRoi = d.getROI();
@@ -1331,6 +1372,34 @@ public final class UmapSession {
         String suffix = ": " + tagName;
         if (!currentName.endsWith(suffix)) return null;
         return currentName.substring(0, currentName.length() - suffix.length());
+    }
+
+    /**
+     * Count cells by classification for the standalone legend:
+     * {@code full class path -> [count, ARGB]}, in first-seen order.
+     * <p>
+     * <b>The full path, not {@link PathClass#getName()}.</b> QuPath treats
+     * {@code "T cell: Rim"} as a class <em>derived</em> from {@code "T cell"} and returns
+     * the leaf {@code "Rim"} from {@code getName()} — so once two phenotypes carried the
+     * same population tag, the legend collapsed them into one row wearing whichever colour
+     * it saw first and quoting the sum of both counts. Same defect as the tag write loops,
+     * one screen away.
+     * <p>
+     * Here rather than on {@code PhenotypeLegend} because that class cannot be loaded
+     * without a JavaFX toolkit, and because the legend's other source — a snapshot's
+     * {@code populations()} — is already the session's answer. One legend, two sources,
+     * both answered here.
+     */
+    public static java.util.Map<String, int[]> classCounts(PathObject[] objects) {
+        java.util.Map<String, int[]> counts = new java.util.LinkedHashMap<>();
+        if (objects == null) return counts;
+        for (PathObject obj : objects) {
+            PathClass pc = obj.getPathClass();
+            String name = pc != null ? pc.toString() : PhenotypeSnapshot.UNCLASSIFIED;
+            int color = pc != null ? pc.getColor() : 0x808080;
+            counts.computeIfAbsent(name, k -> new int[]{0, color})[0]++;
+        }
+        return counts;
     }
 
     /**

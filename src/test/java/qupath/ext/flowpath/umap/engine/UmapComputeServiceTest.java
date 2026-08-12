@@ -11,6 +11,7 @@ import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.lib.objects.classes.PathClass;
 import qupath.ext.flowpath.umap.testing.Embeddings;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
@@ -630,6 +631,48 @@ class UmapComputeServiceTest {
 
             var failed = assertInstanceOf(UmapOutcome.Failed.class, outcomes.get(0));
             assertTrue(failed.reason().contains("Only 1 of 2"), failed.reason());
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /**
+     * Subsampling strata are the full class path, not {@link PathClass#getName()}.
+     * <p>
+     * QuPath's {@code getName()} for the derived class {@code "T cell: Core"} is the leaf
+     * {@code "Core"}, so tagging two phenotypes with one population name merged them into a
+     * single stratum. Proportional allocation then faithfully preserved the proportion of a
+     * population that does not exist, while losing both of the ones that do — a
+     * subsample-driven distortion of exactly the thing subsampling promises to preserve.
+     * <p>
+     * Ninety cells of one phenotype and ten of another, both tagged "Core": merged, the
+     * sampler sees one stratum of a hundred; kept apart, the rare population is guaranteed
+     * its share.
+     */
+    @Test
+    void taggingTwoPhenotypesAlikeDoesNotMergeTheirSubsamplingStrata() {
+        var service = new UmapComputeService();
+        try {
+            var cells = Cells.of(100)
+                    .marker("CD45", i -> Math.sin(i))
+                    .marker("CD8", i -> Math.cos(i * 0.7));
+            // detections() materialises once and build() reuses it, so these are the very
+            // objects the index — and therefore the sampler — will read.
+            var objects = cells.detections();
+            for (int i = 0; i < objects.size(); i++) {
+                objects.get(i).setPathClass(PathClass.fromString(
+                        i < 90 ? "Strata-Common: Core" : "Strata-Rare: Core", 0xFF808080));
+            }
+
+            int[] sample = service.stratifiedSample(Embeddings.of(cells.build()), 20);
+
+            int rare = 0;
+            for (int i : sample) {
+                if (objects.get(i).getPathClass().toString().startsWith("Strata-Rare")) rare++;
+            }
+            assertTrue(rare >= 2, "the rare population must keep its share of a 20-cell "
+                    + "sample; merged into one stratum it was sampled at random and could "
+                    + "vanish entirely. Got " + rare);
         } finally {
             service.shutdown();
         }

@@ -13,6 +13,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
+import qupath.ext.flowpath.umap.session.UmapSession;
 import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
@@ -116,14 +117,7 @@ public class PhenotypeLegend extends ScrollPane {
         content.getChildren().clear();
         if (objects == null || objects.length == 0) return;
 
-        Map<String, int[]> classCounts = new LinkedHashMap<>(); // name -> [count, color]
-        for (PathObject obj : objects) {
-            PathClass pc = obj.getPathClass();
-            String name = pc != null ? pc.getName() : PhenotypeSnapshot.UNCLASSIFIED;
-            int color = pc != null ? pc.getColor() : 0x808080;
-            classCounts.computeIfAbsent(name, k -> new int[]{0, color})[0]++;
-        }
-        var sorted = new ArrayList<>(classCounts.entrySet());
+        var sorted = new ArrayList<>(UmapSession.classCounts(objects).entrySet());
         sorted.sort((a, b) -> Integer.compare(b.getValue()[0], a.getValue()[0]));
 
         addPhenotypeHeader(sorted.size(), null);

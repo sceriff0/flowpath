@@ -1340,8 +1340,10 @@ public class UmapPane extends BorderPane {
         umapCanvas.setHighlightIndices(new int[]{index});
 
         PathClass pc = cell.getPathClass();
-        setStatus(String.format("Cell %,d%s — centred in viewer", index,
-                pc != null ? " (" + pc.getName() + ")" : ""), StatusLevel.INFO);
+        // toString(): getName() on a tagged cell is the bare tag ("Rim"), which tells the
+        // user nothing about which population the cell they clicked belongs to.
+        setStatus(String.format(java.util.Locale.US, "Cell %,d%s — centred in viewer", index,
+                pc != null ? " (" + pc + ")" : ""), StatusLevel.INFO);
     }
 
     /**

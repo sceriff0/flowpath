@@ -481,11 +481,15 @@ public class UmapComputeService {
             return all;
         }
 
-        // Group by PathClass
+        // Group by PathClass, on the FULL class path rather than PathClass.getName().
+        // QuPath's getName() for the derived class "T cell: Rim" is the leaf "Rim", so
+        // tagging two phenotypes with one population name merged them into a single
+        // stratum — and proportional allocation then preserved the proportion of a
+        // population that does not exist while losing both of the ones that do.
         var classGroups = new java.util.LinkedHashMap<String, java.util.List<Integer>>();
         for (int i = 0; i < n; i++) {
             var pc = objects[i].getPathClass();
-            String key = pc != null ? pc.getName() : "__unclassified__";
+            String key = pc != null ? pc.toString() : "__unclassified__";
             classGroups.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(i);
         }
 

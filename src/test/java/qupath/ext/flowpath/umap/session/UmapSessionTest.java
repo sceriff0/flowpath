@@ -626,6 +626,94 @@ class UmapSessionTest {
         assertTrue(session.ringMasks().isEmpty());
     }
 
+    /**
+     * The same {@code getName()} defect as the tag write loops, one screen away: the
+     * standalone legend keyed its rows by the leaf of the class path, so tagging two
+     * phenotypes with one population name collapsed them into a single row wearing
+     * whichever colour was seen first and quoting the sum of both counts.
+     */
+    @Test
+    void twoPhenotypesCarryingTheSameTagStayTwoLegendRows() {
+        var objects = new PathObject[]{
+                cell(0, "Legend-T: Core", 0xFF00FF00),
+                cell(1, "Legend-T: Core", 0xFF00FF00),
+                cell(2, "Legend-B: Core", 0xFF0000FF)
+        };
+
+        var counts = UmapSession.classCounts(objects);
+
+        assertEquals(List.of("Legend-T: Core", "Legend-B: Core"), List.copyOf(counts.keySet()),
+                "keyed on getName() both of these are \"Core\", and the legend showed one row");
+        assertEquals(2, counts.get("Legend-T: Core")[0]);
+        assertEquals(1, counts.get("Legend-B: Core")[0]);
+        assertEquals(0xFF00FF00, counts.get("Legend-T: Core")[1]);
+        assertEquals(0xFF0000FF, counts.get("Legend-B: Core")[1],
+                "and the merged row wore whichever colour happened to be seen first");
+    }
+
+    @Test
+    void unclassifiedCellsGetTheirOwnLegendRow() {
+        var counts = UmapSession.classCounts(new PathObject[]{
+                cell(0, "Legend-Plain", 0xFF112233), cell(1, null, 0)});
+
+        assertEquals(1, counts.get("Legend-Plain")[0]);
+        assertEquals(0xFF112233, counts.get("Legend-Plain")[1]);
+        assertEquals(1, counts.get(PhenotypeSnapshot.UNCLASSIFIED)[0]);
+        assertTrue(UmapSession.classCounts(null).isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // Notification
+    // ------------------------------------------------------------------
+
+    /**
+     * A subscriber that mutates during its own notification is refused, loudly.
+     * <p>
+     * The mutation depth is already back to zero by the time observers are called, so the
+     * nested publish would run to completion and the outer loop would then resume handing
+     * the <em>older</em> state to the subscribers it had not reached — the staleness this
+     * whole design replaced, reintroduced from the inside.
+     */
+    @Test
+    void aSubscriberThatMutatesDuringItsOwnNotificationIsRefused() {
+        var session = new UmapSession();
+        var reached = new ArrayList<String>();
+        session.observe(state -> {
+            reached.add("mutating");
+            if (session.isRunning()) session.cancelRun();
+        });
+        session.observe(state -> reached.add("second"));
+
+        assertThrows(IllegalStateException.class, session::beginRun);
+        assertTrue(reached.contains("second"),
+                "the round still completes — the throw is the report, not the remedy");
+    }
+
+    /**
+     * One broken subscriber must not leave the rest of the panel half-updated.
+     * <p>
+     * Armed after subscription because {@link UmapSession#observe} delivers the current
+     * state by calling the new subscriber directly — a throw there belongs to whoever just
+     * subscribed and is not this loop's to absorb.
+     */
+    @Test
+    void aThrowingSubscriberDoesNotStopTheOnesBehindIt() {
+        var session = new UmapSession();
+        var reached = new ArrayList<String>();
+        var armed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        session.observe(state -> {
+            if (armed.get()) throw new IllegalArgumentException("legend blew up");
+        });
+        session.observe(state -> reached.add("behind it"));
+        armed.set(true);
+
+        var thrown = assertThrows(IllegalArgumentException.class, session::beginRun);
+        assertEquals("legend blew up", thrown.getMessage(), "and the first failure is still raised");
+        assertEquals(List.of("behind it", "behind it"), reached,
+                "once at subscription, once for the run it was told about");
+        assertTrue(session.isRunning(), "the mutation itself stands; only the reporting failed");
+    }
+
     // ------------------------------------------------------------------
     // Nothing derived leaves this class in a form a caller can edit
     // ------------------------------------------------------------------
