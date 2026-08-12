@@ -645,12 +645,16 @@ class UmapComputeServiceTest {
      * population that does not exist, while losing both of the ones that do — a
      * subsample-driven distortion of exactly the thing subsampling promises to preserve.
      * <p>
-     * Ninety cells of one phenotype and ten of another, both tagged "Core": merged, the
-     * sampler sees one stratum of a hundred; kept apart, the rare population is guaranteed
-     * its share.
+     * Ten phenotypes of ten cells each, all tagged "Core", sampled down to ten. Stratified
+     * correctly, {@code classN = Math.max(1, ...)} guarantees every phenotype exactly one
+     * seat. Merged into one stratum it is ten draws from a hundred cells, and drawing one
+     * of each of ten populations that way has a probability of about four in a million — so
+     * this asserts a structural guarantee rather than an average a lucky seed might hit.
+     * An earlier version of this test used one common and one rare population and asserted
+     * the rare one kept its share; the merged sampler cleared it by chance.
      */
     @Test
-    void taggingTwoPhenotypesAlikeDoesNotMergeTheirSubsamplingStrata() {
+    void taggingPhenotypesAlikeDoesNotMergeTheirSubsamplingStrata() {
         var service = new UmapComputeService();
         try {
             var cells = Cells.of(100)
@@ -660,19 +664,18 @@ class UmapComputeServiceTest {
             // objects the index — and therefore the sampler — will read.
             var objects = cells.detections();
             for (int i = 0; i < objects.size(); i++) {
-                objects.get(i).setPathClass(PathClass.fromString(
-                        i < 90 ? "Strata-Common: Core" : "Strata-Rare: Core", 0xFF808080));
+                objects.get(i).setPathClass(
+                        PathClass.fromString("Strata-P" + (i / 10) + ": Core", 0xFF808080));
             }
 
-            int[] sample = service.stratifiedSample(Embeddings.of(cells.build()), 20);
+            int[] sample = service.stratifiedSample(Embeddings.of(cells.build()), 10);
 
-            int rare = 0;
-            for (int i : sample) {
-                if (objects.get(i).getPathClass().toString().startsWith("Strata-Rare")) rare++;
-            }
-            assertTrue(rare >= 2, "the rare population must keep its share of a 20-cell "
-                    + "sample; merged into one stratum it was sampled at random and could "
-                    + "vanish entirely. Got " + rare);
+            var represented = new java.util.TreeSet<String>();
+            for (int i : sample) represented.add(objects.get(i).getPathClass().toString());
+            assertEquals(10, represented.size(),
+                    "every phenotype gets a seat when they are ten strata; keyed on "
+                            + "getName() they are one stratum called \"Core\" and this is a "
+                            + "lottery. Got " + represented);
         } finally {
             service.shutdown();
         }
