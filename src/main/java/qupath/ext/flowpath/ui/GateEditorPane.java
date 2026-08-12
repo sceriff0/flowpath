@@ -347,7 +347,7 @@ public class GateEditorPane extends VBox {
         HBox channelRow = new HBox(8, chLabel, channelCombo);
         channelCombo.setValue(node.getChannel());
         addSignalControls(channelRow, GateAxis.of(node, 0));
-        wireChannelCombo(channelCombo, node, 0, this::updateHistogram);
+        wireChannelCombo(channelCombo, node, 0);
 
         HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
         if (node.isThresholdIsZScore()) zscoreModeBtn.setSelected(true);
@@ -436,14 +436,12 @@ public class GateEditorPane extends VBox {
         chYCombo.setValue(gate.getChannelY());
         chYCombo.setPrefWidth(150);
 
-        // Redraws the scatter, once there is one. The handlers are wired here, before the
-        // plot is built, and used to be re-wired afterwards with a second, longer body —
-        // which is how one of the two spellings ended up without the rebuild that
-        // re-resolves the axis for its new channel. A gate whose channels the index does
-        // not carry still has to accept a channel change; it simply has nothing to redraw.
-        final Runnable[] redraw = {() -> { }};
-        wireChannelCombo(chXCombo, gate, 0, () -> redraw[0].run());
-        wireChannelCombo(chYCombo, gate, 1, () -> redraw[0].run());
+        // One handler per axis, wired before the plot is built — this method used to wire
+        // each combo twice, early and again after the scatter existed, with a longer body
+        // the second time. Which one you got depended on whether the gate's channels were
+        // in the index, and only one of the two re-resolved the axis.
+        wireChannelCombo(chXCombo, gate, 0);
+        wireChannelCombo(chYCombo, gate, 1);
 
         // Compute slider ranges from data (z-score or raw).
         // For child gates with ancestor mask, use the filtered data range for proper centering.
@@ -527,7 +525,6 @@ public class GateEditorPane extends VBox {
             scatterRef[0] = scatter;
             this.currentScatter = scatter;
             gateSpecificArea.getChildren().addAll(createSectionHeader("Scatter Plot"), scatter);
-            redraw[0] = () -> redrawScatter(scatter, gate);
         }
     }
 
@@ -585,12 +582,11 @@ public class GateEditorPane extends VBox {
         HBox rowY = new HBox(8, chYLabel, chYCombo);
         addSignalControls(rowY, GateAxis.of(node, 1));
 
-        // Redraws the scatter, once there is one. Wired before the plot is built because a
-        // gate whose channels this image does not carry still has to accept a channel
-        // change — that is the only way to point it at one the image does carry.
-        final Runnable[] redraw = {() -> { }};
-        wireChannelCombo(chXCombo, node, 0, () -> redraw[0].run());
-        wireChannelCombo(chYCombo, node, 1, () -> redraw[0].run());
+        // Wired before the plot is built: a gate whose channels this image does not carry
+        // still has to accept a channel change — that is the only way to point it at one
+        // the image does carry. The old handler bailed out when either combo was blank.
+        wireChannelCombo(chXCombo, node, 0);
+        wireChannelCombo(chYCombo, node, 1);
 
         gateSpecificArea.getChildren().addAll(
             rowX, rowY,
@@ -698,7 +694,6 @@ public class GateEditorPane extends VBox {
 
                 gateSpecificArea.getChildren().add(scatter);
 
-                redraw[0] = () -> redrawScatter(scatter, node);
                 return;
             }
         }
@@ -888,23 +883,24 @@ public class GateEditorPane extends VBox {
      * <p>
      * {@code retarget} repoints the axis, re-pins its compartment and statistic to a
      * column the <em>new</em> channel is quantified with, and moves the branch labels the
-     * user has not claimed. The pane then redraws: the branch-name editor, whatever plot
-     * the builder owns, and finally a deferred rebuild so the signal selectors are
-     * re-derived for the new channel.
+     * user has not claimed. The pane then refreshes the branch-name editor and queues a
+     * rebuild, which is what re-derives the signal selectors — a legacy channel offers no
+     * compartment choice, and one that replaces it must stop showing one.
      * <p>
-     * The re-pin is deliberately done <em>before</em> the redraw. It used to arrive only
-     * with the rebuild, so the refresh in between read the old channel's compartment — the
-     * shape of every one of the four bugs this wiring was collapsed to fix.
+     * There is deliberately no immediate plot refresh here. Each builder used to run one,
+     * because the re-pin arrived only with the rebuild and the plot would otherwise have
+     * shown the old channel's compartment until then. Now that {@code retarget} pins
+     * before returning, the rebuild on the next pulse draws the right thing the first
+     * time, and a second drawing path is one more place for the two to disagree.
      */
-    private void wireChannelCombo(ComboBox<String> combo, GateNode gate, int slot, Runnable redraw) {
+    private void wireChannelCombo(ComboBox<String> combo, GateNode gate, int slot) {
         combo.setOnAction(e -> {
             // currentNode is the gate the editor is showing. A combo left over from a
-            // superseded build (a gate-type conversion queues its rebuild) must not write
-            // to a gate that is no longer in the tree.
+            // superseded build (a gate-type conversion queues its own rebuild) must not
+            // write to a gate that is no longer in the tree.
             if (suppressEvents || currentNode != gate) return;
             if (!GateAxis.of(gate, slot).retarget(combo.getValue(), compartmentCapability)) return;
             buildBranchNamesEditor(gate);
-            redraw.run();
             fireNodeChanged();
             rebuildForChannelChange();
         });

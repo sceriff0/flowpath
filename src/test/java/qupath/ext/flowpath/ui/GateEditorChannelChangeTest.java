@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ui;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Slider;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
@@ -25,6 +26,7 @@ import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -283,6 +285,76 @@ class GateEditorChannelChangeTest {
         assertEquals("CD8", gate.getChannelY());
         assertAxisReadsRealData(f, gate, 0, "CD3: Nucleus: Median");
         assertAxisReadsRealData(f, gate, 1, "CD8");
+    }
+
+    /**
+     * A channel that offers no compartment choice must stop offering one.
+     * <p>
+     * {@code GateAxis.retarget} re-pins the model, but the <em>selectors</em> are built
+     * from the channel's capability, so they are only correct after the editor is rebuilt.
+     * CD8 is a bare legacy column here: after the X axis moves onto it, the two-selector
+     * layout has to become a one-selector layout, or the pane offers a nuclear median for
+     * a channel that has none.
+     */
+    @Test
+    void aChannelWithNoCompartmentsStopsOfferingASignalSelector() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
+        Fixture f = editorFor(gate);
+        assertEquals(2, compartmentCombos(f.pane()).size(), "CD3 and CD4 are both quantified per compartment");
+
+        selectChannel(channelCombo(f.pane(), 0), "CD8");
+
+        assertEquals(1, compartmentCombos(f.pane()).size(),
+                "the X axis now reads a bare legacy column, which offers no compartment");
+    }
+
+    /**
+     * The points that get plotted must come off each axis' <em>own</em> resolved column.
+     * <p>
+     * Asked of the quadrant threshold sliders, whose range is built from exactly that
+     * data. Deliberately in raw mode: a z-scored axis is scale-invariant, so a plot
+     * reading the whole-cell mean where the gate is set to the nuclear median would look
+     * identical — the fixture's compartment columns are proportional to each other, and an
+     * assertion that cannot tell them apart is not an assertion. In raw units the nuclear
+     * median is 1.5x the bare column and the range moves with it.
+     *
+     * <p>This is the bug of commit {@code 6b66868}, which had to be fixed in four places
+     * because the read was written out four times.
+     */
+    @Test
+    void theSliderRangeIsBuiltFromTheColumnTheAxisActuallyReads() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
+        gate.setThresholdIsZScore(false);
+        gate.setCompartmentX(Compartment.NUCLEAR);
+        gate.setCompartmentY(Compartment.NUCLEAR);
+        Fixture f = editorFor(gate);
+
+        double[] nuclearX = GateAxis.of(gate, 0).columnIn(f.index(), f.stats()).values();
+        double expectedMin = Arrays.stream(nuclearX).min().orElseThrow();
+        double expectedMax = Arrays.stream(nuclearX).max().orElseThrow();
+        assertNotEquals(expectedMin, Arrays.stream(bareValues(f, "CD3")).min().orElseThrow(),
+                "the fixture must make the two candidate columns distinguishable");
+
+        List<Slider> sliders = new ArrayList<>();
+        collect(f.pane(), Slider.class, sl -> true, sliders);
+        assertTrue(sliders.size() >= 2, "a quadrant gate lays out a threshold slider per axis");
+
+        assertEquals(expectedMin, sliders.get(0).getMin(), 1e-9,
+                "the X slider spans the nuclear median column the X axis is set to");
+        assertEquals(expectedMax, sliders.get(0).getMax(), 1e-9);
+    }
+
+    private static double[] bareValues(Fixture f, String channel) {
+        return f.index().getResolvedColumn(channel, Compartment.WHOLE_CELL, Statistic.MEAN);
+    }
+
+    private static List<ComboBox> compartmentCombos(GateEditorPane pane) {
+        List<ComboBox> combos = new ArrayList<>();
+        collect(pane, ComboBox.class,
+                c -> !c.getItems().isEmpty() && c.getItems().get(0) instanceof Compartment, combos);
+        return combos;
     }
 
     /**
