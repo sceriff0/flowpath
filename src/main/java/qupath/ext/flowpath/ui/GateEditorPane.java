@@ -17,6 +17,7 @@ import qupath.ext.flowpath.model.ColorUtils;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.EllipseGate;
+import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasuredColumn;
@@ -31,7 +32,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
-import java.util.function.Supplier;
 
 /**
  * Right-side editor panel for configuring a single gate node.
@@ -257,30 +257,10 @@ public class GateEditorPane extends VBox {
         branchNamesArea = new VBox(4);
         actionButtonArea = new VBox(4);
 
-        // Wire deferred callbacks
-        channelCombo.setOnAction(e -> {
-            if (!suppressEvents && currentNode != null) {
-                String oldChannel = currentNode.getChannel();
-                String newChannel = channelCombo.getValue();
-                currentNode.setChannel(newChannel);
-                // Only auto-rename branches if they still match the old default pattern
-                if (newChannel != null && currentNode.getBranches().size() >= 2) {
-                    Branch pos = currentNode.getBranches().get(0);
-                    Branch neg = currentNode.getBranches().get(1);
-                    if (oldChannel != null && pos.getName().equals(oldChannel + "+")) {
-                        pos.setName(newChannel + "+");
-                    }
-                    if (oldChannel != null && neg.getName().equals(oldChannel + "-")) {
-                        neg.setName(newChannel + "-");
-                    }
-                }
-                updateHistogram();
-                fireNodeChanged();
-                // Rebuild the editor so the signal-type selector reflects the new channel's
-                // available compartments (and a now-unavailable compartment falls back safely).
-                setGateNode(currentNode);
-            }
-        });
+        // The channel pickers are wired per gate, in the builders, through
+        // wireChannelCombo — a channel change is a decision about one axis, and each
+        // builder knows only which slot its combo drives and what to redraw afterwards.
+
         // Assemble
         getChildren().addAll(
             gateTypeLabel,
@@ -341,8 +321,8 @@ public class GateEditorPane extends VBox {
             gateSpecificArea.getChildren().clear();
             if (node instanceof QuadrantGate qg) {
                 buildQuadrantEditor(qg);
-            } else if (node instanceof Region2DGate) {
-                build2DEditor(node);
+            } else if (node instanceof Region2DGate region2d) {
+                build2DEditor(region2d);
             } else {
                 buildThresholdEditor(node);
             }
@@ -366,9 +346,8 @@ public class GateEditorPane extends VBox {
         chLabel.setStyle("-fx-text-fill: white;");
         HBox channelRow = new HBox(8, chLabel, channelCombo);
         channelCombo.setValue(node.getChannel());
-        addCompartmentControls(channelRow, node.getChannel(),
-                node::getCompartment, node::setCompartment,
-                node::getStatistic, node::setStatistic);
+        addSignalControls(channelRow, GateAxis.of(node, 0));
+        wireChannelCombo(channelCombo, node, 0, this::updateHistogram);
 
         HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
         if (node.isThresholdIsZScore()) zscoreModeBtn.setSelected(true);
@@ -548,11 +527,9 @@ public class GateEditorPane extends VBox {
         else rawModeBtn.setSelected(true);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
-        addCompartmentControls(rowX, gate.getChannelX(),
-                gate::getCompartmentX, gate::setCompartmentX, gate::getStatisticX, gate::setStatisticX);
+        addSignalControls(rowX, GateAxis.of(gate, 0));
         HBox rowY = new HBox(8, chYLabel, chYCombo);
-        addCompartmentControls(rowY, gate.getChannelY(),
-                gate::getCompartmentY, gate::setCompartmentY, gate::getStatisticY, gate::setStatisticY);
+        addSignalControls(rowY, GateAxis.of(gate, 1));
 
         gateSpecificArea.getChildren().addAll(
             rowX, rowY,
@@ -631,7 +608,7 @@ public class GateEditorPane extends VBox {
         }
     }
 
-    private void build2DEditor(GateNode node) {
+    private void build2DEditor(Region2DGate node) {
         currentHistogram = null;
         currentThresholdSlider = null;
         currentThresholdField = null;
@@ -646,11 +623,8 @@ public class GateEditorPane extends VBox {
         ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
         chYCombo.setPrefWidth(150);
 
-        // Read current channels from the node
-        if (node instanceof Region2DGate region) {
-            chXCombo.setValue(region.getChannelX());
-            chYCombo.setValue(region.getChannelY());
-        }
+        chXCombo.setValue(node.getChannelX());
+        chYCombo.setValue(node.getChannelY());
 
         // Drawing toolbar — shape picker
         ToggleGroup toolGroup = new ToggleGroup();
@@ -684,15 +658,9 @@ public class GateEditorPane extends VBox {
         else rawModeBtn.setSelected(true);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
+        addSignalControls(rowX, GateAxis.of(node, 0));
         HBox rowY = new HBox(8, chYLabel, chYCombo);
-        if (node instanceof Region2DGate region) {
-            addCompartmentControls(rowX, region.getChannelX(),
-                    region::getCompartmentX, region::setCompartmentX,
-                    region::getStatisticX, region::setStatisticX);
-            addCompartmentControls(rowY, region.getChannelY(),
-                    region::getCompartmentY, region::setCompartmentY,
-                    region::getStatisticY, region::setStatisticY);
-        }
+        addSignalControls(rowY, GateAxis.of(node, 1));
 
         gateSpecificArea.getChildren().addAll(
             rowX, rowY,
@@ -968,32 +936,26 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * Append a "Signal:" compartment selector (and, when expanded statistics exist, a
-     * statistic selector) to {@code row} for the given channel, wired to the gate via the
-     * supplied getters/setters. No-op when the GeoJSON is legacy or the channel has no
-     * per-compartment measurements — the gate then stays on whole-cell mean.
+     * Append a "Signal:" compartment selector (and, when the export carries more than one
+     * statistic, a statistic selector) to {@code row} for one gate axis.
+     * <p>
+     * The layout is this pane's; the decision is {@link GateAxis}'. {@link
+     * GateAxis#choicesFrom} answers both what may be offered and what the axis must be
+     * read as, and the axis is pinned to that signal <em>whether or not</em> a selector
+     * appears. Skipping the pin because there was nothing to show is how a gate ended up
+     * on {@code "<marker>: <Compartment>: Mean"} — MIRAGE's default quantification emits
+     * Median only, so that column is not in the file, and the axis read NaN for every
+     * cell: an empty histogram and a gate classifying nothing.
      */
-    private void addCompartmentControls(HBox row, String channel,
-                                        Supplier<Compartment> getComp, Consumer<Compartment> setComp,
-                                        Supplier<Statistic> getStat, Consumer<Statistic> setStat) {
-        if (compartmentCapability == null || channel == null
-                || !compartmentCapability.hasCompartments(channel)) {
-            // Legacy / no rich data: pin to whole-cell mean, show nothing.
-            setComp.accept(Compartment.WHOLE_CELL);
-            setStat.accept(Statistic.MEAN);
-            return;
-        }
+    private void addSignalControls(HBox row, GateAxis axis) {
+        GateAxis.Choices choices = axis.choicesFrom(compartmentCapability);
+        axis.apply(choices.signal());
+        if (!choices.offersCompartment()) return;
 
-        // Compartment selector (enum order: Nuclear, Cytoplasmic, Whole-cell).
-        List<Compartment> comps = new ArrayList<>();
-        for (Compartment c : Compartment.values()) {
-            if (compartmentCapability.compartmentsFor(channel).contains(c)) comps.add(c);
-        }
-        Compartment selComp = compartmentCapability.resolveCompartment(channel, getComp.get());
-        setComp.accept(selComp);
-
-        ComboBox<Compartment> compCombo = new ComboBox<>(FXCollections.observableArrayList(comps));
-        compCombo.setValue(selComp);
+        String channel = axis.channel();
+        ComboBox<Compartment> compCombo =
+                new ComboBox<>(FXCollections.observableArrayList(choices.compartments()));
+        compCombo.setValue(choices.signal().compartment());
         compCombo.setConverter(new StringConverter<>() {
             @Override public String toString(Compartment c) { return c == null ? "" : c.displayName(); }
             @Override public Compartment fromString(String s) { return null; }
@@ -1001,42 +963,59 @@ public class GateEditorPane extends VBox {
         compCombo.setTooltip(new Tooltip("Signal compartment for " + channel));
         compCombo.setOnAction(e -> {
             if (!suppressEvents && currentNode != null) {
-                applySignalChange(() -> setComp.accept(compCombo.getValue()));
+                applySignalChange(() ->
+                        axis.apply(new GateAxis.Signal(compCombo.getValue(), axis.statistic())));
             }
         });
         Label sigLabel = new Label("Signal:");
         sigLabel.setStyle("-fx-text-fill: white;");
         row.getChildren().addAll(sigLabel, compCombo);
 
-        // Statistic selector — shown only when the export carries more than one, but the
-        // gate is pinned to an available statistic either way. It must never be pinned to
-        // one the export lacks: MIRAGE's default compartment quantification emits Median
-        // only (Mean and Sum are --expanded_quantification), so forcing Mean here resolved
-        // the axis to "<marker>: <Compartment>: Mean" — a column that is not in the file.
-        // The gate then read NaN for every cell: an empty histogram, a gate classifying
-        // nothing, and the slowest path through CellIndex.getResolvedColumn, over
-        // measurements sitting right there in the GeoJSON.
-        List<Statistic> stats = new ArrayList<>();
-        for (Statistic s : Statistic.values()) {
-            if (compartmentCapability.statisticsFor(channel).contains(s)) stats.add(s);
-        }
-        Statistic selStat = compartmentCapability.resolveStatistic(channel, getStat.get());
-        setStat.accept(selStat);
-        if (stats.size() > 1) {
-            ComboBox<Statistic> statCombo = new ComboBox<>(FXCollections.observableArrayList(stats));
-            statCombo.setValue(selStat);
-            statCombo.setConverter(new StringConverter<>() {
-                @Override public String toString(Statistic s) { return s == null ? "" : s.displayName(); }
-                @Override public Statistic fromString(String s) { return null; }
-            });
-            statCombo.setTooltip(new Tooltip("Summary statistic for " + channel));
-            statCombo.setOnAction(e -> {
-                if (!suppressEvents && currentNode != null) {
-                    applySignalChange(() -> setStat.accept(statCombo.getValue()));
-                }
-            });
-            row.getChildren().add(statCombo);
-        }
+        if (!choices.offersStatistic()) return;
+        ComboBox<Statistic> statCombo =
+                new ComboBox<>(FXCollections.observableArrayList(choices.statistics()));
+        statCombo.setValue(choices.signal().statistic());
+        statCombo.setConverter(new StringConverter<>() {
+            @Override public String toString(Statistic s) { return s == null ? "" : s.displayName(); }
+            @Override public Statistic fromString(String s) { return null; }
+        });
+        statCombo.setTooltip(new Tooltip("Summary statistic for " + channel));
+        statCombo.setOnAction(e -> {
+            if (!suppressEvents && currentNode != null) {
+                applySignalChange(() ->
+                        axis.apply(new GateAxis.Signal(axis.compartment(), statCombo.getValue())));
+            }
+        });
+        row.getChildren().add(statCombo);
+    }
+
+    /**
+     * Point {@code combo} at slot {@code slot} of {@code gate}: everything a channel
+     * change implies is {@link GateAxis#retarget}'s, and everything it leaves behind on
+     * screen is this pane's.
+     * <p>
+     * {@code retarget} repoints the axis, re-pins its compartment and statistic to a
+     * column the <em>new</em> channel is quantified with, and moves the branch labels the
+     * user has not claimed. The pane then redraws: the branch-name editor, whatever plot
+     * the builder owns, and finally a deferred rebuild so the signal selectors are
+     * re-derived for the new channel.
+     * <p>
+     * The re-pin is deliberately done <em>before</em> the redraw. It used to arrive only
+     * with the rebuild, so the refresh in between read the old channel's compartment — the
+     * shape of every one of the four bugs this wiring was collapsed to fix.
+     */
+    private void wireChannelCombo(ComboBox<String> combo, GateNode gate, int slot, Runnable redraw) {
+        combo.setOnAction(e -> {
+            // currentNode is the gate the editor is showing. A combo left over from a
+            // superseded build (a gate-type conversion queues its rebuild) must not write
+            // to a gate that is no longer in the tree.
+            if (suppressEvents || currentNode != gate) return;
+            if (!GateAxis.of(gate, slot).retarget(combo.getValue(), compartmentCapability)) return;
+            buildBranchNamesEditor(gate);
+            redraw.run();
+            fireNodeChanged();
+            rebuildForChannelChange();
+        });
     }
 
 
