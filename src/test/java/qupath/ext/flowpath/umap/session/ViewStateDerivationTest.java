@@ -279,6 +279,34 @@ class ViewStateDerivationTest {
                         + "annotation filter of its own — it would re-index the new image "
                         + "behind the gating pane's back");
         assertFalse(session.hasCells());
+        assertFalse(state.canEditInputs(),
+                "and the feature picker is still populated with the PREVIOUS image's "
+                        + "markers — ticking one there re-indexed the new image's whole "
+                        + "hierarchy behind the gating pane's back");
+    }
+
+    /**
+     * "Who owns the cells" is one fact, and the awaiting window is on the gating side of it.
+     * <p>
+     * {@code isSnapshotMode()} used to be a second, unrepaired reading of the same question
+     * ({@code snapshot != null}), which the awaiting window falsified: it said standalone
+     * while {@link ViewState#standalone()} said otherwise about the same instant.
+     */
+    @Test
+    @DisplayName("Awaiting a snapshot is still snapshot mode, and says so once")
+    void awaitingIsStillSnapshotMode() {
+        var session = withSnapshot(8);
+        assertTrue(session.isSnapshotMode());
+
+        session.detachSnapshot();
+
+        assertNull(session.snapshot());
+        assertTrue(session.isSnapshotMode(), "the gating pane has not handed the cells back");
+        assertEquals(!session.isSnapshotMode(), session.viewState().standalone(),
+                "one fact, not two readings of it");
+        assertNotNull(session.detectionsForRebuild());
+        assertTrue(session.detectionsForRebuild().isEmpty(),
+                "a rebuild in this window has nothing to do, rather than the new hierarchy");
     }
 
     @Test

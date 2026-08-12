@@ -29,12 +29,13 @@ import java.util.Objects;
  * "which state?" in {@code computeRestingState()}, again in {@code clearPolygon()} with
  * the gate-mask branch missing, and a third time in the export path.
  * <p>
- * {@link #sync()} takes no argument. There is no longer any way for a caller to express a
- * state at all, so a caller's state cannot contradict the session's — the only expressible
- * mistake is failing to call {@code sync()}, which leaves the widgets stale rather than
- * lying about a different session. The rule itself lives in
- * {@link UmapSession#viewState()}, is a pure function, and is table-tested without a
- * toolkit.
+ * {@code sync()} then took no argument, which removed the ability to name a wrong state
+ * but left the ability to forget — and {@code UmapPane.onUmapResultReady} was the standing
+ * proof, retiring the gate and the stale tags <em>after</em> {@code ComputeController} had
+ * already synced. Now this class {@link UmapSession#observe subscribes} to the session in
+ * its constructor and applies whatever it is handed. Nothing calls it, so nothing can fail
+ * to. The rule itself lives in {@link UmapSession#viewState()}, is a pure function, and is
+ * table-tested without a toolkit.
  *
  * <h2>What each control is bound to</h2>
  * <pre>
@@ -48,6 +49,7 @@ import java.util.Objects;
  *   quality preset, k, epochs,
  *   subsample, max cells, scaling
  * Empty-state overlay                 showEmptyState
+ * Failure banner (text + visible)     failure
  * Annotation filter (visible)         standalone
  * </pre>
  *
@@ -71,12 +73,19 @@ public final class UiStateController {
      * @param dismissPopups  closes any popup hosting one of {@code inputs}. Disabling the
      *                       button that opens the feature picker does nothing for a picker
      *                       that is already open over the plot
+     * @param failureBanner  where {@link ViewState#failure()} is shown while the plot is
+     *                       <em>not</em> empty. The empty-state overlay carries a failure
+     *                       that left nothing behind, but a re-run that fails over a
+     *                       surviving embedding keeps the stage at COMPUTED and the
+     *                       overlay down — and its only trace used to be a modal alert and
+     *                       a status line that wiped itself five seconds later
      */
     public record Controls(Button compute,
                            Button cancel,
                            ProgressIndicator progressIndicator,
                            ProgressBar computeProgress,
                            Label computeStage,
+                           Label failureBanner,
                            ToggleButton draw,
                            Button clear,
                            TextField tagName,
@@ -95,6 +104,7 @@ public final class UiStateController {
             Objects.requireNonNull(progressIndicator, "progressIndicator");
             Objects.requireNonNull(computeProgress, "computeProgress");
             Objects.requireNonNull(computeStage, "computeStage");
+            Objects.requireNonNull(failureBanner, "failureBanner");
             Objects.requireNonNull(draw, "draw");
             Objects.requireNonNull(clear, "clear");
             Objects.requireNonNull(tagName, "tagName");
@@ -109,7 +119,6 @@ public final class UiStateController {
         }
     }
 
-    private final UmapSession session;
     private final Controls controls;
 
     /**
@@ -121,20 +130,17 @@ public final class UiStateController {
     private final ReadOnlyObjectWrapper<ViewState> state;
 
     public UiStateController(UmapSession session, Controls controls) {
-        this.session = Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(session, "session");
         this.controls = Objects.requireNonNull(controls, "controls");
         this.state = new ReadOnlyObjectWrapper<>(this, "state", session.viewState());
         apply(state.get(), null);
+        // Subscribing is the whole design: from here on the session hands this class every
+        // settled state, and there is no method left for a caller to forget to call.
+        session.observe(this::onSessionChanged);
     }
 
-    /**
-     * Re-derive the panel's state from the session and apply it. Idempotent, and cheap
-     * enough to call after anything at all — which is the point: a caller that is unsure
-     * whether something changed should call it rather than guess a state.
-     */
-    public void sync() {
+    private void onSessionChanged(ViewState now) {
         ViewState previous = state.get();
-        ViewState now = session.viewState();
         apply(now, previous);
         state.set(now);
     }
@@ -147,28 +153,6 @@ public final class UiStateController {
     /** Observable {@link #current()}, for callers that repaint on every transition. */
     public ReadOnlyObjectProperty<ViewState> stateProperty() {
         return state.getReadOnlyProperty();
-    }
-
-    /**
-     * Interim guard while {@link #sync()} still has to be <em>called</em>: assert that the
-     * widgets agree with the session at the end of a handler that touched it.
-     * <p>
-     * The remaining expressible mistake in this design is forgetting to sync, which leaves
-     * the panel stale. Until the session pushes its own state (the observer design deferred
-     * to the next task), this turns that omission from a wrong button into a stack trace at
-     * the handler that caused it.
-     *
-     * @throws IllegalStateException when the applied state is not the one the session
-     *                               currently derives
-     */
-    public void assertSynced() {
-        ViewState derived = session.viewState();
-        if (!derived.equals(state.get())) {
-            throw new IllegalStateException(
-                    "UI state is stale: the session derives " + derived
-                            + " but the panel is showing " + state.get()
-                            + ". A handler mutated the session without calling sync().");
-        }
     }
 
     // ------------------------------------------------------------------
@@ -197,6 +181,16 @@ public final class UiStateController {
         } else {
             controls.computeStage().setText("");
         }
+
+        // A failure that left an embedding standing does not reach the empty-state overlay,
+        // because the overlay is down. This is where it lives instead: under Run UMAP, for
+        // as long as the failure is still the last thing that happened. It is what made the
+        // modal alert redundant — and the modal was also why the Failed path could not be
+        // driven from a test already on the FX thread.
+        boolean failed = s.failure() != null;
+        controls.failureBanner().setText(failed ? s.failure() : "");
+        controls.failureBanner().setVisible(failed);
+        controls.failureBanner().setManaged(failed);
 
         controls.draw().setDisable(!s.canGate());
         controls.clear().setDisable(!s.canGate());

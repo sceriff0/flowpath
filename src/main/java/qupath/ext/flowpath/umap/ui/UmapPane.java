@@ -29,7 +29,6 @@ import qupath.lib.roi.interfaces.ROI;
 
 import java.io.File;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Main panel for the qUMAP extension.
@@ -107,6 +106,7 @@ public class UmapPane extends BorderPane {
     private Label cellsSummary;
     private ProgressBar computeProgress;
     private Label computeStage;
+    private Label failureBanner;
     private ToggleGroup colorModeGroup;
     private ToggleButton colorByPhenotype;
     private ToggleButton colorByMarker;
@@ -168,7 +168,7 @@ public class UmapPane extends BorderPane {
             if (!on) {
                 clearViewerSelection();
                 umapCanvas.setHighlightMask(null);
-            } else if (session.gateMask() != null) {
+            } else if (session.hasGate()) {
                 pushGateSelectionToViewer();
             }
         });
@@ -229,9 +229,6 @@ public class UmapPane extends BorderPane {
                     }
                     @Override public void detail(String text) {
                         setStatusDetail(text);
-                    }
-                    @Override public void alert(String message) {
-                        new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
                     }
                 },
                 dotSize -> {
@@ -306,11 +303,20 @@ public class UmapPane extends BorderPane {
         computeStage.setWrapText(true);
         computeStage.setStyle("-fx-text-fill: #9aa0a6; -fx-font-size: 10;");
 
+        // Where a failure goes when the plot is not empty. A re-run that dies over a
+        // surviving embedding leaves the stage at COMPUTED, so the empty-state overlay —
+        // the other place the reason is shown — never comes up to say so.
+        failureBanner = new Label();
+        failureBanner.setWrapText(true);
+        failureBanner.setStyle("-fx-text-fill: #ff8080; -fx-font-size: 10;");
+        failureBanner.setVisible(false);
+        failureBanner.setManaged(false);
+
         var embedSection = section("2 · Embedding",
                 railLabel("Quality"), presetCombo,
                 railLabel("Feature scaling"), scalingCombo,
                 advancedPane,
-                computeBtn, cancelBtn, computeProgress, computeStage);
+                computeBtn, cancelBtn, computeProgress, computeStage, failureBanner);
 
         // --- Colour ---
         // A segmented pair rather than two independent dropdowns: colouring by phenotype
@@ -430,7 +436,7 @@ public class UmapPane extends BorderPane {
         // is why nothing below ever names a state.
         uiState = new UiStateController(session, new UiStateController.Controls(
                 computeController.getComputeButton(), computeController.getCancelButton(),
-                progressIndicator, computeProgress, computeStage,
+                progressIndicator, computeProgress, computeStage, failureBanner,
                 drawButton, clearButton,
                 tagNameField, tagColorPicker, applyTagButton,
                 exportButton,
@@ -441,13 +447,13 @@ public class UmapPane extends BorderPane {
                         computeController.getEpochsSpinner(), computeController.getMaxCellsSpinner(),
                         computeController.getSubsampleMode(), computeController.getScalingMode()),
                 featuresPopup::hide));
-        computeController.attachUiState(uiState);
-        // Every transition repaints the rail summary and the empty state's wording.
-        // Hooking the property rather than dotting refreshOverview() through a dozen call
-        // sites is what keeps the headline, the sub-line and the cell summary from ever
-        // disagreeing with the buttons.
-        uiState.stateProperty().addListener((obs, o, n) -> refreshOverview());
-        refreshOverview();
+        // Every settled change repaints the rail summary and the empty state's wording.
+        // Subscribed to the SESSION rather than to uiState.stateProperty(): the wording
+        // quotes cell and marker counts, which change without the ViewState changing —
+        // a feature rebuild that lands on the same stage would otherwise leave the rail
+        // quoting the previous index's size. The state controller subscribed first, so
+        // its widgets are already coherent with the state this is handed.
+        session.observe(this::refreshOverview);
 
         polygonSelector.setOnPolygonComplete(this::onPolygonComplete);
         umapCanvas.setOnPointPicked(this::onPointPicked);
@@ -466,8 +472,7 @@ public class UmapPane extends BorderPane {
         legend.setOnPhenotypeToggled(this::togglePhenotypeVisibility);
         legend.setOnPhenotypeHover(this::highlightPhenotype);
         legend.setOnShowAll(() -> {
-            if (session.hiddenPhenotypes().isEmpty()) return;
-            session.hiddenPhenotypes().clear();
+            if (!session.showAllPhenotypes()) return;
             applyPhenotypeVisibility();
             updateLegend();
         });
@@ -482,7 +487,7 @@ public class UmapPane extends BorderPane {
                 case ESCAPE -> {
                     if (polygonSelector.isActive()) {
                         polygonSelector.deactivate();
-                    } else if (session.gateMask() != null) {
+                    } else if (session.hasGate()) {
                         clearPolygon();
                     }
                 }
@@ -606,8 +611,7 @@ public class UmapPane extends BorderPane {
      * the empty state used to answer that by asking the toolbar button whether it happened
      * to be disabled.
      */
-    private void refreshOverview() {
-        ViewState state = uiState.current();
+    private void refreshOverview(ViewState state) {
         CellIndex index = session.index();
         PhenotypeSnapshot snapshot = session.snapshot();
         // The session's rule, not a second copy: while it is waiting for the gating tree to
@@ -615,24 +619,10 @@ public class UmapPane extends BorderPane {
         boolean hasCells = session.hasCells();
         int markers = session.includedMarkerCount();
 
-        if (!hasCells) {
-            cellsSummary.setText("No cells loaded.");
-        } else if (snapshot != null) {
-            int included = snapshot.includedCount();
-            int dropped = snapshot.cellCount() - included;
-            int pops = snapshot.populations().size();
-            StringBuilder sb = new StringBuilder(String.format("%,d cells", included));
-            if (dropped > 0) sb.append(String.format(" · %,d filtered out", dropped));
-            sb.append(snapshot.hasPhenotypes()
-                    ? String.format("%n%d phenotype%s from %d gate%s", pops, pops == 1 ? "" : "s",
-                            snapshot.gateCount(), snapshot.gateCount() == 1 ? "" : "s")
-                    : String.format("%nNo gates applied yet"));
-            sb.append(String.format("%n%d of %d markers selected", markers, session.markers().size()));
-            cellsSummary.setText(sb.toString());
-        } else {
-            cellsSummary.setText(String.format("%,d cells%n%d of %d markers selected",
-                    index.size(), markers, session.markers().size()));
-        }
+        // The same composition the status bar prints on one line. It used to be spelled out
+        // here with different wording and different arithmetic from UmapSession.describe,
+        // and the two appeared within an inch of each other quoting different numbers.
+        cellsSummary.setText(String.join("\n", session.overviewLines()));
 
         if (!state.showEmptyState()) return;
 
@@ -724,19 +714,17 @@ public class UmapPane extends BorderPane {
         switch (adoption) {
             case DETACHED -> { /* standalone from here; nothing on screen changes yet */ }
             case RECOLOUR -> {
-                // Gate edit only: keep the embedding, restyle it.
+                // Gate edit only: keep the embedding, restyle it. The rail summary was
+                // already repainted by adopt()'s own publish — a gate edit changes the
+                // phenotype counts without changing the ViewState, which is exactly why
+                // this pane subscribes to the session rather than to the state property.
                 updatePhenotypeColors();
                 updateLegend();
-                refreshOverview();
-                setStatus(UmapSession.describe(incoming) + " — recoloured from the gating tree.",
+                setStatus(session.overviewLine() + " — recoloured from the gating tree.",
                         StatusLevel.INFO);
             }
-            case REBUILD -> onSnapshotCellSetChanged(incoming);
+            case REBUILD -> onSnapshotCellSetChanged();
         }
-        // Adoption can change snapshot mode itself, which is what decides whether this
-        // panel owns an annotation filter at all.
-        uiState.sync();
-        uiState.assertSynced();
     }
 
     /**
@@ -744,7 +732,7 @@ public class UmapPane extends BorderPane {
      * for a new one. The session has already retired the gate, the tags and the cached
      * colours by the time this runs; what is left here is canvases and controls.
      */
-    private void onSnapshotCellSetChanged(PhenotypeSnapshot incoming) {
+    private void onSnapshotCellSetChanged() {
         computeService.cancel();
         session.cancelRun();
         umapCanvas.setData(null, null);
@@ -759,7 +747,8 @@ public class UmapPane extends BorderPane {
         markerDropdown.getItems().addAll(session.markers());
         markerDropdown.setValue(UmapSession.NO_MARKER);
 
-        featureSelectionPane.populate(session.markers(), session.capability(), session.selection());
+        featureSelectionPane.populate(session.markers(), session.capability(), session.selection(),
+                session::editSelection);
         updateLegend();
 
         ImageData<?> imageData = qupath.getImageData();
@@ -767,8 +756,7 @@ public class UmapPane extends BorderPane {
             attachSelectionListener(imageData);
         }
 
-        uiState.sync();
-        setStatus(UmapSession.describe(incoming) + " — ready to embed.", StatusLevel.INFO);
+        setStatus(session.overviewLine() + " — ready to embed.", StatusLevel.INFO);
     }
 
     // --- Initialization ---
@@ -797,7 +785,6 @@ public class UmapPane extends BorderPane {
         if (session.isSnapshotMode()) {
             session.detachSnapshot();
             clearDerivedState();
-            uiState.sync();
             setStatus("Image changed — waiting for the gating tree to re-index.", StatusLevel.INFO);
             return;
         }
@@ -856,10 +843,6 @@ public class UmapPane extends BorderPane {
         polygonSelector.clear();
         polygonSelector.deactivate();
 
-        // Nothing is indexed any more, so the derivation lands on NO_IMAGE: everything
-        // disabled, cancel and progress hidden.
-        uiState.sync();
-
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) {
             setStatus("No image loaded", StatusLevel.INFO);
@@ -887,13 +870,12 @@ public class UmapPane extends BorderPane {
         // this half used to be on the wrong side of. The persisted selection is resolved by
         // callback because it cannot be loaded until the panel and capability are known,
         // yet the index cannot be built until the selection is.
-        var detectionsCopy = new ArrayList<>(detections);
         var options = new IngestOptions(
                 DetectionIngest.channelNames(imageData),
                 DetectionIngest.calibration(imageData),
                 (discovered, cap) -> UmapSession.loadSelection(stored, discovered, cap));
         Thread bgThread = new Thread(() -> {
-            IngestResult ingest = DetectionIngest.read(detectionsCopy, options);
+            IngestResult ingest = DetectionIngest.read(detections, options);
             MarkerStats builtStats = MarkerStats.compute(ingest.index());
             Platform.runLater(() -> {
                 // A newer reload superseded this one (e.g. the user toggled the
@@ -911,14 +893,14 @@ public class UmapPane extends BorderPane {
 
                 session.installIndex(ingest.index(), builtStats, markersCopy,
                         builtCapability, loadedSelection);
-                uiState.sync();
 
                 markerDropdown.getItems().clear();
                 markerDropdown.getItems().add(UmapSession.NO_MARKER);
                 markerDropdown.getItems().addAll(markersCopy);
                 markerDropdown.setValue(UmapSession.NO_MARKER);
 
-                featureSelectionPane.populate(markersCopy, builtCapability, loadedSelection);
+                featureSelectionPane.populate(markersCopy, builtCapability, loadedSelection,
+                        session::editSelection);
 
                 // The reload notice rides along with the ready message rather than
                 // being posted up-front, where "Building cell index..." would wipe it
@@ -939,44 +921,23 @@ public class UmapPane extends BorderPane {
     }
 
     /**
-     * The set of detections this panel operates on: all non-Excluded detections,
-     * narrowed to those inside annotation ROIs when the annotation filter is on.
+     * The set of detections this panel operates on, read out of the hierarchy and handed
+     * to {@link UmapSession#selectDetections} as plain data.
      * <p>
-     * Extracted so the feature-rebuild path uses exactly the same cell set as the
-     * initial load. It previously re-queried the hierarchy without applying the
-     * annotation filter, so editing a feature silently widened the analysis back to
-     * the whole slide — and, because population tag masks are indexed positionally
-     * against this list, quietly misaligned every existing tag.
+     * The rule — drop the Excluded class, narrow to the annotation ROIs when there are any
+     * — lives on the session, where it can be tested without a {@code QuPathGUI}. All this
+     * decides is where the two lists come from, which is the one part that genuinely needs
+     * an {@link ImageData}.
      */
     private List<PathObject> collectDetections(ImageData<?> imageData) {
-        if (imageData == null) return new ArrayList<>();
-
-        var detections = imageData.getHierarchy().getDetectionObjects()
-                .stream()
-                .filter(d -> {
-                    var pc = d.getPathClass();
-                    return pc == null || !"Excluded".equals(pc.getName());
-                })
-                .collect(Collectors.toCollection(ArrayList::new));
-
-        // Filter by annotation ROIs if enabled
-        if (roiFilterCheckBox.isSelected()) {
-            List<ROI> rois = imageData.getHierarchy().getAnnotationObjects()
-                    .stream()
-                    .map(PathObject::getROI)
-                    .filter(Objects::nonNull)
-                    .toList();
-            if (!rois.isEmpty()) {
-                detections.removeIf(d -> {
-                    ROI cellRoi = d.getROI();
-                    if (cellRoi == null) return true;
-                    double cx = cellRoi.getCentroidX();
-                    double cy = cellRoi.getCentroidY();
-                    return rois.stream().noneMatch(roi -> roi.contains(cx, cy));
-                });
-            }
-        }
-        return detections;
+        if (imageData == null) return List.of();
+        List<ROI> rois = roiFilterCheckBox.isSelected()
+                ? imageData.getHierarchy().getAnnotationObjects().stream()
+                        .map(PathObject::getROI)
+                        .filter(Objects::nonNull)
+                        .toList()
+                : List.of();
+        return UmapSession.selectDetections(imageData.getHierarchy().getDetectionObjects(), rois);
     }
 
     // --- Feature selection (per-marker compartment / statistic / include) ---
@@ -1007,14 +968,14 @@ public class UmapPane extends BorderPane {
         }
         if (session.markers().isEmpty()) return;
 
-        // Rebuild the index with the new resolution off the FX thread.
-        // In snapshot mode the cell set is the gating pane's, already narrowed by its
-        // quality and annotation filters. Re-querying the hierarchy would widen it back
-        // to the whole slide and break the positional alignment every snapshot array
-        // depends on, so reuse exactly the objects the snapshot indexed.
-        List<PathObject> detections = session.isSnapshotMode()
-                ? session.detectionsForRebuild()
-                : collectDetections(imageData);
+        // Rebuild the index with the new resolution off the FX thread. Whose cells those
+        // are is the session's answer, not a second reading of it here: in snapshot mode
+        // the set is the gating pane's, already narrowed by its quality and annotation
+        // filters, and re-querying the hierarchy would widen it back to the whole slide
+        // and break the positional alignment every snapshot array depends on. A null means
+        // this panel owns its own cell set and must collect it.
+        List<PathObject> forRebuild = session.detectionsForRebuild();
+        List<PathObject> detections = forRebuild != null ? forRebuild : collectDetections(imageData);
         if (detections.isEmpty()) return;
 
         // The rebuild can take a few seconds on a large slide; without feedback it
@@ -1033,7 +994,6 @@ public class UmapPane extends BorderPane {
         // other direction. Withholding Run until the rebuild lands makes the exclusion
         // symmetric.
         session.beginRebuild();
-        uiState.sync();
         var rebuildCalibration = DetectionIngest.calibration(imageData);
         Thread bg = new Thread(() -> {
             CellIndex built = null;
@@ -1052,22 +1012,19 @@ public class UmapPane extends BorderPane {
                     // A build that died leaving the counter up would disable Run for the
                     // rest of the session.
                     session.endRebuild();
-                    if (rebuilt == null || !session.isCurrentBuild(generation)) {
-                        uiState.sync();
-                        return;
-                    }
+                    if (rebuilt == null || !session.isCurrentBuild(generation)) return;
                     // Reconciles the snapshot onto the rebuilt index rather than leaving the
                     // pane holding one index and its snapshot naming another — see
                     // UmapSession's index/snapshot invariant.
+                    // The tick count may have crossed MINIMUM_FEATURES in either
+                    // direction; installing publishes, so Run UMAP's enablement is
+                    // re-derived rather than assumed unchanged.
                     session.installRebuiltIndex(rebuilt, rebuiltStats);
                     // Refresh the overlay if one is showing for the selected marker.
                     onMarkerSelected();
-                    // The tick count may have crossed MINIMUM_FEATURES in either direction,
-                    // so Run UMAP's enablement is re-derived rather than assumed unchanged.
-                    uiState.sync();
-                    setStatus(String.format("Features updated — %,d cells, %d markers. Recompute UMAP to apply.",
+                    setStatus(String.format(java.util.Locale.US,
+                            "Features updated — %,d cells, %d markers. Recompute UMAP to apply.",
                             rebuilt.size(), markersCopy.size()), StatusLevel.SUCCESS);
-                    uiState.assertSynced();
                 });
             }
         }, "flowpath-umap-features");
@@ -1093,8 +1050,7 @@ public class UmapPane extends BorderPane {
     private void onUmapResultReady(UmapResult result) {
         // A fresh embedding invalidates any gate drawn on the previous one: the
         // polygon's coordinates refer to a layout that no longer exists.
-        session.beginGateComputation();
-        session.setGateMask(null);
+        session.retireGate();
         polygonSelector.clear();
         polygonSelector.deactivate();
 
@@ -1103,7 +1059,7 @@ public class UmapPane extends BorderPane {
         // count, at which point the masks refer to nothing meaningful — drop them
         // rather than render rings against mismatched indices.
         if (session.tagsAreStaleFor(result.size())) {
-            session.tags().clear();
+            session.clearTags();
             setStatus("Cell set changed — population tag overlays cleared "
                     + "(classifications on the cells are unaffected)", StatusLevel.WARN);
         }
@@ -1120,33 +1076,18 @@ public class UmapPane extends BorderPane {
         updatePhenotypeColors();
         updateLegend();
 
-        // What the first finished embedding should be coloured by.
-        //
-        // Standalone, the answer is "some marker" — without one the plot is a uniform
-        // grey blob and the user has to go hunting through a dropdown to see anything.
-        //
-        // Opened from a gate tree the answer is the opposite: the phenotypes ARE the
-        // thing they came to look at, and overriding them with an arbitrary channel
-        // would throw away the whole reason the two halves were joined. So only fall
-        // back to marker colouring when there are no phenotypes to show.
-        boolean phenotypesWorthShowing = session.snapshot() != null && session.snapshot().hasPhenotypes();
-        if (phenotypesWorthShowing) {
-            colorByPhenotype.setSelected(true);
-        } else if (!session.markers().isEmpty()) {
-            String currentMarker = markerDropdown.getValue();
-            if (currentMarker == null || UmapSession.NO_MARKER.equals(currentMarker)) {
+        // What the first finished embedding should be coloured by is the session's
+        // decision — a product rule that used to sit here behind thirteen lines of
+        // justifying comment and no test, because reaching it needed a live toolkit.
+        switch (session.firstColourMode(markerDropdown.getValue())) {
+            case PHENOTYPE -> colorByPhenotype.setSelected(true);
+            case MARKER -> {
                 colorByMarker.setSelected(true);
                 markerDropdown.setValue(session.preferredMarker());
                 onMarkerSelected();   // setValue does not reliably fire the action handler
             }
+            case UNCHANGED -> { /* the user has already chosen; leave the plot alone */ }
         }
-
-        // ComputeController synced before handing the result over, so the panel was already
-        // coherent with the new embedding — but the gate and possibly the tags have been
-        // retired since, and both are inputs to the derivation.
-        uiState.sync();
-        refreshOverview();
-        uiState.assertSynced();
     }
 
     // --- Phenotype Coloring ---
@@ -1217,7 +1158,7 @@ public class UmapPane extends BorderPane {
      * the gate look like it had moved.
      */
     private void highlightPhenotype(String name) {
-        if (session.embedding() == null || !session.isSnapshotMode() || session.gateMask() != null) return;
+        if (session.embedding() == null || !session.isSnapshotMode() || session.hasGate()) return;
         if (!session.usesGatingColors(session.embedding().size())) return;
         if (name == null) {
             umapCanvas.setHighlightIndices(null);
@@ -1276,18 +1217,16 @@ public class UmapPane extends BorderPane {
                 // Superseded by a newer drag, or the embedding changed underneath us.
                 if (!session.isCurrentGate(generation) || session.embedding() != result) return;
 
+                // A closed polygon is what unlocks the tag controls; setting the mask
+                // publishes, so they unlock without anyone asking them to.
                 session.setGateMask(mask);
                 // Only the mask changed — reshade the cached colours rather than
                 // re-reading every cell's PathClass.
                 refreshGateShading();
                 pushGateSelectionToViewer();
 
-                // A closed polygon is what unlocks the tag controls; the derivation reads
-                // the mask that was just set.
-                uiState.sync();
-                setStatus(String.format("%,d inside gate / %,d outside",
+                setStatus(String.format(java.util.Locale.US, "%,d inside gate / %,d outside",
                         insideCount, mask.length - insideCount), StatusLevel.INFO);
-                uiState.assertSynced();
             });
         }, "flowpath-umap-gate");
         worker.setDaemon(true);
@@ -1295,9 +1234,9 @@ public class UmapPane extends BorderPane {
     }
 
     private void clearPolygon() {
-        // Invalidate any in-flight gate computation so it cannot re-apply a mask.
-        session.beginGateComputation();
-        session.setGateMask(null);
+        // One call, because retiring a gate is one thing: drop the mask AND invalidate the
+        // in-flight computation that would otherwise re-apply it a moment later.
+        session.retireGate();
 
         polygonSelector.clear();
         polygonSelector.deactivate();
@@ -1305,16 +1244,10 @@ public class UmapPane extends BorderPane {
         refreshGateShading();
         clearViewerSelection();
 
-        // This was the second copy of the resting-state rule, and it was missing the
-        // gate-mask branch its original had. There is nothing left to get wrong: the mask
-        // is already cleared above, so the derivation cannot land on GATING.
-        uiState.sync();
-
         if (session.embedding() != null) {
-            setStatus(String.format("UMAP: %,d cells", session.embedding().size()),
-                    StatusLevel.INFO);
+            setStatus(String.format(java.util.Locale.US, "UMAP: %,d cells",
+                    session.embedding().size()), StatusLevel.INFO);
         }
-        uiState.assertSynced();
     }
 
     // --- QuPath viewer integration ---
@@ -1333,20 +1266,15 @@ public class UmapPane extends BorderPane {
 
     /** Select the gated cells in QuPath so they highlight on the tissue. */
     private void pushGateSelectionToViewer() {
-        boolean[] gateMask = session.gateMask();
-        if (!viewerSyncCheckBox.isSelected() || session.embedding() == null || gateMask == null) return;
+        if (!viewerSyncCheckBox.isSelected() || session.embedding() == null
+                || !session.hasGate()) return;
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) return;
 
-        PathObject[] objects = session.embedding().getObjectsRaw();
-        List<PathObject> selected = new ArrayList<>();
-        boolean truncated = false;
-        int limit = Math.min(objects.length, gateMask.length);
-        for (int i = 0; i < limit; i++) {
-            if (!gateMask[i]) continue;
-            if (selected.size() >= MAX_VIEWER_SELECTION) { truncated = true; break; }
-            selected.add(objects[i]);
-        }
+        // The mask itself never leaves the session — see UmapSession#gatedObjects.
+        List<PathObject> selected =
+                session.gatedObjects(session.embedding().getObjectsRaw(), MAX_VIEWER_SELECTION);
+        boolean truncated = selected.size() == MAX_VIEWER_SELECTION;
 
         syncingSelection = true;
         try {
@@ -1356,7 +1284,7 @@ public class UmapPane extends BorderPane {
         }
 
         if (truncated) {
-            setStatus(String.format(
+            setStatus(String.format(java.util.Locale.US,
                     "Gate selected in viewer (capped at %,d of the gated cells)",
                     MAX_VIEWER_SELECTION), StatusLevel.WARN);
         }
@@ -1471,8 +1399,7 @@ public class UmapPane extends BorderPane {
     // --- Population Tagging ---
 
     private void applyPopulationTag() {
-        boolean[] insideMask = session.gateMask();
-        if (session.embedding() == null || insideMask == null) {
+        if (session.embedding() == null || !session.hasGate()) {
             setStatus("Draw a polygon first to select cells", StatusLevel.WARN);
             return;
         }
@@ -1492,44 +1419,18 @@ public class UmapPane extends BorderPane {
                 | ((int) (color.getGreen() * 255) << 8)
                 | (int) (color.getBlue() * 255);
 
-        // Reuse the gate mask already computed when the polygon closed, rather than
-        // re-running the O(cells x vertices) scan on the FX thread. It is derived from
-        // the polygon geometry, so it is unaffected by earlier tagging operations.
-        PathObject[] objects = session.embedding().getObjectsRaw();
+        // The write loop, the tag and the gate retirement are all one operation on the
+        // session: it reuses the mask computed when the polygon closed (rather than
+        // re-running the O(cells x vertices) scan on the FX thread), names each cell
+        // through its own tagClassName rule, and retires the gate that selected them.
+        PopulationTag tag = session.applyTag(name, packedColor,
+                session.embedding().getObjectsRaw());
+        if (tag == null) return;
 
-        // Apply derived PathClass to cells inside the polygon, preserving phenotype
-        // color. This is the ONE place the panel writes classifications, and it only
-        // runs because the user pressed Tag Selection. The naming rule — including which
-        // trailing ": something" counts as a previously applied tag — is the session's.
-        int tagLimit = Math.min(objects.length, insideMask.length);
-        for (int i = 0; i < tagLimit; i++) {
-            if (insideMask[i]) {
-                PathClass current = objects[i].getPathClass();
-                int originalColor = current != null ? current.getColor() : 0xFF808080;
-                String derivedName = session.tagClassName(
-                        current != null ? current.getName() : null, name);
-                objects[i].setPathClass(PathClass.fromString(derivedName, originalColor));
-            }
-        }
-
-        // Create population tag
-        PopulationTag tag = new PopulationTag(name, packedColor, insideMask);
-        session.addTag(tag);
-
-        // Update ring rendering
         updatePopulationRings();
-
-        // Retire the gate. Cells outside it were never modified, so there is nothing
-        // to restore — the old code needed a restore pass here only because closing a
-        // polygon had reclassified every outside cell.
-        session.beginGateComputation();
-        session.setGateMask(null);
         clearViewerSelection();
-
         polygonSelector.clear();
         polygonSelector.deactivate();
-        // The gate is retired and a tag now exists, so the derivation lands on TAGGED.
-        uiState.sync();
         updatePhenotypeColors();
         updateLegend();
 
@@ -1538,35 +1439,17 @@ public class UmapPane extends BorderPane {
             imageData.getHierarchy().fireHierarchyChangedEvent(this);
         }
 
-        setStatus(String.format("Tagged %,d cells as '%s'", tag.count(), name), StatusLevel.SUCCESS);
-        uiState.assertSynced();
+        setStatus(String.format(java.util.Locale.US, "Tagged %,d cells as '%s'",
+                tag.count(), name), StatusLevel.SUCCESS);
     }
 
     private void removePopulationTag(String tagName) {
         if (session.embedding() == null) return;
 
-        PopulationTag tagToRemove = session.tag(tagName);
-        if (tagToRemove == null) return;
+        // Restoring the classes the tag overwrote — colour carry included — is the
+        // session's, beside the rule that derived those names in the first place.
+        if (session.removeTag(tagName, session.embedding().getObjectsRaw()) == null) return;
 
-        // Restore original PathClass (strip ": tagName" suffix)
-        PathObject[] objects = session.embedding().getObjectsRaw();
-        boolean[] mask = tagToRemove.mask();
-        int limit = Math.min(objects.length, mask.length);
-        for (int i = 0; i < limit; i++) {
-            if (!mask[i]) continue;
-            PathClass current = objects[i].getPathClass();
-            String baseName = UmapSession.untagClassName(
-                    current == null ? null : current.getName(), tagName);
-            if (baseName != null) {
-                // Carry the colour across. Tagging preserved the phenotype colour
-                // on the derived class, so dropping it here left every untagged
-                // cell rendered in QuPath's default rather than its own phenotype.
-                objects[i].setPathClass(PathClass.fromString(baseName, current.getColor()));
-            }
-        }
-
-        session.removeTag(tagName);
-        uiState.sync();
         updatePopulationRings();
         updatePhenotypeColors();
         updateLegend();
@@ -1577,7 +1460,6 @@ public class UmapPane extends BorderPane {
         }
 
         setStatus(String.format("Removed tag '%s'", tagName), StatusLevel.SUCCESS);
-        uiState.assertSynced();
     }
 
     private void updatePopulationRings() {
@@ -1586,21 +1468,13 @@ public class UmapPane extends BorderPane {
             return;
         }
 
-        List<int[]> colors = new ArrayList<>();
-        List<boolean[]> masks = new ArrayList<>();
-        for (PopulationTag tag : session.tags()) {
-            colors.add(new int[]{tag.color()});
-            masks.add(tag.mask());
-        }
-        umapCanvas.setPopulationRings(colors, masks);
+        umapCanvas.setPopulationRings(session.ringColors(), session.ringMasks());
     }
 
     // --- Marker Overlay ---
 
     private void onMarkerSelected() {
-        CellIndex index = session.index();
-        MarkerStats markerStats = session.stats();
-        if (session.embedding() == null || index == null || markerStats == null) return;
+        if (session.embedding() == null) return;
 
         String selected = markerDropdown.getValue();
         if (selected == null || UmapSession.NO_MARKER.equals(selected)) {
@@ -1608,24 +1482,12 @@ public class UmapPane extends BorderPane {
             return;
         }
 
-        int idx = index.getMarkerIndex(selected);
-        if (idx < 0) return;
-
-        double[] rawValues = index.getMarkerValues(idx);
         boolean useZScore = "Z-score".equals(colorScaleDropdown.getValue());
-
-        double[] displayValues;
-        MarkerOverlayCanvas.ColorScale scale;
-        if (useZScore) {
-            displayValues = new double[rawValues.length];
-            for (int i = 0; i < rawValues.length; i++) {
-                displayValues[i] = markerStats.toZScore(selected, rawValues[i]);
-            }
-            scale = MarkerOverlayCanvas.ColorScale.BLUE_WHITE_RED;
-        } else {
-            displayValues = rawValues;
-            scale = MarkerOverlayCanvas.ColorScale.VIRIDIS;
-        }
+        double[] displayValues = session.colourValues(selected, useZScore);
+        if (displayValues == null) return;
+        MarkerOverlayCanvas.ColorScale scale = useZScore
+                ? MarkerOverlayCanvas.ColorScale.BLUE_WHITE_RED
+                : MarkerOverlayCanvas.ColorScale.VIRIDIS;
 
         markerOverlay.setMarkerValues(displayValues, selected, scale);
         String scaleLabel = useZScore ? "Z-score" : "Raw";
@@ -1694,7 +1556,6 @@ public class UmapPane extends BorderPane {
         // which is why re-enabling it afterwards no longer needs a third copy of the
         // resting-state rule.
         session.beginExport();
-        uiState.sync();
         setStatus("Exporting %,d cells to %s...".formatted(result.size(), file.getName()),
                 StatusLevel.INFO);
 
@@ -1711,13 +1572,11 @@ public class UmapPane extends BorderPane {
                 // reload during the write leaves no embedding, and the derivation has
                 // already made that call.
                 session.endExport();
-                uiState.sync();
                 if (failure == null) {
                     setStatus("Exported to " + file.getName(), StatusLevel.SUCCESS);
                 } else {
                     setStatus("Export failed: " + failure, StatusLevel.ERROR);
                 }
-                uiState.assertSynced();
             });
         }, "flowpath-umap-export");
         writer.setDaemon(true);
@@ -1759,15 +1618,12 @@ public class UmapPane extends BorderPane {
         /** The persistent long form behind the status line; null or blank removes it. */
         void detail(String text);
 
-        /**
-         * Put a failure in front of the user and block until they acknowledge it.
-         * <p>
-         * A third channel because it has a third lifetime, and because owning the modal
-         * here rather than in {@code ComputeController} is what lets the controller's
-         * failure paths be exercised at all: {@code Alert.showAndWait()} on the FX thread
-         * deadlocks a test that is already on it.
-         */
-        void alert(String message);
+        // There is deliberately no alert(String) channel any more. It existed because a
+        // failure had nowhere durable to go: the status line wiped after five seconds and
+        // the empty-state overlay only speaks when the plot is empty. ViewState.failure()
+        // now reaches the overlay OR the rail's failure banner, whichever is showing, and
+        // a modal on top of that only stood between the user and the panel that was
+        // already telling them.
     }
 
     /**

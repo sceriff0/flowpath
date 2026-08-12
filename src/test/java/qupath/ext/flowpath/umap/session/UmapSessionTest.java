@@ -13,6 +13,8 @@ import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
+import qupath.lib.regions.ImagePlane;
+import qupath.lib.roi.ROIs;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -184,7 +186,7 @@ class UmapSessionTest {
         session.addTag(new PopulationTag("Rim", 1, new boolean[2]));
 
         session.retireCellSet();
-        assertNull(session.gateMask());
+        assertFalse(session.hasGate());
         assertNull(session.baseColors());
         assertTrue(session.tags().isEmpty());
         assertTrue(session.hiddenPhenotypes().contains("B cell"),
@@ -356,8 +358,8 @@ class UmapSessionTest {
         assertTrue(session.tagsAreStaleFor(5),
                 "Masks are positional — a different cell count makes them meaningless");
         assertNotNull(session.tag("Rim"));
-        assertSame(session.tag("Rim"), session.removeTag("Rim"));
-        assertNull(session.removeTag("Rim"));
+        assertSame(session.tag("Rim"), session.removeTag("Rim", null));
+        assertNull(session.removeTag("Rim", null));
     }
 
     // ------------------------------------------------------------------
@@ -385,25 +387,305 @@ class UmapSessionTest {
                 "Starting an index build also retires any gate computed on the old cells");
     }
 
+    /**
+     * The rail and the status bar say the same three things about the same slide.
+     * <p>
+     * They used to be two compositions with different wording and different arithmetic —
+     * the rail counted the markers the picker had ticked, the status line counted the
+     * markers the gate tree had named — printed within an inch of each other. Whichever
+     * one a reader believed, the other was quoting a different number.
+     */
     @Test
-    void describeSummarisesCellsFiltersPhenotypesAndGatedMarkers() {
+    void theRailAndTheStatusBarShareOneComposition() {
         var objects = new ArrayList<PathObject>();
         for (int i = 0; i < 4; i++) objects.add(cell(i, null, 0));
         var index = indexOf(objects);
 
-        String withGates = UmapSession.describe(snapshot(index,
+        var session = sessionOn(snapshot(index,
                 new String[]{"T cell", "T cell", "B cell", "x"},
                 new int[4], new boolean[]{false, false, false, true},
                 List.of("CD3"), new MarkerSelection()));
-        assertTrue(withGates.startsWith("3 cells (1 filtered out)"), withGates);
-        assertTrue(withGates.contains("2 phenotypes from 2 gates"), withGates);
-        assertTrue(withGates.contains("1 gated marker pre-selected"), withGates);
 
-        String noGates = UmapSession.describe(snapshot(index,
+        assertEquals(List.of("3 cells \u00b7 1 filtered out",
+                        "2 phenotypes from 2 gates",
+                        "2 of 2 markers selected"),
+                session.overviewLines());
+        assertEquals(String.join(", ", session.overviewLines()), session.overviewLine(),
+                "the status bar is the rail's paragraph on one line, not a second one");
+    }
+
+    @Test
+    void anUngatedSnapshotSaysSoRatherThanClaimingZeroPhenotypes() {
+        var objects = new ArrayList<PathObject>();
+        for (int i = 0; i < 4; i++) objects.add(cell(i, null, 0));
+        var index = indexOf(objects);
+
+        var session = sessionOn(snapshot(index,
                 new String[]{PhenotypeSnapshot.UNCLASSIFIED, PhenotypeSnapshot.UNCLASSIFIED,
                         PhenotypeSnapshot.UNCLASSIFIED, PhenotypeSnapshot.UNCLASSIFIED},
                 new int[4], new boolean[4], List.of(), new MarkerSelection()));
-        assertEquals("4 cells, no gates applied yet", noGates);
+
+        assertEquals("4 cells, no gates applied yet, 2 of 2 markers selected",
+                session.overviewLine());
+    }
+
+    /** Standalone there is no gating tree to report on, so the middle line is absent. */
+    @Test
+    void aStandaloneSessionReportsCellsAndMarkersOnly() {
+        var session = new UmapSession();
+        var index = threeMarkerIndex();
+        assertEquals(List.of("No cells loaded"), session.overviewLines(),
+                "and an empty session says exactly that, in both places");
+
+        session.installIndex(index, MarkerStats.compute(index), WIDE_PANEL,
+                CompartmentCapability.empty(), MarkerSelection.defaultFor(WIDE_PANEL));
+        assertEquals(List.of("2 cells", "3 of 3 markers selected"), session.overviewLines());
+
+        // A stale cell set is not a cell set — the same rule hasCells() states, so the
+        // summary cannot go on quoting the previous image's size.
+        session.adopt(snapshot(index, WIDE_PANEL, new String[]{"a", "b"}, new int[2],
+                new boolean[2], List.of(), new MarkerSelection()));
+        session.detachSnapshot();
+        assertEquals(List.of("No cells loaded"), session.overviewLines());
+    }
+
+    // ------------------------------------------------------------------
+    // Rules that used to need a QuPathGUI
+    // ------------------------------------------------------------------
+
+    /**
+     * The cell-set rule, as data.
+     * <p>
+     * It was {@code UmapPane.collectDetections}, which took an {@code ImageData} and read a
+     * checkbox, so the only way to ask it anything was to build a pane. Its snapshot-side
+     * counterpart already lived on the session, which is how the two came to disagree: the
+     * rebuild path re-queried the hierarchy <em>without</em> the annotation filter, widening
+     * the analysis back to the whole slide.
+     */
+    @Test
+    void theCellSetDropsExcludedCellsAndNarrowsToTheAnnotations() {
+        var inside = cell(1, null, 0);
+        var outside = cell(90, null, 0);
+        var excluded = cell(2, UmapSession.EXCLUDED_CLASS, 0xFF808080);
+        var all = List.of(inside, outside, excluded);
+
+        assertEquals(List.of(inside, outside),
+                UmapSession.selectDetections(all, List.of()),
+                "No annotations means no narrowing — an Excluded cell is dropped either way");
+
+        var roi = ROIs.createRectangleROI(-5, -5, 20, 20, ImagePlane.getDefaultPlane());
+        assertEquals(List.of(inside), UmapSession.selectDetections(all, List.of(roi)));
+    }
+
+    /**
+     * A drawn annotation that contains nothing is not the same as no annotation, and the
+     * filter must not quietly widen back to the slide because the user missed.
+     */
+    @Test
+    void anAnnotationCoveringNothingYieldsNothing() {
+        var all = List.of(cell(1, null, 0), cell(2, null, 0));
+        var elsewhere = ROIs.createRectangleROI(500, 500, 10, 10, ImagePlane.getDefaultPlane());
+        assertTrue(UmapSession.selectDetections(all, List.of(elsewhere)).isEmpty());
+    }
+
+    /**
+     * What the first finished embedding is painted by — a product decision that carried
+     * thirteen lines of justifying comment inside a {@code UmapPane} handler and no test.
+     */
+    @Test
+    void theFirstEmbeddingIsColouredByPhenotypeWheneverThereAreAny() {
+        var index = threeMarkerIndex();
+        var gated = sessionOn(snapshot(index, WIDE_PANEL, new String[]{"T cell", "B cell"},
+                new int[2], new boolean[2], List.of("CD8"), new MarkerSelection()));
+        assertEquals(UmapSession.ColourMode.PHENOTYPE, gated.firstColourMode(null),
+                "the phenotypes ARE what the user came to look at");
+        assertEquals(UmapSession.ColourMode.PHENOTYPE, gated.firstColourMode("CD3"),
+                "and an arbitrary channel does not get to override them");
+
+        var ungated = sessionOn(snapshot(index, WIDE_PANEL,
+                new String[]{PhenotypeSnapshot.UNCLASSIFIED, PhenotypeSnapshot.UNCLASSIFIED},
+                new int[2], new boolean[2], List.of(), new MarkerSelection()));
+        assertEquals(UmapSession.ColourMode.MARKER, ungated.firstColourMode(UmapSession.NO_MARKER),
+                "without phenotypes the alternative is a uniform grey blob");
+        assertEquals(UmapSession.ColourMode.UNCHANGED, ungated.firstColourMode("FoxP3"),
+                "but a marker the user picked themselves is left alone");
+
+        assertEquals(UmapSession.ColourMode.UNCHANGED, new UmapSession().firstColourMode(null),
+                "and with no panel there is nothing to colour by either way");
+    }
+
+    @Test
+    void markerColourValuesComeBackRawOrStandardisedOnRequest() {
+        var index = threeMarkerIndex();
+        var session = new UmapSession();
+        session.installIndex(index, MarkerStats.compute(index), WIDE_PANEL,
+                CompartmentCapability.empty(), MarkerSelection.defaultFor(WIDE_PANEL));
+
+        assertSame(index.getMarkerValues(index.getMarkerIndex("CD8")),
+                session.colourValues("CD8", false),
+                "raw is the index's backing column — cloning it per repaint is the hot path");
+
+        double[] z = session.colourValues("CD8", true);
+        assertNotSame(index.getMarkerValues(index.getMarkerIndex("CD8")), z);
+        assertEquals(-z[0], z[1], 1e-9, "two symmetric values standardise symmetrically");
+        assertTrue(z[1] > 0);
+
+        assertNull(session.colourValues("NotOnThisPanel", false));
+        assertNull(session.colourValues(null, true));
+        assertNull(new UmapSession().colourValues("CD8", false), "nothing indexed, nothing to paint");
+    }
+
+    // ------------------------------------------------------------------
+    // Population tagging: the write loops
+    // ------------------------------------------------------------------
+
+    /**
+     * Tagging writes the derived class onto the gated cells only, keeps their colour, and
+     * retires the gate that selected them. Untagging puts every one of them back —
+     * <em>with</em> the colour, which is the part that was missing when the loop lived in
+     * the pane and left every untagged cell rendered in QuPath's default grey.
+     */
+    @Test
+    void taggingAndUntaggingRoundTripThroughTheSession() {
+        // Distinct class names: QuPath caches PathClass globally by its full path and
+        // keeps the colour of whichever test created it first.
+        var tCell = cell(0, "Tag-T", 0xFF00FF00);
+        var bCell = cell(1, "Tag-B", 0xFF0000FF);
+        var index = indexOf(List.of(tCell, bCell));
+        var session = sessionOn(snapshot(index, new String[]{"Tag-T", "Tag-B"},
+                new int[2], new boolean[2], List.of(), new MarkerSelection()));
+        PathObject[] objects = index.getObjects();
+
+        assertNull(session.applyTag("Rim", 0xFF8800, objects), "no gate, nothing to name");
+
+        session.setGateMask(new boolean[]{true, false});
+        var tag = session.applyTag("Rim", 0xFF8800, objects);
+
+        assertNotNull(tag);
+        assertEquals(1, tag.count());
+        assertEquals("Tag-T: Rim", tCell.getPathClass().toString());
+        assertEquals(0xFF00FF00, tCell.getPathClass().getColor(), "the phenotype colour rides along");
+        assertEquals("Tag-B", bCell.getPathClass().toString(), "cells outside the gate are untouched");
+        assertFalse(session.hasGate(), "the gate that selected them is retired with the tag");
+        assertEquals(List.of(tag), session.tags());
+
+        assertSame(tag, session.removeTag("Rim", objects));
+        assertEquals("Tag-T", tCell.getPathClass().toString());
+        assertEquals(0xFF00FF00, tCell.getPathClass().getColor(),
+                "and it rides back — dropping it left every untagged cell in the default grey");
+        assertTrue(session.tags().isEmpty());
+        assertNull(session.removeTag("Rim", objects));
+    }
+
+    /**
+     * Re-tagging an already-tagged cell replaces the tag rather than nesting under it, and
+     * untagging still finds its own suffix.
+     * <p>
+     * Neither worked. {@code PathClass.fromString("Tag-P: Rim", c)} builds a <em>derived</em>
+     * class whose {@code getName()} is the leaf {@code "Rim"} — which both loops read — so
+     * a second tag produced {@code "Rim: Core"} and {@code untagClassName("Rim", "Rim")}
+     * matched nothing and restored nothing. The loops were in {@code UmapPane}, where no
+     * test could reach them.
+     */
+    @Test
+    void aSecondTagReplacesTheFirstRatherThanNestingUnderIt() {
+        var cell = cell(0, "Tag-P", 0xFF123456);
+        var index = indexOf(List.of(cell));
+        var session = sessionOn(snapshot(index, new String[]{"Tag-P"},
+                new int[1], new boolean[1], List.of(), new MarkerSelection()));
+        PathObject[] objects = index.getObjects();
+
+        session.setGateMask(new boolean[]{true});
+        session.applyTag("Rim", 0xFF8800, objects);
+        assertEquals("Tag-P: Rim", cell.getPathClass().toString());
+
+        session.setGateMask(new boolean[]{true});
+        session.applyTag("Core", 0x0088FF, objects);
+        assertEquals("Tag-P: Core", cell.getPathClass().toString(),
+                "the previously applied tag is stripped, not nested under");
+
+        assertNotNull(session.removeTag("Core", objects));
+        assertEquals("Tag-P", cell.getPathClass().toString());
+    }
+
+    @Test
+    void ringOverlaysAreOnePairPerTagInTheOrderTheyWereApplied() {
+        var session = new UmapSession();
+        assertTrue(session.ringColors().isEmpty());
+
+        session.addTag(new PopulationTag("Rim", 0xFF0000, new boolean[]{true, false}));
+        session.addTag(new PopulationTag("Core", 0x00FF00, new boolean[]{false, true}));
+
+        assertArrayEquals(new int[]{0xFF0000}, session.ringColors().get(0));
+        assertArrayEquals(new int[]{0x00FF00}, session.ringColors().get(1));
+        assertArrayEquals(new boolean[]{true, false}, session.ringMasks().get(0));
+        assertEquals(2, session.ringMasks().size());
+
+        session.clearTags();
+        assertTrue(session.tags().isEmpty());
+        assertTrue(session.ringMasks().isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // Nothing derived leaves this class in a form a caller can edit
+    // ------------------------------------------------------------------
+
+    /**
+     * The leaks the observer design could not survive. Each of these used to hand out live
+     * state that {@code UmapPane} mutated directly — {@code session.tags().clear()} was a
+     * TAGGED-to-COMPUTED transition the session never heard about — and the gate mask was
+     * iterated in two places outside the class.
+     */
+    @Test
+    void derivedStateIsNotHandedOutInAFormACallerCanChange() {
+        var session = new UmapSession();
+        session.addTag(new PopulationTag("Rim", 1, new boolean[2]));
+        session.togglePhenotype("B cell");
+
+        assertThrows(UnsupportedOperationException.class, () -> session.tags().clear());
+        assertThrows(UnsupportedOperationException.class, () -> session.hiddenPhenotypes().clear());
+        assertThrows(NullPointerException.class, () -> session.setGateMask(null),
+                "dropping a gate is retireGate() — setGateMask(null) said only half of it");
+
+        assertTrue(session.showAllPhenotypes());
+        assertTrue(session.hiddenPhenotypes().isEmpty());
+        assertFalse(session.showAllPhenotypes(), "and says so when there was nothing to show");
+    }
+
+    /**
+     * Retiring a gate also invalidates the computation still in flight over it. Spelling
+     * that out as {@code beginGateComputation()} plus {@code setGateMask(null)} was three
+     * copies of one operation, and a fourth caller would have had to know the generation
+     * bump was not optional.
+     */
+    @Test
+    void retiringAGateStopsTheDragThatWasStillComputingIt() {
+        var session = new UmapSession();
+        session.setGateMask(new boolean[]{true, false, true});
+        int inFlight = session.beginGateComputation();
+        assertTrue(session.isCurrentGate(inFlight));
+
+        session.retireGate();
+
+        assertFalse(session.hasGate());
+        assertFalse(session.isCurrentGate(inFlight),
+                "otherwise the drag lands a moment later and re-applies the mask just dropped");
+    }
+
+    @Test
+    void theGatedObjectsAreCappedRatherThanHandingOutTheMask() {
+        var objects = List.of(cell(0, null, 0), cell(1, null, 0), cell(2, null, 0));
+        var index = indexOf(objects);
+        var session = new UmapSession();
+        session.setGateMask(new boolean[]{true, false, true});
+
+        assertEquals(List.of(objects.get(0), objects.get(2)),
+                session.gatedObjects(index.getObjects(), 200_000));
+        assertEquals(1, session.gatedObjects(index.getObjects(), 1).size(),
+                "a gate can cover millions of cells; the viewer selection is capped");
+
+        session.retireGate();
+        assertTrue(session.gatedObjects(index.getObjects(), 10).isEmpty());
     }
 
     @Test

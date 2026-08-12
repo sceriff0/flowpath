@@ -70,13 +70,16 @@ class ComputeControllerFxTest {
         }
     }
 
-    /** A reporter that swallows everything, including the modal. */
+    /** A reporter that records the last line and its severity, and shows nothing. */
     private static final class SilentReporter implements UmapPane.StatusReporter {
-        final AtomicReference<String> alerted = new AtomicReference<>();
+        final AtomicReference<String> reported = new AtomicReference<>();
+        final AtomicReference<UmapPane.StatusLevel> level = new AtomicReference<>();
 
-        @Override public void report(String text, UmapPane.StatusLevel level) { }
+        @Override public void report(String text, UmapPane.StatusLevel l) {
+            reported.set(text);
+            level.set(l);
+        }
         @Override public void detail(String text) { }
-        @Override public void alert(String message) { alerted.set(message); }
     }
 
     private static CellIndex threeMarkers() {
@@ -110,13 +113,15 @@ class ComputeControllerFxTest {
                 result -> { },
                 reporter,
                 size -> { });
-        controller.attachUiState(new UiStateController(session, new UiStateController.Controls(
+        // The controller no longer holds a reference to this — the session pushes state
+        // to it — but the panel it drives must still exist for the run to be observable.
+        new UiStateController(session, new UiStateController.Controls(
                 controller.getComputeButton(), controller.getCancelButton(),
-                new ProgressIndicator(), new ProgressBar(), new Label(),
+                new ProgressIndicator(), new ProgressBar(), new Label(), new Label(),
                 new ToggleButton(), new Button(),
                 new TextField(), new ColorPicker(), new Button(),
                 new Button(), new StackPane(), new Button(), new CheckBox(),
-                List.of(), () -> { })));
+                List.of(), () -> { }));
         return controller;
     }
 
@@ -214,9 +219,9 @@ class ComputeControllerFxTest {
      * Without this, {@link #asupersededEndingLeavesTheNewerRunsBusyStateAlone} would still
      * pass if the controller had simply stopped reacting to outcomes altogether.
      * <p>
-     * Cancelled rather than Failed, because {@code onUmapError} opens a modal alert and
-     * {@code showAndWait} on the FX thread would deadlock a headless test. The Failed
-     * mapping is pinned in {@code ViewStateDerivationTest}, where no toolkit is involved.
+     * Cancelled and Failed both, now that {@code onUmapError} no longer opens a modal —
+     * {@code showAndWait} on the FX thread deadlocked a test already on it, which is why
+     * this could only ever be written as a cancellation before.
      */
     @Test
     void anEndingThatBelongsToThisRunDoesClearTheBusyState() {
@@ -233,6 +238,13 @@ class ComputeControllerFxTest {
 
                 assertEquals(ViewState.Stage.READY, session.viewState().stage());
                 assertFalse(session.isRunning());
+
+                controller.runUmap();
+                controller.onUmapOutcome(UmapOutcome.failed("heap exhausted"));
+
+                assertEquals(ViewState.Stage.FAILED, session.viewState().stage());
+                assertFalse(session.isRunning());
+                assertEquals("heap exhausted", session.viewState().failure());
             });
         } finally {
             service.shutdown();
@@ -273,7 +285,9 @@ class ComputeControllerFxTest {
                 assertNotNull(session.viewState().failure());
                 assertTrue(session.viewState().failure().contains("LinkageError"),
                         "and it must say what actually happened");
-                assertNotNull(reporter.alerted.get(), "the user is told, without a modal here");
+                assertEquals(UmapPane.StatusLevel.ERROR, reporter.level.get(),
+                        "the user is told on the status line, and by the panel that keeps "
+                                + "saying so after it wipes");
             });
         } finally {
             service.shutdown();

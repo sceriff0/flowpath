@@ -29,7 +29,7 @@ class FeatureSelectionPaneFxTest {
 
         FxTestSupport.onFxRun(() -> {
             var pane = new FeatureSelectionPane();
-            pane.populate(List.of("CD3"), cap, selection);
+            pane.populate(List.of("CD3"), cap, selection, selection::put);
             // Simulate the user choosing the nuclear compartment by mutating via the
             // model the pane edits (combo wiring is exercised by the change callback).
             selection.put("CD3", selection.entryFor("CD3").withCompartment(Compartment.NUCLEAR));
@@ -50,7 +50,7 @@ class FeatureSelectionPaneFxTest {
 
         FxTestSupport.onFxRun(() -> {
             var pane = new FeatureSelectionPane();
-            pane.populate(List.of("CD3"), cap, selection);
+            pane.populate(List.of("CD3"), cap, selection, selection::put);
         });
 
         assertEquals(Compartment.WHOLE_CELL, selection.compartmentFor("CD3"));

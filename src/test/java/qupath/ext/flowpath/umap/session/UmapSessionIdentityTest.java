@@ -216,7 +216,7 @@ class UmapSessionIdentityTest {
         var indexC = indexOf(cells(5, 200));
         assertEquals(UmapSession.Adoption.REBUILD, session.adopt(snapshotOf(indexC, "B cell", 0xFF0000)));
         assertSame(indexC, session.index());
-        assertNull(session.gateMask(), "A new cell set retires the gate");
+        assertFalse(session.hasGate(), "A new cell set retires the gate");
         assertTrue(session.tags().isEmpty(), "A new cell set retires the population tags");
         assertDoesNotThrow(session::assertIndexInvariant);
     }
@@ -229,7 +229,17 @@ class UmapSessionIdentityTest {
         session.adopt(snapshotOf(indexA, "T cell", 0x00FF00));
         assertTrue(session.isSnapshotMode());
         assertEquals(UmapSession.Adoption.DETACHED, session.adopt(null));
-        assertFalse(session.isSnapshotMode());
+        assertNull(session.snapshot());
+        // Detaching does not hand the cells back to this panel: the CellIndex it is still
+        // holding came from the gating pane and describes whatever that was showing. So
+        // the session waits, and waiting is still snapshot mode — which is the fact
+        // isSnapshotMode() used to be unable to see, offering an annotation filter and a
+        // feature picker over the previous image's cells.
+        assertTrue(session.isAwaitingSnapshot());
+        assertTrue(session.isSnapshotMode());
+        assertNotNull(session.detectionsForRebuild(),
+                "and a rebuild here has nothing to do, rather than the whole new hierarchy");
+        assertTrue(session.detectionsForRebuild().isEmpty());
         assertDoesNotThrow(session::assertIndexInvariant);
     }
 

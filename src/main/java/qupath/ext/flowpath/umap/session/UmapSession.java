@@ -16,14 +16,18 @@ import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.ext.flowpath.umap.model.UmapResult;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
+import qupath.lib.roi.interfaces.ROI;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * Everything the UMAP view <em>knows</em>, separated from everything it <em>shows</em>.
@@ -57,6 +61,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@link #installIndex}/{@link #installRebuiltIndex}. {@link #beginIndexBuild()} and
  * {@link #isCurrentBuild(int)} are the generation guard those background threads use,
  * and they are the only members touched off the FX thread.
+ *
+ * <h2>The session pushes; nothing pulls</h2>
+ * Every mutator here ends by handing {@link #viewState()} to whoever
+ * {@link #observe(Consumer) subscribed} — {@code UiStateController} does, in its
+ * constructor. There is therefore no {@code sync()} to call and no {@code assertSynced()}
+ * to catch the day someone did not, which is what the eight call sites of the latter
+ * existed for. The corollary is that state must never leave this class in a form a caller
+ * can edit: {@link #tags()} and {@link #hiddenPhenotypes()} are unmodifiable views and the
+ * gate mask is not handed out at all, because a caller mutating one of those changes the
+ * derived state without the session — and therefore without the panel — ever hearing.
  */
 public final class UmapSession {
 
@@ -72,6 +86,12 @@ public final class UmapSession {
 
     /** ImageData property key under which the per-marker selection is persisted. */
     public static final String SELECTION_PROPERTY = "qumap.markerSelection";
+
+    /**
+     * The {@link PathClass} name the gating half writes onto cells its quality filter
+     * removed. They are never analysis input, whichever half discovered them.
+     */
+    public static final String EXCLUDED_CLASS = "Excluded";
 
     // --- Data ---
     private CellIndex cellIndex;
@@ -144,6 +164,72 @@ public final class UmapSession {
     private final AtomicInteger gateGeneration = new AtomicInteger();
 
     // ------------------------------------------------------------------
+    // Observation
+    // ------------------------------------------------------------------
+
+    /**
+     * Who is told when the session changes. Plain {@link Consumer}s of {@link ViewState},
+     * so this class still compiles and tests without a JavaFX toolkit.
+     */
+    private final List<Consumer<ViewState>> observers = new ArrayList<>();
+
+    /**
+     * How deep the current mutation is. Observers are told once, when the outermost
+     * mutator returns.
+     * <p>
+     * Not an optimisation. {@link #adopt} reaches {@link #retireCellSet()} at a moment
+     * when {@code snapshot} names the incoming cells and {@code cellIndex} still holds
+     * the outgoing ones — the one instant in the class's life at which its own
+     * index/snapshot invariant is false. Publishing there would make that instant
+     * <em>observable</em>, which is exactly what the invariant promises never happens.
+     */
+    private int mutationDepth;
+
+    /**
+     * Subscribe to every settled change, and receive the current state immediately.
+     * <p>
+     * This is what replaced {@code UiStateController.sync()} being <em>called</em>.
+     * {@code sync()} was already unable to express a wrong state — it took no argument —
+     * but it could still be forgotten, and {@code UmapPane.onUmapResultReady} was the
+     * standing proof: it retired the gate and the stale tags <em>after</em>
+     * {@code ComputeController} had synced, so a second sync had to be remembered at the
+     * end of the handler, and an {@code assertSynced()} had to be sprinkled at the tail
+     * of eight others to catch the day someone did not. Now no caller syncs, so no caller
+     * can fail to.
+     */
+    public void observe(Consumer<ViewState> observer) {
+        observers.add(Objects.requireNonNull(observer, "observer"));
+        observer.accept(viewState());
+    }
+
+    /**
+     * Run {@code body} as one mutation and tell the observers once it has settled. A
+     * mutator that throws publishes nothing: the depth unwinds, and observers never see
+     * a half-applied change.
+     */
+    private void mutate(Runnable body) {
+        mutationDepth++;
+        try {
+            body.run();
+        } finally {
+            mutationDepth--;
+        }
+        publish();
+    }
+
+    /** Tell every observer, unless an enclosing mutation is still running. */
+    private void publish() {
+        if (mutationDepth > 0 || observers.isEmpty()) return;
+        ViewState now = viewState();
+        // Indexed rather than iterated: an observer that subscribes another during its
+        // own notification would otherwise take the whole panel down with a
+        // ConcurrentModificationException.
+        for (int i = 0; i < observers.size(); i++) {
+            observers.get(i).accept(now);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Accessors
     // ------------------------------------------------------------------
 
@@ -153,20 +239,54 @@ public final class UmapSession {
 
     public PhenotypeSnapshot snapshot() { return snapshot; }
 
-    /** {@code true} when this session is driven by the gating tree rather than the hierarchy. */
-    public boolean isSnapshotMode() { return snapshot != null; }
+    /**
+     * {@code true} when the gating tree — not this panel's own read of the hierarchy —
+     * owns the cell set.
+     * <p>
+     * Waiting for a snapshot is still snapshot mode. {@code snapshot != null} alone was a
+     * second, unrepaired reading of "who owns the cells": during the window between an
+     * image change and the gating tree's next push, {@link #detachSnapshot()} has nulled
+     * the snapshot but the gating pane is still the owner. Answering "standalone" there
+     * let the panel offer its own annotation filter, re-index the new image behind the
+     * gating pane's back, and — through {@link #detectionsForRebuild()} — rebuild features
+     * from a hierarchy the gating half had not finished reading.
+     */
+    public boolean isSnapshotMode() { return snapshot != null || awaitingSnapshot; }
 
     public List<String> markers() { return markers; }
 
     public CompartmentCapability capability() { return capability; }
 
+    /**
+     * The feature picker's state — read here, written through
+     * {@link #editSelection(String, MarkerSelection.Entry)}.
+     * <p>
+     * {@code MarkerSelection} is mutable and shared with the gating half, so this cannot
+     * be an unmodifiable view the way {@link #tags()} is. What it can be is the only
+     * <em>reader</em>: the include flag decides whether Run UMAP is clickable at all, and
+     * {@code FeatureSelectionPane} used to {@code put} straight into this object, so
+     * ticking a marker changed that answer without the session — and therefore the panel —
+     * ever finding out.
+     */
     public MarkerSelection selection() { return selection; }
 
-    public List<PopulationTag> tags() { return populationTags; }
+    /**
+     * The population tags, in the order they were applied — an unmodifiable <em>view</em>,
+     * not a copy.
+     * <p>
+     * It used to be the live list, and {@code UmapPane} called {@code tags().clear()} on
+     * it directly. That is a change of {@link ViewState} (TAGGED to COMPUTED) made without
+     * the session's knowledge, which is precisely what {@link #observe} cannot survive:
+     * the observers would never be told. {@link #clearTags()} is the same edit, spelled so
+     * the session hears it.
+     */
+    public List<PopulationTag> tags() { return Collections.unmodifiableList(populationTags); }
 
-    public Set<String> hiddenPhenotypes() { return hiddenPhenotypes; }
+    /** The hidden phenotype names — an unmodifiable view; see {@link #tags()}. */
+    public Set<String> hiddenPhenotypes() { return Collections.unmodifiableSet(hiddenPhenotypes); }
 
-    public boolean[] gateMask() { return gateMask; }
+    /** {@code true} when a polygon gate is closed over the embedding. */
+    public boolean hasGate() { return gateMask != null; }
 
     /** The embedding currently on screen, or {@code null} when there is none. */
     public UmapResult embedding() { return embedding; }
@@ -260,6 +380,18 @@ public final class UmapSession {
      * @return what the caller must do to the view
      */
     public Adoption adopt(PhenotypeSnapshot incoming) {
+        Adoption adoption;
+        mutationDepth++;
+        try {
+            adoption = adoptInternal(incoming);
+        } finally {
+            mutationDepth--;
+        }
+        publish();
+        return adoption;
+    }
+
+    private Adoption adoptInternal(PhenotypeSnapshot incoming) {
         if (incoming == null) {
             // Delegated, not reimplemented. This branch used to null the snapshot and stop,
             // which was identical to detachSnapshot() until detachSnapshot() learnt that the
@@ -309,12 +441,14 @@ public final class UmapSession {
      * the gating pane has not re-indexed yet.
      */
     public void detachSnapshot() {
-        snapshot = null;
-        // The index survives on purpose — the pane still needs the old PathObjects until a
-        // replacement arrives — so say out loud that it no longer describes anything the
-        // user is looking at. Everything derived from it is withheld until then.
-        awaitingSnapshot = true;
-        clearDerivedState();
+        mutate(() -> {
+            snapshot = null;
+            // The index survives on purpose — the pane still needs the old PathObjects until
+            // a replacement arrives — so say out loud that it no longer describes anything
+            // the user is looking at. Everything derived from it is withheld until then.
+            awaitingSnapshot = true;
+            clearDerivedState();
+        });
     }
 
     /**
@@ -327,6 +461,10 @@ public final class UmapSession {
      * a colour array from the previous cell set would land on the wrong points.
      */
     public void retireCellSet() {
+        mutate(this::retireCellSetNow);
+    }
+
+    private void retireCellSetNow() {
         gateMask = null;
         baseColors = null;
         populationTags.clear();
@@ -346,8 +484,27 @@ public final class UmapSession {
      * where the phenotype names themselves stop meaning anything.
      */
     public void clearDerivedState() {
-        retireCellSet();
-        hiddenPhenotypes.clear();
+        mutate(() -> {
+            retireCellSetNow();
+            hiddenPhenotypes.clear();
+        });
+    }
+
+    /**
+     * Drop the polygon gate, and invalidate any gate computation still in flight so it
+     * cannot re-apply the mask this just removed.
+     * <p>
+     * One method because it was three: {@code onUmapResultReady}, {@code clearPolygon} and
+     * {@code applyPopulationTag} each spelled out {@code beginGateComputation()} followed
+     * by {@code setGateMask(null)}, and a fourth caller would have had to know that the
+     * generation bump is not optional. {@link #setGateMask} now refuses {@code null}, so
+     * this is the only way to say it.
+     */
+    public void retireGate() {
+        mutate(() -> {
+            gateGeneration.incrementAndGet();
+            gateMask = null;
+        });
     }
 
     // ------------------------------------------------------------------
@@ -362,14 +519,16 @@ public final class UmapSession {
      * that no longer exists, which is the drift the whole class is built to prevent.
      */
     public void clearIndex() {
-        snapshot = null;
-        awaitingSnapshot = false;
-        cellIndex = null;
-        markerStats = null;
-        markers = new ArrayList<>();
-        capability = CompartmentCapability.empty();
-        selection = new MarkerSelection();
-        retireCellSet();
+        mutate(() -> {
+            snapshot = null;
+            awaitingSnapshot = false;
+            cellIndex = null;
+            markerStats = null;
+            markers = new ArrayList<>();
+            capability = CompartmentCapability.empty();
+            selection = new MarkerSelection();
+            retireCellSetNow();
+        });
     }
 
     /**
@@ -386,13 +545,16 @@ public final class UmapSession {
                             + "snapshot owns the cell set — use installRebuiltIndex, which "
                             + "reconciles the snapshot, or detach first.");
         }
-        this.cellIndex = Objects.requireNonNull(index, "index");
-        this.awaitingSnapshot = false;
-        this.markerStats = stats;
-        this.markers = List.copyOf(markers);
-        this.capability = capability;
-        this.selection = selection;
-        this.baseColors = null;
+        Objects.requireNonNull(index, "index");
+        mutate(() -> {
+            this.cellIndex = index;
+            this.awaitingSnapshot = false;
+            this.markerStats = stats;
+            this.markers = List.copyOf(markers);
+            this.capability = capability;
+            this.selection = selection;
+            this.baseColors = null;
+        });
     }
 
     /**
@@ -407,10 +569,12 @@ public final class UmapSession {
         // rebuild and painting the old phenotypes onto the new cells: the snapshot's own
         // length check cannot see that, because the lengths still agree.
         PhenotypeSnapshot reseated = snapshot == null ? null : snapshot.rebindTo(rebuilt, rebuiltStats);
-        this.snapshot = reseated;
-        this.cellIndex = rebuilt;
-        this.markerStats = rebuiltStats;
-        this.baseColors = null;
+        mutate(() -> {
+            this.snapshot = reseated;
+            this.cellIndex = rebuilt;
+            this.markerStats = rebuiltStats;
+            this.baseColors = null;
+        });
     }
 
     /**
@@ -420,9 +584,55 @@ public final class UmapSession {
      * and annotation filters; re-querying the hierarchy would widen it back to the whole
      * slide and break the positional alignment every snapshot array depends on. Returns
      * {@code null} when the caller should collect detections itself.
+     * <p>
+     * Empty — <em>not</em> null — while {@link #isAwaitingSnapshot() awaiting one}. The
+     * gating pane owns the cell set in that window too, and it has not yet said what it
+     * is; collecting detections ourselves would index the new image's whole hierarchy
+     * behind its back. Nothing to rebuild is the honest answer, and the caller's existing
+     * "no detections, nothing to do" branch handles it.
      */
     public List<PathObject> detectionsForRebuild() {
-        return snapshot == null ? null : List.of(snapshot.index().getObjects());
+        if (snapshot != null) return List.of(snapshot.index().getObjects());
+        return awaitingSnapshot ? List.of() : null;
+    }
+
+    /**
+     * The cells an analysis may read: everything not classified {@link #EXCLUDED_CLASS},
+     * narrowed to the annotation ROIs when there are any.
+     * <p>
+     * The predicate as data — a list of detections and a list of ROIs — rather than an
+     * {@link qupath.lib.images.ImageData} and a checkbox. It was the pane's
+     * {@code collectDetections}, unreachable without a {@code QuPathGUI}, even though the
+     * rule it carries is the reason the feature-rebuild path exists at all: rebuilding
+     * used to re-query the hierarchy <em>without</em> the annotation filter, silently
+     * widening the analysis back to the whole slide and misaligning every population tag
+     * mask, which is indexed positionally against this list.
+     *
+     * @param detections every detection on the image, in hierarchy order
+     * @param rois       the annotation ROIs to narrow to; empty means "no narrowing",
+     *                   which is what an annotation filter with nothing drawn must mean
+     */
+    public static List<PathObject> selectDetections(Collection<PathObject> detections,
+                                                    List<ROI> rois) {
+        List<PathObject> kept = new ArrayList<>();
+        for (PathObject d : detections) {
+            PathClass pc = d.getPathClass();
+            if (pc != null && EXCLUDED_CLASS.equals(pc.getName())) continue;
+            if (!rois.isEmpty()) {
+                ROI cellRoi = d.getROI();
+                // No ROI means no centroid to test, so it cannot be shown to be inside.
+                if (cellRoi == null) continue;
+                double cx = cellRoi.getCentroidX();
+                double cy = cellRoi.getCentroidY();
+                boolean inside = false;
+                for (ROI roi : rois) {
+                    if (roi.contains(cx, cy)) { inside = true; break; }
+                }
+                if (!inside) continue;
+            }
+            kept.add(d);
+        }
+        return kept;
     }
 
     /**
@@ -448,8 +658,10 @@ public final class UmapSession {
      * describing that run — and puts the session into the one phase in which Cancel exists.
      */
     public void beginRun() {
-        running = true;
-        failure = null;
+        mutate(() -> {
+            running = true;
+            failure = null;
+        });
     }
 
     /**
@@ -458,7 +670,7 @@ public final class UmapSession {
      * idempotent with this.
      */
     public void cancelRun() {
-        running = false;
+        mutate(() -> running = false);
     }
 
     /**
@@ -483,24 +695,26 @@ public final class UmapSession {
      */
     public ViewState record(UmapOutcome outcome) {
         Objects.requireNonNull(outcome, "outcome");
-        switch (outcome) {
-            case UmapOutcome.Succeeded succeeded -> {
-                embedding = succeeded.result();
-                failure = null;
-                running = false;
+        mutate(() -> {
+            switch (outcome) {
+                case UmapOutcome.Succeeded succeeded -> {
+                    embedding = succeeded.result();
+                    failure = null;
+                    running = false;
+                }
+                case UmapOutcome.Failed failed -> {
+                    failure = failed.describe();
+                    running = false;
+                }
+                case UmapOutcome.Cancelled ignored -> {
+                    running = false;
+                }
+                case UmapOutcome.Superseded ignored -> {
+                    // A newer run owns the busy state. Touching `running` here would drive
+                    // the panel out of a COMPUTING that is still true.
+                }
             }
-            case UmapOutcome.Failed failed -> {
-                failure = failed.describe();
-                running = false;
-            }
-            case UmapOutcome.Cancelled ignored -> {
-                running = false;
-            }
-            case UmapOutcome.Superseded ignored -> {
-                // A newer run owns the busy state. Touching `running` here would drive the
-                // panel out of a COMPUTING that is still true.
-            }
-        }
+        });
         return viewState();
     }
 
@@ -509,22 +723,24 @@ public final class UmapSession {
      * exit of the background build, superseded ones included.
      */
     public void beginRebuild() {
-        pendingRebuilds++;
+        mutate(() -> pendingRebuilds++);
     }
 
     /** A feature rebuild has landed, been superseded, or failed. */
     public void endRebuild() {
-        if (pendingRebuilds > 0) pendingRebuilds--;
+        mutate(() -> {
+            if (pendingRebuilds > 0) pendingRebuilds--;
+        });
     }
 
     /** A CSV export is writing; Export must not be clickable again until it finishes. */
     public void beginExport() {
-        exporting = true;
+        mutate(() -> exporting = true);
     }
 
     /** The CSV export finished, successfully or not. */
     public void endExport() {
-        exporting = false;
+        mutate(() -> exporting = false);
     }
 
     /**
@@ -582,13 +798,17 @@ public final class UmapSession {
                 idle && hasEmbedding,
                 idle && stage == ViewState.Stage.GATING,
                 idle && hasEmbedding && !exporting,
-                idle,
+                // The feature picker is still populated with the PREVIOUS image's markers
+                // while the gating tree re-indexes, and ticking one there re-indexed the
+                // new image's whole hierarchy behind the gating pane's back. The awaiting
+                // window withholds the inputs for the same reason it withholds Run.
+                idle && !awaitingSnapshot,
                 rebuilding,
                 !hasEmbedding,
                 !hasEmbedding && hasCells,
                 // Waiting for a snapshot is still snapshot mode: the gating pane owns the
                 // cell set and this panel must not offer its own annotation filter over it.
-                snapshot == null && !awaitingSnapshot,
+                !isSnapshotMode(),
                 running ? null : failure);
     }
 
@@ -647,6 +867,16 @@ public final class UmapSession {
             }
         }
         return sel;
+    }
+
+    /**
+     * Record one row of the feature picker: which compartment, which statistic, and
+     * whether this marker feeds the embedding at all.
+     */
+    public void editSelection(String marker, MarkerSelection.Entry entry) {
+        Objects.requireNonNull(marker, "marker");
+        Objects.requireNonNull(entry, "entry");
+        mutate(() -> selection.put(marker, entry));
     }
 
     /**
@@ -719,6 +949,65 @@ public final class UmapSession {
             }
         }
         return markers.get(0);
+    }
+
+    /** What {@link #firstColourMode} decided a finished embedding should be painted by. */
+    public enum ColourMode {
+        /** Paint the gate tree's phenotypes — the thing the user came to look at. */
+        PHENOTYPE,
+        /** Paint one marker's expression, at {@link #preferredMarker()}. */
+        MARKER,
+        /** The user has already chosen; leave the plot alone. */
+        UNCHANGED
+    }
+
+    /**
+     * What a finished embedding should be coloured by.
+     * <p>
+     * Standalone, the answer is "some marker" — without one the plot is a uniform grey
+     * blob and the user has to go hunting through a dropdown to see anything. Opened from
+     * a gate tree the answer is the opposite: the phenotypes <em>are</em> the thing they
+     * came to look at, and overriding them with an arbitrary channel would throw away the
+     * whole reason the two halves were joined. So marker colouring is the fallback for
+     * having no phenotypes to show, not the default.
+     * <p>
+     * A product decision that carried thirteen lines of justifying comment inside a
+     * {@code UmapPane} handler and no test at all, because reaching it needed a live
+     * toolkit and a {@code QuPathGUI}.
+     *
+     * @param currentMarker what the marker dropdown holds; anything other than
+     *                      {@code null} or {@link #NO_MARKER} is a choice the user has
+     *                      already made, and is left alone
+     */
+    public ColourMode firstColourMode(String currentMarker) {
+        if (snapshot != null && snapshot.hasPhenotypes()) return ColourMode.PHENOTYPE;
+        if (markers.isEmpty()) return ColourMode.UNCHANGED;
+        boolean unchosen = currentMarker == null || NO_MARKER.equals(currentMarker);
+        return unchosen ? ColourMode.MARKER : ColourMode.UNCHANGED;
+    }
+
+    /**
+     * The per-cell numbers the marker overlay paints, already on the requested scale.
+     *
+     * @param marker    a marker name from {@link #markers()}
+     * @param asZScore  {@code true} for the standardized scale, {@code false} for the raw
+     *                  measurement
+     * @return the values, positional against {@link CellIndex#getObjects()}, or
+     *         {@code null} when this session cannot resolve the marker. Raw values are the
+     *         index's <b>backing column</b> — read-only, like every other array accessor
+     *         on the hot path; the z-scored form is necessarily a new array
+     */
+    public double[] colourValues(String marker, boolean asZScore) {
+        if (cellIndex == null || markerStats == null || marker == null) return null;
+        int idx = cellIndex.getMarkerIndex(marker);
+        if (idx < 0) return null;
+        double[] raw = cellIndex.getMarkerValues(idx);
+        if (!asZScore) return raw;
+        double[] z = new double[raw.length];
+        for (int i = 0; i < raw.length; i++) {
+            z[i] = markerStats.toZScore(marker, raw[i]);
+        }
+        return z;
     }
 
     // ------------------------------------------------------------------
@@ -796,14 +1085,58 @@ public final class UmapSession {
         return shaded;
     }
 
+    /**
+     * Close a polygon gate over the embedding.
+     *
+     * @throws NullPointerException on {@code null} — dropping a gate is
+     *         {@link #retireGate()}, which also invalidates the computation still in
+     *         flight. {@code setGateMask(null)} said only half of that, in three places
+     */
     public void setGateMask(boolean[] mask) {
-        this.gateMask = mask;
+        Objects.requireNonNull(mask, "mask — to drop the gate call retireGate()");
+        mutate(() -> this.gateMask = mask);
+    }
+
+    /**
+     * The gated cells, in embedding order, capped at {@code limit}.
+     * <p>
+     * The last thing outside this class that iterated the gate mask, which is why there is
+     * no {@code gateMask()} accessor any more: the mask is state, and handing it out is
+     * handing out the ability to change it without the session hearing.
+     *
+     * @param objects the embedding's object array; read, never retained
+     * @param limit   the most objects to return — a gate can cover millions of cells and
+     *                QuPath's selection model is not built for that
+     */
+    public List<PathObject> gatedObjects(PathObject[] objects, int limit) {
+        List<PathObject> selected = new ArrayList<>();
+        if (gateMask == null || objects == null) return selected;
+        int end = Math.min(objects.length, gateMask.length);
+        for (int i = 0; i < end && selected.size() < limit; i++) {
+            if (gateMask[i]) selected.add(objects[i]);
+        }
+        return selected;
     }
 
     /** Hide or show one phenotype in the plot. */
     public void togglePhenotype(String name) {
         if (name == null) return;
-        if (!hiddenPhenotypes.remove(name)) hiddenPhenotypes.add(name);
+        mutate(() -> {
+            if (!hiddenPhenotypes.remove(name)) hiddenPhenotypes.add(name);
+        });
+    }
+
+    /**
+     * Un-hide every phenotype the legend pushed out of the way.
+     *
+     * @return {@code true} when something was actually hidden, so the caller can skip a
+     *         repaint. The pane used to answer that by reading {@code hiddenPhenotypes()}
+     *         and then clearing the live set itself
+     */
+    public boolean showAllPhenotypes() {
+        if (hiddenPhenotypes.isEmpty()) return false;
+        mutate(hiddenPhenotypes::clear);
+        return true;
     }
 
     /**
@@ -842,18 +1175,108 @@ public final class UmapSession {
     // ------------------------------------------------------------------
 
     public void addTag(PopulationTag tag) {
-        populationTags.add(tag);
+        mutate(() -> populationTags.add(tag));
     }
 
-    /** Remove the tag with this name, returning it, or {@code null} when there was none. */
-    public PopulationTag removeTag(String name) {
-        for (PopulationTag tag : populationTags) {
-            if (tag.name().equals(name)) {
-                populationTags.remove(tag);
-                return tag;
+    /**
+     * Drop every population tag — the overlays only, never the classifications on the
+     * cells.
+     * <p>
+     * Called when a recompute produces a different cell count, at which point the masks
+     * are positional against nothing. {@code UmapPane} used to do this with
+     * {@code session.tags().clear()} on the live list, which changed the session's
+     * {@link ViewState} from TAGGED to COMPUTED without the session ever finding out.
+     */
+    public void clearTags() {
+        if (populationTags.isEmpty()) return;
+        mutate(populationTags::clear);
+    }
+
+    /**
+     * Name the gated cells as a population: write the derived {@link PathClass} onto each
+     * one, register the tag, and retire the gate that selected them.
+     * <p>
+     * This is the one place FlowPath's UMAP half writes classifications, and it happens
+     * only because the user pressed Tag Selection. Cells outside the gate are never
+     * touched — which is why there is no restore pass here, unlike the version that
+     * reclassified every outside cell just to grey it out.
+     *
+     * @param name        the population name
+     * @param packedColor packed RGB for the ring overlay
+     * @param objects     the embedding's object array, positional against the gate mask
+     * @return the tag that was applied, or {@code null} when no gate is closed
+     */
+    public PopulationTag applyTag(String name, int packedColor, PathObject[] objects) {
+        if (gateMask == null || objects == null) return null;
+        boolean[] insideMask = gateMask;
+        int end = Math.min(objects.length, insideMask.length);
+        for (int i = 0; i < end; i++) {
+            if (!insideMask[i]) continue;
+            PathClass current = objects[i].getPathClass();
+            // Carry the phenotype's colour onto the derived class, so a tagged cell still
+            // renders as its population in QuPath rather than in the default grey.
+            int originalColor = current != null ? current.getColor() : 0xFF808080;
+            // toString(), not getName(). QuPath treats "T cell: Rim" as a DERIVED class
+            // whose getName() is the leaf "Rim" — so reading the name back tagged an
+            // already-tagged cell as "Rim: Core" instead of "T cell: Core", and left
+            // removeTag unable to recognise its own suffix at all. toString() is the full
+            // path, and is what fromString() parses.
+            String derivedName = tagClassName(current != null ? current.toString() : null, name);
+            objects[i].setPathClass(PathClass.fromString(derivedName, originalColor));
+        }
+        PopulationTag tag = new PopulationTag(name, packedColor, insideMask);
+        mutate(() -> {
+            populationTags.add(tag);
+            gateGeneration.incrementAndGet();
+            gateMask = null;
+        });
+        return tag;
+    }
+
+    /**
+     * Remove a population tag and put its cells back to the class they carried before it
+     * was applied.
+     * <p>
+     * The colour is carried across deliberately. {@link #applyTag} preserved the phenotype
+     * colour on the derived class, so dropping it here left every untagged cell rendered
+     * in QuPath's default instead of its own phenotype.
+     *
+     * @param objects the embedding's object array, positional against the tag's mask
+     * @return the tag that was removed, or {@code null} when there was no such tag
+     */
+    public PopulationTag removeTag(String name, PathObject[] objects) {
+        PopulationTag tagToRemove = tag(name);
+        if (tagToRemove == null) return null;
+        if (objects != null) {
+            boolean[] mask = tagToRemove.mask();
+            int end = Math.min(objects.length, mask.length);
+            for (int i = 0; i < end; i++) {
+                if (!mask[i]) continue;
+                PathClass current = objects[i].getPathClass();
+                // The full derived path — see applyTag. current.getName() is "Rim", which
+                // never ends with ": Rim", so nothing was ever restored.
+                String baseName = untagClassName(current == null ? null : current.toString(), name);
+                if (baseName != null) {
+                    objects[i].setPathClass(PathClass.fromString(baseName, current.getColor()));
+                }
             }
         }
-        return null;
+        mutate(() -> populationTags.remove(tagToRemove));
+        return tagToRemove;
+    }
+
+    /** One single-entry colour array per tag, for the canvas's ring overlay. */
+    public List<int[]> ringColors() {
+        List<int[]> colors = new ArrayList<>(populationTags.size());
+        for (PopulationTag tag : populationTags) colors.add(new int[]{tag.color()});
+        return colors;
+    }
+
+    /** One mask per tag, in the same order as {@link #ringColors()}. */
+    public List<boolean[]> ringMasks() {
+        List<boolean[]> masks = new ArrayList<>(populationTags.size());
+        for (PopulationTag tag : populationTags) masks.add(tag.mask());
+        return masks;
     }
 
     /** The tag with this name, or {@code null}. */
@@ -908,26 +1331,44 @@ public final class UmapSession {
     // Reporting
     // ------------------------------------------------------------------
 
-    /** One-line summary of a snapshot for the status bar. */
-    public static String describe(PhenotypeSnapshot s) {
-        int populations = s.populations().size();
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("%,d cells", s.includedCount()));
-        int dropped = s.cellCount() - s.includedCount();
-        if (dropped > 0) {
-            sb.append(String.format(" (%,d filtered out)", dropped));
+    /**
+     * What this session is holding, as ordered fragments: the cell count, what the gating
+     * tree made of them, and how much of the panel the next run would read.
+     * <p>
+     * <b>One composition, two renderings.</b> The rail's cell summary and the status
+     * bar's snapshot line were two implementations of the same paragraph with different
+     * wording and different arithmetic — the rail counted ticked markers, the status line
+     * counted gated ones, and the two appeared within an inch of each other saying
+     * different numbers about the same slide. {@link #overviewLine()} joins these with
+     * commas for the status bar; the rail joins them with newlines. Neither composes
+     * anything of its own.
+     */
+    public List<String> overviewLines() {
+        if (!hasCells()) return List.of("No cells loaded");
+
+        List<String> lines = new ArrayList<>(3);
+        int total = snapshot != null ? snapshot.includedCount() : cellIndex.size();
+        int dropped = snapshot != null ? snapshot.cellCount() - snapshot.includedCount() : 0;
+        lines.add(dropped > 0
+                ? String.format(Locale.US, "%,d cells \u00b7 %,d filtered out", total, dropped)
+                : String.format(Locale.US, "%,d cells", total));
+
+        if (snapshot != null) {
+            int populations = snapshot.populations().size();
+            lines.add(snapshot.hasPhenotypes()
+                    ? String.format(Locale.US, "%d phenotype%s from %d gate%s",
+                            populations, populations == 1 ? "" : "s",
+                            snapshot.gateCount(), snapshot.gateCount() == 1 ? "" : "s")
+                    : "no gates applied yet");
         }
-        if (s.hasPhenotypes()) {
-            sb.append(String.format(", %d phenotype%s from %d gate%s",
-                    populations, populations == 1 ? "" : "s",
-                    s.gateCount(), s.gateCount() == 1 ? "" : "s"));
-        } else {
-            sb.append(", no gates applied yet");
-        }
-        if (!s.gatedMarkers().isEmpty()) {
-            sb.append(String.format(", %d gated marker%s pre-selected",
-                    s.gatedMarkers().size(), s.gatedMarkers().size() == 1 ? "" : "s"));
-        }
-        return sb.toString();
+
+        lines.add(String.format(Locale.US, "%d of %d markers selected",
+                includedMarkerCount(), markers.size()));
+        return lines;
+    }
+
+    /** {@link #overviewLines()} on one line, for the status bar. */
+    public String overviewLine() {
+        return String.join(", ", overviewLines());
     }
 }

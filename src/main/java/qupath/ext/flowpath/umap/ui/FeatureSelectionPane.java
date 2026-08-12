@@ -16,6 +16,7 @@ import qupath.ext.flowpath.model.Statistic;
 
 import java.util.List;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 /**
  * Compact per-marker feature picker that drives which measurement key feeds the
@@ -28,9 +29,12 @@ import java.util.Set;
  * compartments/statistics that actually exist for that marker (from
  * {@link CompartmentCapability}).
  * <p>
- * The pane owns no persistence; it edits a {@link MarkerSelection} in place and
- * notifies its owner via {@code onChanged} so {@code UmapPane} can persist and
- * re-resolve.
+ * The pane owns no persistence and no model. It <em>reads</em> a {@link MarkerSelection}
+ * for its initial control values and reports every edit through the {@code writer} given
+ * to {@link #populate}, then notifies its owner via {@code onChanged} so {@code UmapPane}
+ * can persist and re-resolve. It used to {@code put} straight into the selection it was
+ * handed, which meant the include flag — an input to whether Run UMAP is clickable at all
+ * — changed without {@code UmapSession} hearing about it.
  */
 final class FeatureSelectionPane extends VBox {
 
@@ -66,10 +70,14 @@ final class FeatureSelectionPane extends VBox {
     }
 
     /**
-     * Rebuild the grid for the given markers, capability and selection. The
-     * selection is mutated in place as the user edits controls.
+     * Rebuild the grid for the given markers, capability and selection.
+     *
+     * @param selection read for each row's initial value
+     * @param writer    where every edit goes — {@code UmapSession::editSelection} in
+     *                  production, so the session publishes the change to the panel
      */
-    void populate(List<String> markers, CompartmentCapability capability, MarkerSelection selection) {
+    void populate(List<String> markers, CompartmentCapability capability, MarkerSelection selection,
+                  BiConsumer<String, MarkerSelection.Entry> writer) {
         grid.getChildren().clear();
 
         boolean rich = capability != null && capability.isRich();
@@ -89,7 +97,7 @@ final class FeatureSelectionPane extends VBox {
             CheckBox include = new CheckBox();
             include.setSelected(entry.included());
             include.selectedProperty().addListener((obs, o, n) -> {
-                selection.put(marker, selection.entryFor(marker).withIncluded(n));
+                writer.accept(marker, selection.entryFor(marker).withIncluded(n));
                 onChanged.run();
             });
 
@@ -109,7 +117,7 @@ final class FeatureSelectionPane extends VBox {
                         ? entry.compartment() : firstOrDefault(comps, Compartment.defaultCompartment()));
                 compCombo.setConverter(new CompartmentStringConverter());
                 compCombo.setOnAction(e -> {
-                    selection.put(marker, selection.entryFor(marker).withCompartment(compCombo.getValue()));
+                    writer.accept(marker, selection.entryFor(marker).withCompartment(compCombo.getValue()));
                     onChanged.run();
                 });
 
@@ -118,7 +126,7 @@ final class FeatureSelectionPane extends VBox {
                         ? entry.statistic() : firstOrDefaultStat(stats, Statistic.defaultStatistic()));
                 statCombo.setConverter(new StatisticStringConverter());
                 statCombo.setOnAction(e -> {
-                    selection.put(marker, selection.entryFor(marker).withStatistic(statCombo.getValue()));
+                    writer.accept(marker, selection.entryFor(marker).withStatistic(statCombo.getValue()));
                     onChanged.run();
                 });
             } else {
@@ -134,7 +142,7 @@ final class FeatureSelectionPane extends VBox {
                 statCombo.setDisable(true);
 
                 // Ensure the selection reflects the pinned default.
-                selection.put(marker, selection.entryFor(marker)
+                writer.accept(marker, selection.entryFor(marker)
                         .withCompartment(Compartment.WHOLE_CELL).withStatistic(Statistic.MEAN));
             }
 

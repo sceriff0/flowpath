@@ -33,8 +33,8 @@ import java.util.function.Consumer;
  *       (set by the active preset) and {@code computeStartTime}.</li>
  *   <li>Wire {@code computeService}'s terminal {@code onOutcome} channel and its
  *       separate {@code onStatusUpdate} progress channel.</li>
- *   <li>Fold each run's terminal {@link UmapOutcome} into {@link UmapSession} and ask
- *       {@link UiStateController} to re-derive the panel from it.</li>
+ *   <li>Fold each run's terminal {@link UmapOutcome} into {@link UmapSession}, whose
+ *       observers re-derive the panel from it.</li>
  * </ul>
  *
  * <p>Data and rendering surfaces (canvas, legend, markerOverlay) remain in
@@ -48,11 +48,11 @@ import java.util.function.Consumer;
  *   <li><b>No resting-state supplier:</b> this controller used to be handed a
  *       {@code Supplier<UiState>} resolving to COMPUTED/READY/NO_IMAGE, because
  *       {@code UmapPane} owned the embedding. It no longer decides anything about UI
- *       state: it records the outcome on the session and calls
- *       {@link UiStateController#sync()}, which re-derives the whole panel. The
- *       {@code Superseded} branch is safe by construction rather than by comment —
- *       {@link UmapSession#record} leaves the running phase alone for it, so the sync
- *       re-applies the COMPUTING the newer run still owns.</li>
+ *       state, and it no longer even holds a reference to {@link UiStateController}: it
+ *       records the outcome on the session, whose observers re-derive the whole panel.
+ *       The {@code Superseded} branch is safe by construction rather than by comment —
+ *       {@link UmapSession#record} leaves the running phase alone for it, so the
+ *       re-derivation re-applies the COMPUTING the newer run still owns.</li>
  *   <li><b>computeService ownership:</b> stays in UmapPane; this controller
  *       receives it via constructor and wires its callbacks. UmapPane's
  *       {@code initializeFromImage} keeps calling {@code computeService.cancel()}
@@ -82,15 +82,6 @@ final class ComputeController {
 
     // --- Collaborators ---
     private final UmapComputeService computeService;
-    /**
-     * The shared UI state machine. Assigned via {@link #attachUiState} after
-     * construction because {@link UiStateController} itself takes this
-     * controller's compute/cancel buttons as dependencies — there is a
-     * one-shot circular reference at construction. After {@code attachUiState}
-     * runs (which UmapPane does immediately before driving any state), the
-     * reference is effectively final for the lifetime of the controller.
-     */
-    private UiStateController uiState;
     private final UmapSession session;
     private final Consumer<UmapResult> resultConsumer;
     private final UmapPane.StatusReporter statusReporter;
@@ -216,19 +207,6 @@ final class ComputeController {
                 statusReporter.report(s, UmapPane.StatusLevel.INFO));
     }
 
-    /**
-     * Inject the {@link UiStateController} after construction. Required because
-     * {@code UiStateController}'s constructor takes this controller's compute /
-     * cancel buttons; UmapPane builds this controller first to obtain those
-     * buttons, then constructs the state controller, then wires it back here.
-     * Must be called before any lifecycle method ({@link #runUmap()},
-     * {@link #cancelUmap()}, {@link #onUmapComplete}, {@link #onUmapError})
-     * runs — UmapPane's constructor enforces this.
-     */
-    void attachUiState(UiStateController uiState) {
-        this.uiState = Objects.requireNonNull(uiState, "uiState");
-    }
-
     // --- Control getters (toolbar assembly happens in UmapPane) ---
 
     ComboBox<String> getQualityPreset() { return qualityPreset; }
@@ -303,8 +281,8 @@ final class ComputeController {
     /**
      * Kick off a UMAP run. No-ops (with a status update) when no cell index is
      * available. Commits all editable spinner values, builds {@link UmapParameters},
-     * shows the progress dialog, transitions {@code uiState} to COMPUTING, and
-     * submits the work to {@link UmapComputeService}.
+     * enters the session's running phase, and submits the work to
+     * {@link UmapComputeService}.
      */
     void runUmap() {
         CellIndex cellIndex = session.index();
@@ -366,7 +344,6 @@ final class ComputeController {
         // Failed outcome, which is why this does not check anything itself: the alternative
         // is a second place that decides what "enough features" means.
         session.beginRun();
-        uiState.sync();
         statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
         try {
             computeService.compute(EmbeddingFeatures.of(cellIndex, session.selection()),
@@ -397,7 +374,6 @@ final class ComputeController {
     void cancelUmap() {
         computeService.cancel();
         session.cancelRun();
-        uiState.sync();
         statusReporter.report("UMAP cancelled", UmapPane.StatusLevel.WARN);
     }
 
@@ -418,7 +394,6 @@ final class ComputeController {
         // newer run still owns. Reacting to a superseded ending is therefore no longer
         // something a future edit to this switch could accidentally start doing.
         session.record(outcome);
-        uiState.sync();
         switch (outcome) {
             case UmapOutcome.Succeeded succeeded ->
                     onUmapComplete(succeeded.result(), succeeded.report());
@@ -465,13 +440,18 @@ final class ComputeController {
     }
 
     /**
-     * Compute-error callback. The panel has already been re-synced, so the session's
-     * {@code FAILED} stage — and the reason with it — is on screen before this modal alert
-     * opens and remains after it is dismissed. This only surfaces the message.
+     * Compute-error callback.
+     * <p>
+     * There is no modal here any more. Recording the outcome put the reason on the panel
+     * — on the empty-state overlay when the run left nothing behind, and on the failure
+     * banner under Run UMAP when it failed over a surviving embedding — and both of those
+     * outlive an alert the user dismisses on the way to looking at the plot. The modal was
+     * also the reason this path could not be exercised: {@code Alert.showAndWait()} on the
+     * FX thread deadlocks a test that is already on it, so every failure test had to be
+     * written as a cancellation instead.
      */
     void onUmapError(String message) {
         statusReporter.report("Error: " + message, UmapPane.StatusLevel.ERROR);
-        statusReporter.alert(message);
     }
 
     /**

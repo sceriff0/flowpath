@@ -63,6 +63,7 @@ class UiStateControllerTest {
     private ProgressIndicator progressIndicator;
     private ProgressBar computeProgress;
     private Label computeStage;
+    private Label failureBanner;
     private ToggleButton drawButton;
     private Button clearButton;
     private TextField tagNameField;
@@ -100,6 +101,7 @@ class UiStateControllerTest {
         progressIndicator = new ProgressIndicator();
         computeProgress = new ProgressBar();
         computeStage = new Label();
+        failureBanner = new Label();
         drawButton = new ToggleButton();
         clearButton = new Button();
         tagNameField = new TextField();
@@ -125,7 +127,7 @@ class UiStateControllerTest {
         session = new UmapSession();
         controller = new UiStateController(session, new UiStateController.Controls(
                 computeButton, cancelButton, progressIndicator, computeProgress, computeStage,
-                drawButton, clearButton,
+                failureBanner, drawButton, clearButton,
                 tagNameField, tagColorPicker, applyTagButton,
                 exportButton, emptyState, emptyAction, roiFilter,
                 inputs, popupsDismissed::incrementAndGet));
@@ -145,7 +147,6 @@ class UiStateControllerTest {
         var idx = index(cells);
         session.installIndex(idx, MarkerStats.compute(idx), PANEL,
                 CompartmentCapability.empty(), new MarkerSelection());
-        controller.sync();
     }
 
     private void embed() {
@@ -158,7 +159,6 @@ class UiStateControllerTest {
                 EmbeddingReport.training(Embeddings.of(idx), null)
                         .completedWith(EmbeddingReport.Steering.none(),
                                 EmbeddingReport.Projection.none())));
-        controller.sync();
     }
 
     // ---------- per-stage contracts ----------
@@ -196,9 +196,11 @@ class UiStateControllerTest {
     @DisplayName("Fewer ticked markers than UMAP needs disables both Run affordances")
     void notEnoughFeatures() {
         installCells(8);
-        session.selection().put("CD8", MarkerSelection.defaultEntry().withIncluded(false));
-        session.selection().put("FoxP3", MarkerSelection.defaultEntry().withIncluded(false));
-        controller.sync();
+        // Through the session, the way the feature picker now writes. Putting straight
+        // into session.selection() changed whether a run was possible at all without the
+        // session hearing it, and the panel went on offering the click.
+        session.editSelection("CD8", MarkerSelection.defaultEntry().withIncluded(false));
+        session.editSelection("FoxP3", MarkerSelection.defaultEntry().withIncluded(false));
 
         assertTrue(computeButton.isDisabled(),
                 "the toolbar button must not invite a click whose only ending is a failure");
@@ -211,7 +213,6 @@ class UiStateControllerTest {
     void computing() {
         installCells(8);
         session.beginRun();
-        controller.sync();
 
         assertEquals(ViewState.Stage.COMPUTING, controller.current().stage());
         assertTrue(computeButton.isDisabled());
@@ -239,9 +240,7 @@ class UiStateControllerTest {
     void computingReleasesTheInputs() {
         installCells(8);
         session.beginRun();
-        controller.sync();
         session.record(UmapOutcome.cancelled());
-        controller.sync();
 
         for (Node input : inputs) {
             assertFalse(input.isDisabled(), input.getClass().getSimpleName());
@@ -273,14 +272,12 @@ class UiStateControllerTest {
         embed();
 
         session.setGateMask(new boolean[8]);
-        controller.sync();
         assertEquals(ViewState.Stage.GATING, controller.current().stage());
         assertFalse(tagNameField.isDisabled());
         assertFalse(tagColorPicker.isDisabled());
         assertFalse(applyTagButton.isDisabled());
 
-        session.setGateMask(null);
-        controller.sync();
+        session.retireGate();
         assertTrue(applyTagButton.isDisabled());
         assertEquals(ViewState.Stage.COMPUTED, controller.current().stage());
     }
@@ -291,7 +288,6 @@ class UiStateControllerTest {
         installCells(8);
         embed();
         session.addTag(new PopulationTag("CD4", 0xFF0000, new boolean[8]));
-        controller.sync();
 
         assertEquals(ViewState.Stage.TAGGED, controller.current().stage());
         assertFalse(drawButton.isDisabled());
@@ -306,11 +302,9 @@ class UiStateControllerTest {
         embed();
         session.setGateMask(new boolean[8]);
         session.beginRun();
-        controller.sync();
         assertTrue(applyTagButton.isDisabled(), "locked while the re-run is in flight");
 
         session.cancelRun();
-        controller.sync();
 
         // clearPolygon()'s copy of the resting rule dropped the gate-mask branch, so this
         // combination used to disable Tag Selection under a user with a polygon closed.
@@ -322,9 +316,7 @@ class UiStateControllerTest {
     void failed() {
         installCells(8);
         session.beginRun();
-        controller.sync();
         session.record(UmapOutcome.failed("heap exhausted"));
-        controller.sync();
 
         assertEquals(ViewState.Stage.FAILED, controller.current().stage());
         assertEquals("heap exhausted", controller.current().failure());
@@ -341,14 +333,12 @@ class UiStateControllerTest {
         installCells(8);
         embed();
         session.beginExport();
-        controller.sync();
 
         assertTrue(exportButton.isDisabled());
         assertFalse(drawButton.isDisabled());
         assertFalse(computeButton.isDisabled());
 
         session.endExport();
-        controller.sync();
         assertFalse(exportButton.isDisabled());
     }
 
@@ -370,14 +360,12 @@ class UiStateControllerTest {
         session.adopt(new PhenotypeSnapshot(idx, MarkerStats.compute(idx), PANEL,
                 CompartmentCapability.empty(), labels, new int[n], new boolean[n],
                 List.of("CD3", "CD8"), new MarkerSelection(), 2, "img"));
-        controller.sync();
         assertFalse(computeButton.isDisabled());
 
         // What UmapPane does when the active image changes while the gating tree owns the
         // cells. This used to be an imperative setState(NO_IMAGE); the derivation had no
         // fact for it and landed on READY over the PREVIOUS image's PathObjects.
         session.detachSnapshot();
-        controller.sync();
 
         assertEquals(ViewState.Stage.NO_IMAGE, controller.current().stage());
         assertTrue(computeButton.isDisabled(),
@@ -396,7 +384,6 @@ class UiStateControllerTest {
         assertFalse(computeButton.isDisabled());
 
         session.beginRebuild();
-        controller.sync();
         assertTrue(controller.current().indexRebuilding());
         assertTrue(computeButton.isDisabled(),
                 "clicking Run here installs a rebuilt index under the run it starts");
@@ -407,7 +394,6 @@ class UiStateControllerTest {
         }
 
         session.endRebuild();
-        controller.sync();
         assertFalse(computeButton.isDisabled());
     }
 
@@ -420,17 +406,89 @@ class UiStateControllerTest {
                 "a writable property lets a caller install a state current() would report");
     }
 
+    /**
+     * The reason nothing in this file calls {@code sync()} any more.
+     * <p>
+     * {@code sync()} took no argument, so a caller could not name a <em>wrong</em> state —
+     * but it could still be forgotten, and {@code UmapPane.onUmapResultReady} was the
+     * standing proof, retiring the gate and the stale tags after {@code ComputeController}
+     * had already synced. The controller now subscribes to the session, so a mutation
+     * <em>is</em> the update. Every other test here mutates the session and asserts on the
+     * widgets without a sync between them; if the subscription were deleted they would all
+     * fail, which is the property this one states out loud.
+     */
     @Test
-    @DisplayName("assertSynced catches a mutation that forgot to sync")
-    void assertSyncedCatchesStaleWidgets() {
+    @DisplayName("A mutation nobody follows up on still reaches the widgets")
+    void theSessionPushesItsOwnState() {
         installCells(8);
-        controller.assertSynced();
+        assertFalse(computeButton.isDisabled());
 
-        session.beginRun();   // deliberately without sync()
-        assertThrows(IllegalStateException.class, controller::assertSynced);
+        session.beginRun();   // and nothing else
+        assertEquals(ViewState.Stage.COMPUTING, controller.current().stage());
+        assertTrue(computeButton.isDisabled());
+        assertCancelVisible();
 
-        controller.sync();
-        controller.assertSynced();
+        session.cancelRun();
+        assertEquals(ViewState.Stage.READY, controller.current().stage());
+        assertFalse(computeButton.isDisabled());
+    }
+
+    /**
+     * Observers see settled states only.
+     * <p>
+     * {@code adopt} reaches {@code retireCellSet()} at the one instant at which the
+     * session's own index/snapshot invariant is false — the snapshot names the incoming
+     * cells while the index still holds the outgoing ones. A notification from inside that
+     * window would make the invariant observable, and {@code UmapPane}'s summary would be
+     * composed from a snapshot and an index describing different slides.
+     */
+    @Test
+    @DisplayName("A nested mutation notifies once, after everything has settled")
+    void observersNeverSeeAHalfAppliedChange() {
+        var fresh = new UmapSession();
+        var seen = new AtomicInteger();
+        fresh.observe(state -> {
+            seen.incrementAndGet();
+            fresh.assertIndexInvariant();
+        });
+        assertEquals(1, seen.get(), "subscribing delivers the current state");
+
+        var idx = index(8);
+        String[] labels = new String[idx.size()];
+        java.util.Arrays.fill(labels, "T cell");
+        fresh.adopt(new PhenotypeSnapshot(idx, MarkerStats.compute(idx), PANEL,
+                CompartmentCapability.empty(), labels, new int[idx.size()],
+                new boolean[idx.size()], List.of("CD3", "CD8"), new MarkerSelection(), 2, "img"));
+        assertEquals(2, seen.get(),
+                "adopt() retires the old cell set on the way through — one change, one notice");
+
+        // detachSnapshot -> clearDerivedState -> retireCellSet is three deep.
+        fresh.detachSnapshot();
+        assertEquals(3, seen.get());
+    }
+
+    @Test
+    @DisplayName("A failure over a surviving embedding has somewhere durable to live")
+    void aFailedRerunKeepsSayingSoBesideThePlot() {
+        installCells(8);
+        embed();
+        assertFalse(failureBanner.isVisible(), "nothing has failed");
+        assertFalse(emptyState.isVisible(), "and the overlay is down over a real plot");
+
+        session.beginRun();
+        session.record(UmapOutcome.failed("heap exhausted on the re-run"));
+
+        // The stage stays COMPUTED: the plot still shows something true. Before this, the
+        // only trace of the failure was a modal alert and a status line that wiped itself
+        // after five seconds, and the empty-state overlay — the other place the reason is
+        // written — never comes up while there is an embedding.
+        assertEquals(ViewState.Stage.COMPUTED, controller.current().stage());
+        assertTrue(failureBanner.isVisible());
+        assertTrue(failureBanner.isManaged());
+        assertEquals("heap exhausted on the re-run", failureBanner.getText());
+
+        session.beginRun();
+        assertFalse(failureBanner.isVisible(), "a new attempt is not the old failure");
     }
 
     // ---------- invariants across every reachable state ----------
@@ -471,27 +529,22 @@ class UiStateControllerTest {
      * actionable, and {@link #noImage()} pins it on its own.
      */
     private void forEachReachableState(Runnable assertion) {
-        controller.sync();
         assertion.run();                                  // READY
 
         session.beginRun();
-        controller.sync();
         assertion.run();                                  // COMPUTING
 
         session.record(UmapOutcome.failed("boom"));
-        controller.sync();
         assertion.run();                                  // FAILED
 
         embed();
         assertion.run();                                  // COMPUTED
 
         session.setGateMask(new boolean[8]);
-        controller.sync();
         assertion.run();                                  // GATING
 
-        session.setGateMask(null);
+        session.retireGate();
         session.addTag(new PopulationTag("CD4", 0xFF0000, new boolean[8]));
-        controller.sync();
         assertion.run();                                  // TAGGED
 
     }
