@@ -17,7 +17,6 @@ import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
 
-import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -395,8 +394,7 @@ final class ComputeController {
         // something a future edit to this switch could accidentally start doing.
         session.record(outcome);
         switch (outcome) {
-            case UmapOutcome.Succeeded succeeded ->
-                    onUmapComplete(succeeded.result(), succeeded.report());
+            case UmapOutcome.Succeeded succeeded -> onUmapComplete(succeeded);
             case UmapOutcome.Failed failed -> onUmapError(failed.describe());
             case UmapOutcome.Cancelled ignored -> onUmapCancelled();
             case UmapOutcome.Superseded ignored -> { /* the newer run owns the UI */ }
@@ -417,18 +415,18 @@ final class ComputeController {
      * toolkit — it only puts the answer where the user is already looking: the first
      * finding on the line, the whole report in the tooltip behind it.
      */
-    void onUmapComplete(UmapResult result, EmbeddingReport report) {
+    void onUmapComplete(UmapOutcome.Succeeded succeeded) {
+        EmbeddingReport report = succeeded.report();
         // Hand the result to UmapPane for rendering / coloring / legend update
-        resultConsumer.accept(result);
+        resultConsumer.accept(succeeded.result());
 
         long elapsed = System.currentTimeMillis() - computeStartTime;
-        String timeStr = elapsed < 1000 ? "%dms".formatted(elapsed)
-                : "%.1fs".formatted(elapsed / 1000.0);
-        String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d) in %s",
-                result.size(), result.getParams().k(), timeStr);
-        String qualifier = report.summary();
-        statusReporter.report(qualifier.isEmpty() ? base : base + " — " + qualifier,
-                qualifier.isEmpty() ? UmapPane.StatusLevel.SUCCESS : UmapPane.StatusLevel.WARN);
+        // The sentence is the outcome's, not this method's. Composing a second one here
+        // is what produced two spellings of the same status line — same numbers, a
+        // different separator — one of which then went dead. All this method contributes
+        // is the elapsed time, which is the only part of it the outcome cannot know.
+        statusReporter.report(succeeded.describe(elapsed),
+                report.isClean() ? UmapPane.StatusLevel.SUCCESS : UmapPane.StatusLevel.WARN);
         // The one line carries the first finding and self-clears; the tooltip carries the
         // whole report and stays. Without it the subsample size — which the brief requires
         // be reported, and which decides how much of the picture was optimised rather than

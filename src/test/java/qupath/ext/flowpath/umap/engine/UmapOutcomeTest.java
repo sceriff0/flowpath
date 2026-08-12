@@ -66,6 +66,18 @@ class UmapOutcomeTest {
         return UmapOutcome.succeeded(resultOn(index), cleanReport(index));
     }
 
+    /**
+     * A run with something to say for itself: one marker carrying the same value on every
+     * cell, which is a finding and therefore reaches {@link EmbeddingReport#summary()}.
+     */
+    private static UmapOutcome.Succeeded succeededWithAFinding(int cells) {
+        CellIndex index = Cells.of(cells)
+                .marker("CD45", i -> i)
+                .marker("CD3", i -> 1.0)
+                .build();
+        return UmapOutcome.succeeded(resultOn(index), cleanReport(index));
+    }
+
     @Test
     void eachFactoryProducesItsOwnKind() {
         assertEquals(UmapOutcome.Kind.SUCCEEDED, succeededOn(3).kind());
@@ -177,6 +189,36 @@ class UmapOutcomeTest {
     void theTwoAbandonmentsDescribeThemselvesDistinctly() {
         assertEquals("UMAP cancelled", UmapOutcome.cancelled().describe());
         assertTrue(UmapOutcome.superseded().describe().contains("superseded"));
+    }
+
+    /**
+     * The status line has exactly one composition, and this is it.
+     * <p>
+     * It briefly had two. {@code Succeeded.describe()} owned the sentence, then the
+     * compute controller grew its own copy — the same numbers, plus the timing, joined
+     * with a different separator — and {@code describe()} went dead in production. The
+     * timing is the one fact the outcome cannot know, so it arrives as an argument
+     * rather than as a second sentence.
+     */
+    @Test
+    void theTimedSentenceIsTheSameSentenceWithTheElapsedTimeInIt() {
+        var succeeded = succeededOn(500);
+        assertEquals("UMAP computed: 500 cells (k=15)", succeeded.describe());
+        assertEquals("UMAP computed: 500 cells (k=15) in 320ms", succeeded.describe(320));
+        // Above a second the run is reported in seconds to one decimal, US-formatted:
+        // the JVM default locale here is en_IT, which would render this as "1,5s".
+        assertEquals("UMAP computed: 500 cells (k=15) in 1.5s", succeeded.describe(1500));
+    }
+
+    /** A finding is appended by the same rule whether or not there is a time to report. */
+    @Test
+    void aFindingIsAppendedToBothSpellingsWithTheSameSeparator() {
+        var degraded = succeededWithAFinding(500);
+        String finding = degraded.report().summary();
+        assertFalse(finding.isEmpty(), "a constant marker is a finding: " + degraded.report().describe());
+        assertEquals("UMAP computed: 500 cells (k=15) — " + finding, degraded.describe());
+        assertEquals("UMAP computed: 500 cells (k=15) in 320ms — " + finding,
+                degraded.describe(320));
     }
 
     /**

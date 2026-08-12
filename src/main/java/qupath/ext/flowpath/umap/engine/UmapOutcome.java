@@ -153,11 +153,39 @@ public sealed interface UmapOutcome
 
         @Override
         public String describe() {
+            return compose(null);
+        }
+
+        /**
+         * {@link #describe()} with the run's wall-clock time folded into the same
+         * sentence, for the status line that has one to report.
+         * <p>
+         * The alternative — letting the status line compose its own — is what happened,
+         * and the two spellings drifted within one branch: same numbers, a different
+         * separator, and only one of them carrying the timing. The sentence is built
+         * here, once; the caller supplies the fact it is the only one that knows.
+         *
+         * @param elapsedMillis wall-clock duration of the run, never negative
+         */
+        public String describe(long elapsedMillis) {
+            // Locale.US, like every other number this project formats: the status line
+            // said "1,5s" on an en_IT JVM, because the spelling this replaces reached for
+            // String.formatted, which takes the default locale.
+            return compose(elapsedMillis < 1000
+                    ? String.format(Locale.US, "%dms", elapsedMillis)
+                    : String.format(Locale.US, "%.1fs", elapsedMillis / 1000.0));
+        }
+
+        /** The one composition. {@code elapsed} is null when there is no timing to say. */
+        private String compose(String elapsed) {
             String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d)",
                     result.size(),
                     result.getParams() == null ? 0 : result.getParams().k());
+            if (elapsed != null) {
+                base += " in " + elapsed;
+            }
             String qualifier = report.summary();
-            return qualifier.isEmpty() ? base : base + "; " + qualifier;
+            return qualifier.isEmpty() ? base : base + " — " + qualifier;
         }
     }
 
