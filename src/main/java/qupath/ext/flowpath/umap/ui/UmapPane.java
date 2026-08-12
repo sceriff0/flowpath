@@ -56,8 +56,6 @@ public class UmapPane extends BorderPane {
     // Engine
     private final UmapComputeService computeService;
 
-    // UI state machine (centralizes enable/disable/visibility transitions)
-    private final UiStateController uiState;
 
     // Compute lifecycle (spinners, presets, runUmap/cancel/onComplete/onError, progressDialog)
     private final ComputeController computeController;
@@ -434,7 +432,10 @@ public class UmapPane extends BorderPane {
         // Every widget now exists, so the state machine can be wired to all of them. It
         // takes no state from anyone: sync() re-derives the panel from the session, which
         // is why nothing below ever names a state.
-        uiState = new UiStateController(session, new UiStateController.Controls(
+        // Not held. It subscribes to the session in its constructor, so the session is
+        // what keeps it alive and what drives it; a field here would only be a handle for
+        // someone to start calling it through again.
+        new UiStateController(session, new UiStateController.Controls(
                 computeController.getComputeButton(), computeController.getCancelButton(),
                 progressIndicator, computeProgress, computeStage, failureBanner,
                 drawButton, clearButton,
@@ -658,7 +659,7 @@ public class UmapPane extends BorderPane {
 
         if (state.stage() == ViewState.Stage.COMPUTING) {
             emptyHeadline.setText("Embedding…");
-            emptySubline.setText(String.format("%,d cells across %d marker%s.",
+            emptySubline.setText(String.format(java.util.Locale.US, "%,d cells across %d marker%s.",
                     index.size(), markers, markers == 1 ? "" : "s"));
             return;
         }
@@ -671,7 +672,7 @@ public class UmapPane extends BorderPane {
         // appears.
         if (markers < EmbeddingFeatures.MINIMUM_FEATURES) {
             emptyHeadline.setText("Not enough markers to embed");
-            emptySubline.setText(String.format(
+            emptySubline.setText(String.format(java.util.Locale.US,
                     "%,d cells, but %d of %d markers %s ticked. UMAP needs at least %d — "
                             + "tick more under Cells.",
                     index.size(), markers, session.markers().size(),
@@ -680,7 +681,7 @@ public class UmapPane extends BorderPane {
         }
 
         emptyHeadline.setText("Ready to embed");
-        String base = String.format("%,d cells across %d marker%s.",
+        String base = String.format(java.util.Locale.US, "%,d cells across %d marker%s.",
                 index.size(), markers, markers == 1 ? "" : "s");
         emptySubline.setText(snapshot != null && !snapshot.gatedMarkers().isEmpty()
                 ? base + " Features are pre-selected from your gates — adjust them under "
