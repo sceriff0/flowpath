@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.OptionalInt;
+
 /**
  * The outcome type carries no behaviour beyond naming the four ends and describing
  * them, so these tests are about exactly that: which end is which, and that a failure
@@ -96,6 +98,39 @@ class UmapOutcomeTest {
         // The JVM default locale here is en_IT, which would render 10500 as "10.500".
         assertEquals("UMAP computed: 10,500 cells (k=15)",
                 UmapOutcome.succeeded(resultOf(10_500)).describe());
+    }
+
+    @Test
+    void aSteeredRunReportsBothTheImputedCellAndTheNeighbourhoodsAroundIt() {
+        // Detaching a node to keep SMILE off its native initialisation path fabricates one
+        // cell's position and shifts the edge weights of every cell that listed it — at
+        // k=15, typically 3-4% of a small dataset. An outcome that named only the first
+        // would be an understatement, and this is an instrument people draw conclusions
+        // from.
+        var steered = UmapOutcome.succeeded(resultOf(500), 241, 15);
+        assertEquals(OptionalInt.of(241), steered.imputedCell());
+        assertEquals(15, steered.reweightedCells());
+        assertEquals("UMAP computed: 500 cells (k=15); cell 241 imputed from its "
+                + "neighbours, 15 neighbourhoods reweighted", steered.describe());
+    }
+
+    @Test
+    void anUnsteeredRunSaysNothingAboutEither() {
+        var plain = UmapOutcome.succeeded(resultOf(500));
+        assertEquals(OptionalInt.empty(), plain.imputedCell());
+        assertEquals(0, plain.reweightedCells());
+        assertEquals("UMAP computed: 500 cells (k=15)", plain.describe());
+    }
+
+    @Test
+    void reweightingWithoutAnImputationIsNotARunThatCanHappen() {
+        // Nothing but detaching a node perturbs a neighbourhood, so the combination
+        // describes a run that cannot exist. Refusing it here is what stops a future
+        // caller reporting the blast radius while quietly dropping the cell at its centre.
+        assertThrows(IllegalArgumentException.class,
+                () -> new UmapOutcome.Succeeded(resultOf(3), OptionalInt.empty(), 4));
+        assertThrows(IllegalArgumentException.class,
+                () -> new UmapOutcome.Succeeded(resultOf(3), OptionalInt.of(1), -1));
     }
 
     @Test

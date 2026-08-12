@@ -422,6 +422,10 @@ class UmapComputeServiceTest {
                     new AssertionError("a small connected graph must report the cell it "
                             + "detached to stay off the native layout"));
             assertTrue(imputed >= 0 && imputed < 500, "imputed cell out of range: " + imputed);
+            assertTrue(succeeded.reweightedCells() > 0,
+                    "steering also rewrites the distance vector of every cell that listed "
+                            + "the detached one; reporting only the imputed cell would "
+                            + "understate it");
 
             // A convex combination of real positions cannot leave the population, so the
             // imputed cell must sit inside it. That the position is the RIGHT one — the
@@ -431,6 +435,43 @@ class UmapComputeServiceTest {
             // the placement.
             assertTrue(withinBoundsOfOthers(xs, imputed) && withinBoundsOfOthers(ys, imputed),
                     "the imputed cell must land inside the embedding, not beside it");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void aSubsampledRunReportsTheImputedCellInTheCallersIndexNotTheTrainingMatrix() throws Exception {
+        // The detached node is a row of the training matrix. When the run subsampled,
+        // that row number addresses the subsample, not the CellIndex the caller handed
+        // in — so reporting it raw would name an innocent cell, and every other test here
+        // passes maxCells = 0, which leaves that translation never executed.
+        //
+        // This is a smoke test, not a proof: sampleIndices is not exposed, so the
+        // assertion is that the reported index is present and addresses the caller's
+        // index. A tighter check would mean widening the service's surface to let a test
+        // see its subsample, which is a worse trade than this comment.
+        int cells = 900;
+        var idx = buildSyntheticIndex(cells, 3, 21L);
+        var service = new UmapComputeService();
+        try {
+            AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
+            service.compute(idx, new UmapParameters(15, 0.1, 1.0, 30, 5), 300);
+            assertTrue(latch.await(180, TimeUnit.SECONDS), "a subsampled UMAP must terminate");
+
+            var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
+                    "a subsampled 900-cell UMAP should succeed: " + outcomeRef.get().describe());
+            assertEquals(cells, succeeded.result().size(),
+                    "subsampling trains on 300 but must still place all 900 cells");
+
+            int imputed = succeeded.imputedCell().orElseThrow(() -> new AssertionError(
+                    "a 300-row training graph is small and connected, so it must be steered"));
+            assertTrue(imputed >= 0 && imputed < cells,
+                    "the imputed cell must address the caller's index: " + imputed);
+            assertTrue(succeeded.reweightedCells() > 0,
+                    "the cells that listed the detached node must be counted, not dropped");
         } finally {
             service.shutdown();
         }

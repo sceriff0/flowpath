@@ -91,17 +91,23 @@ public sealed interface UmapOutcome
 
     /** A run that produced a current embedding, with nothing to qualify it. */
     static Succeeded succeeded(UmapResult result) {
-        return new Succeeded(result, OptionalInt.empty());
+        return new Succeeded(result, OptionalInt.empty(), 0);
     }
 
     /**
-     * A run that produced a current embedding in which one cell's coordinates were
-     * imputed rather than optimised.
+     * A run whose embedding was steered off SMILE's native initialisation path, and the
+     * two numbers that says it cost.
      *
-     * @param imputedCell index into the {@code CellIndex} the run walked
+     * <p>There is deliberately no factory that records the imputation alone. Reporting
+     * one affected cell when a further few per cent carry altered edge weights would be
+     * an understatement, and the way to stop an understatement being written is to make
+     * it unspellable.
+     *
+     * @param imputedCell     index into the {@code CellIndex} the run walked
+     * @param reweightedCells how many other cells listed that one as a neighbour
      */
-    static Succeeded succeeded(UmapResult result, int imputedCell) {
-        return new Succeeded(result, OptionalInt.of(imputedCell));
+    static Succeeded succeeded(UmapResult result, int imputedCell, int reweightedCells) {
+        return new Succeeded(result, OptionalInt.of(imputedCell), reweightedCells);
     }
 
     /** A failure with no throwable behind it — a precondition the run refused. */
@@ -133,20 +139,38 @@ public sealed interface UmapOutcome
     /**
      * A completed run whose embedding is current.
      *
-     * @param result      the embedding, never null
-     * @param imputedCell the one cell, if any, whose coordinates were imputed from its
-     *                    neighbours instead of optimised. FlowPath detaches a single node
-     *                    from the neighbour graph to keep SMILE off its native
-     *                    initialisation path (see {@code EmbeddingInitialisation}); that
-     *                    node's position is then recomputed from its true neighbours.
-     *                    Present here so the qualification travels with the embedding
-     *                    rather than living only in a log line.
+     * @param result          the embedding, never null
+     * @param imputedCell     the one cell, if any, whose coordinates were imputed from its
+     *                        neighbours instead of optimised. FlowPath detaches a single
+     *                        node from the neighbour graph to keep SMILE off its native
+     *                        initialisation path (see {@code EmbeddingInitialisation});
+     *                        that node's position is then recomputed from its true
+     *                        neighbours. Present here so the qualification travels with
+     *                        the embedding rather than living only in a log line.
+     * @param reweightedCells how many further cells listed the detached one among their
+     *                        neighbours and so had their distance vector rewritten. Their
+     *                        positions were optimised normally — only the edge weights
+     *                        feeding that optimisation shifted — but at k=15 this is
+     *                        typically 3–4% of a small dataset, and an outcome claiming
+     *                        one affected cell would be an understatement. Zero whenever
+     *                        {@code imputedCell} is empty.
      */
-    record Succeeded(UmapResult result, OptionalInt imputedCell) implements UmapOutcome {
+    record Succeeded(UmapResult result, OptionalInt imputedCell, int reweightedCells)
+            implements UmapOutcome {
 
         public Succeeded {
             Objects.requireNonNull(result, "result");
             Objects.requireNonNull(imputedCell, "imputedCell");
+            if (reweightedCells < 0) {
+                throw new IllegalArgumentException(
+                        "reweightedCells must be >= 0, got: " + reweightedCells);
+            }
+            // Nothing other than detaching a node perturbs a neighbourhood, so a count
+            // without an imputation describes a run that cannot have happened.
+            if (imputedCell.isEmpty() && reweightedCells != 0) {
+                throw new IllegalArgumentException(
+                        "reweightedCells=" + reweightedCells + " without an imputed cell");
+            }
         }
 
         @Override
@@ -159,9 +183,12 @@ public sealed interface UmapOutcome
             String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d)",
                     result.size(),
                     result.getParams() == null ? 0 : result.getParams().k());
-            return imputedCell.isEmpty() ? base
-                    : String.format(Locale.US, "%s; cell %,d imputed from its neighbours",
-                            base, imputedCell.getAsInt());
+            if (imputedCell.isEmpty()) return base;
+            String imputed = String.format(Locale.US, "%s; cell %,d imputed from its neighbours",
+                    base, imputedCell.getAsInt());
+            return reweightedCells == 0 ? imputed
+                    : String.format(Locale.US, "%s, %,d neighbourhoods reweighted",
+                            imputed, reweightedCells);
         }
     }
 

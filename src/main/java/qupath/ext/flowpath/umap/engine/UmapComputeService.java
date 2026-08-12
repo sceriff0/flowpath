@@ -357,6 +357,7 @@ public class UmapComputeService {
         // is an artefact. Replace it with where its real neighbours say it belongs.
         init.impute(embedding);
         int imputedRow = init.detachedNode().orElse(-1);
+        int reweightedCells = init.reweightedRows();
         long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
         String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
         postStatus(fitMsg);
@@ -411,9 +412,11 @@ public class UmapComputeService {
 
         // Report the imputation as a cell index into cellIndex, not a training-matrix
         // row: the row number means nothing to a consumer that never saw the subsample.
+        // The reweighted figure needs no such translation — it is a count, and the
+        // subsample maps one-to-one onto the cells it was drawn from.
         if (imputedRow < 0) return UmapOutcome.succeeded(result);
         return UmapOutcome.succeeded(result,
-                subsampled ? sampleIndices[imputedRow] : imputedRow);
+                subsampled ? sampleIndices[imputedRow] : imputedRow, reweightedCells);
     }
 
     /**

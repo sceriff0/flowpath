@@ -37,14 +37,24 @@ import java.util.OptionalInt;
  * replaced. The graph then has two connected components, {@code cc.length != 1}, and
  * SMILE takes the pure-Java branch for all {@code n} cells.
  *
- * <p>The detached node pays for it. Carrying no edges into the fuzzy simplicial set, it
- * receives no attractive updates during layout optimisation — only the repulsion of
+ * <p>The detached node pays most of it. Carrying no edges into the fuzzy simplicial set,
+ * it receives no attractive updates during layout optimisation — only the repulsion of
  * negative sampling — and drifts to wherever that pushes it. Its coordinates after
  * {@code fit} are meaningless, so {@link #impute} discards them and recomputes the
  * position from the node's <em>true</em> k nearest neighbours in the original,
  * un-perturbed graph, weighted by inverse distance. That is the same placement rule
  * {@link UmapComputeService} uses for cells held out of a subsample, shared through
  * {@link InverseDistanceBlend} rather than written twice.
+ *
+ * <p>It is not the only cell affected, and saying otherwise would be an understatement in
+ * an instrument people draw conclusions from. Every row that listed the detached node has
+ * its distance vector rewritten (see {@link #detach}), and {@code smoothKnnDist} reads a
+ * row's <em>whole</em> distance vector to pick that row's sigma — so those rows carry
+ * slightly different membership strengths than they would have. Measured at N=500, k=15
+ * on four seeds: 15 to 22 rows, 3–4.5% of cells. The effect is second-order (an edge
+ * weight, not a position, and no cell is moved by it) but it is real, so
+ * {@link #reweightedRows()} counts it and the count travels on the outcome beside the
+ * imputed cell rather than being left for someone to rediscover.
  *
  * <p>The node is chosen as the one with the smallest total distance to its k neighbours
  * — the deepest point of the densest region. Two reasons, both about damage. Its
@@ -87,17 +97,23 @@ final class EmbeddingInitialisation {
         PCA
     }
 
+    /** The perturbed graph, paired with the size of the perturbation. */
+    private record Detached(NearestNeighborGraph graph, int reweightedRows) {}
+
     private final NearestNeighborGraph original;
     private final Route natural;
     private final NearestNeighborGraph steered;
     private final int detached;
+    private final int reweightedRows;
 
     private EmbeddingInitialisation(NearestNeighborGraph original, Route natural,
-                                    NearestNeighborGraph steered, int detached) {
+                                    NearestNeighborGraph steered, int detached,
+                                    int reweightedRows) {
         this.original = original;
         this.natural = natural;
         this.steered = steered;
         this.detached = detached;
+        this.reweightedRows = reweightedRows;
     }
 
     /**
@@ -115,10 +131,12 @@ final class EmbeddingInitialisation {
     static EmbeddingInitialisation forGraph(NearestNeighborGraph nng) {
         Route natural = routeFor(nng);
         if (natural == Route.PCA) {
-            return new EmbeddingInitialisation(nng, natural, nng, -1);
+            return new EmbeddingInitialisation(nng, natural, nng, -1, 0);
         }
         int detached = densestNode(nng);
-        return new EmbeddingInitialisation(nng, natural, detach(nng, detached), detached);
+        Detached steered = detach(nng, detached);
+        return new EmbeddingInitialisation(nng, natural, steered.graph(), detached,
+                steered.reweightedRows());
     }
 
     private static Route routeFor(NearestNeighborGraph nng) {
@@ -151,6 +169,21 @@ final class EmbeddingInitialisation {
      */
     OptionalInt detachedNode() {
         return detached < 0 ? OptionalInt.empty() : OptionalInt.of(detached);
+    }
+
+    /**
+     * How many <em>other</em> rows had their distance vector rewritten because they listed
+     * the detached node, and therefore carry slightly different membership strengths than
+     * they would have. Zero when nothing was steered.
+     *
+     * <p>Free to obtain: {@link #detach} already visits every entry of every row, so this
+     * is a counter on a loop that had to run anyway, not a second pass. It is reported
+     * because the alternative — an outcome naming one affected cell when the real number
+     * is nearer 4% of them — is an understatement, and understatements in an instrument
+     * are how people end up trusting a number they should have questioned.
+     */
+    int reweightedRows() {
+        return reweightedRows;
     }
 
     /**
@@ -203,10 +236,28 @@ final class EmbeddingInitialisation {
      * each surviving row at k entries, keeps the distances ascending (which
      * {@code smoothKnnDist} reads positionally when it picks each row's rho), and adds no
      * edge that was not already there — the duplicate collapses onto the existing edge
-     * when the adjacency list is built. A row therefore loses only the edge to the
-     * detached node, and nothing else about the graph moves.
+     * when the adjacency list is built.
+     *
+     * <p><b>What that does and does not leave alone.</b> Structurally a rewritten row
+     * loses exactly one edge, the one to the detached node, and gains nothing. Its
+     * <em>weights</em> are another matter, and it would be convenient but false to say
+     * the graph is otherwise untouched. {@code smoothKnnDist} reads each row's entire
+     * distance vector to solve for that row's sigma, and compacting past the detached
+     * entry and padding with a repeat of the furthest survivor changes the multiset it
+     * reads. Every membership strength on such a row therefore shifts a little. If the
+     * detached node happened to be a row's <em>nearest</em> neighbour, that row's rho
+     * moves too, which is the larger of the two effects — it is the local-connectivity
+     * offset subtracted from every distance in the row.
+     *
+     * <p>No cell is repositioned by this and no edge is invented; the rows keep the same
+     * neighbours in the same order, weighted slightly differently. The count of rows in
+     * that condition is returned rather than hidden, because "one cell was affected" is
+     * an understatement of what steering costs and this is a scientific instrument.
+     *
+     * @return the perturbed graph and the number of rows whose distance vector was
+     *         rewritten, which is the number of rows that had listed {@code node}
      */
-    private static NearestNeighborGraph detach(NearestNeighborGraph nng, int node) {
+    private static Detached detach(NearestNeighborGraph nng, int node) {
         int n = nng.size();
         int[][] neighbours = new int[n][];
         double[][] distances = new double[n][];
@@ -218,6 +269,7 @@ final class EmbeddingInitialisation {
         Arrays.fill(neighbours[node], node);
         Arrays.fill(distances[node], 0.0);
 
+        int reweighted = 0;
         for (int i = 0; i < n; i++) {
             if (i == node) continue;
             int[] row = neighbours[i];
@@ -229,6 +281,8 @@ final class EmbeddingInitialisation {
                 dist[kept] = dist[j];
                 kept++;
             }
+            if (kept == row.length) continue;   // never listed the detached node
+            reweighted++;
             if (kept == 0) {
                 // Only reachable if a row named nothing but the detached node. It becomes
                 // isolated too — still not spectral, still correct, just a second cell
@@ -243,6 +297,7 @@ final class EmbeddingInitialisation {
                 }
             }
         }
-        return new NearestNeighborGraph(nng.k(), neighbours, distances, nng.index());
+        return new Detached(new NearestNeighborGraph(nng.k(), neighbours, distances,
+                nng.index()), reweighted);
     }
 }

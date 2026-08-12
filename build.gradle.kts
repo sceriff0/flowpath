@@ -21,10 +21,19 @@ dependencies {
     // of dependencies FlowPath never reaches:
     //
     //  - org.bytedeco / com.epam — native BLAS/ARPACK backends. FlowPath declares no
-    //    bytedeco artefact of its own; the natives that reach the running extension
-    //    arrive transitively from QuPath's own opencv-platform, and ARPACK is not among
-    //    them. The UMAP path deliberately does not depend on any of it: SMILE's spectral
-    //    embedding initialisation is the one thing that would call ARPACK, and
+    //    bytedeco artefact of its own, and excluding the group here keeps SMILE from
+    //    adding one.
+    //
+    //    Verified, by resolving testRuntimeClasspath: bytedeco still appears on it, via
+    //    QuPath's own qupath-core-processing -> opencv-platform -> openblas-platform ->
+    //    openblas. ARPACK is not among those artefacts. Expected, but NOT verified
+    //    against a packaged QuPath install: the same is true of the extension's real
+    //    runtime classpath, i.e. that whatever bytedeco reaches the running extension
+    //    comes from the host application rather than from here, and still does not
+    //    include ARPACK.
+    //
+    //    Either way the UMAP path deliberately does not depend on any of it. SMILE's
+    //    spectral embedding initialisation is the one thing that would call ARPACK, and
     //    EmbeddingInitialisation steers the neighbour graph so SMILE takes its pure-Java
     //    PCA branch instead. Adding the natives back is not an option rather than a
     //    preference — Maven Central publishes ARPACK for linux-arm64, linux-x86_64,
