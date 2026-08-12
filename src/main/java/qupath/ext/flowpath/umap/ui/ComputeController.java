@@ -371,10 +371,19 @@ final class ComputeController {
         try {
             computeService.compute(EmbeddingFeatures.of(cellIndex, session.selection()),
                     params, maxCells, scaling);
-        } catch (RuntimeException neverThrownInPractice) {
-            // The service converts a rejected submission into a Failed outcome rather than
-            // throwing. A throw we have not thought of must still end the run rather than
-            // strand COMPUTING, so it travels the one terminal channel like everything else.
+        } catch (Throwable neverThrownInPractice) {
+            // Throwable, not RuntimeException. Task 1 exists because an Error fell between
+            // two catches exactly here and the run ended with no outcome at all; narrowing
+            // this to RuntimeException would leave a LinkageError or an OOM from the submit
+            // stranding COMPUTING for the rest of the session, which is the same defect one
+            // frame further out.
+            //
+            // This calls onUmapOutcome directly, bypassing TerminalDelivery's one-shot
+            // guard. Unreachable in production: the service converts a rejected submission
+            // into a Failed outcome rather than throwing, so if it threw, it threw BEFORE
+            // registering a delivery for this run and no second outcome can exist. If a
+            // future compute() gains a throwing path after registration, this must go
+            // through that delivery instead.
             onUmapOutcome(UmapOutcome.failed(
                     "Could not start the UMAP run", neverThrownInPractice));
         }
@@ -462,8 +471,7 @@ final class ComputeController {
      */
     void onUmapError(String message) {
         statusReporter.report("Error: " + message, UmapPane.StatusLevel.ERROR);
-
-        new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
+        statusReporter.alert(message);
     }
 
     /**

@@ -173,15 +173,7 @@ public class UmapPane extends BorderPane {
             }
         });
 
-        drawButton = new ToggleButton("Draw Polygon");
-        drawButton.setTooltip(new Tooltip("Draw a polygon gate on the UMAP plot.\nClick to add vertices, double-click to close.\nDrag vertices to adjust the shape."));
-        drawButton.setOnAction(e -> {
-            if (drawButton.isSelected()) {
-                polygonSelector.activate();
-            } else {
-                polygonSelector.deactivate();
-            }
-        });
+        drawButton = drawToggleFor(polygonSelector);
 
         clearButton = new Button("Clear Shape");
         clearButton.setTooltip(new Tooltip("Remove polygon gate and restore all cell classes. (Esc)"));
@@ -237,6 +229,9 @@ public class UmapPane extends BorderPane {
                     }
                     @Override public void detail(String text) {
                         setStatusDetail(text);
+                    }
+                    @Override public void alert(String message) {
+                        new Alert(Alert.AlertType.ERROR, message, ButtonType.OK).showAndWait();
                     }
                 },
                 dotSize -> {
@@ -455,12 +450,6 @@ public class UmapPane extends BorderPane {
         refreshOverview();
 
         polygonSelector.setOnPolygonComplete(this::onPolygonComplete);
-        // The Draw toggle reflects the selector rather than being told about it. Five
-        // places used to call drawButton.setSelected(false) by hand — the Escape handler,
-        // the snapshot teardown, the derived-state teardown and two states of the machine
-        // — and any path that forgot left a toggle pressed over a selector that was not
-        // listening.
-        polygonSelector.setOnActiveChanged(drawButton::setSelected);
         umapCanvas.setOnPointPicked(this::onPointPicked);
 
         // Sync marker overlay zoom/pan with main canvas
@@ -522,6 +511,36 @@ public class UmapPane extends BorderPane {
         box.getChildren().addAll(header, rule);
         box.getChildren().addAll(children);
         return box;
+    }
+
+    /**
+     * The Draw toggle, created already bound to {@code selector} in both directions.
+     * <p>
+     * A factory rather than a wire laid down beside the widget, because a wire is deletable
+     * and a constructor argument is not: {@code drawButton} is final, so removing this call
+     * fails to compile rather than leaving a toggle that silently stops following the
+     * selector. The previous attempt at this was a loose
+     * {@code selector.setOnActiveChanged(drawButton::setSelected)} line in the constructor
+     * and a test that installed the same idiom on its own objects — deleting the production
+     * line left the suite green, which is the failure mode this shape exists to remove.
+     * <p>
+     * Both directions matter. The button drives the selector when the user clicks it; the
+     * selector drives the button whenever anything <em>else</em> deactivates it — Escape, a
+     * snapshot teardown, a fresh embedding, an image change. Those were eight hand-written
+     * {@code setSelected(false)} calls, and any path that forgot one left a pressed toggle
+     * over a selector that was no longer listening.
+     */
+    static ToggleButton drawToggleFor(PolygonSelector selector) {
+        var button = new ToggleButton("Draw Polygon");
+        button.setTooltip(new Tooltip("Draw a polygon gate on the UMAP plot.\n"
+                + "Click to add vertices, double-click to close.\n"
+                + "Drag vertices to adjust the shape."));
+        selector.setOnActiveChanged(button::setSelected);
+        button.setOnAction(e -> {
+            if (button.isSelected()) selector.activate();
+            else selector.deactivate();
+        });
+        return button;
     }
 
     /** A dim caption above a rail control. */
@@ -1739,6 +1758,16 @@ public class UmapPane extends BorderPane {
 
         /** The persistent long form behind the status line; null or blank removes it. */
         void detail(String text);
+
+        /**
+         * Put a failure in front of the user and block until they acknowledge it.
+         * <p>
+         * A third channel because it has a third lifetime, and because owning the modal
+         * here rather than in {@code ComputeController} is what lets the controller's
+         * failure paths be exercised at all: {@code Alert.showAndWait()} on the FX thread
+         * deadlocks a test that is already on it.
+         */
+        void alert(String message);
     }
 
     /**

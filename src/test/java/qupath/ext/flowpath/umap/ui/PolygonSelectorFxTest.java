@@ -19,9 +19,15 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * The toggle's {@code selected} flag used to be set by hand at eight sites — the Escape
  * handler, the snapshot teardown, the derived-state teardown, the compute teardown and four
  * states of the UI machine — and any path that deactivated the selector without remembering
- * the button left a pressed toggle over a selector that was no longer listening. It is now
- * one wire, {@code UmapPane:463}, and this is the only thing standing behind it: delete that
- * line and the rest of the suite stays green while the toggle sticks down permanently.
+ * the button left a pressed toggle over a selector that was no longer listening.
+ * <p>
+ * The binding is exercised through {@link UmapPane#drawToggleFor}, which is the production
+ * code, not a copy of its idiom. An earlier version of this file built its own selector and
+ * toggle and wired them inline under a comment claiming to be "exactly the wire UmapPane
+ * installs" — which pinned the idiom and left the wiring free: deleting the line in
+ * {@code UmapPane} kept the whole suite green. Deleting the factory's call site is now a
+ * compile error ({@code drawButton} is final) and deleting its body fails
+ * {@link #theToggleFollowsTheSelector()}.
  */
 class PolygonSelectorFxTest {
 
@@ -55,19 +61,14 @@ class PolygonSelectorFxTest {
     }
 
     @Test
-    @DisplayName("The production wire keeps the toggle in step with the selector")
+    @DisplayName("The production binding keeps the toggle in step with the selector")
     void theToggleFollowsTheSelector() {
         assumeTrue(FxTestSupport.toolkitAvailable());
 
         FxTestSupport.onFxRun(() -> {
             var selector = new PolygonSelector(new UmapCanvas());
-            var drawButton = new ToggleButton("Draw Polygon");
-            // Exactly the wire UmapPane installs.
-            selector.setOnActiveChanged(drawButton::setSelected);
-            drawButton.setOnAction(e -> {
-                if (drawButton.isSelected()) selector.activate();
-                else selector.deactivate();
-            });
+            // The production factory — the same call UmapPane's constructor makes.
+            var drawButton = UmapPane.drawToggleFor(selector);
 
             // The user presses Draw. ToggleButton.fire() flips `selected` itself before
             // dispatching the action, which is how the real click arrives.

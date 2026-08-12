@@ -234,7 +234,12 @@ public final class UmapSession {
 
     /** What {@link #adopt} decided the incoming snapshot means for the embedding. */
     public enum Adoption {
-        /** {@code null} came in: the session leaves snapshot mode and runs off the hierarchy. */
+        /**
+         * {@code null} came in: the gating tree has no phenotyping to give, so the session
+         * leaves snapshot mode and waits for one — see {@link #detachSnapshot()}. It does
+         * <em>not</em> fall back to the cells it happens to be holding; those came from the
+         * gating pane and describe whatever it was showing before.
+         */
         DETACHED,
         /** Same cells, new labels: keep the embedding, re-derive colours. */
         RECOLOUR,
@@ -256,7 +261,14 @@ public final class UmapSession {
      */
     public Adoption adopt(PhenotypeSnapshot incoming) {
         if (incoming == null) {
-            snapshot = null;
+            // Delegated, not reimplemented. This branch used to null the snapshot and stop,
+            // which was identical to detachSnapshot() until detachSnapshot() learnt that the
+            // surviving CellIndex belongs to a cell set nobody is looking at any more. Left
+            // alone it would be a second, public route back into exactly the state that fix
+            // was written to make inexpressible: READY, Run clickable over the previous
+            // image's cells, and an annotation filter offering to re-index behind the gating
+            // pane's back. One detach, one meaning.
+            detachSnapshot();
             return Adoption.DETACHED;
         }
         // Whatever else adoption decides, a snapshot has arrived: the session is no longer
@@ -282,7 +294,6 @@ public final class UmapSession {
 
         this.snapshot = incoming;
 
-        awaitingSnapshot = false;
         beginIndexBuild();
         retireCellSet();
         cellIndex = incoming.index();

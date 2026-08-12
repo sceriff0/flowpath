@@ -55,12 +55,28 @@ class ComputeControllerFxTest {
     /** Captures the feature set the controller hands the service, and runs nothing. */
     private static final class RecordingService extends UmapComputeService {
         final AtomicReference<EmbeddingFeatures> handedOver = new AtomicReference<>();
+        /** When set, the next submit throws instead of recording — see the ordering test. */
+        Error throwOnce;
 
         @Override
         public void compute(EmbeddingFeatures features, UmapParameters params, int maxCells,
                             ScalingMode scalingMode) {
+            if (throwOnce != null) {
+                Error thrown = throwOnce;
+                throwOnce = null;
+                throw thrown;
+            }
             handedOver.set(features);
         }
+    }
+
+    /** A reporter that swallows everything, including the modal. */
+    private static final class SilentReporter implements UmapPane.StatusReporter {
+        final AtomicReference<String> alerted = new AtomicReference<>();
+
+        @Override public void report(String text, UmapPane.StatusLevel level) { }
+        @Override public void detail(String text) { }
+        @Override public void alert(String message) { alerted.set(message); }
     }
 
     private static CellIndex threeMarkers() {
@@ -83,14 +99,16 @@ class ComputeControllerFxTest {
 
     /** Wire a controller and its state machine over {@code session}, on the FX thread. */
     private static ComputeController controllerOver(UmapComputeService service, UmapSession session) {
+        return controllerOver(service, session, new SilentReporter());
+    }
+
+    private static ComputeController controllerOver(UmapComputeService service, UmapSession session,
+                                                    UmapPane.StatusReporter reporter) {
         var controller = new ComputeController(
                 service,
                 session,
                 result -> { },
-                new UmapPane.StatusReporter() {
-                    @Override public void report(String text, UmapPane.StatusLevel level) { }
-                    @Override public void detail(String text) { }
-                },
+                reporter,
                 size -> { });
         controller.attachUiState(new UiStateController(session, new UiStateController.Controls(
                 controller.getComputeButton(), controller.getCancelButton(),
@@ -215,6 +233,47 @@ class ComputeControllerFxTest {
 
                 assertEquals(ViewState.Stage.READY, session.viewState().stage());
                 assertFalse(session.isRunning());
+            });
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /**
+     * The submit ordering, pinned rather than merely correct.
+     * <p>
+     * {@code runUmap} enters the running phase BEFORE submitting. The order used to be
+     * reversed, which was safe only because production delivers outcomes through
+     * {@code Platform::runLater} — with a synchronous delivery executor a refusal reaches
+     * the consumer from inside {@code compute()}, and {@code beginRun()} afterwards would
+     * re-enter a COMPUTING nothing was ever going to leave. Entering first makes the phase
+     * true whatever the executor does, and leaves the submit itself as the thing that must
+     * not strand it.
+     * <p>
+     * An {@link Error}, not a {@link RuntimeException}: the catch was narrowed to the latter
+     * for one round, which is the same shape as the gap Task 1 was written to close.
+     */
+    @Test
+    void aSubmitThatThrowsEndsTheRunInsteadOfStrandingIt() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+
+        var service = new RecordingService();
+        try {
+            FxTestSupport.onFxRun(() -> {
+                var session = sessionOver(threeMarkers(), new MarkerSelection());
+                var reporter = new SilentReporter();
+                var controller = controllerOver(service, session, reporter);
+                service.throwOnce = new LinkageError("the classpath moved under us");
+
+                controller.runUmap();
+
+                assertFalse(session.isRunning(),
+                        "a throw from the submit must not leave the panel busy forever");
+                assertEquals(ViewState.Stage.FAILED, session.viewState().stage());
+                assertNotNull(session.viewState().failure());
+                assertTrue(session.viewState().failure().contains("LinkageError"),
+                        "and it must say what actually happened");
+                assertNotNull(reporter.alerted.get(), "the user is told, without a modal here");
             });
         } finally {
             service.shutdown();

@@ -295,6 +295,40 @@ class ViewStateDerivationTest {
     }
 
     @Test
+    @DisplayName("adopt(null) is the same detach, not a second one")
+    void adoptingNullTakesTheSameRouteAsDetach() {
+        var session = embedded(withSnapshot(8));
+
+        assertEquals(UmapSession.Adoption.DETACHED, session.adopt(null));
+
+        // This branch used to null the snapshot and stop, which was identical to
+        // detachSnapshot() until detachSnapshot() learnt about the stale cell set. Left
+        // behind, it was a public route back into READY over the previous image's cells.
+        assertTrue(session.isAwaitingSnapshot());
+        var state = session.viewState();
+        assertEquals(Stage.NO_IMAGE, state.stage());
+        assertFalse(state.canCompute());
+        assertFalse(state.standalone());
+        assertNull(session.embedding(), "and the embedding it described goes with it");
+    }
+
+    @Test
+    @DisplayName("Forgetting the image entirely also ends the wait")
+    void clearingTheIndexEndsTheWait() {
+        var session = withSnapshot(8);
+        session.detachSnapshot();
+        assertFalse(session.viewState().standalone());
+
+        // Reachable in production: a second image change lands in the standalone branch of
+        // initializeFromImage, which reloads rather than waiting. Leaving the flag set would
+        // hide the annotation filter on a panel that now owns its own cells.
+        session.clearIndex();
+
+        assertFalse(session.isAwaitingSnapshot());
+        assertTrue(session.viewState().standalone());
+    }
+
+    @Test
     @DisplayName("A standalone re-index ends the wait too")
     void installingAnIndexEndsTheWait() {
         var session = withSnapshot(8);
@@ -327,7 +361,8 @@ class ViewStateDerivationTest {
         var during = session.viewState();
         assertTrue(during.indexRebuilding());
         assertFalse(during.canCompute());
-        assertFalse(during.offerFirstRun() && during.canCompute());
+        assertTrue(during.offerFirstRun(),
+                "still offered — withheld, not hidden, so the disabled state is legible");
 
         session.endRebuild();
         assertTrue(session.viewState().canCompute());
