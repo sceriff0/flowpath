@@ -6,7 +6,7 @@ plugins {
 qupathExtension {
     name = "FlowPath"
     group = "io.github.qupath"
-    version = "2.1.0"
+    version = "2.2.0"
     description = "FlowJo-style cell phenotyping for multiplexed imaging: hierarchical gating plus UMAP visualisation of the resulting phenotypes."
     automaticModule = "qupath.ext.flowpath"
 }

@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 12/08/2026
+
+The UMAP half works on a Mac. It did not before, and it did not say so.
+
+### Fixed
+- **Run UMAP did nothing at all on Apple Silicon, for essentially every real
+  gated population.** Any training set of 10 000 cells or fewer with a connected
+  neighbour graph sent SMILE to a spectral layout initialisation, which needs an
+  ARPACK native library that has no `macosx-arm64` build. Every such run threw
+  `NoClassDefFoundError`. FlowPath now owns that decision and steers onto SMILE's
+  pure-Java PCA branch instead, by detaching one node from the graph and imputing
+  its position from its true neighbours. **Embedding coordinates for datasets of
+  10 000 cells or fewer therefore differ from any this extension produced
+  before** — they are PCA-initialised now, with one cell's position imputed.
+  Larger datasets were already taking the PCA branch and are unchanged.
+- **A failed run left the panel spinning forever.** Seven exit paths through the
+  compute service delivered no callback at all, and the run body caught
+  `OutOfMemoryError` and `Exception` — so a plain `Error`, which is exactly what
+  the missing ARPACK native throws, matched neither, escaped into a `Future`
+  nobody read, and the UI sat in COMPUTING with no way back. Every run now ends
+  in exactly one of four outcomes: succeeded, failed, cancelled or superseded.
+  A failure names itself on the panel instead of being a spinner that never stops.
+- **Unticking a marker in *Features…* did not exclude it.** The include flag
+  changed one label in the picker and nothing else; the embedding ran over the
+  whole panel regardless. It now decides which columns the computation reads.
+  **Anyone who unticked markers and ran a UMAP will get a different embedding
+  from this release on** — the earlier one was over more markers than the picker
+  claimed.
+- **Run UMAP invited a click it could not honour.** Fewer than two ticked markers
+  is not an embedding, so the button is now disabled — in the toolbar and on the
+  empty state, from the same derivation — and the overlay says how many are
+  ticked rather than "Ready to embed".
+- **Tagging a population read only the last segment of the class path.** Removing
+  a tag never restored anything, because it looked for a class that never
+  matched; re-tagging a tagged cell produced `"Rim: Core"` where it should have
+  produced `"T cell: Core"`, taking the tag as the base class. **Projects saved
+  with an earlier version may contain such malformed derived classes, and this
+  release does not repair them** — re-tag the affected populations. The same
+  truncation collapsed `"T cell: Rim"` and `"B cell: Rim"` into a single legend
+  row in the standalone window.
+- **Stratified subsampling merged distinct phenotypes into one stratum**, for the
+  same reason: it grouped by the leaf class name, so two phenotypes wearing one
+  tag were sampled as though they were one population.
+- **The empty state promised a pre-selection that had not happened.** It read
+  "Features are pre-selected from your gates" over a picker still sitting at
+  everything-ticked, because seeding declines below two gated markers — and one
+  gate on one marker is the ordinary first gate anyone draws. It now says which
+  of the two you are looking at.
+- Each axis of a 2D gate resolves its compartment and statistic against **its
+  own** channel. An axis with no channel keeps the model's `MEDIAN` default,
+  where the editor used to stamp `MEAN` over it; that stamp was inert for
+  classification and is re-written only if such a gate is opened and saved.
+
+### Added
+- **Every successful run reports what it had to degrade**, because a degraded
+  embedding looks exactly like a clean one. The first finding goes on the status
+  line, the whole report in the tooltip behind it: cells the projection could not
+  place (left at exactly `(0,0)`, where they read as a real cluster rather than
+  as missing data), markers no training cell carried, markers with no variance,
+  the imputed cell and the neighbourhoods reweighted around it, and the subsample
+  size. A run with nothing to report says so and stays green.
+- **The inputs lock for the duration of a run**, so what a result was computed
+  from is what the panel was showing when Run was pressed; and Run is withheld
+  while a feature change is still rebuilding the cell index, rather than starting
+  a computation over columns that are about to be replaced.
+
+### Removed (internal API)
+No serialization format changed and no saved file is affected; these are
+compile-level removals for anyone scripting against the extension's classes.
+- `CellIndex.toMatrix()` — advertised in the v2.0.0 *Added* list. The matrix is
+  now `EmbeddingFeatures.Selected#toMatrix`, which builds it from the ticked
+  columns rather than from the whole panel; that difference is the include-flag
+  fix above.
+- `UmapComputeService.setOnComplete` / `setOnError` — replaced by
+  `setOnOutcome`, the single callback the four-outcome type made possible.
+- `UiStateController.setState` / `currentState` / `currentStateProperty` — the
+  panel is pushed to from the session and no longer has a state to be set.
+- `UmapSession.gateMask` / `describe`.
+
 ## [2.1.0] - 11/08/2026
 
 Architectural deepening across the gating engine, measurement resolution and the
