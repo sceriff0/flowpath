@@ -187,6 +187,19 @@ final class EmbeddingInitialisation {
     }
 
     /**
+     * This decision's own account of itself, for {@link EmbeddingReport}.
+     * <p>
+     * The centre and the blast radius leave together, from the object that knows both.
+     * A caller assembling the pair by hand could name the detached node and forget the
+     * rows around it — the exact understatement {@link EmbeddingReport.Steering} refuses
+     * to represent — so it is never assembled by hand.
+     */
+    EmbeddingReport.Steering steering() {
+        return detached < 0 ? EmbeddingReport.Steering.none()
+                : EmbeddingReport.Steering.detaching(detached, reweightedRows);
+    }
+
+    /**
      * Overwrite the detached node's coordinates with the inverse-distance-weighted mean
      * of its true k nearest neighbours, read from the original graph.
      *

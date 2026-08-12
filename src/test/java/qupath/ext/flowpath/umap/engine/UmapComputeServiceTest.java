@@ -98,6 +98,17 @@ class UmapComputeServiceTest {
                 idx.getObjects(), idx.getMarkerNames(), new UmapParameters(15, 0.1, 1.0, 50, 5));
     }
 
+    /**
+     * The outcome a work stub returns: a trivial embedding plus the report the type
+     * refuses to succeed without. These tests are about the lifecycle around the work,
+     * so the run they describe degraded nothing.
+     */
+    private static UmapOutcome stubSuccess(CellIndex idx) {
+        return UmapOutcome.succeeded(stubResult(idx),
+                EmbeddingReport.training(idx, null)
+                        .completedWith(EmbeddingReport.Steering.none(), 0));
+    }
+
     /** A service whose callbacks run inline and whose embedding is replaced by {@code work}. */
     private static UmapComputeService serviceRunning(UmapComputeService.EmbeddingWork work) {
         return new UmapComputeService(Runnable::run, work);
@@ -200,7 +211,7 @@ class UmapComputeServiceTest {
                     }
                 }
             }
-            return UmapOutcome.succeeded(stubResult(idx));
+            return stubSuccess(idx);
         });
         self.set(service);
 
@@ -244,7 +255,7 @@ class UmapComputeServiceTest {
                 occupied.set(true);
                 spinUntil(release);
             }
-            return UmapOutcome.succeeded(stubResult(idx));
+            return stubSuccess(idx);
         });
         try {
             service.setOnOutcome(outcomes::add);
@@ -285,7 +296,7 @@ class UmapComputeServiceTest {
                 started.set(true);
                 spinUntil(release);
             }
-            return UmapOutcome.succeeded(stubResult(idx));
+            return stubSuccess(idx);
         });
         try {
             service.setOnOutcome(outcome -> {
@@ -318,7 +329,7 @@ class UmapComputeServiceTest {
         // a RejectedExecutionException thrown back at it leaves that state with nothing
         // to clear it. The rejection is an outcome like any other.
         var index = Cells.of(4).marker("CD45", i -> i).build();
-        var service = serviceRunning((idx, p, max, mode, gen) -> UmapOutcome.succeeded(stubResult(idx)));
+        var service = serviceRunning((idx, p, max, mode, gen) -> stubSuccess(idx));
         service.shutdown();
 
         assertDoesNotThrow(() -> service.compute(index, UmapParameters.defaults(), 0));
@@ -418,11 +429,19 @@ class UmapComputeServiceTest {
 
             // Getting an embedding at this size costs one cell, and the outcome says so
             // rather than leaving the reader to find it in a log line.
-            int imputed = succeeded.imputedCell().orElseThrow(() ->
+            int imputed = succeeded.report().imputedCell().orElseThrow(() ->
                     new AssertionError("a small connected graph must report the cell it "
                             + "detached to stay off the native layout"));
             assertTrue(imputed >= 0 && imputed < 500, "imputed cell out of range: " + imputed);
-            assertTrue(succeeded.reweightedCells() > 0,
+            assertEquals(EmbeddingReport.Initialisation.PCA_STEERED_FROM_SPECTRAL,
+                    succeeded.report().initialisation(),
+                    "the report must name the initialisation the run actually used");
+            assertEquals(0, succeeded.report().cellsAtOrigin(),
+                    "an unsubsampled run projects nothing, so nothing can be parked");
+            assertTrue(succeeded.report().unmeasuredMarkers().isEmpty(),
+                    "three gaussian markers are not degenerate: "
+                            + succeeded.report().unmeasuredMarkers());
+            assertTrue(succeeded.report().reweightedCells() > 0,
                     "steering also rewrites the distance vector of every cell that listed "
                             + "the detached one; reporting only the imputed cell would "
                             + "understate it");
@@ -466,12 +485,49 @@ class UmapComputeServiceTest {
             assertEquals(cells, succeeded.result().size(),
                     "subsampling trains on 300 but must still place all 900 cells");
 
-            int imputed = succeeded.imputedCell().orElseThrow(() -> new AssertionError(
+            int imputed = succeeded.report().imputedCell().orElseThrow(() -> new AssertionError(
                     "a 300-row training graph is small and connected, so it must be steered"));
             assertTrue(imputed >= 0 && imputed < cells,
                     "the imputed cell must address the caller's index: " + imputed);
-            assertTrue(succeeded.reweightedCells() > 0,
+            assertTrue(succeeded.report().reweightedCells() > 0,
                     "the cells that listed the detached node must be counted, not dropped");
+            assertTrue(succeeded.report().subsampled(), "300 of 900 is a subsample");
+            assertEquals(300, succeeded.report().trainedCells());
+            assertEquals(cells, succeeded.report().totalCells());
+            assertEquals(0, succeeded.report().cellsAtOrigin(),
+                    "every held-out cell had five sampled neighbours to blend, so none "
+                            + "should have been left at the origin");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    @Test
+    void aMarkerNoCellCarriesIsReportedRatherThanEmbeddedAsAColumnOfZeros() throws Exception {
+        // The CellIndex.toMatrix hole, end to end. FoxP3 is absent on every cell, so its
+        // column is imputed with the mean of nothing — 0.0 — and the run silently embeds
+        // over two markers while the user believes it used three. The embedding is fine;
+        // the belief is not, and only the report can correct it.
+        var idx = Cells.of(500)
+                .marker("CD45", i -> Math.sin(i))
+                .marker("CD8", i -> Math.cos(i * 0.7))
+                .marker("FoxP3", i -> 1.0).absentOn(i -> true)
+                .build();
+        var service = new UmapComputeService();
+        try {
+            AtomicReference<UmapOutcome> outcomeRef = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            service.setOnOutcome(o -> { outcomeRef.set(o); latch.countDown(); });
+            service.compute(idx, new UmapParameters(15, 0.1, 1.0, 30, 5), 0);
+            assertTrue(latch.await(180, TimeUnit.SECONDS), "a degenerate column must not hang");
+
+            var succeeded = assertInstanceOf(UmapOutcome.Succeeded.class, outcomeRef.get(),
+                    "a degenerate column degrades the run, it does not fail it: "
+                            + outcomeRef.get().describe());
+            assertEquals(List.of("FoxP3"), succeeded.report().unmeasuredMarkers());
+            assertFalse(succeeded.report().isClean());
+            assertTrue(succeeded.report().describe().contains("FoxP3"),
+                    succeeded.report().describe());
         } finally {
             service.shutdown();
         }

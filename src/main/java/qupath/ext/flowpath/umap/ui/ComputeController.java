@@ -7,6 +7,7 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.Tooltip;
+import qupath.ext.flowpath.umap.engine.EmbeddingReport;
 import qupath.ext.flowpath.umap.engine.UmapComputeService;
 import qupath.ext.flowpath.umap.engine.UmapOutcome;
 import qupath.ext.flowpath.model.CellIndex;
@@ -14,6 +15,7 @@ import qupath.ext.flowpath.umap.model.ScalingMode;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
 
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -379,7 +381,8 @@ final class ComputeController {
      */
     void onUmapOutcome(UmapOutcome outcome) {
         switch (outcome) {
-            case UmapOutcome.Succeeded succeeded -> onUmapComplete(succeeded.result());
+            case UmapOutcome.Succeeded succeeded ->
+                    onUmapComplete(succeeded.result(), succeeded.report());
             case UmapOutcome.Failed failed -> onUmapError(failed.describe());
             case UmapOutcome.Cancelled ignored -> onUmapCancelled();
             case UmapOutcome.Superseded ignored -> { /* the newer run owns the UI */ }
@@ -390,8 +393,16 @@ final class ComputeController {
      * Compute-success callback. The state transition to COMPUTED runs BEFORE the
      * result consumer is invoked, so UmapPane sees coherent UI state when it
      * pushes the new data into the canvases/legend.
+     * <p>
+     * The status line carries the run's {@link EmbeddingReport} summary as well as its
+     * size and timing, and drops to WARN when there is one. That is the whole point of
+     * the report: a run that stranded cells at the origin, embedded a marker nothing was
+     * measured for, or bought its layout with one fabricated cell position produces a
+     * picture that looks exactly like a clean one. This method decides nothing about
+     * which of those happened — {@code EmbeddingReport} does, and is tested without a
+     * toolkit — it only puts the answer where the user is already looking.
      */
-    void onUmapComplete(UmapResult result) {
+    void onUmapComplete(UmapResult result, EmbeddingReport report) {
         // Enables gating + export, disables tag controls (await polygon), hides cancel/progress
         uiState.setState(UiStateController.UiState.COMPUTED);
 
@@ -401,8 +412,16 @@ final class ComputeController {
         long elapsed = System.currentTimeMillis() - computeStartTime;
         String timeStr = elapsed < 1000 ? "%dms".formatted(elapsed)
                 : "%.1fs".formatted(elapsed / 1000.0);
-        statusReporter.report(String.format("UMAP computed: %,d cells (k=%d) in %s",
-                result.size(), result.getParams().k(), timeStr), UmapPane.StatusLevel.SUCCESS);
+        String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d) in %s",
+                result.size(), result.getParams().k(), timeStr);
+        String qualifier = report.summary();
+        statusReporter.report(qualifier.isEmpty() ? base : base + " — " + qualifier,
+                qualifier.isEmpty() ? UmapPane.StatusLevel.SUCCESS : UmapPane.StatusLevel.WARN);
+        if (!report.isClean() || report.subsampled()) {
+            // The status line holds one finding; the log holds every finding and every
+            // note. Same channel the compute service already logs its phase timings on.
+            System.err.println("FlowPath UMAP: " + report.describe());
+        }
     }
 
     /**

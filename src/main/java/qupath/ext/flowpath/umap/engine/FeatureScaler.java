@@ -23,6 +23,16 @@ import qupath.ext.flowpath.umap.model.ScalingMode;
  */
 public final class FeatureScaler {
 
+    /**
+     * Below this population standard deviation a column is treated as constant: the
+     * z-score divisor is forced to 1.0 rather than dividing by (near) zero.
+     * <p>
+     * Shared with {@link EmbeddingReport}, which calls a marker degenerate at exactly
+     * this threshold. "The scaler could not standardise this column" and "the report
+     * calls it constant" are the same statement, so they read the same number.
+     */
+    static final double ZERO_VARIANCE_STD = 1e-10;
+
     private final ScalingMode mode;
     /** Per-column subtractive center (z-score mean); null for non-fitting modes. */
     private final double[] center;
@@ -67,7 +77,7 @@ public final class FeatureScaler {
             }
             double std = Math.sqrt(ss / n); // population std (ddof=0), matches StandardScaler
             center[j] = mean;
-            scale[j] = std < 1e-10 ? 1.0 : std;
+            scale[j] = std < ZERO_VARIANCE_STD ? 1.0 : std;
         }
         return new FeatureScaler(mode, center, scale);
     }

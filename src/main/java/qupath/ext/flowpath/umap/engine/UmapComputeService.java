@@ -42,6 +42,16 @@ import java.util.stream.IntStream;
  * entirely, so the {@code Error} no longer arrives; the {@code Throwable} catch stays
  * because the lesson was about which failures a seam can afford not to see, not about
  * that one library.
+ *
+ * <h2>Success is not the same as nothing to report</h2>
+ * A run can reach an embedding and still have degraded it: cells the projection could
+ * find no neighbour for and left at {@code (0,0)}, a marker no cell carried a value for
+ * and which therefore entered the matrix as a column of imputed zeros, a node detached
+ * from the graph to stay off an absent native. None of those look any different from a
+ * clean run on the canvas. Every one of them is counted where it happens and carried out
+ * on {@link EmbeddingReport}, which {@link UmapOutcome.Succeeded} will not be built
+ * without — the same move as the terminal-outcome guarantee, one level in: the seam
+ * cannot say "it worked" without saying what "it" was.
  */
 public class UmapComputeService {
 
@@ -294,6 +304,12 @@ public class UmapComputeService {
             }
         }
 
+        // Read what the training set looks like before anything is built from it. This is
+        // half of the run's report and it comes from the CellIndex columns, not from the
+        // matrix below — so no ordering constraint ties it to the scaler that rewrites
+        // that matrix in place.
+        EmbeddingReport.Training training = EmbeddingReport.training(cellIndex, sampleIndices);
+
         // Build matrix
         postStatus("Preparing data matrix (%,d cells x %d markers)...".formatted(computeN, m));
         double[][] matrix;
@@ -356,8 +372,9 @@ public class UmapComputeService {
         // The detached node carried no edges into the layout, so what fit returned for it
         // is an artefact. Replace it with where its real neighbours say it belongs.
         init.impute(embedding);
-        int imputedRow = init.detachedNode().orElse(-1);
-        int reweightedCells = init.reweightedRows();
+        // Read off the decision object before it is released below, so the centre of the
+        // perturbation and its blast radius are never assembled by hand.
+        EmbeddingReport.Steering steering = init.steering();
         long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
         String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
         postStatus(fitMsg);
@@ -375,6 +392,7 @@ public class UmapComputeService {
         nng = null;
         init = null;
 
+        int cellsAtOrigin = 0;
         if (subsampled) {
             // Fill sampled cells
             for (int i = 0; i < sampleIndices.length; i++) {
@@ -385,7 +403,8 @@ public class UmapComputeService {
             // Project remaining cells via kNN
             postStatus("Projecting remaining %,d cells...".formatted(n - computeN));
             long projStart = System.nanoTime();
-            projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY, imputationMeans, scaler);
+            cellsAtOrigin = projectRemaining(cellIndex, sampleIndices, embedding, umapX, umapY,
+                    imputationMeans, scaler);
             long projMs = (System.nanoTime() - projStart) / 1_000_000L;
             String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
                     .formatted(nnMs, fitMs, projMs);
@@ -410,13 +429,10 @@ public class UmapComputeService {
                 cellIndex.getMarkerNames(), resolvedParams);
         cachedResult = result;
 
-        // Report the imputation as a cell index into cellIndex, not a training-matrix
-        // row: the row number means nothing to a consumer that never saw the subsample.
-        // The reweighted figure needs no such translation — it is a count, and the
-        // subsample maps one-to-one onto the cells it was drawn from.
-        if (imputedRow < 0) return UmapOutcome.succeeded(result);
-        return UmapOutcome.succeeded(result,
-                subsampled ? sampleIndices[imputedRow] : imputedRow, reweightedCells);
+        // The embedding and the account of what it cost leave together. Translating the
+        // detached row into a cell index is the report's job, not this method's: it is
+        // the piece that holds both the row and the subsample it addresses.
+        return UmapOutcome.succeeded(result, training.completedWith(steering, cellsAtOrigin));
     }
 
     /**
@@ -508,16 +524,27 @@ public class UmapComputeService {
      * Project non-sampled cells by finding their k nearest neighbors among the sampled cells
      * (using a KD-tree for fast lookup) and averaging those neighbors' UMAP coordinates
      * weighted by inverse distance.
+     *
+     * @return how many cells this could not place, and so left at {@code (0,0)}. Returned
+     *         rather than logged: a cell at the origin is drawn in the same colour, in the
+     *         same plot, as one the optimiser actually put there, so the only thing that
+     *         separates "no usable neighbour" from "a real tight cluster" is this count
+     *         reaching the report
      */
-    private void projectRemaining(CellIndex cellIndex, int[] sampleIndices,
-                                  double[][] sampleEmbedding,
-                                  double[] umapX, double[] umapY,
-                                  double[] imputationMeans,
-                                  FeatureScaler scaler) {
+    private int projectRemaining(CellIndex cellIndex, int[] sampleIndices,
+                                 double[][] sampleEmbedding,
+                                 double[] umapX, double[] umapY,
+                                 double[] imputationMeans,
+                                 FeatureScaler scaler) {
         int n = cellIndex.size();
         int m = cellIndex.getMarkerNames().length;
         int knn = Math.min(5, sampleIndices.length);
-        if (knn == 0) return;
+        if (knn == 0) {
+            // An empty subsample. Nothing was trained on, so nothing can be projected and
+            // every cell in the image stays at the origin — the worst version of this
+            // failure, and the one that used to return in silence.
+            return n;
+        }
 
         boolean[] isSampled = new boolean[n];
         for (int idx : sampleIndices) isSampled[idx] = true;
@@ -576,8 +603,14 @@ public class UmapComputeService {
         final int totalRemaining = remaining;
         final int progressStep = Math.max(1, remaining / 10);
         AtomicInteger progressCount = new AtomicInteger(0);
+        // Counted where the cells are parked rather than inferred afterwards by scanning
+        // for coordinates that happen to be (0,0): a cell the optimiser genuinely placed
+        // at the origin is not a defect, and the two are indistinguishable after the fact.
+        AtomicInteger parkedAtOrigin = new AtomicInteger(0);
 
         IntStream.range(0, remaining).parallel().forEach(q -> {
+            // A cancelled run leaves the rest of the queries unplaced, but it also reports
+            // Cancelled rather than Succeeded, so no report is built from this count.
             if (cancelled) return;
 
             int ci = queryIndices[q];
@@ -607,8 +640,12 @@ public class UmapComputeService {
             if (InverseDistanceBlend.place(neighbors, dists, sampleEmbedding, -1, placed)) {
                 umapX[ci] = placed[0];
                 umapY[ci] = placed[1];
+            } else {
+                // No neighbour carried any weight, so this cell stays at (0,0). It is
+                // counted, not merely left: the point is indistinguishable from real
+                // structure once it is on the canvas.
+                parkedAtOrigin.incrementAndGet();
             }
-            // else: leave at 0.0 (no valid neighbors found)
 
             // Progress update every ~10%
             int done = progressCount.incrementAndGet();
@@ -617,6 +654,7 @@ public class UmapComputeService {
                 postStatus("Projecting remaining cells... %d%%".formatted(pct));
             }
         });
+        return parkedAtOrigin.get();
     }
 
     /**

@@ -4,7 +4,6 @@ import qupath.ext.flowpath.umap.model.UmapResult;
 
 import java.util.Locale;
 import java.util.Objects;
-import java.util.OptionalInt;
 
 /**
  * How one {@link UmapComputeService#compute} call ended. Exactly one of these is
@@ -37,11 +36,13 @@ import java.util.OptionalInt;
  * </ul>
  *
  * <h2>Where later facts belong</h2>
- * Anything a caller wants to know <em>about a run that worked</em> — which embedding
- * initialisation was actually used, which cells had to be imputed, what the stage had
- * to degrade — hangs off {@link Succeeded}, alongside the result. Use
- * {@link #succeeded(UmapResult)} rather than the canonical constructor so that adding
- * such a fact is one change here and not one at every call site.
+ * Everything a caller wants to know <em>about a run that worked</em> — which embedding
+ * initialisation was actually used, which cell had to be imputed, which markers were
+ * degenerate, how many cells the projection could not place — hangs off {@link Succeeded}
+ * as a single {@link EmbeddingReport}, alongside the result. One carrier rather than a
+ * growing list of loose fields: a caller that wants the provenance of a run reads one
+ * object, and a new fact is added in {@code EmbeddingReport} without touching this type
+ * or any call site.
  */
 public sealed interface UmapOutcome
         permits UmapOutcome.Succeeded, UmapOutcome.Failed,
@@ -89,25 +90,17 @@ public sealed interface UmapOutcome
 
     // --- Factories -----------------------------------------------------------
 
-    /** A run that produced a current embedding, with nothing to qualify it. */
-    static Succeeded succeeded(UmapResult result) {
-        return new Succeeded(result, OptionalInt.empty(), 0);
-    }
-
     /**
-     * A run whose embedding was steered off SMILE's native initialisation path, and the
-     * two numbers that says it cost.
+     * A run that produced a current embedding, and what producing it cost.
      *
-     * <p>There is deliberately no factory that records the imputation alone. Reporting
-     * one affected cell when a further few per cent carry altered edge weights would be
-     * an understatement, and the way to stop an understatement being written is to make
-     * it unspellable.
-     *
-     * @param imputedCell     index into the {@code CellIndex} the run walked
-     * @param reweightedCells how many other cells listed that one as a neighbour
+     * <p>There is deliberately no factory that omits the report. A run can succeed while
+     * leaving cells stranded at the origin, embedding a marker that was never measured,
+     * or fabricating one cell's position to stay off an absent native — and every one of
+     * those looks like an ordinary success from the outside. Making the report
+     * unskippable is what stops "it worked" being said without saying what "it" was.
      */
-    static Succeeded succeeded(UmapResult result, int imputedCell, int reweightedCells) {
-        return new Succeeded(result, OptionalInt.of(imputedCell), reweightedCells);
+    static Succeeded succeeded(UmapResult result, EmbeddingReport report) {
+        return new Succeeded(result, report);
     }
 
     /** A failure with no throwable behind it — a precondition the run refused. */
@@ -139,38 +132,18 @@ public sealed interface UmapOutcome
     /**
      * A completed run whose embedding is current.
      *
-     * @param result          the embedding, never null
-     * @param imputedCell     the one cell, if any, whose coordinates were imputed from its
-     *                        neighbours instead of optimised. FlowPath detaches a single
-     *                        node from the neighbour graph to keep SMILE off its native
-     *                        initialisation path (see {@code EmbeddingInitialisation});
-     *                        that node's position is then recomputed from its true
-     *                        neighbours. Present here so the qualification travels with
-     *                        the embedding rather than living only in a log line.
-     * @param reweightedCells how many further cells listed the detached one among their
-     *                        neighbours and so had their distance vector rewritten. Their
-     *                        positions were optimised normally — only the edge weights
-     *                        feeding that optimisation shifted — but at k=15 this is
-     *                        typically 3–4% of a small dataset, and an outcome claiming
-     *                        one affected cell would be an understatement. Zero whenever
-     *                        {@code imputedCell} is empty.
+     * @param result the embedding, never null
+     * @param report what producing it cost — degenerate markers, cells the projection
+     *               could not place, the initialisation actually used and the cell it was
+     *               bought with. Never null: an embedding without an account of itself is
+     *               the failure mode this seam exists to close, so the type does not
+     *               permit one
      */
-    record Succeeded(UmapResult result, OptionalInt imputedCell, int reweightedCells)
-            implements UmapOutcome {
+    record Succeeded(UmapResult result, EmbeddingReport report) implements UmapOutcome {
 
         public Succeeded {
             Objects.requireNonNull(result, "result");
-            Objects.requireNonNull(imputedCell, "imputedCell");
-            if (reweightedCells < 0) {
-                throw new IllegalArgumentException(
-                        "reweightedCells must be >= 0, got: " + reweightedCells);
-            }
-            // Nothing other than detaching a node perturbs a neighbourhood, so a count
-            // without an imputation describes a run that cannot have happened.
-            if (imputedCell.isEmpty() && reweightedCells != 0) {
-                throw new IllegalArgumentException(
-                        "reweightedCells=" + reweightedCells + " without an imputed cell");
-            }
+            Objects.requireNonNull(report, "report");
         }
 
         @Override
@@ -183,12 +156,8 @@ public sealed interface UmapOutcome
             String base = String.format(Locale.US, "UMAP computed: %,d cells (k=%d)",
                     result.size(),
                     result.getParams() == null ? 0 : result.getParams().k());
-            if (imputedCell.isEmpty()) return base;
-            String imputed = String.format(Locale.US, "%s; cell %,d imputed from its neighbours",
-                    base, imputedCell.getAsInt());
-            return reweightedCells == 0 ? imputed
-                    : String.format(Locale.US, "%s, %,d neighbourhoods reweighted",
-                            imputed, reweightedCells);
+            String qualifier = report.summary();
+            return qualifier.isEmpty() ? base : base + "; " + qualifier;
         }
     }
 

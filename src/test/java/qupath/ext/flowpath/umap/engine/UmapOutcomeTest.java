@@ -26,16 +26,45 @@ import java.util.OptionalInt;
  */
 class UmapOutcomeTest {
 
+    private static CellIndex indexOf(int cells) {
+        return Cells.of(cells).marker("CD45", i -> i).build();
+    }
+
     private static UmapResult resultOf(int cells) {
-        CellIndex index = Cells.of(cells).marker("CD45", i -> i).build();
+        return resultOn(indexOf(cells));
+    }
+
+    private static UmapResult resultOn(CellIndex index) {
+        int cells = index.size();
         return new UmapResult(new double[cells], new double[cells],
                 index.getObjects(), index.getMarkerNames(),
                 new UmapParameters(15, 0.1, 1.0, 50, 5));
     }
 
+    /** The report of a run that degraded nothing — the shape most of these tests want. */
+    private static EmbeddingReport cleanReport(int cells) {
+        return cleanReport(indexOf(cells));
+    }
+
+    private static EmbeddingReport cleanReport(CellIndex index) {
+        return EmbeddingReport.training(index, null)
+                .completedWith(EmbeddingReport.Steering.none(), 0);
+    }
+
+    /** A run that bought its layout by detaching one node, and what that cost. */
+    private static EmbeddingReport steeredReport(CellIndex index, int detachedRow, int reweighted) {
+        return EmbeddingReport.training(index, null)
+                .completedWith(EmbeddingReport.Steering.detaching(detachedRow, reweighted), 0);
+    }
+
+    private static UmapOutcome.Succeeded succeededOn(int cells) {
+        CellIndex index = indexOf(cells);
+        return UmapOutcome.succeeded(resultOn(index), cleanReport(index));
+    }
+
     @Test
     void eachFactoryProducesItsOwnKind() {
-        assertEquals(UmapOutcome.Kind.SUCCEEDED, UmapOutcome.succeeded(resultOf(3)).kind());
+        assertEquals(UmapOutcome.Kind.SUCCEEDED, succeededOn(3).kind());
         assertEquals(UmapOutcome.Kind.FAILED, UmapOutcome.failed("nope").kind());
         assertEquals(UmapOutcome.Kind.CANCELLED, UmapOutcome.cancelled().kind());
         assertEquals(UmapOutcome.Kind.SUPERSEDED, UmapOutcome.superseded().kind());
@@ -43,24 +72,35 @@ class UmapOutcomeTest {
 
     @Test
     void onlySucceededIsSuccessAndOnlyTheTwoAbandonmentsAreAbandoned() {
-        assertTrue(UmapOutcome.succeeded(resultOf(3)).isSuccess());
+        assertTrue(succeededOn(3).isSuccess());
         assertFalse(UmapOutcome.failed("nope").isSuccess());
 
         assertTrue(UmapOutcome.cancelled().isAbandoned());
         assertTrue(UmapOutcome.superseded().isAbandoned());
-        assertFalse(UmapOutcome.succeeded(resultOf(3)).isAbandoned());
+        assertFalse(succeededOn(3).isAbandoned());
         assertFalse(UmapOutcome.failed("nope").isAbandoned());
     }
 
     @Test
-    void succeededCarriesTheResult() {
+    void succeededCarriesTheResultAndItsReport() {
         UmapResult result = resultOf(4);
-        assertSame(result, UmapOutcome.succeeded(result).result());
+        EmbeddingReport report = cleanReport(4);
+        UmapOutcome.Succeeded succeeded = UmapOutcome.succeeded(result, report);
+        assertSame(result, succeeded.result());
+        assertSame(report, succeeded.report());
     }
 
     @Test
     void succeededRefusesANullResult() {
-        assertThrows(NullPointerException.class, () -> UmapOutcome.succeeded(null));
+        assertThrows(NullPointerException.class, () -> UmapOutcome.succeeded(null, cleanReport(3)));
+    }
+
+    @Test
+    void succeededRefusesAnEmbeddingWithNoAccountOfItself() {
+        // The whole reason the report is a constructor argument rather than an optional
+        // extra: a run that stranded cells at the origin or embedded a marker nothing was
+        // measured for looks exactly like a clean one from here.
+        assertThrows(NullPointerException.class, () -> UmapOutcome.succeeded(resultOf(3), null));
     }
 
     @Test
@@ -97,7 +137,7 @@ class UmapOutcomeTest {
     void succeededDescribesCellCountsWithTheUsGroupingSeparator() {
         // The JVM default locale here is en_IT, which would render 10500 as "10.500".
         assertEquals("UMAP computed: 10,500 cells (k=15)",
-                UmapOutcome.succeeded(resultOf(10_500)).describe());
+                succeededOn(10_500).describe());
     }
 
     @Test
@@ -106,31 +146,22 @@ class UmapOutcomeTest {
         // cell's position and shifts the edge weights of every cell that listed it — at
         // k=15, typically 3-4% of a small dataset. An outcome that named only the first
         // would be an understatement, and this is an instrument people draw conclusions
-        // from.
-        var steered = UmapOutcome.succeeded(resultOf(500), 241, 15);
-        assertEquals(OptionalInt.of(241), steered.imputedCell());
-        assertEquals(15, steered.reweightedCells());
+        // from. The facts now live on the report; the sentence the user reads is unchanged.
+        CellIndex index = indexOf(500);
+        var steered = UmapOutcome.succeeded(resultOn(index), steeredReport(index, 241, 15));
+        assertEquals(OptionalInt.of(241), steered.report().imputedCell());
+        assertEquals(15, steered.report().reweightedCells());
         assertEquals("UMAP computed: 500 cells (k=15); cell 241 imputed from its "
                 + "neighbours, 15 neighbourhoods reweighted", steered.describe());
     }
 
     @Test
     void anUnsteeredRunSaysNothingAboutEither() {
-        var plain = UmapOutcome.succeeded(resultOf(500));
-        assertEquals(OptionalInt.empty(), plain.imputedCell());
-        assertEquals(0, plain.reweightedCells());
+        var plain = succeededOn(500);
+        assertEquals(OptionalInt.empty(), plain.report().imputedCell());
+        assertEquals(0, plain.report().reweightedCells());
+        assertTrue(plain.report().isClean());
         assertEquals("UMAP computed: 500 cells (k=15)", plain.describe());
-    }
-
-    @Test
-    void reweightingWithoutAnImputationIsNotARunThatCanHappen() {
-        // Nothing but detaching a node perturbs a neighbourhood, so the combination
-        // describes a run that cannot exist. Refusing it here is what stops a future
-        // caller reporting the blast radius while quietly dropping the cell at its centre.
-        assertThrows(IllegalArgumentException.class,
-                () -> new UmapOutcome.Succeeded(resultOf(3), OptionalInt.empty(), 4));
-        assertThrows(IllegalArgumentException.class,
-                () -> new UmapOutcome.Succeeded(resultOf(3), OptionalInt.of(1), -1));
     }
 
     @Test
@@ -147,7 +178,7 @@ class UmapOutcomeTest {
     @Test
     void everyOutcomeIsMatchedByAnExhaustiveSwitch() {
         for (UmapOutcome outcome : new UmapOutcome[] {
-                UmapOutcome.succeeded(resultOf(2)),
+                succeededOn(2),
                 UmapOutcome.failed("nope"),
                 UmapOutcome.cancelled(),
                 UmapOutcome.superseded() }) {
