@@ -345,14 +345,17 @@ final class ComputeController {
             if (result.isEmpty() || result.get() == ButtonType.CANCEL) return;
         }
 
-        // Submit BEFORE showing the busy state. The two used to be the other way
-        // round, so anything the submit threw synchronously — a compute() after the
-        // service was shut down raises RejectedExecutionException — left the UI in
-        // COMPUTING with no run behind it and no callback able to clear it. The
-        // service now converts that rejection into a failed outcome rather than
-        // throwing, and this ordering means even a throw we have not thought of
-        // cannot strand the pane. Both calls happen on the FX thread, so the
-        // outcome callback queues behind the rest of this method either way.
+        // Enter the running phase BEFORE submitting, and catch anything the submit throws.
+        //
+        // The order used to be the other way round, to survive a synchronous throw from
+        // compute() — but that only worked because production delivers outcomes through
+        // Platform::runLater, so nothing could arrive before the phase was set. With a
+        // synchronous delivery executor (which the service supports, and its own tests use)
+        // a Refused feature set delivers Failed from inside compute(), and beginRun() then
+        // ran afterwards and re-entered a COMPUTING nothing would ever leave. Task 1 fixed
+        // this exact hazard once for the outcome channel; this is the same hazard on the
+        // submit side, and the fix is to make the phase true first and treat a throw as the
+        // failure it is rather than relying on an executor's timing.
         computeStartTime = System.currentTimeMillis();
         // The tooltip describes the run whose result is on screen. A new run invalidates
         // it immediately, rather than leaving the previous run's provenance hanging behind
@@ -362,12 +365,19 @@ final class ComputeController {
         // than two markers ticked comes back Refused and the service turns it into a
         // Failed outcome, which is why this does not check anything itself: the alternative
         // is a second place that decides what "enough features" means.
-        computeService.compute(EmbeddingFeatures.of(cellIndex, session.selection()),
-                params, maxCells, scaling);
-
         session.beginRun();
         uiState.sync();
         statusReporter.report("Computing UMAP...", UmapPane.StatusLevel.INFO);
+        try {
+            computeService.compute(EmbeddingFeatures.of(cellIndex, session.selection()),
+                    params, maxCells, scaling);
+        } catch (RuntimeException neverThrownInPractice) {
+            // The service converts a rejected submission into a Failed outcome rather than
+            // throwing. A throw we have not thought of must still end the run rather than
+            // strand COMPUTING, so it travels the one terminal channel like everything else.
+            onUmapOutcome(UmapOutcome.failed(
+                    "Could not start the UMAP run", neverThrownInPractice));
+        }
     }
 
     /**

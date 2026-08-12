@@ -158,7 +158,11 @@ class ViewStateDerivationTest {
                             s.record(UmapOutcome.failed("out of memory"));
                         }, embedded(withCells(8)), Stage.COMPUTED},
                 new Object[]{"a gate is meaningless without an embedding",
-                        (Runner) s -> s.setGateMask(new boolean[8]), withCells(8), Stage.READY});
+                        (Runner) s -> s.setGateMask(new boolean[8]), withCells(8), Stage.READY},
+                new Object[]{"the image changed and the gating tree has not re-pushed yet",
+                        (Runner) UmapSession::detachSnapshot, withSnapshot(8), Stage.NO_IMAGE},
+                new Object[]{"a feature rebuild is in flight",
+                        (Runner) UmapSession::beginRebuild, withCells(8), Stage.READY});
     }
 
     /** A session mutation applied on top of a fixture, for the table above. */
@@ -245,6 +249,105 @@ class ViewStateDerivationTest {
     void standaloneTracksSnapshotMode() {
         assertTrue(withCells(8).viewState().standalone());
         assertFalse(withSnapshot(8).viewState().standalone());
+    }
+
+    // ------------------------------------------------------------------
+    // The stale cell set
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Detaching a snapshot leaves nothing runnable over the previous image's cells")
+    void detachingASnapshotWithdrawsTheStaleCellSet() {
+        var session = embedded(withSnapshot(8));
+        assertEquals(Stage.COMPUTED, session.viewState().stage());
+
+        // What UmapPane does when the active image changes while the gating tree owns the
+        // cells: drop the snapshot and wait for the next push. The CellIndex deliberately
+        // survives — the pane still needs those PathObjects until a replacement arrives.
+        session.detachSnapshot();
+
+        assertNotNull(session.index(), "the stale index is still held");
+        assertTrue(session.isAwaitingSnapshot());
+
+        var state = session.viewState();
+        assertEquals(Stage.NO_IMAGE, state.stage(),
+                "READY here would offer a Run over the PREVIOUS image's cells");
+        assertFalse(state.canCompute());
+        assertFalse(state.offerFirstRun());
+        assertFalse(state.standalone(),
+                "the gating pane still owns the cell set, so this panel offers no "
+                        + "annotation filter of its own — it would re-index the new image "
+                        + "behind the gating pane's back");
+        assertFalse(session.hasCells());
+    }
+
+    @Test
+    @DisplayName("The next snapshot ends the wait")
+    void adoptingEndsTheWait() {
+        var session = withSnapshot(8);
+        session.detachSnapshot();
+
+        session.adopt(snapshotOf(index(6)));
+
+        assertFalse(session.isAwaitingSnapshot());
+        assertEquals(Stage.READY, session.viewState().stage());
+        assertTrue(session.viewState().canCompute());
+    }
+
+    @Test
+    @DisplayName("A standalone re-index ends the wait too")
+    void installingAnIndexEndsTheWait() {
+        var session = withSnapshot(8);
+        session.detachSnapshot();
+
+        var idx = index(6);
+        session.installIndex(idx, MarkerStats.compute(idx), PANEL,
+                CompartmentCapability.empty(), new MarkerSelection());
+
+        assertFalse(session.isAwaitingSnapshot());
+        assertTrue(session.viewState().standalone());
+        assertTrue(session.viewState().canCompute());
+    }
+
+    // ------------------------------------------------------------------
+    // The rebuild lock, the other half of the mid-run-edit hole
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A pending feature rebuild withholds Run, symmetrically with a run withholding edits")
+    void aPendingRebuildWithholdsRun() {
+        var session = withCells(8);
+        assertTrue(session.viewState().canCompute());
+
+        // runUmap does not bump the build generation, so without this a user could tick a
+        // marker and click Run before the rebuild lands — installRebuiltIndex would then
+        // seat a new CellIndex under a live compute, which is exactly what locking the
+        // inputs during a run was meant to prevent.
+        session.beginRebuild();
+        var during = session.viewState();
+        assertTrue(during.indexRebuilding());
+        assertFalse(during.canCompute());
+        assertFalse(during.offerFirstRun() && during.canCompute());
+
+        session.endRebuild();
+        assertTrue(session.viewState().canCompute());
+    }
+
+    @Test
+    @DisplayName("Overlapping rebuilds only unlock Run when the last one lands")
+    void overlappingRebuildsCount() {
+        var session = withCells(8);
+        session.beginRebuild();
+        session.beginRebuild();
+
+        session.endRebuild();
+        assertFalse(session.viewState().canCompute(), "one is still in flight");
+
+        session.endRebuild();
+        assertTrue(session.viewState().canCompute());
+
+        session.endRebuild();
+        assertTrue(session.viewState().canCompute(), "an unbalanced end must not go negative");
     }
 
     @Test
@@ -409,16 +512,19 @@ class ViewStateDerivationTest {
     @DisplayName("A hand-built contradiction is rejected rather than applied")
     void contradictionsAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> new ViewState(
-                Stage.COMPUTING, true, true, false, false, false, false,
+                Stage.COMPUTING, true, true, false, false, false, false, false,
                 true, false, true, null), "compute and cancel offered together");
         assertThrows(IllegalArgumentException.class, () -> new ViewState(
-                Stage.COMPUTED, true, false, true, true, true, true,
+                Stage.COMPUTED, true, false, true, true, true, true, false,
                 false, false, true, null), "tag controls unlocked with no polygon closed");
         assertThrows(IllegalArgumentException.class, () -> new ViewState(
-                Stage.FAILED, true, false, false, false, false, true,
+                Stage.FAILED, true, false, false, false, false, true, false,
                 true, true, true, null), "FAILED with no reason");
         assertThrows(IllegalArgumentException.class, () -> new ViewState(
-                Stage.COMPUTING, false, true, false, false, false, true,
+                Stage.COMPUTING, false, true, false, false, false, true, false,
                 true, false, true, null), "inputs editable mid-run");
+        assertThrows(IllegalArgumentException.class, () -> new ViewState(
+                Stage.READY, true, false, false, false, false, true, true,
+                true, true, true, null), "Run offered over columns a rebuild is replacing");
     }
 }

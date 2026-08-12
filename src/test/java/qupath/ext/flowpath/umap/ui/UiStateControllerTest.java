@@ -25,6 +25,7 @@ import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
 import qupath.ext.flowpath.umap.engine.EmbeddingReport;
 import qupath.ext.flowpath.umap.engine.UmapOutcome;
+import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.model.PopulationTag;
 import qupath.ext.flowpath.umap.model.UmapParameters;
 import qupath.ext.flowpath.umap.model.UmapResult;
@@ -357,6 +358,79 @@ class UiStateControllerTest {
         installCells(8);
         assertTrue(roiFilter.isVisible());
         assertTrue(roiFilter.isManaged());
+    }
+
+    @Test
+    @DisplayName("An image change under a gating snapshot locks the panel over the stale cells")
+    void detachedSnapshotLocksThePanel() {
+        var idx = index(8);
+        int n = idx.size();
+        String[] labels = new String[n];
+        for (int i = 0; i < n; i++) labels[i] = "T cell";
+        session.adopt(new PhenotypeSnapshot(idx, MarkerStats.compute(idx), PANEL,
+                CompartmentCapability.empty(), labels, new int[n], new boolean[n],
+                List.of("CD3", "CD8"), new MarkerSelection(), 2, "img"));
+        controller.sync();
+        assertFalse(computeButton.isDisabled());
+
+        // What UmapPane does when the active image changes while the gating tree owns the
+        // cells. This used to be an imperative setState(NO_IMAGE); the derivation had no
+        // fact for it and landed on READY over the PREVIOUS image's PathObjects.
+        session.detachSnapshot();
+        controller.sync();
+
+        assertEquals(ViewState.Stage.NO_IMAGE, controller.current().stage());
+        assertTrue(computeButton.isDisabled(),
+                "Run here would embed the previous image's cells");
+        assertTrue(emptyAction.isDisabled());
+        assertFalse(emptyAction.isVisible());
+        assertFalse(roiFilter.isVisible(),
+                "and the annotation filter would re-index the new image behind the "
+                        + "gating pane's back");
+    }
+
+    @Test
+    @DisplayName("A pending feature rebuild disables Run in both places")
+    void rebuildPendingLocksRun() {
+        installCells(8);
+        assertFalse(computeButton.isDisabled());
+
+        session.beginRebuild();
+        controller.sync();
+        assertTrue(controller.current().indexRebuilding());
+        assertTrue(computeButton.isDisabled(),
+                "clicking Run here installs a rebuilt index under the run it starts");
+        assertTrue(emptyAction.isDisabled());
+        // Editing stays possible — only running is withheld, mirroring a run withholding edits.
+        for (Node input : inputs) {
+            assertFalse(input.isDisabled());
+        }
+
+        session.endRebuild();
+        controller.sync();
+        assertFalse(computeButton.isDisabled());
+    }
+
+    @Test
+    @DisplayName("stateProperty cannot be cast back and written")
+    void stateIsReadOnlyToTheOutside() {
+        installCells(8);
+        var exposed = controller.stateProperty();
+        assertFalse(exposed instanceof javafx.beans.property.Property,
+                "a writable property lets a caller install a state current() would report");
+    }
+
+    @Test
+    @DisplayName("assertSynced catches a mutation that forgot to sync")
+    void assertSyncedCatchesStaleWidgets() {
+        installCells(8);
+        controller.assertSynced();
+
+        session.beginRun();   // deliberately without sync()
+        assertThrows(IllegalStateException.class, controller::assertSynced);
+
+        controller.sync();
+        controller.assertSynced();
     }
 
     // ---------- invariants across every reachable state ----------

@@ -90,6 +90,37 @@ public final class UmapSession {
     private String failure;
     private boolean exporting;
 
+    /**
+     * The cell set is stale and a replacement is expected from the gating tree.
+     * <p>
+     * Set by {@link #detachSnapshot()}, which the pane calls when the active image changes
+     * while the gating tree owns the cells. Nulling the snapshot alone does not make the
+     * session empty — {@code cellIndex} still holds the <em>previous</em> image's
+     * {@link PathObject}s until the gating pane finishes re-indexing, which on a real slide
+     * is seconds of background ingest. Without this fact the derivation reads
+     * {@code hasCells == true} and offers a Run button that would embed the old image's
+     * cells, a viewer push of objects the new hierarchy does not contain, and an annotation
+     * filter that would re-index the new image behind the gating pane's back.
+     * <p>
+     * This is the fact the imperative {@code setState(NO_IMAGE)} used to carry and the
+     * session could not express.
+     */
+    private boolean awaitingSnapshot;
+
+    /**
+     * How many feature rebuilds have been started and not yet landed.
+     * <p>
+     * A counter rather than a flag because rebuilds supersede each other: a superseded one
+     * still has to balance its own start, and the newest must keep the panel un-runnable
+     * until it lands. Symmetric with {@link #running} — a run in flight forbids editing the
+     * inputs, and an edit in flight forbids running, because
+     * {@link #installRebuiltIndex} would otherwise seat a new {@link CellIndex} under a
+     * compute thread still reading the old one. Locking the controls closes that in one
+     * direction only: {@code runUmap} does not bump the build generation, so ticking a
+     * marker and immediately clicking Run reaches the same place by the other route.
+     */
+    private int pendingRebuilds;
+
     // --- Feature selection ---
     private List<String> markers = new ArrayList<>();
     private CompartmentCapability capability = CompartmentCapability.empty();
@@ -145,6 +176,23 @@ public final class UmapSession {
 
     /** Why the last run failed, or {@code null}. */
     public String failure() { return failure; }
+
+    /** {@code true} while the cell set is stale and the gating tree owes this session one. */
+    public boolean isAwaitingSnapshot() { return awaitingSnapshot; }
+
+    /** {@code true} while a feature rebuild is in flight and has not been installed. */
+    public boolean isRebuildPending() { return pendingRebuilds > 0; }
+
+    /**
+     * {@code true} when this session holds cells that describe the image on screen.
+     * <p>
+     * One rule, two readers: the derivation and the rail's own summary. A stale cell set —
+     * held while the gating tree re-indexes after an image change — is deliberately not
+     * cells, and the two would otherwise disagree about the same window.
+     */
+    public boolean hasCells() {
+        return !awaitingSnapshot && cellIndex != null && cellIndex.size() > 0;
+    }
 
     /**
      * How many markers the feature picker leaves ticked — asked of the same filter the
@@ -211,6 +259,9 @@ public final class UmapSession {
             snapshot = null;
             return Adoption.DETACHED;
         }
+        // Whatever else adoption decides, a snapshot has arrived: the session is no longer
+        // waiting for one.
+        awaitingSnapshot = false;
 
         // Ask the incoming snapshot whether it covers the cells this session is ACTUALLY
         // holding. Comparing against the snapshot we happen to remember (the old
@@ -231,6 +282,7 @@ public final class UmapSession {
 
         this.snapshot = incoming;
 
+        awaitingSnapshot = false;
         beginIndexBuild();
         retireCellSet();
         cellIndex = incoming.index();
@@ -247,6 +299,10 @@ public final class UmapSession {
      */
     public void detachSnapshot() {
         snapshot = null;
+        // The index survives on purpose — the pane still needs the old PathObjects until a
+        // replacement arrives — so say out loud that it no longer describes anything the
+        // user is looking at. Everything derived from it is withheld until then.
+        awaitingSnapshot = true;
         clearDerivedState();
     }
 
@@ -296,6 +352,7 @@ public final class UmapSession {
      */
     public void clearIndex() {
         snapshot = null;
+        awaitingSnapshot = false;
         cellIndex = null;
         markerStats = null;
         markers = new ArrayList<>();
@@ -319,6 +376,7 @@ public final class UmapSession {
                             + "reconciles the snapshot, or detach first.");
         }
         this.cellIndex = Objects.requireNonNull(index, "index");
+        this.awaitingSnapshot = false;
         this.markerStats = stats;
         this.markers = List.copyOf(markers);
         this.capability = capability;
@@ -435,6 +493,19 @@ public final class UmapSession {
         return viewState();
     }
 
+    /**
+     * A feature rebuild has been started. Must be balanced by {@link #endRebuild()} on every
+     * exit of the background build, superseded ones included.
+     */
+    public void beginRebuild() {
+        pendingRebuilds++;
+    }
+
+    /** A feature rebuild has landed, been superseded, or failed. */
+    public void endRebuild() {
+        if (pendingRebuilds > 0) pendingRebuilds--;
+    }
+
     /** A CSV export is writing; Export must not be clickable again until it finishes. */
     public void beginExport() {
         exporting = true;
@@ -454,10 +525,11 @@ public final class UmapSession {
      *   <li><b>Stage</b> — a run in flight wins; then a failure the user has not moved past;
      *       then the presence of an embedding, and within that whether a polygon is closed
      *       (GATING) or a tag has been applied (TAGGED).</li>
-     *   <li><b>Compute</b> — needs cells, needs {@link EmbeddingFeatures#MINIMUM_FEATURES}
-     *       markers ticked, and needs nothing already running. The marker count is the
-     *       carry-forward from the feature picker: the toolbar button used to ignore it and
-     *       invite a click whose only possible ending was a failure dialog.</li>
+     *   <li><b>Compute</b> — needs cells that describe the image on screen, needs
+     *       {@link EmbeddingFeatures#MINIMUM_FEATURES} markers ticked, and needs nothing
+     *       already running <em>or rebuilding</em>. The marker count is the carry-forward
+     *       from the feature picker: the toolbar button used to ignore it and invite a
+     *       click whose only possible ending was a failure dialog.</li>
      *   <li><b>Inputs</b> — the feature picker and every embedding parameter are locked
      *       while a run is in flight. {@code onFeatureSelectionChanged} installs a rebuilt
      *       {@link CellIndex} on this session; doing that under a compute thread still
@@ -466,7 +538,9 @@ public final class UmapSession {
      * </ul>
      */
     public ViewState viewState() {
-        boolean hasCells = cellIndex != null && cellIndex.size() > 0;
+        // A stale cell set is not a cell set. Everything below reads through this, so the
+        // window between an image change and the gating tree's next push offers nothing.
+        boolean hasCells = hasCells();
         boolean hasEmbedding = embedding != null;
         boolean gateOpen = hasEmbedding && gateMask != null;
 
@@ -488,17 +562,22 @@ public final class UmapSession {
         }
 
         boolean idle = !running;
+        boolean rebuilding = isRebuildPending();
         return new ViewState(
                 stage,
-                idle && hasCells && includedMarkerCount() >= EmbeddingFeatures.MINIMUM_FEATURES,
+                idle && !rebuilding && hasCells
+                        && includedMarkerCount() >= EmbeddingFeatures.MINIMUM_FEATURES,
                 running,
                 idle && hasEmbedding,
                 idle && stage == ViewState.Stage.GATING,
                 idle && hasEmbedding && !exporting,
                 idle,
+                rebuilding,
                 !hasEmbedding,
                 !hasEmbedding && hasCells,
-                snapshot == null,
+                // Waiting for a snapshot is still snapshot mode: the gating pane owns the
+                // cell set and this panel must not offer its own annotation filter over it.
+                snapshot == null && !awaitingSnapshot,
                 running ? null : failure);
     }
 

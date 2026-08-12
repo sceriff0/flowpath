@@ -1,8 +1,7 @@
 package qupath.ext.flowpath.umap.ui;
 
-import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
-import javafx.beans.property.SimpleObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ColorPicker;
@@ -113,12 +112,18 @@ public final class UiStateController {
     private final UmapSession session;
     private final Controls controls;
 
-    private final ObjectProperty<ViewState> state;
+    /**
+     * Read-only to the outside. Exposing the mutable property — even typed as
+     * {@link ReadOnlyObjectProperty} — let a caller cast it back and set a fabricated state
+     * that {@link #current()} would then report to {@code UmapPane.refreshOverview}, which
+     * is the one thing this class exists to make impossible.
+     */
+    private final ReadOnlyObjectWrapper<ViewState> state;
 
     public UiStateController(UmapSession session, Controls controls) {
         this.session = Objects.requireNonNull(session, "session");
         this.controls = Objects.requireNonNull(controls, "controls");
-        this.state = new SimpleObjectProperty<>(this, "state", session.viewState());
+        this.state = new ReadOnlyObjectWrapper<>(this, "state", session.viewState());
         apply(state.get(), null);
     }
 
@@ -141,7 +146,29 @@ public final class UiStateController {
 
     /** Observable {@link #current()}, for callers that repaint on every transition. */
     public ReadOnlyObjectProperty<ViewState> stateProperty() {
-        return state;
+        return state.getReadOnlyProperty();
+    }
+
+    /**
+     * Interim guard while {@link #sync()} still has to be <em>called</em>: assert that the
+     * widgets agree with the session at the end of a handler that touched it.
+     * <p>
+     * The remaining expressible mistake in this design is forgetting to sync, which leaves
+     * the panel stale. Until the session pushes its own state (the observer design deferred
+     * to the next task), this turns that omission from a wrong button into a stack trace at
+     * the handler that caused it.
+     *
+     * @throws IllegalStateException when the applied state is not the one the session
+     *                               currently derives
+     */
+    public void assertSynced() {
+        ViewState derived = session.viewState();
+        if (!derived.equals(state.get())) {
+            throw new IllegalStateException(
+                    "UI state is stale: the session derives " + derived
+                            + " but the panel is showing " + state.get()
+                            + ". A handler mutated the session without calling sync().");
+        }
     }
 
     // ------------------------------------------------------------------

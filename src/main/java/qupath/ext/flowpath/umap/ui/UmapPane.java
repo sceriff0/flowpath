@@ -591,7 +591,9 @@ public class UmapPane extends BorderPane {
         ViewState state = uiState.current();
         CellIndex index = session.index();
         PhenotypeSnapshot snapshot = session.snapshot();
-        boolean hasCells = index != null && index.size() > 0;
+        // The session's rule, not a second copy: while it is waiting for the gating tree to
+        // re-index, the CellIndex it still holds belongs to the previous image.
+        boolean hasCells = session.hasCells();
         int markers = session.includedMarkerCount();
 
         if (!hasCells) {
@@ -631,9 +633,17 @@ public class UmapPane extends BorderPane {
 
         if (!hasCells) {
             emptyHeadline.setText("No cells to embed");
-            emptySubline.setText(session.isSnapshotMode()
-                    ? "Waiting for the gating window to index this image."
-                    : "Open an image with cell detections, then come back.");
+            // Not standalone covers both holding a snapshot and waiting for the next one.
+            emptySubline.setText(state.standalone()
+                    ? "Open an image with cell detections, then come back."
+                    : "Waiting for the gating window to index this image.");
+            return;
+        }
+
+        if (state.indexRebuilding()) {
+            emptyHeadline.setText("Rebuilding the cell index…");
+            emptySubline.setText("Applying the feature change. Run UMAP unlocks when the "
+                    + "new columns are ready.");
             return;
         }
 
@@ -707,6 +717,7 @@ public class UmapPane extends BorderPane {
         // Adoption can change snapshot mode itself, which is what decides whether this
         // panel owns an annotation filter at all.
         uiState.sync();
+        uiState.assertSynced();
     }
 
     /**
@@ -716,6 +727,7 @@ public class UmapPane extends BorderPane {
      */
     private void onSnapshotCellSetChanged(PhenotypeSnapshot incoming) {
         computeService.cancel();
+        session.cancelRun();
         umapCanvas.setData(null, null);
         umapCanvas.setHighlightIndices(null);
         umapCanvas.setHighlightMask(null);
@@ -785,6 +797,9 @@ public class UmapPane extends BorderPane {
      */
     private void clearDerivedState() {
         computeService.cancel();
+        // The service's Cancelled outcome would clear the phase a moment later anyway; this
+        // makes every sync() between here and then exact rather than merely self-healing.
+        session.cancelRun();
         session.clearDerivedState();
         umapCanvas.setData(null, null);
         umapCanvas.setHighlightIndices(null);
@@ -812,6 +827,7 @@ public class UmapPane extends BorderPane {
 
         // Tear down any running computation cleanly
         computeService.cancel();
+        session.cancelRun();
         session.clearIndex();
         umapCanvas.setData(null, null);
         umapCanvas.setHighlightIndices(null);
@@ -991,27 +1007,50 @@ public class UmapPane extends BorderPane {
         // in quick succession (or editing one while a reload is in flight) must land on
         // the newest request's result, not whichever build finishes last.
         int generation = session.beginIndexBuild();
+        // Locking the inputs during a run stops edit-then-run. It does not stop
+        // run-before-the-edit-lands: nothing in runUmap bumps the build generation, so
+        // ticking a marker and immediately clicking Run would install this rebuilt index
+        // under a live compute — the very thing the lock exists to prevent, reached by the
+        // other direction. Withholding Run until the rebuild lands makes the exclusion
+        // symmetric.
+        session.beginRebuild();
+        uiState.sync();
         var rebuildCalibration = DetectionIngest.calibration(imageData);
         Thread bg = new Thread(() -> {
-            // Same calibration as the initial read, so the rebuilt index's
-            // CellGeometry reaches the same ScaleVerdict rather than silently
-            // demoting to NO_CALIBRATION when a feature row is edited.
-            CellIndex rebuilt = CellIndex.build(detections, markersCopy, selectionCopy, rebuildCalibration);
-            MarkerStats rebuiltStats = MarkerStats.compute(rebuilt);
-            Platform.runLater(() -> {
-                if (!session.isCurrentBuild(generation)) return;
-                // Reconciles the snapshot onto the rebuilt index rather than leaving the
-                // pane holding one index and its snapshot naming another — see
-                // UmapSession's index/snapshot invariant.
-                session.installRebuiltIndex(rebuilt, rebuiltStats);
-                // Refresh the overlay if one is showing for the selected marker.
-                onMarkerSelected();
-                // The tick count may have crossed MINIMUM_FEATURES in either direction, so
-                // Run UMAP's enablement is re-derived rather than assumed unchanged.
-                uiState.sync();
-                setStatus(String.format("Features updated — %,d cells, %d markers. Recompute UMAP to apply.",
-                        rebuilt.size(), markersCopy.size()), StatusLevel.SUCCESS);
-            });
+            CellIndex built = null;
+            MarkerStats builtStats = null;
+            try {
+                // Same calibration as the initial read, so the rebuilt index's
+                // CellGeometry reaches the same ScaleVerdict rather than silently
+                // demoting to NO_CALIBRATION when a feature row is edited.
+                built = CellIndex.build(detections, markersCopy, selectionCopy, rebuildCalibration);
+                builtStats = MarkerStats.compute(built);
+            } finally {
+                final CellIndex rebuilt = built;
+                final MarkerStats rebuiltStats = builtStats;
+                Platform.runLater(() -> {
+                    // Balances beginRebuild() on EVERY exit — landed, superseded or thrown.
+                    // A build that died leaving the counter up would disable Run for the
+                    // rest of the session.
+                    session.endRebuild();
+                    if (rebuilt == null || !session.isCurrentBuild(generation)) {
+                        uiState.sync();
+                        return;
+                    }
+                    // Reconciles the snapshot onto the rebuilt index rather than leaving the
+                    // pane holding one index and its snapshot naming another — see
+                    // UmapSession's index/snapshot invariant.
+                    session.installRebuiltIndex(rebuilt, rebuiltStats);
+                    // Refresh the overlay if one is showing for the selected marker.
+                    onMarkerSelected();
+                    // The tick count may have crossed MINIMUM_FEATURES in either direction,
+                    // so Run UMAP's enablement is re-derived rather than assumed unchanged.
+                    uiState.sync();
+                    setStatus(String.format("Features updated — %,d cells, %d markers. Recompute UMAP to apply.",
+                            rebuilt.size(), markersCopy.size()), StatusLevel.SUCCESS);
+                    uiState.assertSynced();
+                });
+            }
         }, "flowpath-umap-features");
         bg.setDaemon(true);
         bg.start();
@@ -1088,6 +1127,7 @@ public class UmapPane extends BorderPane {
         // retired since, and both are inputs to the derivation.
         uiState.sync();
         refreshOverview();
+        uiState.assertSynced();
     }
 
     // --- Phenotype Coloring ---
@@ -1228,6 +1268,7 @@ public class UmapPane extends BorderPane {
                 uiState.sync();
                 setStatus(String.format("%,d inside gate / %,d outside",
                         insideCount, mask.length - insideCount), StatusLevel.INFO);
+                uiState.assertSynced();
             });
         }, "flowpath-umap-gate");
         worker.setDaemon(true);
@@ -1254,6 +1295,7 @@ public class UmapPane extends BorderPane {
             setStatus(String.format("UMAP: %,d cells", session.embedding().size()),
                     StatusLevel.INFO);
         }
+        uiState.assertSynced();
     }
 
     // --- QuPath viewer integration ---
@@ -1478,6 +1520,7 @@ public class UmapPane extends BorderPane {
         }
 
         setStatus(String.format("Tagged %,d cells as '%s'", tag.count(), name), StatusLevel.SUCCESS);
+        uiState.assertSynced();
     }
 
     private void removePopulationTag(String tagName) {
@@ -1515,6 +1558,7 @@ public class UmapPane extends BorderPane {
         }
 
         setStatus(String.format("Removed tag '%s'", tagName), StatusLevel.SUCCESS);
+        uiState.assertSynced();
     }
 
     private void updatePopulationRings() {
@@ -1596,8 +1640,17 @@ public class UmapPane extends BorderPane {
     // --- Export ---
 
     private void exportCsv() {
-        if (session.embedding() == null) {
-            setStatus("No UMAP data to export", StatusLevel.WARN);
+        // Ctrl+E reaches here without touching the Export button, so the button being
+        // disabled protects nothing. Asking the same derivation the button is bound to is
+        // what makes the keyboard path obey the exporting flag too — a double Ctrl+E used
+        // to start the same write twice, which is precisely what beginExport() exists to
+        // prevent.
+        if (!session.viewState().canExport()) {
+            setStatus(session.embedding() == null
+                            ? "No UMAP data to export"
+                            : "Export unavailable right now — a run or an earlier export is "
+                                    + "still in progress",
+                    StatusLevel.WARN);
             return;
         }
 
@@ -1645,6 +1698,7 @@ public class UmapPane extends BorderPane {
                 } else {
                     setStatus("Export failed: " + failure, StatusLevel.ERROR);
                 }
+                uiState.assertSynced();
             });
         }, "flowpath-umap-export");
         writer.setDaemon(true);

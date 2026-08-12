@@ -42,6 +42,9 @@ import java.util.Objects;
  *                        False during a run: {@code onFeatureSelectionChanged} reinstalls
  *                        the session's {@code CellIndex} while the compute thread is still
  *                        reading the old one
+ * @param indexRebuilding a feature rebuild is in flight, so the columns the next run would
+ *                        read are about to change under it. Withholds {@code canCompute},
+ *                        symmetrically with a run withholding {@code canEditInputs}
  * @param showEmptyState  the "no embedding yet" overlay covers the plot
  * @param offerFirstRun   that overlay carries its own Run button — only when there are
  *                        cells to embed
@@ -58,6 +61,7 @@ public record ViewState(Stage stage,
                         boolean canTag,
                         boolean canExport,
                         boolean canEditInputs,
+                        boolean indexRebuilding,
                         boolean showEmptyState,
                         boolean offerFirstRun,
                         boolean standalone,
@@ -109,6 +113,8 @@ public record ViewState(Stage stage,
                 "a closed polygon implies a gateable embedding");
         require(stage != Stage.COMPUTING || !(canCompute || canGate || canExport || canEditInputs),
                 "a run in flight locks compute, gating, export and every input");
+        require(!(indexRebuilding && canCompute),
+                "a run must not start over columns a rebuild is about to replace");
         require(stage != Stage.FAILED || failure != null,
                 "the FAILED stage must carry the reason it failed");
         require(stage != Stage.COMPUTING || failure == null,
