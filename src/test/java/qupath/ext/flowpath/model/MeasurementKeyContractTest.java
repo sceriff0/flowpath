@@ -202,67 +202,93 @@ class MeasurementKeyContractTest {
         assertTrue(cap.pairsFor("CD3").isEmpty());
     }
 
-    // ------------------------------------------- the real MIRAGE REDSEA shape
+    // ------------------------------- the real MIRAGE composed statistic vocabulary
 
     /**
-     * The actual keys MIRAGE's {@code feat/redsea-compensation} emits, taken from
-     * {@code bin/utils/measurements.py}: {@code REDSEA_STATISTICS = ("REDSEA Sum",
-     * "REDSEA Mean")}, whole-cell only.
-     * <p>
-     * Two things here that a hand-written example would have missed. The token contains a
-     * <b>space</b>, so no amount of adding names to the old {@code Compartment × Statistic}
-     * suffix loop would have been enough — the shape had to change. And MIRAGE's own
-     * source note says {@code "X: Cell: REDSEA Sum" does not end with ": Cell: Sum"},
-     * which is precisely why the old parser returned null rather than mis-parsing: the
-     * column went missing rather than going wrong.
+     * MIRAGE composes its statistic names rather than listing them:
+     * {@code BASE_STATISTICS = ("Median", "Mean", "Sum", "REDSEA")} crossed with
+     * {@code NORMALIZATIONS = ("", " Z", " RobustZ")} — twelve names, most containing a
+     * space. Enumerating those on this side is exactly the hand-synced list the open
+     * vocabulary exists to abolish, so what is asserted here is that all twelve parse,
+     * not that FlowPath knows their names.
      */
     @Test
-    void theRealRedseaKeysParse() {
-        for (String token : List.of("REDSEA Sum", "REDSEA Mean")) {
-            String key = "CD3: Cell: " + token;
-            MeasurementKeys.Parsed parsed = MeasurementKeys.parse(key);
+    void everyComposedStatisticNameParses() {
+        for (String base : List.of("Median", "Mean", "Sum", "REDSEA")) {
+            for (String norm : List.of("", " Z", " RobustZ")) {
+                String token = base + norm;
+                String key = "CD3: Cell: " + token;
+                MeasurementKeys.Parsed parsed = MeasurementKeys.parse(key);
 
-            assertNotNull(parsed, key);
-            assertEquals("CD3", parsed.marker(), key);
-            assertEquals(Compartment.WHOLE_CELL, parsed.compartment(), key);
-            assertEquals(token, parsed.statistic().token(), key);
+                assertNotNull(parsed, key);
+                assertEquals("CD3", parsed.marker(), key);
+                assertEquals(Compartment.WHOLE_CELL, parsed.compartment(), key);
+                assertEquals(token, parsed.statistic().token(), key);
+            }
         }
     }
 
-    /** A REDSEA token must not be confused with the plain statistic it ends with. */
+    /**
+     * The shape FlowPath does understand: base and normalisation.
+     * <p>
+     * Longest suffix wins. {@code "Median RobustZ"} also ends with {@code " Z"}, so a
+     * shorter match would split it into base {@code "Median Robust"} — MIRAGE's own
+     * {@code split_statistic} carries the same caveat.
+     */
     @Test
-    void redseaSumIsNotSum() {
-        assertNotEquals(Statistic.SUM, Statistic.of("REDSEA Sum"));
-        assertNotEquals(Statistic.MEAN, Statistic.of("REDSEA Mean"));
-        assertEquals(Statistic.SUM, MeasurementKeys.parse("CD3: Cell: Sum").statistic());
-        assertEquals(Statistic.of("REDSEA Sum"), MeasurementKeys.parse("CD3: Cell: REDSEA Sum").statistic());
+    void aStatisticKnowsItsBaseAndItsNormalisation() {
+        assertEquals("Median", Statistic.of("Median").baseToken());
+        assertEquals("", Statistic.of("Median").normalisation());
+        assertFalse(Statistic.of("Median").isStandardised());
+
+        assertEquals("Median", Statistic.of("Median Z").baseToken());
+        assertEquals(" Z", Statistic.of("Median Z").normalisation());
+        assertTrue(Statistic.of("Median Z").isStandardised());
+
+        assertEquals("Median", Statistic.of("Median RobustZ").baseToken(),
+                "\" RobustZ\" must beat \" Z\", or the base becomes \"Median Robust\"");
+        assertEquals(" RobustZ", Statistic.of("Median RobustZ").normalisation());
+        assertTrue(Statistic.of("Median RobustZ").isStandardised());
+
+        assertEquals("REDSEA", Statistic.of("REDSEA").baseToken());
+        assertFalse(Statistic.of("REDSEA").isStandardised());
+        assertTrue(Statistic.of("REDSEA RobustZ").isStandardised());
+    }
+
+    /** A composed name must not be confused with the plain statistic it is built from. */
+    @Test
+    void aNormalisedStatisticIsNotItsBase() {
+        assertNotEquals(Statistic.MEDIAN, Statistic.of("Median Z"));
+        assertNotEquals(Statistic.SUM, Statistic.of("Sum RobustZ"));
+        assertEquals(Statistic.MEDIAN, MeasurementKeys.parse("CD3: Cell: Median").statistic());
+        assertEquals(Statistic.of("Median Z"), MeasurementKeys.parse("CD3: Cell: Median Z").statistic());
     }
 
     /**
      * A whole REDSEA-enabled export, end to end. This is the shape finding 3 was always
-     * about: REDSEA is whole-cell only, every other statistic is per-compartment, and the
-     * product of the two projections advertises pairs the file does not carry.
+     * about: REDSEA is whole-cell only (a membrane correction has no nucleus/cytoplasm
+     * decomposition), every other statistic is per-compartment, and the product of the two
+     * projections advertises pairs the file does not carry.
      */
     @Test
     void aRedseaEnabledExportOffersOnlyWhatItCarries() {
         var cap = CompartmentCapability.fromKeys(List.of(
                 "CD3: Cell: Median", "CD3: Nucleus: Median", "CD3: Cytoplasm: Median",
-                "CD3: Cell: REDSEA Sum", "CD3: Cell: REDSEA Mean"));
+                "CD3: Cell: REDSEA", "CD3: Cell: REDSEA Z"));
 
         assertEquals(Set.of(Compartment.NUCLEAR, Compartment.CYTOPLASMIC, Compartment.WHOLE_CELL),
                 cap.compartmentsFor("CD3"));
-        assertEquals(Set.of(Statistic.MEDIAN, Statistic.of("REDSEA Sum"), Statistic.of("REDSEA Mean")),
+        assertEquals(Set.of(Statistic.MEDIAN, Statistic.of("REDSEA"), Statistic.of("REDSEA Z")),
                 cap.statisticsFor("CD3"));
 
-        // The nuclear selector must offer Median alone — the compensation has no
-        // nucleus/cytoplasm decomposition to emit.
+        // The nuclear selector must offer Median alone.
         assertEquals(Set.of(Statistic.MEDIAN), cap.statisticsFor("CD3", Compartment.NUCLEAR));
         assertEquals(Set.of(Statistic.MEDIAN), cap.statisticsFor("CD3", Compartment.CYTOPLASMIC));
-        assertEquals(Set.of(Statistic.MEDIAN, Statistic.of("REDSEA Sum"), Statistic.of("REDSEA Mean")),
+        assertEquals(Set.of(Statistic.MEDIAN, Statistic.of("REDSEA"), Statistic.of("REDSEA Z")),
                 cap.statisticsFor("CD3", Compartment.WHOLE_CELL));
 
-        assertFalse(cap.offers("CD3", Compartment.NUCLEAR, Statistic.of("REDSEA Sum")));
-        assertFalse(cap.offers("CD3", Compartment.CYTOPLASMIC, Statistic.of("REDSEA Mean")));
+        assertFalse(cap.offers("CD3", Compartment.NUCLEAR, Statistic.of("REDSEA")));
+        assertFalse(cap.offers("CD3", Compartment.CYTOPLASMIC, Statistic.of("REDSEA Z")));
 
         // And nothing the editor can ask for resolves outside the file.
         for (Compartment c : Compartment.values()) {
@@ -274,11 +300,25 @@ class MeasurementKeyContractTest {
         }
     }
 
-    /** The panel still shows one row per marker when REDSEA columns are present. */
+    /** The panel still shows one row per marker when composed columns are present. */
     @Test
-    void redseaColumnsDoNotMultiplyThePanel() {
+    void composedColumnsDoNotMultiplyThePanel() {
         assertEquals(List.of("CD3", "CD8"), MeasurementKeys.collapseToBaseMarkers(List.of(
-                "CD3", "CD3: Cell: Median", "CD3: Cell: REDSEA Sum", "CD3: Cell: REDSEA Mean",
-                "CD8", "CD8: Cell: Median")));
+                "CD3", "CD3: Cell: Median", "CD3: Cell: Median Z", "CD3: Cell: REDSEA",
+                "CD8", "CD8: Cell: Median RobustZ")));
+    }
+
+    /** A base statistic's variants stay adjacent, matching how MIRAGE groups them. */
+    @Test
+    void orderingGroupsAStatisticWithItsNormalisations() {
+        var cap = CompartmentCapability.fromKeys(List.of(
+                "CD3: Cell: Median RobustZ", "CD3: Cell: REDSEA", "CD3: Cell: Mean",
+                "CD3: Cell: Median", "CD3: Cell: Median Z"));
+
+        assertEquals(List.of(
+                        Statistic.MEAN,
+                        Statistic.MEDIAN, Statistic.of("Median Z"), Statistic.of("Median RobustZ"),
+                        Statistic.of("REDSEA")),
+                List.copyOf(cap.statisticsFor("CD3", Compartment.WHOLE_CELL)));
     }
 }

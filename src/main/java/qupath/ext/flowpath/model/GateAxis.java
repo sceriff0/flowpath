@@ -236,8 +236,19 @@ public final class GateAxis {
      * {@link MeasuredColumn#toZScore} reports every cell as exactly 0.0 there, which is a
      * plausible-looking wrong answer rather than an error. Asking this before offering the
      * mode is what keeps the button and the pixels agreeing.
+     * <p>
+     * <b>Nor is it offered over a statistic MIRAGE already standardised.</b> Since MIRAGE
+     * composed its statistic vocabulary, an axis can be pointed at
+     * {@code "CD3: Cell: Median Z"} — a column that <em>is</em> a z-score. Standardising it
+     * again would not throw and would look almost right, because a second pass over
+     * already-centred data is near-identity on a well-behaved column; what it actually
+     * does is rescale the axis by a factor that varies with the current filter. The two
+     * standardisations are not the same number in principle either: MIRAGE's is across
+     * every cell of a patient, FlowPath's across the cells currently loaded.
      */
     public boolean offersZScore(CellIndex index, MarkerStats stats) {
+        Statistic statistic = statistic();
+        if (statistic != null && statistic.isStandardised()) return false;
         MeasuredColumn column = columnIn(index, stats);
         return column != null && column.hasSpread();
     }
@@ -255,6 +266,23 @@ public final class GateAxis {
             if (!axis.offersZScore(index, stats)) return false;
         }
         return true;
+    }
+
+    /**
+     * True when any axis of {@code gate} reads a statistic MIRAGE has already standardised
+     * ({@code " Z"} / {@code " RobustZ"}).
+     * <p>
+     * Answerable without an index, which is why it is separate from
+     * {@link #offersZScore(GateNode, CellIndex, MarkerStats)}: a gate pointed at
+     * {@code "CD3: Cell: Median Z"} must not be offered FlowPath's own z-score even before
+     * any cells are loaded, whereas "is this column flat" genuinely has to wait for data.
+     */
+    public static boolean readsStandardisedStatistic(GateNode gate) {
+        for (GateAxis axis : axesOf(gate)) {
+            Statistic statistic = axis.statistic();
+            if (statistic != null && statistic.isStandardised()) return true;
+        }
+        return false;
     }
 
     /**

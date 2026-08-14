@@ -143,8 +143,17 @@ class GateEditorSignalTest {
         return findOne(pane, TextField.class, f -> f.getText().matches("-?\\d+\\.\\d{4}"));
     }
 
+    /**
+     * The Raw / Z-score mode button, matched on the leading word.
+     * <p>
+     * Not an exact-text match: the z-score button's label carries a qualifier naming who
+     * computed the number ("Z-score (computed)"), because MIRAGE now emits standardised
+     * statistics of its own. What these tests mean by {@code modeButton(pane, "Z-score")}
+     * is the mode, not the wording, and "Raw" / "Z-score" still pick out one button each.
+     */
     private static RadioButton modeButton(GateEditorPane pane, String text) {
-        return findOne(pane, RadioButton.class, b -> text.equals(b.getText()));
+        return findOne(pane, RadioButton.class,
+                b -> b.getText() != null && b.getText().startsWith(text));
     }
 
     /** Select a value on a ComboBox the way a user would, firing its action handler. */
@@ -410,5 +419,118 @@ class GateEditorSignalTest {
         Slider slider = thresholdSlider(f.pane());
         assertTrue(slider.getValue() >= slider.getMin() && slider.getValue() <= slider.getMax(),
                 "remapped threshold must sit inside the new axis");
+    }
+
+    // ---- the computed z-score toggle ----------------------------------------
+
+    /**
+     * An index whose CD3 carries a plain Median, a MIRAGE-standardised {@code Median Z},
+     * and a constant channel, so the three reasons the toggle behaves differently are all
+     * reachable from one fixture.
+     */
+    private static Fixture editorForZScore(GateNode gate) {
+        IntToDoubleFunction cell = i -> i * 10.0;
+        CellIndex idx = Cells.of(N)
+                .marker("CD3", cell)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, cell)
+                .marker("CD3", Compartment.WHOLE_CELL, Statistic.of("Median Z"), i -> i - 10.0)
+                .marker("FLAT", i -> 7.0)
+                .marker("FLAT", Compartment.WHOLE_CELL, Statistic.MEDIAN, i -> 7.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
+        FxTestSupport.onFxRun(() -> {
+            pane.setChannelNames(List.of("CD3", "FLAT"));
+            pane.setCompartmentCapability(cap);
+            pane.setCellIndex(idx);
+            pane.setMarkerStats(stats);
+            pane.setGateNode(gate);
+        });
+        return new Fixture(pane, idx, stats);
+    }
+
+    /** The ordinary case: a column with spread offers the computed z-score. */
+    @Test
+    void aChannelWithSpreadOffersTheComputedZScore() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        Fixture f = editorForZScore(gate);
+        flushFx();
+
+        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        assertFalse(z.isDisable());
+    }
+
+    /**
+     * The label and colour say who computed the number. MIRAGE now emits standardised
+     * statistics of its own, so an unqualified "Z-score" no longer identifies whose.
+     */
+    @Test
+    void theToggleSaysTheNumberIsComputedHere() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        Fixture f = editorForZScore(gate);
+        flushFx();
+
+        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        assertTrue(z.getText().toLowerCase(Locale.ROOT).contains("computed"),
+                "the label must say the value is derived, not read: " + z.getText());
+        assertTrue(z.getStyle().contains("#7fc4a8"),
+                "and carry the computed-here accent: " + z.getStyle());
+        assertNotNull(z.getTooltip());
+        assertTrue(z.getTooltip().getText().contains("FlowPath"),
+                "the tooltip must name who computes it: " + z.getTooltip().getText());
+    }
+
+    /**
+     * <b>The display/model agreement this exists for.</b> A constant column cannot be
+     * standardised — {@code updateHistogram} already declined to, silently. The button must
+     * decline visibly, and the gate's own flag must come with it, or the engine keeps
+     * z-scoring a column the editor is drawing raw.
+     */
+    @Test
+    void aConstantChannelDisablesTheToggleAndClearsTheFlag() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("FLAT");
+        gate.setStatistic(Statistic.MEDIAN);
+        gate.setThresholdIsZScore(true);
+        Fixture f = editorForZScore(gate);
+        flushFx();
+
+        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        assertTrue(z.isDisable(), "a flat column has no spread to standardise against");
+        assertFalse(gate.isThresholdIsZScore(),
+                "the flag the engine reads must follow the button, not outlive it");
+    }
+
+    /**
+     * Switching the statistic to one MIRAGE already standardised withdraws the offer —
+     * the case that made "update on compartment/statistic change" necessary rather than
+     * merely tidy. Driven through the real combo box, as a user would.
+     */
+    @Test
+    void choosingAStandardisedStatisticWithdrawsTheComputedZScore() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        gate.setThresholdIsZScore(true);
+        Fixture f = editorForZScore(gate);
+        flushFx();
+
+        assertFalse(FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score")).isDisable(),
+                "Median is not standardised, so the toggle starts available");
+
+        select(statisticCombo(f.pane(), 0), Statistic.of("Median Z"));
+        flushFx();
+
+        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        assertTrue(z.isDisable(), "z-scoring a z-score rescales the axis by the current filter");
+        assertFalse(gate.isThresholdIsZScore());
+        assertTrue(z.getTooltip().getText().contains("already standardised"),
+                "and the tooltip must say why: " + z.getTooltip().getText());
     }
 }

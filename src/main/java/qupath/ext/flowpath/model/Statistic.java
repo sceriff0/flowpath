@@ -12,8 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * Maps to the statistic token in the measurement key
  * {@code "<marker>: <Compartment>: <Stat>"}. <b>{@link #MEDIAN} is the one MIRAGE
- * always emits</b> for every compartment it quantifies; {@link #MEAN} and
- * {@link #SUM} appear only with {@code --expanded_quantification}. Which of
+ * always emits</b> — {@code params.quantify_statistics} defaults to {@code ['Median']}.
+ * Every other name appears only when that list asks for it. Which of
  * them a given export actually carries must be read from
  * {@link CompartmentCapability}, never assumed — a default-quantification export
  * has no Mean column, and pinning a gate axis to one resolves it to a measurement
@@ -21,14 +21,23 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h2>Open vocabulary</h2>
  * This is deliberately <b>not</b> an enum. MIRAGE's statistic list is extensible
- * (MIRAGE's {@code feat/redsea-compensation} adds two at once, {@code "REDSEA Sum"} and
- * {@code "REDSEA Mean"}), and a closed enum here made FlowPath unable to see a column it
- * had no name for: the key failed to parse, then
- * {@code MeasurementKeys.collapseToBaseMarkers} re-absorbed the whole unparsed string as
- * a marker, so the panel grew a phantom row spelled {@code "CD3: Cell: REDSEA Sum"} next
- * to the real {@code CD3}. Note the statistic token contains a space — one more reason
- * the old {@code Compartment × Statistic} suffix loop could never have been extended by
- * adding names to it. FlowPath now discovers the
+ * and — since MIRAGE composed its vocabulary — no longer even enumerable by hand. A closed
+ * enum here made FlowPath unable to see a column it had no name for: the key failed to
+ * parse, then {@code MeasurementKeys.collapseToBaseMarkers} re-absorbed the whole unparsed
+ * string as a marker, so the panel grew a phantom row spelled {@code "CD3: Cell: REDSEA"}
+ * next to the real {@code CD3}.
+ *
+ * <h2>The vocabulary is composed, not listed</h2>
+ * MIRAGE builds its statistic names as {@code base × normalisation}: bases
+ * {@code Median}, {@code Mean}, {@code Sum} and {@code REDSEA}, each crossed with
+ * {@code ""}, {@code " Z"} and {@code " RobustZ"} — twelve names, several containing a
+ * space. Enumerating those on this side would be a list to hand-sync forever, which is
+ * the thing this type exists to stop; FlowPath discovers them from the data and only
+ * understands their <em>shape</em>, via {@link #baseToken} and {@link #normalisation}.
+ * <p>
+ * {@code REDSEA} is whole-cell only — a membrane correction has no nucleus/cytoplasm
+ * decomposition — which is why {@link CompartmentCapability} must store pairs rather than
+ * two independent axes. FlowPath now discovers the
  * statistic vocabulary from the data and only {@link Compartment} stays closed — it is a
  * genuinely fixed set of anatomical regions, which is what makes it a reliable parsing
  * anchor. {@link #MEAN}, {@link #MEDIAN} and {@link #SUM} survive as constants because
@@ -104,6 +113,58 @@ public final class Statistic {
         return of(token);
     }
 
+    /**
+     * MIRAGE's normalisation suffixes, in display order (plain, then z, then robust z).
+     * <p>
+     * Splitting must try the <b>longest first</b>: {@code "Median RobustZ"} ends with
+     * {@code " Z"} as well, so a shorter match would split it into base
+     * {@code "Median Robust"}. MIRAGE's own {@code split_statistic} carries the same
+     * caveat, and this is the mirror of it.
+     */
+    private static final List<String> NORMALISATIONS = List.of("", " Z", " RobustZ");
+
+    /**
+     * The measured quantity, with any normalisation suffix removed:
+     * {@code "Median RobustZ"} -> {@code "Median"}, {@code "REDSEA"} -> {@code "REDSEA"}.
+     */
+    public String baseToken() {
+        return token.substring(0, token.length() - normalisation().length());
+    }
+
+    /**
+     * The normalisation suffix this statistic carries: {@code ""}, {@code " Z"} or
+     * {@code " RobustZ"}.
+     */
+    public String normalisation() {
+        String best = "";
+        for (String norm : NORMALISATIONS) {
+            // Longest wins: " RobustZ" also ends with " Z".
+            if (!norm.isEmpty() && token.length() > norm.length()
+                    && token.regionMatches(true, token.length() - norm.length(), norm, 0, norm.length())
+                    && norm.length() > best.length()) {
+                best = norm;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * True when MIRAGE has <b>already standardised</b> this column across the cells of one
+     * patient — the {@code " Z"} and {@code " RobustZ"} variants.
+     * <p>
+     * The reason FlowPath cares: its own z-score toggle standardises whatever column is
+     * selected, so turning it on over an already-standardised statistic z-scores a
+     * z-score. Nothing would throw, and the second pass is close to a no-op on a
+     * well-behaved column, which is exactly what makes it hard to notice — the axis would
+     * simply be wrong by a rescaling that varies with the filtered population.
+     * <p>
+     * Note the two are not the same number even in principle: MIRAGE standardises across
+     * every cell of a patient, FlowPath across the cells currently loaded and filtered.
+     */
+    public boolean isStandardised() {
+        return !normalisation().isEmpty();
+    }
+
     /** True if this is one of the three statistics FlowPath ships an opinion about. */
     public boolean isKnown() {
         return KNOWN.contains(this);
@@ -128,13 +189,35 @@ public final class Statistic {
     public static List<Statistic> orderKnownFirst(Collection<Statistic> available) {
         List<Statistic> out = new ArrayList<>();
         if (available == null) return out;
-        for (Statistic s : KNOWN) {
-            if (available.contains(s)) out.add(s);
-        }
+
+        // Bases in display order: the ones FlowPath has an opinion about, then whatever
+        // else turned up, in the order the export presented it.
+        List<String> bases = new ArrayList<>();
+        for (Statistic s : KNOWN) bases.add(s.baseToken());
         for (Statistic s : available) {
-            if (s != null && !KNOWN.contains(s)) out.add(s);
+            if (s == null) continue;
+            String base = s.baseToken();
+            if (!containsIgnoreCase(bases, base)) bases.add(base);
+        }
+
+        // A base statistic's variants stay adjacent, matching how MIRAGE groups them.
+        for (String base : bases) {
+            for (String norm : NORMALISATIONS) {
+                for (Statistic s : available) {
+                    if (s != null && s.token.equalsIgnoreCase(base + norm) && !out.contains(s)) {
+                        out.add(s);
+                    }
+                }
+            }
         }
         return out;
+    }
+
+    private static boolean containsIgnoreCase(List<String> haystack, String needle) {
+        for (String s : haystack) {
+            if (s.equalsIgnoreCase(needle)) return true;
+        }
+        return false;
     }
 
     /** Token used inside the measurement key, e.g. {@code "Mean"}. */

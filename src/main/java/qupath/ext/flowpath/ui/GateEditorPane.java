@@ -51,6 +51,21 @@ public class GateEditorPane extends VBox {
 
     // --- Shared threshold/quadrant controls (reused across gate types) ---
     private final ComboBox<String> channelCombo;
+    /**
+     * The accent for a number FlowPath computes rather than reads. Distinct from the
+     * gate-type blue and from the warning orange, both of which already mean something
+     * else in this pane.
+     */
+    private static final String COMPUTED_HERE_COLOR = "#7fc4a8";
+
+    /** Muted, matching the pane's other unavailable controls. */
+    private static final String UNAVAILABLE_COLOR = "#666666";
+
+    private static final String ZSCORE_AVAILABLE_TOOLTIP =
+            "Standardise against this column's own distribution.\n"
+            + "Computed by FlowPath over the cells currently loaded and filtered \u2014 "
+            + "not a value read from the export.";
+
     private final ToggleGroup modeGroup;
     private final RadioButton rawModeBtn;
     private final RadioButton zscoreModeBtn;
@@ -99,11 +114,14 @@ public class GateEditorPane extends VBox {
         rawModeBtn.setToggleGroup(modeGroup);
         rawModeBtn.setStyle("-fx-text-fill: white;");
         rawModeBtn.setTooltip(new Tooltip("Compare marker raw intensity values against threshold"));
-        zscoreModeBtn = new RadioButton("Z-score");
+        // Marked, in colour and in words, as a value FlowPath derives rather than one it
+        // read: MIRAGE now emits standardised statistics of its own (" Z" / " RobustZ"),
+        // so "z-score" alone no longer says who computed it or over which population.
+        zscoreModeBtn = new RadioButton("Z-score (computed)");
         zscoreModeBtn.setToggleGroup(modeGroup);
         zscoreModeBtn.setSelected(true);
-        zscoreModeBtn.setStyle("-fx-text-fill: white;");
-        zscoreModeBtn.setTooltip(new Tooltip("Compare z-score normalized values against threshold (recommended)"));
+        zscoreModeBtn.setStyle("-fx-text-fill: " + COMPUTED_HERE_COLOR + ";");
+        zscoreModeBtn.setTooltip(new Tooltip(ZSCORE_AVAILABLE_TOOLTIP));
         modeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
             if (!suppressEvents && currentNode != null) {
                 boolean toZScore = zscoreModeBtn.isSelected();
@@ -981,6 +999,11 @@ public class GateEditorPane extends VBox {
             }
         }
 
+        // The axis now resolves to a different column, so both z-score questions have to
+        // be asked again: a Median column with spread and a "Median Z" column are not the
+        // same offer.
+        syncModeSelection(node);
+
         if (threshold) {
             updateHistogram();
             fireNodeChanged();
@@ -1403,32 +1426,44 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * Point the Raw/Z-score toggle at {@code node}, and offer z-score only when the gate's
-     * axes resolve to columns with enough spread to standardise against.
+     * Point the Raw/Z-score toggle at {@code node}, and offer z-score only when this gate's
+     * axes can actually deliver one.
      * <p>
      * The button used to be created selected and never disabled, while the drawing code
      * asked a second question the button had not: {@code updateHistogram} computes
-     * {@code isThresholdIsZScore() && col.hasSpread()} and falls back to raw values on a
-     * flat column. So the editor rendered raw under a button reading "Z-score", and
-     * flipping the toggle there changed the label and the gate's flag without converting
-     * the threshold — the conversion is guarded on the same {@code hasSpread()} the button
-     * was not. The number stayed in the old space beneath a label naming the new one.
+     * {@code isThresholdIsZScore() && col.hasSpread()} and draws raw values on a flat
+     * column. So the editor rendered raw under a button reading "Z-score", and flipping the
+     * toggle there moved the label and the gate's flag without converting the threshold —
+     * the conversion is guarded on the same {@code hasSpread()} the button was not.
      * <p>
-     * When the columns cannot be resolved at all — no index attached yet — the question is
-     * not answerable, so the toggle is left alone and the node's own preference stands. A
-     * later refresh settles it once there is data to judge with.
+     * Two separate reasons to withdraw the offer, and they become answerable at different
+     * times. A statistic MIRAGE already standardised is knowable from the gate alone, so it
+     * is checked first and holds even before an index is attached. Whether the column is
+     * flat needs data; until there is some, the question is left open and the node's own
+     * preference stands, so an editor that has not seen cells cannot discard a saved gate's
+     * setting.
+     * <p>
+     * Re-run from {@link #applySignalChange} as well as on rebuild, because changing the
+     * compartment or the statistic changes which column the axis resolves to — and
+     * therefore both answers.
      */
     private void syncModeSelection(GateNode node) {
-        boolean offersZScore = !GateAxis.columnsResolvable(node, cellIndex, markerStats)
-                || GateAxis.offersZScore(node, cellIndex, markerStats);
+        boolean alreadyStandardised = GateAxis.readsStandardisedStatistic(node);
+        boolean decidable = GateAxis.columnsResolvable(node, cellIndex, markerStats);
+        boolean offersZScore = !alreadyStandardised
+                && (!decidable || GateAxis.offersZScore(node, cellIndex, markerStats));
+
         withSuppressedEvents(() -> {
             zscoreModeBtn.setDisable(!offersZScore);
-            zscoreModeBtn.setTooltip(new Tooltip(offersZScore
-                    ? "Compare z-score normalized values against threshold (recommended)"
-                    : "This channel's values are constant, so there is no spread to standardise against"));
+            zscoreModeBtn.setStyle("-fx-text-fill: "
+                    + (offersZScore ? COMPUTED_HERE_COLOR : UNAVAILABLE_COLOR) + ";");
+            zscoreModeBtn.setTooltip(new Tooltip(
+                    offersZScore ? ZSCORE_AVAILABLE_TOOLTIP
+                                 : unavailableZScoreReason(alreadyStandardised)));
             if (node.isThresholdIsZScore() && offersZScore) zscoreModeBtn.setSelected(true);
             else rawModeBtn.setSelected(true);
         });
+
         // Events are suppressed above, so the flag the engine reads has to be brought
         // across by hand — otherwise GatingEngine keeps z-scoring a column the editor is
         // drawing raw, which is the display/classification split this repo has been bitten
@@ -1436,6 +1471,17 @@ public class GateEditorPane extends VBox {
         if (!offersZScore && node.isThresholdIsZScore()) {
             node.setThresholdIsZScore(false);
         }
+    }
+
+    /** Why the computed z-score is not on offer, in the user's terms. */
+    private static String unavailableZScoreReason(boolean alreadyStandardised) {
+        if (alreadyStandardised) {
+            return "This statistic is already standardised by MIRAGE, across every cell of "
+                    + "the patient.\nStandardising it again would rescale the axis by "
+                    + "whatever is currently filtered.";
+        }
+        return "This channel's values are constant, so there is no spread to standardise "
+                + "against.";
     }
 
     private void withSuppressedEvents(Runnable action) {

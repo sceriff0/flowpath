@@ -27,8 +27,8 @@ import java.util.Set;
  * built from the same parsed key and then queried independently by
  * {@code resolveCompartment} and {@code resolveStatistic}. That made the set of offerable
  * signals the <b>Cartesian product of the two projections</b>, which is a superset of the
- * pairs the file actually holds: a marker carrying {@code Cell: REDSEA Sum} and
- * {@code Nucleus: Median} advertised {@code Nucleus × REDSEA Sum}, which resolves to a key
+ * pairs the file actually holds: a marker carrying {@code Cell: REDSEA} and
+ * {@code Nucleus: Median} advertised {@code Nucleus × REDSEA}, which resolves to a key
  * that is not in the file, so every cell reads NaN.
  * <p>
  * The bug was unobservable only because MIRAGE emitted Median/Mean/Sum for every

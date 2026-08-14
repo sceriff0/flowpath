@@ -472,4 +472,66 @@ class GateAxisTest {
         assertFalse(GateAxis.offersZScore(quad, index, stats),
                 "a gate is only offered z-score when every axis can deliver it");
     }
+
+    /**
+     * MIRAGE now composes its statistic names, so an axis can be pointed at a column that
+     * <em>is</em> a z-score. FlowPath must not standardise it again: nothing throws, and a
+     * second pass over already-centred data is near-identity on a well-behaved column, so
+     * the only symptom is an axis rescaled by whatever happens to be filtered.
+     */
+    @Test
+    void anAlreadyStandardisedStatisticIsNotOfferedZScore() {
+        Statistic medianZ = Statistic.of("Median Z");
+        CellIndex index = Cells.of(6)
+                .marker("CD3", Compartment.WHOLE_CELL, medianZ, -2, -1, 0, 1, 2, 3)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        GateNode gate = new GateNode("CD3");
+        gate.setCompartment(Compartment.WHOLE_CELL);
+        gate.setStatistic(medianZ);
+
+        MeasuredColumn column = GateAxis.of(gate, 0).columnIn(index, stats);
+        assertNotNull(column);
+        assertTrue(column.hasSpread(), "the column has spread; that is not why it is refused");
+
+        assertTrue(GateAxis.readsStandardisedStatistic(gate));
+        assertFalse(GateAxis.offersZScore(gate, index, stats),
+                "standardising a standardised column rescales the axis by the current filter");
+    }
+
+    /**
+     * Knowable from the gate alone. Unlike "is this column flat", this answer must hold
+     * before any cells are loaded, or a saved gate on a " Z" statistic would be offered the
+     * toggle for as long as the editor had no index.
+     */
+    @Test
+    void theStandardisedCheckNeedsNoIndex() {
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.of("Median RobustZ"));
+
+        assertTrue(GateAxis.readsStandardisedStatistic(gate));
+        assertFalse(GateAxis.columnsResolvable(gate, null, null));
+        assertFalse(GateAxis.offersZScore(gate, null, null));
+    }
+
+    /** A plain statistic is not standardised, whatever its spread. */
+    @Test
+    void aPlainStatisticIsNotTreatedAsStandardised() {
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        assertFalse(GateAxis.readsStandardisedStatistic(gate));
+
+        QuadrantGate quad = new QuadrantGate("CD3", "CD8");
+        assertFalse(GateAxis.readsStandardisedStatistic(quad));
+    }
+
+    /** One standardised axis is enough to withdraw the offer for a whole 2D gate. */
+    @Test
+    void oneStandardisedAxisWithdrawsZScoreForTheWholeGate() {
+        QuadrantGate quad = new QuadrantGate("CD3", "CD8");
+        quad.setStatisticY(Statistic.of("Mean Z"));
+
+        assertTrue(GateAxis.readsStandardisedStatistic(quad),
+                "a shared toggle moves both axes, so one standardised axis settles it");
+    }
 }
