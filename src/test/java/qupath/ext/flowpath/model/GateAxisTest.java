@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -387,5 +388,88 @@ class GateAxisTest {
         assertEquals(index.column(quad, 0, stats).key(), GateAxis.of(quad, 0).columnIn(index, stats).key(),
                 "the axis must resolve exactly what CellIndex.column(gate, axis) resolves");
         assertEquals(index.column(quad, 1, stats).key(), GateAxis.of(quad, 1).columnIn(index, stats).key());
+    }
+
+    // ---- z-score availability -----------------------------------------------
+
+    /**
+     * The Raw/Z-score toggle is offered unconditionally in the editor, but the drawing
+     * code declines to use z-score on a flat column. Pinning the decision here means the
+     * button and the pixels can be made to agree from one answer.
+     */
+    @Test
+    void aChannelWithSpreadOffersZScore() {
+        CellIndex index = Cells.of(6).mirageMedianMarker("CD3", 1, 2, 3, 4, 5, 6).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        GateNode gate = new GateNode("CD3");
+
+        assertTrue(GateAxis.columnsResolvable(gate, index, stats));
+        assertTrue(GateAxis.offersZScore(gate, index, stats));
+        assertTrue(GateAxis.of(gate, 0).offersZScore(index, stats));
+    }
+
+    /**
+     * A constant column standardises to exactly 0.0 for every cell — a plausible-looking
+     * wrong answer rather than an error, which is why the mode must not be offered.
+     */
+    @Test
+    void aConstantChannelDoesNotOfferZScore() {
+        CellIndex index = Cells.of(6).mirageMedianMarker("CD3", 4, 4, 4, 4, 4, 4).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        GateNode gate = new GateNode("CD3");
+
+        MeasuredColumn column = GateAxis.of(gate, 0).columnIn(index, stats);
+        assertNotNull(column);
+        assertFalse(column.hasSpread());
+        assertEquals(0.0, column.zScoreAt(0), "a flat column reports every cell at the mean");
+
+        assertTrue(GateAxis.columnsResolvable(gate, index, stats),
+                "the column resolves; it simply has nothing to standardise against");
+        assertFalse(GateAxis.offersZScore(gate, index, stats));
+    }
+
+    /**
+     * "Nothing loaded yet" must stay distinguishable from "this column is flat". Conflating
+     * them would disable the toggle on an editor that has not seen data, discarding a saved
+     * gate's z-score preference before it could ever be honoured.
+     */
+    @Test
+    void withoutAnIndexTheZScoreQuestionIsUnanswerable() {
+        GateNode gate = new GateNode("CD3");
+
+        assertFalse(GateAxis.columnsResolvable(gate, null, null),
+                "no index: the question is not answerable");
+        assertFalse(GateAxis.offersZScore(gate, null, null));
+    }
+
+    /** A gate whose channel is not in the index has no column to judge either. */
+    @Test
+    void anUnknownChannelIsAlsoUnanswerable() {
+        CellIndex index = Cells.of(4).mirageMedianMarker("CD3", 1, 2, 3, 4).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        GateNode gate = new GateNode("CD8");
+
+        assertFalse(GateAxis.columnsResolvable(gate, index, stats));
+    }
+
+    /**
+     * A shared toggle moves every axis of a gate at once, so one flat axis is enough to
+     * withdraw the offer — matching the editor's conversion guard, which already required
+     * both columns of a 2D gate to have spread before transforming anything.
+     */
+    @Test
+    void oneFlatAxisWithdrawsZScoreForTheWholeGate() {
+        CellIndex index = Cells.of(6)
+                .mirageMedianMarker("CD3", 1, 2, 3, 4, 5, 6)
+                .mirageMedianMarker("CD8", 7, 7, 7, 7, 7, 7)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        QuadrantGate quad = new QuadrantGate("CD3", "CD8");
+
+        assertTrue(GateAxis.of(quad, 0).offersZScore(index, stats), "CD3 has spread");
+        assertFalse(GateAxis.of(quad, 1).offersZScore(index, stats), "CD8 is constant");
+        assertTrue(GateAxis.columnsResolvable(quad, index, stats));
+        assertFalse(GateAxis.offersZScore(quad, index, stats),
+                "a gate is only offered z-score when every axis can deliver it");
     }
 }

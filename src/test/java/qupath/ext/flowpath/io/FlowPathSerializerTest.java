@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.Statistic;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -137,6 +138,97 @@ class FlowPathSerializerTest {
 
         GateTree loaded = FlowPathSerializer.load(file);
         assertTrue(loaded.getRoots().get(0).isExcludeOutliers());
+    }
+
+    /**
+     * A statistic FlowPath does not ship a constant for must survive a save/load cycle.
+     * <p>
+     * {@code parseStatistic} used to be {@code Statistic.valueOf(...)} inside a bare
+     * {@code catch (Exception ignored)} that fell through to {@code Statistic.MEAN}. Now
+     * that the vocabulary is open that is no longer a harmless default: a workspace saved
+     * against an export carrying {@code CD3: Cell: REDSEA} would silently reload pinned to
+     * Mean, resolve to a measurement key that is not in the file, and read NaN for every
+     * cell. Nothing would throw and the gate would still draw.
+     */
+    @Test
+    void anUnknownStatisticSurvivesTheRoundTrip() throws IOException {
+        var tree = new GateTree();
+        var root = new GateNode("CD3", 1.0);
+        root.setStatistic(Statistic.of("REDSEA"));
+        tree.addRoot(root);
+
+        File file = tempDir.resolve("redsea.json").toFile();
+        FlowPathSerializer.save(tree, file);
+        GateTree loaded = FlowPathSerializer.load(file);
+
+        assertEquals(Statistic.of("REDSEA"), loaded.getRoots().get(0).getStatistic(),
+                "an unrecognised statistic must not be silently downgraded to Mean");
+    }
+
+    /** Workspaces written by the closed-enum version spelled the statistic {@code "MEDIAN"}. */
+    @Test
+    void aStatisticWrittenAsAnEnumNameStillLoads() throws IOException {
+        String json = """
+                {
+                  "version": 1,
+                  "qualityFilter": {},
+                  "gates": [
+                    {
+                      "channel": "CD45",
+                      "threshold": 0.0,
+                      "thresholdIsZScore": true,
+                      "compartment": "NUCLEAR",
+                      "statistic": "MEDIAN",
+                      "positiveName": "CD45+",
+                      "negativeName": "CD45-",
+                      "positiveColor": [0, 200, 0],
+                      "negativeColor": [128, 128, 128],
+                      "positiveChildren": [],
+                      "negativeChildren": []
+                    }
+                  ]
+                }
+                """;
+        File file = tempDir.resolve("enumname.json").toFile();
+        try (var writer = new BufferedWriter(new FileWriter(file))) {
+            writer.write(json);
+        }
+
+        assertEquals(Statistic.MEDIAN, FlowPathSerializer.load(file).getRoots().get(0).getStatistic(),
+                "parsing is case-insensitive, so MEDIAN and Median are the same statistic");
+    }
+
+    /**
+     * A v1 workspace has no statistic property at all. Mean is the right answer there and
+     * only there: the bare column genuinely is the whole-cell mean.
+     */
+    @Test
+    void anAbsentStatisticPropertyStillMeansMean() throws IOException {
+        String json = """
+                {
+                  "version": 1,
+                  "qualityFilter": {},
+                  "gates": [
+                    {
+                      "channel": "CD45",
+                      "threshold": 0.0,
+                      "thresholdIsZScore": true,
+                      "positiveName": "CD45+",
+                      "negativeName": "CD45-",
+                      "positiveColor": [0, 200, 0],
+                      "negativeColor": [128, 128, 128],
+                      "positiveChildren": [],
+                      "negativeChildren": []
+                    }
+                  ]
+                }
+                """;
+        File file = tempDir.resolve("v1.json").toFile();
+        try (var writer = new BufferedWriter(new FileWriter(file))) {
+            writer.write(json);
+        }
+
+        assertEquals(Statistic.MEAN, FlowPathSerializer.load(file).getRoots().get(0).getStatistic());
     }
 
     @Test

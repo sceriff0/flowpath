@@ -25,25 +25,43 @@ public final class MeasurementKeys {
 
     /**
      * Parse a measurement key of the form {@code "<marker>: <Compartment>: <Stat>"}.
+     * <p>
+     * <b>Anchored on the compartment, not on the pair.</b> This used to test every
+     * {@code Compartment × Statistic} product as a suffix, which meant an export could
+     * carry a statistic FlowPath had no name for and the whole key would fail to parse —
+     * invisible to gating and to UMAP feature selection, and then re-absorbed by
+     * {@link #collapseToBaseMarkers} as a phantom marker literally named
+     * {@code "CD3: Cell: REDSEA"}. The two trailing slots look symmetric and are not:
+     * {@link Compartment} is a genuinely closed set of anatomical regions, while the
+     * statistic is whatever MIRAGE can compute. So the compartment is the anchor, and the
+     * statistic slot accepts any non-blank token.
+     * <p>
+     * The split runs right-to-left, so a marker name that itself contains {@code ": "}
+     * (QuPath's own {@code "ROI: 0.50 µm per pixel: CD3"} shape) still parses correctly.
+     * A key with fewer than two separators, or whose second-from-right token is not a
+     * compartment, is not a per-compartment key.
      *
      * @return the parsed components, or {@code null} if the key is not a recognised
      *         per-compartment key (e.g. a bare marker name or a morphology field).
      */
     public static Parsed parse(String key) {
         if (key == null) return null;
-        // Match the last two ": <token>" segments against known compartment/statistic tokens.
-        for (Compartment c : Compartment.values()) {
-            for (Statistic s : Statistic.values()) {
-                String suffix = SEP + c.token() + SEP + s.token();
-                if (key.endsWith(suffix)) {
-                    String marker = key.substring(0, key.length() - suffix.length());
-                    marker = stripLayerPrefix(marker).trim();
-                    if (marker.isEmpty()) return null;
-                    return new Parsed(marker, c, s);
-                }
-            }
-        }
-        return null;
+        int statSep = key.lastIndexOf(SEP);
+        if (statSep < 0) return null;
+        int compSep = key.lastIndexOf(SEP, statSep - 1);
+        if (compSep < 0) return null;
+
+        // The compartment token is the anchor: reject anything that is not one, which is
+        // what keeps morphology fields and QuPath's own measurements out of the panel.
+        Compartment compartment = Compartment.fromToken(key.substring(compSep + SEP.length(), statSep));
+        if (compartment == null) return null;
+
+        Statistic statistic = Statistic.fromToken(key.substring(statSep + SEP.length()));
+        if (statistic == null) return null;
+
+        String marker = stripLayerPrefix(key.substring(0, compSep)).trim();
+        if (marker.isEmpty()) return null;
+        return new Parsed(marker, compartment, statistic);
     }
 
     /**

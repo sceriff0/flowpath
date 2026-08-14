@@ -660,8 +660,13 @@ public class CellIndex {
      * {@code "CD3: Cell: Mean"} cannot disagree about which column a default gate reads.
      */
     private static boolean isDefault(Compartment compartment, Statistic statistic) {
+        // Statistic is an interned value type, so == would in fact work; this is spelled
+        // with equals so the bare-column rule does not silently depend on that. A
+        // non-interned Statistic would make of("Mean") == MEAN false, sending every
+        // default gate to "CD3: Cell: Mean" instead of the bare "CD3" column and reading
+        // NaN for every cell without throwing.
         return (compartment == null || compartment == Compartment.WHOLE_CELL)
-                && (statistic == null || statistic == Statistic.MEAN);
+                && (statistic == null || Statistic.MEAN.equals(statistic));
     }
 
     /**

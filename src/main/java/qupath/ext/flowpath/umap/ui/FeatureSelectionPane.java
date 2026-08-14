@@ -172,10 +172,13 @@ final class FeatureSelectionPane extends VBox {
         return out;
     }
 
+    /**
+     * Known statistics first, then whatever else the export carries. Delegates to
+     * {@link Statistic#orderKnownFirst} rather than looping a closed value list, so a
+     * statistic MIRAGE adds shows up in the picker without a change here.
+     */
     private static List<Statistic> orderedStats(Set<Statistic> set) {
-        List<Statistic> out = new java.util.ArrayList<>();
-        for (Statistic s : Statistic.values()) if (set.contains(s)) out.add(s);
-        return out;
+        return Statistic.orderKnownFirst(set);
     }
 
     private static Compartment firstOrDefault(Set<Compartment> set, Compartment fallback) {
@@ -184,8 +187,8 @@ final class FeatureSelectionPane extends VBox {
     }
 
     private static Statistic firstOrDefaultStat(Set<Statistic> set, Statistic fallback) {
-        for (Statistic s : Statistic.values()) if (set.contains(s)) return s;
-        return fallback;
+        List<Statistic> ordered = Statistic.orderKnownFirst(set);
+        return ordered.isEmpty() ? fallback : ordered.get(0);
     }
 
     private static final class CompartmentStringConverter extends javafx.util.StringConverter<Compartment> {

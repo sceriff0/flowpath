@@ -350,8 +350,7 @@ public class GateEditorPane extends VBox {
         wireChannelCombo(channelCombo, node, 0);
 
         HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
-        if (node.isThresholdIsZScore()) zscoreModeBtn.setSelected(true);
-        else rawModeBtn.setSelected(true);
+        syncModeSelection(node);
 
         // Create fresh controls for this gate (local-creation pattern, like quadrant editor)
         HistogramCanvas histogram = new HistogramCanvas();
@@ -497,8 +496,7 @@ public class GateEditorPane extends VBox {
         });
 
         HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
-        if (gate.isThresholdIsZScore()) zscoreModeBtn.setSelected(true);
-        else rawModeBtn.setSelected(true);
+        syncModeSelection(gate);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
         addSignalControls(rowX, GateAxis.of(gate, 0));
@@ -574,8 +572,7 @@ public class GateEditorPane extends VBox {
         else if (node instanceof EllipseGate) ellipseBtn.setSelected(true);
 
         HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
-        if (node.isThresholdIsZScore()) zscoreModeBtn.setSelected(true);
-        else rawModeBtn.setSelected(true);
+        syncModeSelection(node);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
         addSignalControls(rowX, GateAxis.of(node, 0));
@@ -1403,6 +1400,42 @@ public class GateEditorPane extends VBox {
         Platform.runLater(() -> {
             if (currentNode == node) setGateNode(node);
         });
+    }
+
+    /**
+     * Point the Raw/Z-score toggle at {@code node}, and offer z-score only when the gate's
+     * axes resolve to columns with enough spread to standardise against.
+     * <p>
+     * The button used to be created selected and never disabled, while the drawing code
+     * asked a second question the button had not: {@code updateHistogram} computes
+     * {@code isThresholdIsZScore() && col.hasSpread()} and falls back to raw values on a
+     * flat column. So the editor rendered raw under a button reading "Z-score", and
+     * flipping the toggle there changed the label and the gate's flag without converting
+     * the threshold — the conversion is guarded on the same {@code hasSpread()} the button
+     * was not. The number stayed in the old space beneath a label naming the new one.
+     * <p>
+     * When the columns cannot be resolved at all — no index attached yet — the question is
+     * not answerable, so the toggle is left alone and the node's own preference stands. A
+     * later refresh settles it once there is data to judge with.
+     */
+    private void syncModeSelection(GateNode node) {
+        boolean offersZScore = !GateAxis.columnsResolvable(node, cellIndex, markerStats)
+                || GateAxis.offersZScore(node, cellIndex, markerStats);
+        withSuppressedEvents(() -> {
+            zscoreModeBtn.setDisable(!offersZScore);
+            zscoreModeBtn.setTooltip(new Tooltip(offersZScore
+                    ? "Compare z-score normalized values against threshold (recommended)"
+                    : "This channel's values are constant, so there is no spread to standardise against"));
+            if (node.isThresholdIsZScore() && offersZScore) zscoreModeBtn.setSelected(true);
+            else rawModeBtn.setSelected(true);
+        });
+        // Events are suppressed above, so the flag the engine reads has to be brought
+        // across by hand — otherwise GatingEngine keeps z-scoring a column the editor is
+        // drawing raw, which is the display/classification split this repo has been bitten
+        // by before.
+        if (!offersZScore && node.isThresholdIsZScore()) {
+            node.setThresholdIsZScore(false);
+        }
     }
 
     private void withSuppressedEvents(Runnable action) {

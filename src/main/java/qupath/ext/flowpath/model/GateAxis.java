@@ -182,21 +182,20 @@ public final class GateAxis {
             // whole-cell mean, and no selector is offered.
             return new Choices(List.of(), List.of(), new Signal(Compartment.WHOLE_CELL, Statistic.MEAN));
         }
-        List<Compartment> compartments = new ArrayList<>();
-        EnumSet<Compartment> availableComps = EnumSet.noneOf(Compartment.class);
-        availableComps.addAll(capability.compartmentsFor(channel));
-        for (Compartment c : Compartment.values()) {
-            if (availableComps.contains(c)) compartments.add(c);
-        }
-        List<Statistic> statistics = new ArrayList<>();
-        EnumSet<Statistic> availableStats = EnumSet.noneOf(Statistic.class);
-        availableStats.addAll(capability.statisticsFor(channel));
-        for (Statistic s : Statistic.values()) {
-            if (availableStats.contains(s)) statistics.add(s);
-        }
+        // One resolution, not two. Asking the compartment axis and the statistic axis
+        // independently is what let the editor advertise a pair the file does not carry
+        // (Nucleus x REDSEA for a marker holding only Cell: REDSEA and Nucleus: Median),
+        // which resolves to an absent key and reads NaN for every cell.
+        CompartmentCapability.Pair resolved =
+                capability.resolvePair(channel, compartment(), statistic());
+        // Already in canonical order; the capability owns the ordering.
+        List<Compartment> compartments = new ArrayList<>(capability.compartmentsFor(channel));
+        // Statistics valid *within the resolved compartment*, so the dropdown cannot
+        // offer a combination that is not in the export.
+        List<Statistic> statistics =
+                new ArrayList<>(capability.statisticsFor(channel, resolved.compartment()));
         return new Choices(List.copyOf(compartments), List.copyOf(statistics),
-                new Signal(capability.resolveCompartment(channel, compartment()),
-                           capability.resolveStatistic(channel, statistic())));
+                new Signal(resolved.compartment(), resolved.statistic()));
     }
 
     /**
@@ -220,6 +219,67 @@ public final class GateAxis {
         String channel = channel();
         if (channel == null || index == null || stats == null) return null;
         return index.column(channel, compartment(), statistic(), stats);
+    }
+
+    /**
+     * True when this axis resolves to a column with enough spread to standardise against.
+     * <p>
+     * The z-score mode was offered unconditionally, and the display then quietly declined
+     * to use it: the editor computed {@code isThresholdIsZScore() && col.hasSpread()} and
+     * rendered raw values when the column was flat, while the radio button still read
+     * "Z-score" and the gate's flag still said true. Flipping the mode on such a column
+     * changed the label without converting the threshold, because the conversion is
+     * guarded on the same {@code hasSpread()} the button is not — so the number stayed in
+     * the old space under a label naming the new one.
+     * <p>
+     * A flat column has no meaningful standardisation to offer:
+     * {@link MeasuredColumn#toZScore} reports every cell as exactly 0.0 there, which is a
+     * plausible-looking wrong answer rather than an error. Asking this before offering the
+     * mode is what keeps the button and the pixels agreeing.
+     */
+    public boolean offersZScore(CellIndex index, MarkerStats stats) {
+        MeasuredColumn column = columnIn(index, stats);
+        return column != null && column.hasSpread();
+    }
+
+    /**
+     * True when <em>every</em> axis of {@code gate} resolves to a column with spread — the
+     * question a shared Raw/Z-score toggle has to ask, since it moves all of a gate's axes
+     * at once. Matches the editor's existing conversion guard, which requires both columns
+     * of a 2D gate to have spread before it will transform anything.
+     */
+    public static boolean offersZScore(GateNode gate, CellIndex index, MarkerStats stats) {
+        List<GateAxis> axes = axesOf(gate);
+        if (axes.isEmpty()) return false;
+        for (GateAxis axis : axes) {
+            if (!axis.offersZScore(index, stats)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * True when every axis of {@code gate} resolves to a column at all — that is, when
+     * {@link #offersZScore(GateNode, CellIndex, MarkerStats)} is answering a real question
+     * rather than reporting that there is nothing loaded yet.
+     * <p>
+     * The two are separate on purpose. "This column is flat, so z-score means nothing" and
+     * "no index has been attached yet" are both {@code false} from {@code offersZScore},
+     * and a caller that conflated them would disable the toggle on an editor that has not
+     * seen data — discarding a saved gate's z-score preference before it could ever be
+     * honoured.
+     */
+    public static boolean columnsResolvable(GateNode gate, CellIndex index, MarkerStats stats) {
+        if (index == null || stats == null) return false;
+        List<GateAxis> axes = axesOf(gate);
+        if (axes.isEmpty()) return false;
+        for (GateAxis axis : axes) {
+            String channel = axis.channel();
+            // Not columnIn() != null: CellIndex.column hands back an all-NaN column for a
+            // key that is not in the file rather than null, so a resolved handle is not by
+            // itself evidence that there is anything to judge.
+            if (channel == null || index.getMarkerIndex(channel) < 0) return false;
+        }
+        return true;
     }
 
     /**

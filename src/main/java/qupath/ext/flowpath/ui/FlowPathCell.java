@@ -121,10 +121,10 @@ public class FlowPathCell extends TreeCell<Object> {
     private static Label compartmentBadge(Compartment c, Statistic s) {
         Compartment comp = (c == null) ? Compartment.WHOLE_CELL : c;
         Statistic stat = (s == null) ? Statistic.MEAN : s;
-        if (comp == Compartment.WHOLE_CELL && stat == Statistic.MEAN) return null;
+        if (comp == Compartment.WHOLE_CELL && Statistic.MEAN.equals(stat)) return null;
 
         String text = comp.abbreviation();
-        if (stat != Statistic.MEAN) text += "·" + stat.displayName().substring(0, 3).toLowerCase();
+        if (!Statistic.MEAN.equals(stat)) text += "·" + stat.displayName().substring(0, 3).toLowerCase();
         Label badge = new Label(text);
         badge.setFont(Font.font(null, FontWeight.BOLD, 9));
         badge.setTextFill(Color.WHITE);

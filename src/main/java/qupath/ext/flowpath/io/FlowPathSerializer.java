@@ -242,8 +242,8 @@ public class FlowPathSerializer {
             obj.addProperty("thresholdIsZScore", qg.isThresholdIsZScore());
             obj.addProperty("compartmentX", qg.getCompartmentX().name());
             obj.addProperty("compartmentY", qg.getCompartmentY().name());
-            obj.addProperty("statisticX", qg.getStatisticX().name());
-            obj.addProperty("statisticY", qg.getStatisticY().name());
+            obj.addProperty("statisticX", qg.getStatisticX().token());
+            obj.addProperty("statisticY", qg.getStatisticY().token());
             // Serialize 4 branches
             JsonArray branches = new JsonArray();
             for (Branch b : qg.getBranches()) {
@@ -260,7 +260,7 @@ public class FlowPathSerializer {
             obj.addProperty("threshold", node.getThreshold());
             obj.addProperty("thresholdIsZScore", node.isThresholdIsZScore());
             obj.addProperty("compartment", node.getCompartment().name());
-            obj.addProperty("statistic", node.getStatistic().name());
+            obj.addProperty("statistic", node.getStatistic().token());
             obj.addProperty("positiveName", node.getPositiveName());
             obj.addProperty("negativeName", node.getNegativeName());
             obj.add("positiveColor", ColorUtils.toJsonArray(node.getPositiveColor()));
@@ -279,8 +279,8 @@ public class FlowPathSerializer {
         obj.addProperty("thresholdIsZScore", gate.isThresholdIsZScore());
         obj.addProperty("compartmentX", gate.getCompartmentX().name());
         obj.addProperty("compartmentY", gate.getCompartmentY().name());
-        obj.addProperty("statisticX", gate.getStatisticX().name());
-        obj.addProperty("statisticY", gate.getStatisticY().name());
+        obj.addProperty("statisticX", gate.getStatisticX().token());
+        obj.addProperty("statisticY", gate.getStatisticY().token());
     }
 
     private static List<GateNode> deserializeNodeList(JsonArray array) throws IOException {
@@ -331,10 +331,34 @@ public class FlowPathSerializer {
         return Compartment.WHOLE_CELL;
     }
 
-    /** Parse a Statistic enum from a property, defaulting to mean (v1 / unknown). */
+    /**
+     * Parse a statistic from a property.
+     * <p>
+     * <b>Absent means v1; present means honour it verbatim.</b> This used to be
+     * {@code Statistic.valueOf(...)} inside a bare {@code catch (Exception ignored)}
+     * falling through to {@link Statistic#MEAN}, which turned "I do not recognise this
+     * statistic" into "it is a mean". Since {@link Statistic} became an open vocabulary
+     * that is no longer a harmless default: a workspace saved against a MIRAGE export
+     * carrying {@code CD3: Cell: REDSEA} would reload pinned to {@code Mean}, resolve to a
+     * measurement key that is not in the file, and read NaN for every cell — plausible,
+     * silent and wrong, exactly the class of defect {@code MeasuredColumn} exists to
+     * prevent. An unrecognised token is now kept as itself.
+     * <p>
+     * Mean remains the answer only when the property is <em>missing</em>, which means a v1
+     * workspace, whose bare column genuinely is the whole-cell mean.
+     * <p>
+     * Written as {@link Statistic#token} (e.g. {@code "Median"}) rather than the old enum
+     * {@code name()} (e.g. {@code "MEDIAN"}); parsing is case-insensitive, so workspaces
+     * written by either version load identically.
+     */
     private static Statistic parseStatistic(JsonObject obj, String key) {
-        if (obj.has(key)) {
-            try { return Statistic.valueOf(obj.get(key).getAsString()); } catch (Exception ignored) {}
+        if (obj.has(key) && !obj.get(key).isJsonNull()) {
+            try {
+                Statistic parsed = Statistic.fromToken(obj.get(key).getAsString());
+                if (parsed != null) return parsed;
+            } catch (Exception ignored) {
+                // Not a string primitive — fall through to the v1 default.
+            }
         }
         return Statistic.MEAN;
     }

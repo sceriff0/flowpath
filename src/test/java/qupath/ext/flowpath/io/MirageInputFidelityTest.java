@@ -149,9 +149,9 @@ class MirageInputFidelityTest {
 
         assertTrue(cap.isRich(), "a MIRAGE compartment export is a rich GeoJSON");
         assertEquals(EnumSet.allOf(Compartment.class), EnumSet.copyOf(cap.compartmentsFor("CD3")));
-        assertEquals(EnumSet.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM),
-                EnumSet.copyOf(cap.statisticsFor("CD3")),
-                "--expanded_quantification adds Median and Sum");
+        assertEquals(java.util.Set.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM),
+                cap.statisticsFor("CD3"),
+                "naming Mean and Sum in --quantify_statistics adds them alongside Median");
     }
 
     @Test
@@ -192,7 +192,7 @@ class MirageInputFidelityTest {
         // Discovery advertises exactly Median for the Cell compartment (no Mean/Sum columns).
         var cap = CompartmentCapability.scan(cells.detections(), 10);
         assertTrue(cap.isRich(), "a per-compartment Median key makes this a rich export");
-        assertEquals(EnumSet.of(Statistic.MEDIAN), EnumSet.copyOf(cap.statisticsFor("CD3")),
+        assertEquals(java.util.Set.of(Statistic.MEDIAN), cap.statisticsFor("CD3"),
                 "a default (non-expanded) run exposes only Median");
 
         CellIndex idx = cells.build();

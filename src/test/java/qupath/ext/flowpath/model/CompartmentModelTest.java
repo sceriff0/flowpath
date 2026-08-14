@@ -28,8 +28,61 @@ class CompartmentModelTest {
     void statisticTokensAndParsing() {
         assertEquals("Mean", Statistic.MEAN.token());
         assertEquals(Statistic.MEDIAN, Statistic.fromToken("median"));
-        assertNull(Statistic.fromToken("variance"));
         assertEquals(Statistic.MEAN, Statistic.defaultStatistic());
+    }
+
+    /**
+     * The inverse of the assertion this test used to make.
+     * <p>
+     * {@code assertNull(Statistic.fromToken("variance"))} pinned the old closed-enum
+     * contract: a statistic FlowPath had no name for was a parse failure. That is the
+     * behaviour that made a new MIRAGE statistic invisible to gating and to UMAP feature
+     * selection, so the assertion had to be inverted rather than worked around.
+     */
+    @Test
+    void anUnknownStatisticIsAValueNotAFailure() {
+        Statistic redsea = Statistic.fromToken("REDSEA");
+        assertNotNull(redsea, "an unrecognised token is a statistic FlowPath has not met, not a parse failure");
+        assertEquals("REDSEA", redsea.token());
+        assertEquals("REDSEA", redsea.displayName(), "an unknown statistic displays verbatim");
+        assertFalse(redsea.isKnown());
+        assertTrue(Statistic.MEDIAN.isKnown());
+    }
+
+    /** A blank token is still a malformed key, so callers keep their skip-the-line behaviour. */
+    @Test
+    void aBlankStatisticTokenIsStillNothing() {
+        assertNull(Statistic.fromToken(null));
+        assertNull(Statistic.fromToken(""));
+        assertNull(Statistic.fromToken("   "));
+        assertThrows(IllegalArgumentException.class, () -> Statistic.of("  "));
+    }
+
+    /**
+     * Interning, pinned. {@code CellIndex.isDefault} and {@code FlowPathCell} compared
+     * statistics, and a non-canonical instance would have made the bare-column rule miss
+     * and resolve every default gate to an absent key.
+     */
+    @Test
+    void statisticsAreCanonicalPerToken() {
+        assertSame(Statistic.MEAN, Statistic.of("Mean"));
+        assertSame(Statistic.MEAN, Statistic.of("mean"));
+        assertSame(Statistic.MEAN, Statistic.of("MEAN"), "legacy workspaces spelled it MEAN");
+        assertSame(Statistic.of("REDSEA"), Statistic.of("redsea"));
+        assertEquals(Statistic.of("REDSEA").hashCode(), Statistic.of("redsea").hashCode());
+    }
+
+    /** Known statistics lead the ordering; discovered ones follow in encounter order. */
+    @Test
+    void orderingPutsKnownStatisticsFirst() {
+        var input = new java.util.LinkedHashSet<Statistic>();
+        input.add(Statistic.of("REDSEA"));
+        input.add(Statistic.SUM);
+        input.add(Statistic.of("Entropy"));
+        input.add(Statistic.MEDIAN);
+        assertEquals(
+                java.util.List.of(Statistic.MEDIAN, Statistic.SUM, Statistic.of("REDSEA"), Statistic.of("Entropy")),
+                Statistic.orderKnownFirst(input));
     }
 
     // ---- MeasurementKeys ----
@@ -75,7 +128,7 @@ class CompartmentModelTest {
                 java.util.EnumSet.of(Compartment.NUCLEAR, Compartment.CYTOPLASMIC, Compartment.WHOLE_CELL),
                 cap.compartmentsFor("CD3"));
         assertEquals(
-                java.util.EnumSet.of(Statistic.MEAN, Statistic.MEDIAN),
+                java.util.Set.of(Statistic.MEAN, Statistic.MEDIAN),
                 cap.statisticsFor("CD3"));
         assertFalse(cap.hasCompartments("DAPI"));
     }
