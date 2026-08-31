@@ -185,6 +185,11 @@ public final class GatingEngine {
     public static AssignmentResult assignAll(GateTree tree, CellIndex index, MarkerStats stats,
                                               boolean[] roiMask, int[] regionOf, int regionCount) {
         int n = index.size();
+        if (regionOf != null && regionOf.length != n) {
+            throw new IllegalArgumentException(
+                    "regionOf describes a different population than the index: "
+                            + regionOf.length + " vs " + n + " cells");
+        }
         String[] phenotypes = new String[n];
         boolean[] excluded = new boolean[n];
         boolean[] outOfAnnotation = new boolean[n];
@@ -274,16 +279,21 @@ public final class GatingEngine {
             walkRoots(plan, i, ctx);
         }
 
-        // Cell-level tallying runs after the walk, not folded into it: excluded[] and
-        // unmeasured[] only reach their final values once every root has run (multi-root
-        // cells are re-walked per root above), so recording "clean" any earlier would read
-        // a still-changing flag.
+        // Cell-level tallying runs after the walk, not folded into it: baseExcluded is
+        // already final at this point, but doing it in the same pass as the walk would be
+        // an easy place to accidentally read excluded[]/unmeasured[] instead, which are
+        // still changing mid-walk for multi-root cells (re-walked per root above).
         for (int i = 0; i < n; i++) {
             int region = regionOf == null ? -1 : regionOf[i];
-            // "Clean" mirrors the R-side denominator: not clipped, not quality-filtered,
-            // and actually measurable. Recorded per cell here so every branch's clean count
-            // shares one definition rather than each reader inventing its own.
-            tally.recordCell(region, !excluded[i] && !unmeasured[i]);
+            // "Clean" here is the denominator clean(branch) is checked against, so it must
+            // use the same exclusion baseExcluded[] already means: quality filter + ROI
+            // mask only. Not excluded[i] (which also carries a gate's own clipping) and not
+            // unmeasured[i] -- a per-branch clean count can only ever be <= this denominator
+            // because a cell can only land in a branch when it was not base-excluded in the
+            // first place. Using excluded[]/unmeasured[] here instead would let a gate's own
+            // clipping shrink the denominator differently for cells that never reached that
+            // gate, breaking that bound.
+            tally.recordCell(region, !baseExcluded[i]);
         }
 
         return new AssignmentResult(phenotypes, excluded, outOfAnnotation, outlier,
@@ -639,15 +649,19 @@ public final class GatingEngine {
      */
     private static void assignBranch(ResolvedGate rg, int branchIdx, int cellIdx, WalkContext ctx) {
         boolean[] excluded = ctx.excluded();
-        boolean[] unmeasured = ctx.unmeasured();
 
         Branch branch = rg.branches[branchIdx];
         if (!excluded[cellIdx]) {
             branch.setCount(branch.getCount() + 1);
         }
         // Same decision, recorded with its region and cleanliness. Not a second predicate:
-        // branchIdx was decided once, by ResolvedGate.branchOf, above.
-        ctx.tally().record(branch, ctx.regionOf(cellIdx), !excluded[cellIdx] && !unmeasured[cellIdx]);
+        // branchIdx was decided once, by ResolvedGate.branchOf, above. "Clean" here is
+        // judged by !excluded[cellIdx] alone -- the exact condition branch.getCount() just
+        // used above -- so tally.clean(branch) is identical to branch.getCount() by
+        // construction. unmeasured plays no part: a cell that could not be measured never
+        // reaches assignBranch at all (walkNode returns on UNMEASURED before calling this),
+        // so it is already absent from every branch's count without this method saying so.
+        ctx.tally().record(branch, ctx.regionOf(cellIdx), !excluded[cellIdx]);
 
         ctx.phenotypes()[cellIdx] = branch.getName();
         ctx.colors()[cellIdx] = branch.getColor();

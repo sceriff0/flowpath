@@ -26,6 +26,27 @@ import java.util.Map;
  * public} because {@code GatingEngine} (package {@code qupath.ext.flowpath.engine}) is the
  * writer, but the intent is the same as package-private: the gating walk is the only
  * intended caller. Nothing outside that walk has the branch decision to record.
+ * <p>
+ * <b>What "clean" means, and why the two clean fields use different flags.</b>
+ * {@link #clean(Branch)} is judged with the exact exclusion flag a cell had <em>at the
+ * moment it landed in that branch</em> — the same flag {@code Branch.getCount()} was just
+ * incremented under — so {@code clean(branch) == branch.getCount()} by construction; that
+ * parity is the whole reason the tree view and the Analysis window can never disagree about
+ * the same population. {@link #cellsClean()} is judged with a coarser flag: excluded by the
+ * quality filter or ROI mask only, before any individual gate's own outlier clipping is
+ * applied. A cell can only land in a branch at all if it passed that coarser exclusion, so
+ * {@code clean(branch) <= cellsClean()} holds for every branch — the bound percentage
+ * displays depend on — which would not hold if the two fields were judged by the same,
+ * finer-grained flag.
+ * <p>
+ * <b>Unmeasured cells play no part in either clean field.</b> A cell a gate could not
+ * measure never reaches {@code assignBranch} at all — the walk returns before recording
+ * anything for it at that gate — so it is already absent from every branch count without
+ * this class needing to check for it, and it is reported separately through
+ * {@code AssignmentResult.getUnmeasured()}. Do not reintroduce an unmeasured check into
+ * either clean flag; it would be redundant at best, and at worst — if a stale unmeasured
+ * flag ever survived across a multi-root re-walk — it would corrupt a count this class was
+ * never told to exclude that cell from.
  */
 public final class BranchTally {
 
@@ -62,8 +83,10 @@ public final class BranchTally {
      * {@code ResolvedGate.branchOf} — this method does not re-derive it.
      *
      * @param region the cell's region index, or negative when it is in none
-     * @param clean  false when the cell was outlier-clipped, quality-filtered, or a gate
-     *               could not measure it
+     * @param clean  {@code true} unless the cell was excluded at the moment it landed in
+     *               this branch — pass the negation of the same flag
+     *               {@code branch.getCount()} was just guarded by, so {@link #clean(Branch)}
+     *               tracks {@code Branch.getCount()} exactly
      */
     public void record(Branch branch, int region, boolean clean) {
         Counts c = counts.computeIfAbsent(branch, b -> new Counts(regionCount));
@@ -78,6 +101,12 @@ public final class BranchTally {
     /**
      * Record one cell's existence, independent of any branch — the denominators. The only
      * intended caller is the gating walk in {@code GatingEngine}.
+     *
+     * @param region the cell's region index, or negative when it is in none
+     * @param clean  {@code true} unless the cell was excluded by the quality filter or ROI
+     *               mask — <em>not</em> by an individual gate's own outlier clipping, and
+     *               not by whether a gate could measure it. See the class javadoc for why
+     *               this denominator is deliberately coarser than {@link #clean(Branch)}.
      */
     public void recordCell(int region, boolean clean) {
         cellsTotal++;
