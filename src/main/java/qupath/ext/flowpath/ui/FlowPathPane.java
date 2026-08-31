@@ -29,6 +29,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.UndoHistory;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
@@ -88,6 +89,8 @@ public class FlowPathPane extends BorderPane {
     private IngestReport ingestReport = IngestReport.empty();
     private boolean[] cachedQualityMask;
     private boolean[] cachedRoiMask;
+    /** Which annotated region each cell fell in; null whenever the filter is off. */
+    private RegionMask cachedRegions;
     private PathObjectHierarchyListener hierarchyListener;
     private boolean suppressRoiFilterEvents = false;
     private ImageData<?> listenerImageData;
@@ -645,11 +648,13 @@ public class FlowPathPane extends BorderPane {
     private void recomputeRoiMask() {
         if (cellIndex == null) {
             cachedRoiMask = null;
+            cachedRegions = null;
             return;
         }
 
         if (!gateTree.isRoiFilterEnabled()) {
             cachedRoiMask = null;
+            cachedRegions = null;
             previewService.setRoiMask(null);
             return;
         }
@@ -657,22 +662,44 @@ public class FlowPathPane extends BorderPane {
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) {
             cachedRoiMask = null;
+            cachedRegions = null;
             previewService.setRoiMask(null);
             return;
         }
 
-        List<ROI> rois = new ArrayList<>();
-        for (PathObject ann : imageData.getHierarchy().getAnnotationObjects()) {
-            ROI roi = ann.getROI();
-            if (roi != null) rois.add(roi);
-        }
-        if (rois.isEmpty()) {
+        RegionMask regions = RegionMask.compute(cellIndex, annotationsToFilterBy(imageData));
+        if (regions.isEmpty()) {
+            // Nothing usable to filter by. Treated as "no filter" rather than "exclude
+            // everything": annotations that enclose no area answer contains() false
+            // everywhere, so the old behaviour was to empty the entire view whenever the
+            // only annotation on the image was a point or a line, with empty histograms
+            // as the sole symptom.
+            cachedRegions = null;
             cachedRoiMask = null;
             previewService.setRoiMask(null);
         } else {
-            cachedRoiMask = GatingEngine.computeRoiMask(cellIndex, rois);
+            cachedRegions = regions;
+            cachedRoiMask = regions.included();
             previewService.setRoiMask(cachedRoiMask);
         }
+    }
+
+    /**
+     * The annotations the filter should use: whatever is <b>selected</b> in the viewer, or
+     * every annotation on the image when the selection holds none.
+     * <p>
+     * Selection-first matches how the rest of QuPath behaves and makes "gate on just this
+     * region" a click rather than a deletion. Falling back to all annotations keeps the
+     * previous behaviour intact for anyone who never selects anything.
+     */
+    private List<PathObject> annotationsToFilterBy(ImageData<?> imageData) {
+        var hierarchy = imageData.getHierarchy();
+        List<PathObject> selected = new ArrayList<>();
+        for (PathObject obj : hierarchy.getSelectionModel().getSelectedObjects()) {
+            if (obj != null && obj.isAnnotation() && obj.getROI() != null) selected.add(obj);
+        }
+        if (!selected.isEmpty()) return selected;
+        return new ArrayList<>(hierarchy.getAnnotationObjects());
     }
 
     private boolean[] getCombinedMask() {
@@ -928,14 +955,38 @@ public class FlowPathPane extends BorderPane {
         int total = cellIndex != null ? cellIndex.size() : 0;
         int excluded = previewService.getLastExcludedCount();
         int gateCount = countGates(gateTree.getRoots());
-        String roiInfo = gateTree.isRoiFilterEnabled()
-            ? " | ROI: annotations"
-            : "";
+        String roiInfo = gateTree.isRoiFilterEnabled() ? describeRegions() : "";
         statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s%s",
             total, excluded, gateCount, roiInfo, ingestWarning()));
         // The full report goes in the tooltip rather than a dialog: an ingest finding is
         // context for reading the histograms, not an event that should block the user.
         statusBar.setTooltip(cellIndex == null ? null : new Tooltip(ingestReport.describe()));
+    }
+
+    /**
+     * The annotation filter, in one status-bar clause: how many regions are in use, how
+     * many annotations are subtracting, and how many were skipped for enclosing no area.
+     * <p>
+     * The bar used to read a flat {@code "| ROI: annotations"} whatever was going on, so a
+     * stray annotation widening the population, or a points annotation contributing
+     * nothing, looked exactly like a correct setup. Every number here answers a question
+     * the old text could not.
+     */
+    private String describeRegions() {
+        if (cachedRegions == null) {
+            return " | ROI: no usable annotation";
+        }
+        StringBuilder sb = new StringBuilder(" | ROI: ");
+        int regions = cachedRegions.regionNames().size();
+        sb.append(regions).append(regions == 1 ? " region" : " regions");
+        if (cachedRegions.excludeRegionCount() > 0) {
+            sb.append(" \u2212 ").append(cachedRegions.excludeRegionCount()).append(" excluded");
+        }
+        if (cachedRegions.droppedNonArea() > 0) {
+            sb.append(" (").append(cachedRegions.droppedNonArea())
+              .append(" annotation(s) skipped: no area)");
+        }
+        return sb.toString();
     }
 
     /**
@@ -1062,7 +1113,7 @@ public class FlowPathPane extends BorderPane {
         try {
             GatingEngine.AssignmentResult result = GatingEngine.assignAll(
                 gateTree, cellIndex, markerStats, cachedRoiMask);
-            PhenotypeCsvExporter.export(file, cellIndex, result, gateTree, markerStats);
+            PhenotypeCsvExporter.export(file, cellIndex, result, gateTree, markerStats, cachedRegions);
             Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
         } catch (Exception ex) {
             Dialogs.showErrorMessage("Export Error", ex.getMessage());

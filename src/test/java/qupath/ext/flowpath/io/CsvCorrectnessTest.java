@@ -26,6 +26,129 @@ class CsvCorrectnessTest {
 
     // ========== Helpers ==========
 
+    /**
+     * With the annotation filter on, each row names the region its cell came from -- which
+     * is what makes "does this population differ between core and margin?" answerable from
+     * one export instead of one export per region.
+     */
+    @Test
+    void regionColumnNamesTheAnnotationEachCellCameFrom() throws IOException {
+        // Cells at x = 0, 10, ... 90.
+        CellIndex index = Cells.of(10)
+                .marker("CD3", i -> i * 10.0)
+                .at(i -> i * 10.0, i -> 0.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        GateNode gate = new GateNode("CD3", 45.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        var core = qupath.lib.objects.PathObjects.createAnnotationObject(
+                qupath.lib.roi.ROIs.createRectangleROI(-5, -5, 30, 10,
+                        qupath.lib.regions.ImagePlane.getDefaultPlane()));
+        core.setName("Core");
+        var margin = qupath.lib.objects.PathObjects.createAnnotationObject(
+                qupath.lib.roi.ROIs.createRectangleROI(55, -5, 40, 10,
+                        qupath.lib.regions.ImagePlane.getDefaultPlane()));
+        margin.setName("Margin");
+        RegionMask regions = RegionMask.compute(index, List.of(core, margin));
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats, regions.included());
+        File f = tempDir.resolve("regions.csv").toFile();
+        PhenotypeCsvExporter.export(f, index, result, tree, stats, regions);
+
+        List<String> lines = Files.readAllLines(f.toPath());
+        List<String> header = parseCsvLine(lines.get(0));
+        int regionCol = header.indexOf("region");
+        assertTrue(regionCol >= 0, "the region column is written when the filter is on");
+
+        assertEquals("Core", parseCsvLine(lines.get(1)).get(regionCol), "x=0");
+        assertEquals("Core", parseCsvLine(lines.get(3)).get(regionCol), "x=20");
+        assertEquals("", parseCsvLine(lines.get(4)).get(regionCol), "x=30 is in neither");
+        assertEquals("Margin", parseCsvLine(lines.get(7)).get(regionCol), "x=60");
+    }
+
+    /** No filter, no column -- the export keeps its previous shape exactly. */
+    @Test
+    void noRegionColumnWhenTheFilterIsOff() throws IOException {
+        CellIndex index = Cells.of(3).marker("CD3", i -> i * 10.0).area(100.0).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
+        GateNode gate = new GateNode("CD3", 5.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+        File f = tempDir.resolve("noregions.csv").toFile();
+        PhenotypeCsvExporter.export(f, index, result, tree, stats);
+
+        assertFalse(parseCsvLine(Files.readAllLines(f.toPath()).get(0)).contains("region"));
+    }
+
+
+    /**
+     * Every column on one row must tell the same story about a cell the gate could not
+     * measure. {@code computeSign} has always returned blank for NaN and its javadoc
+     * claims the sign column "cannot drift away from the phenotype column beside it" --
+     * but the phenotype column, coming from the engine, said {@code CD3-} for exactly the
+     * cell whose {@code CD3_raw}, {@code CD3_zscore} and {@code CD3_sign} were all blank.
+     * One row asserted both "never measured" and "measured, and negative".
+     */
+    @Test
+    void unmeasuredRowAgreesWithItself() throws IOException {
+        CellIndex index = Cells.of(5)
+                .marker("CD3", i -> i == 2 ? Double.NaN : (i + 1) * 10.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
+
+        GateNode gate = new GateNode("CD3", 25.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+        File f = tempDir.resolve("unmeasured.csv").toFile();
+        PhenotypeCsvExporter.export(f, index, result, tree, stats);
+
+        List<String> lines = Files.readAllLines(f.toPath());
+        List<String> header = parseCsvLine(lines.get(0));
+        List<String> row = parseCsvLine(lines.get(3));   // cell_id 2
+
+        int rawCol = header.indexOf("CD3_raw");
+        int zCol = header.indexOf("CD3_zscore");
+        int signCol = header.indexOf("CD3_sign");
+        int phenoCol = header.indexOf("phenotype");
+        int unmeasuredCol = header.indexOf("Unmeasured");
+        assertTrue(rawCol >= 0 && zCol >= 0 && signCol >= 0 && phenoCol >= 0,
+                "measurement columns present");
+        assertTrue(unmeasuredCol >= 0, "the Unmeasured flag is exported");
+
+        assertEquals("", row.get(rawCol), "no raw value for an omitted measurement");
+        assertEquals("", row.get(zCol), "no z-score either");
+        assertEquals("", row.get(signCol), "and no sign -- the gate has no opinion");
+        assertEquals("Unclassified", row.get(phenoCol),
+                "so the phenotype must not claim one; this used to read CD3-");
+        assertEquals("True", row.get(unmeasuredCol),
+                "and the row says why it is unclassified");
+
+        // The measured rows are untouched.
+        List<String> measured = parseCsvLine(lines.get(1));   // cell_id 0, CD3 = 10
+        assertEquals("CD3-", measured.get(phenoCol));
+        assertEquals("-", measured.get(signCol));
+        assertEquals("False", measured.get(unmeasuredCol));
+    }
+
+
 
     private static List<String> parseCsvLine(String line) {
         List<String> fields = new ArrayList<>();

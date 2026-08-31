@@ -298,6 +298,206 @@ class GatingEngineTest {
         }
     }
 
+    /**
+     * Two roots over the same cells, one of which clips outliers. Whichever root the user
+     * happened to add first must not change the other's counts.
+     * <p>
+     * It used to: {@code excluded[]} answers two different questions at once -- "should
+     * QuPath grey this cell out?" (a union over the whole tree) and "should this branch
+     * count it?" (which has to be scoped to the root doing the counting). Because one
+     * array served both, a cell clipped by root A stopped counting in root B, while a
+     * cell clipped by root B had already been counted by root A. Reordering the two roots
+     * moved the plain gate's split from 4/2 to 6/4 on identical data.
+     */
+    @Test
+    void multiRootCountsDoNotDependOnRootOrder() {
+        int[][] countsByOrder = new int[2][];
+        boolean[][] excludedByOrder = new boolean[2][];
+
+        for (int order = 0; order < 2; order++) {
+            List<String> markers = List.of("A", "B");
+            double[][] values = {
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+            };
+            CellIndex index = Cells.columns(markers, values).build();
+            MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+            GateNode clipper = new GateNode("A", 5.0);
+            clipper.setStatistic(Statistic.MEAN);
+            clipper.setThresholdIsZScore(false);
+            clipper.setExcludeOutliers(true);
+            clipper.setClipPercentileLow(20.0);
+            clipper.setClipPercentileHigh(80.0);
+
+            GateNode plain = new GateNode("B", 5.0);
+            plain.setStatistic(Statistic.MEAN);
+            plain.setThresholdIsZScore(false);
+
+            GateTree tree = new GateTree();
+            tree.setQualityFilter(null);
+            if (order == 0) {
+                tree.addRoot(clipper);
+                tree.addRoot(plain);
+            } else {
+                tree.addRoot(plain);
+                tree.addRoot(clipper);
+            }
+
+            AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+            countsByOrder[order] = new int[] {
+                    plain.getBranches().get(0).getCount(),
+                    plain.getBranches().get(1).getCount(),
+                    clipper.getBranches().get(0).getCount(),
+                    clipper.getBranches().get(1).getCount()
+            };
+            excludedByOrder[order] = result.getExcluded();
+        }
+
+        assertArrayEquals(countsByOrder[0], countsByOrder[1],
+                "Branch counts must not depend on the order roots were added");
+        assertArrayEquals(excludedByOrder[0], excludedByOrder[1],
+                "Exclusion is the union over all roots either way, so it is order-free too");
+
+        // The clipping root still excludes its own outliers -- the fix scopes the
+        // suppression to one root, it does not switch it off.
+        int excludedCount = 0;
+        for (boolean e : excludedByOrder[0]) if (e) excludedCount++;
+        assertTrue(excludedCount > 0, "The clipping root should still exclude its outliers");
+    }
+
+    // ---- unmeasured cells ----
+
+    /**
+     * MIRAGE's {@code export_geojson.py} omits a NaN measurement from the GeoJSON entirely,
+     * so a marker absent on some cells is ordinary input, and the column reads NaN there.
+     * Such a cell used to be labelled negative and <em>counted</em> in the negative branch,
+     * because {@code NaN >= threshold} is false and nothing upstream checked. The same
+     * export wrote blanks in that cell's {@code _raw}, {@code _zscore} and {@code _sign}
+     * columns, so one CSV row asserted both "no data" and "negative" at once.
+     */
+    @Test
+    void unmeasuredCellIsNotClassifiedNegative() {
+        CellIndex index = Cells.of(5)
+                .marker("CD3", i -> i == 2 ? Double.NaN : (i + 1) * 10.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
+
+        GateNode gate = new GateNode("CD3", 25.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+
+        assertTrue(result.getUnmeasured()[2], "The cell with no CD3 value is flagged unmeasured");
+        assertEquals("Unclassified", result.getPhenotypes()[2],
+                "A gate with no value for a cell gives it no label");
+        assertFalse(result.getExcluded()[2],
+                "Unmeasured is not exclusion -- there is simply nothing to say about this cell");
+        assertFalse(result.getOutlier()[2],
+                "Unmeasured is not an outlier: the value is absent, not extreme");
+
+        for (int i : new int[] {0, 1, 3, 4}) {
+            assertFalse(result.getUnmeasured()[i], "Cell " + i + " has a CD3 value");
+        }
+
+        // 10 and 20 are below 25; 40 and 50 above. The NaN cell counts in neither.
+        assertEquals(2, gate.getBranches().get(0).getCount(), "CD3+ counts the two cells above 25");
+        assertEquals(2, gate.getBranches().get(1).getCount(),
+                "CD3- counts only measured cells below 25 -- it used to report 3");
+    }
+
+    /**
+     * A gate that cannot judge a cell must not hand it to its children either: they would
+     * be judging it on the same absent data, one level deeper.
+     */
+    @Test
+    void unmeasuredCellDoesNotDescendIntoChildren() {
+        CellIndex index = Cells.of(4)
+                .marker("CD45", i -> i == 1 ? Double.NaN : 10.0)
+                .marker("CD3", i -> 99.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
+
+        GateNode parent = new GateNode("CD45", 5.0);
+        parent.setStatistic(Statistic.MEAN);
+        parent.setThresholdIsZScore(false);
+        GateNode child = new GateNode("CD3", 50.0);
+        child.setStatistic(Statistic.MEAN);
+        child.setThresholdIsZScore(false);
+        parent.getBranches().get(0).getChildren().add(child);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(parent);
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+
+        assertEquals("Unclassified", result.getPhenotypes()[1],
+                "Cell 1 has no CD45, so it never reaches the CD3 gate below it");
+        assertEquals(3, child.getBranches().get(0).getCount(),
+                "Only the three cells that passed the CD45 gate are judged by CD3");
+        assertEquals(0, child.getBranches().get(1).getCount());
+    }
+
+    /**
+     * An unmeasured cell is not an outlier, and the two flags have to stay distinguishable:
+     * a clipped cell has a real value and so still gets a branch, an unmeasured one does not.
+     */
+    @Test
+    void clippedCellStillGetsABranchUnlikeAnUnmeasuredOne() {
+        CellIndex index = Cells.of(10)
+                .marker("A", i -> i == 0 ? Double.NaN : i + 1.0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        GateNode gate = new GateNode("A", 5.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        gate.setExcludeOutliers(true);
+        gate.setClipPercentileLow(20.0);
+        gate.setClipPercentileHigh(80.0);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+
+        assertTrue(result.getUnmeasured()[0], "Cell 0 has no value for A");
+        assertFalse(result.getOutlier()[0], "...so it is not an outlier either");
+        assertEquals("Unclassified", result.getPhenotypes()[0]);
+
+        // Somebody in the population is clipped, and a clipped cell keeps a phenotype.
+        int clipped = 0;
+        for (int i = 0; i < 10; i++) {
+            if (result.getOutlier()[i]) {
+                clipped++;
+                assertNotEquals("Unclassified", result.getPhenotypes()[i],
+                        "A clipped cell has a real value, so it still has a branch");
+                assertFalse(result.getUnmeasured()[i], "Clipped is not unmeasured");
+            }
+        }
+        assertTrue(clipped > 0, "The 20/80 clip should exclude somebody");
+    }
+
+    @Test
+    void combineMasksRejectsDifferentPopulations() {
+        // Every mask is positional against CellIndex.getObjects(), so different lengths
+        // mean different populations. This used to truncate silently one way and throw an
+        // unexplained ArrayIndexOutOfBoundsException the other.
+        assertThrows(IllegalArgumentException.class,
+                () -> GatingEngine.combineMasks(new boolean[4], new boolean[2]));
+        assertThrows(IllegalArgumentException.class,
+                () -> GatingEngine.combineMasks(new boolean[4], new boolean[6]));
+    }
+
     @Test
     void combineMasksAndsCorrectly() {
         boolean[] a = {true, true, false, false};
@@ -480,8 +680,17 @@ class GatingEngineTest {
     }
 
     @Test
-    void computeAncestorMaskDisabledAncestorPassesAll() {
-        // If an ancestor gate is disabled, it should not filter cells
+    void computeAncestorMaskDisabledAncestorReachesNothing() {
+        // A disabled gate is a hard stop for its whole subtree, and the ancestor mask has
+        // to say so. This test used to assert the opposite -- "a disabled parent should
+        // not filter, all cells reach the child" -- which reads like the friendlier
+        // behaviour but is one the engine cannot deliver: GatingEngine.walkNode returns
+        // on a disabled gate before descending, and a disabled gate has no chosen branch
+        // to descend *into*, so there is no coherent way for its children to run. Pinning
+        // that intent on the mask alone, without ever asking the engine, is what let the
+        // two drift: the mask reported all 5 cells while the engine classified 0 of them,
+        // so the child's plot drew a full population against a phenotype column that
+        // never mentioned it. The assertion below is now the agreement itself.
         List<String> markers = List.of("CD45", "CD3");
         double[][] values = {
             {1, 2, 3, 4, 5},
@@ -504,9 +713,15 @@ class GatingEngineTest {
         tree.getRoots().add(parent);
 
         boolean[] mask = GatingEngine.computeAncestorMask(tree, child, index, stats, null);
-        // Disabled parent should not filter — all cells reach the child
         for (int i = 0; i < 5; i++) {
-            assertTrue(mask[i], "Cell " + i + " should reach child (parent disabled)");
+            assertFalse(mask[i], "Cell " + i + " cannot reach a child of a disabled gate");
+        }
+
+        // ...and the engine agrees: nothing is labelled by the child gate.
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+        for (String phenotype : result.getPhenotypes()) {
+            assertEquals("Unclassified", phenotype,
+                    "A disabled root classifies nothing, so its child cannot either");
         }
     }
 

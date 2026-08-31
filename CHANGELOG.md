@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed — correctness
+
+- **A cell with no measurement is no longer reported as negative.** MIRAGE's
+  `export_geojson.py` omits a NaN measurement from the GeoJSON entirely, so a marker
+  absent on some cells is ordinary input and the column reads NaN there. Because
+  `NaN >= threshold` is false and nothing upstream checked, such a cell was assigned the
+  negative branch and *counted* in it — a marker missing on 5% of cells inflated that
+  marker's negative population by 5%. The same export already wrote blanks in that cell's
+  `_raw`, `_zscore` and `_sign` columns, so one CSV row asserted both "never measured" and
+  "measured, and negative", against a `computeSign` javadoc claiming the two columns
+  cannot drift apart. A gate now gives no opinion on a cell it has no data for: the cell
+  keeps its ancestors' phenotype, is counted in neither branch, does not descend into the
+  subtree, and is flagged in the new **`Unmeasured`** CSV column and
+  `AssignmentResult.getUnmeasured()`. `ResolvedGate` distinguishes `UNMEASURED` from
+  `CLIPPED`, which were the same `-1` — a clipped cell has a real value and still gets a
+  branch.
+- **Multi-root branch counts no longer depend on the order roots were added.**
+  `excluded[]` answered two questions at once: "grey this cell out?" (a union over the
+  whole tree) and "should this branch count it?" (which must be scoped to the root doing
+  the counting). One array serving both meant a cell clipped by root A stopped counting in
+  root B, while a cell clipped by root B had already been counted by root A. Reordering
+  two roots moved a gate's split from 4/2 to 6/4 on identical data. Each root is now
+  walked from the same base exclusion (quality filter + ROI); the union is restored
+  afterwards, so QuPath's visual filtering is unchanged.
+- **`computeAncestorMask` no longer contradicts the engine on a disabled ancestor.** It
+  treated a disabled gate as transparent and reported all cells reaching the target, while
+  `walkNode` returns before descending, so the engine classified none of them — the
+  child's plot drew a full population against a phenotype column that never mentioned it.
+  A disabled gate is a hard stop for its subtree on both paths. The test that pinned the
+  old mask behaviour asserted an intent the engine cannot deliver (a disabled gate has no
+  chosen branch to descend *into*) and now pins the agreement instead.
+- **`combineMasks` rejects masks of different lengths** instead of silently truncating one
+  way and throwing an unexplained `ArrayIndexOutOfBoundsException` the other. Every mask is
+  positional against `CellIndex.getObjects()`, so a length mismatch means two different
+  populations.
+
+### Added — annotation regions
+
+- **The annotation filter uses the selected annotations**, falling back to all of them when
+  nothing is selected, so "gate on just this region" is a click rather than a deletion.
+- **Cells are attributed to the region they came from,** not merely in-or-out. The new
+  `model/RegionMask` replaces the bare `boolean[]` — a type that could not express *which*
+  region, making core-vs-margin comparison unrepresentable rather than just unimplemented.
+  A **`region`** column is written to `gate_pheno.csv` when the filter is on, and the
+  status bar reports the regions in use.
+- **Exclusion regions.** An annotation carrying a QuPath *ignored* classification
+  (`Ignore*`, or any class whose name ends in `*`, per `PathClassTools.isIgnoredClass`) is
+  subtracted — for necrosis, tissue folds and artefacts. Exclusions with no include region
+  alongside them mean "the whole image, minus these". Overlapping include regions resolve
+  to the first match, so per-region counts partition the population.
+- **Line and point annotations are skipped and counted** rather than contributing an
+  all-false mask. Previously, turning the filter on when the only annotation was a stray
+  point excluded *every* cell, with empty histograms as the sole symptom.
+
+### Changed — performance
+
+- **The annotation mask is ~36x faster.** `ROI.contains` on a polygon is a full
+  point-in-polygon test through JTS, and the mask recomputes on every annotation edit, so
+  it sits in the interactive path. Each annotation's envelope is now hoisted into
+  primitive arrays and rejects distant cells in four comparisons. Measured on 200k cells
+  against four 200-vertex polygons: **286ms to 8ms**, with the envelopes rejecting 97% of
+  cells. An envelope is a superset of its geometry, so the mask is bit-identical.
+
+### Fixed — docs
+
+- `CLAUDE.md` described the annotation filter as "UUID-based". No UUID appears anywhere in
+  `src/main`; the filter unions annotations by geometry.
+
 ## [0.9.0] - 31/08/2026
 
 **Version numbering restarts here.** FlowPath was developed under a 1.x/2.x line while

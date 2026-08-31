@@ -155,6 +155,29 @@ final class ResolvedGate {
     }
 
     /**
+     * {@link #branchOf} could not place the cell because the gate has <b>no data</b> for it:
+     * an axis read {@code NaN} (MIRAGE's {@code export_geojson.py} omits a NaN measurement
+     * from the GeoJSON entirely, so a marker absent on some cells is normal input), or the
+     * gate's channel is missing from the index altogether.
+     * <p>
+     * This is deliberately distinct from {@link #CLIPPED}. Both used to be {@code -1}, so
+     * the walk could not tell "this cell is an extreme outlier" from "this cell was never
+     * measured" and handled both as clipping -- which forces a branch anyway. An unmeasured
+     * cell therefore landed in the negative branch and was <em>counted</em> there: a cell
+     * with no CD3 stain reported as CD3-negative. The CSV knew better and left
+     * {@code CD3_raw}, {@code CD3_zscore} and {@code CD3_sign} blank on the same row, so
+     * one exported line asserted both things at once.
+     */
+    static final int UNMEASURED = -2;
+
+    /**
+     * {@link #branchOf} could place the cell, but it falls outside this gate's percentile
+     * clip bounds. The walk flags it and re-asks with {@link #branchIgnoringClip}, because a
+     * clipped cell has a real value and so has a real branch -- it is merely extreme.
+     */
+    static final int CLIPPED = -1;
+
+    /**
      * <b>The</b> predicate: which branch does cell {@code cellIdx} fall into?
      * <p>
      * Two steps, and only two. <i>Sample resolution</i> lives here — read the axis columns
@@ -167,8 +190,8 @@ final class ResolvedGate {
      * Everything expensive — key resolution, column lookup, clip bounds — happened in
      * {@link #compileOne}. This reads {@code double[]} by index.
      *
-     * @return the branch index, or {@code -1} when the gate is unusable or the cell is
-     *         outlier-clipped by it
+     * @return the branch index, or {@link #CLIPPED} when the cell is outlier-clipped by
+     *         this gate, or {@link #UNMEASURED} when the gate has no value to judge it on
      */
     int branchOf(int cellIdx) {
         return branchOf(cellIdx, true);
@@ -186,13 +209,19 @@ final class ResolvedGate {
     }
 
     private int branchOf(int cellIdx, boolean honourClip) {
-        if (!usable) return -1;
+        if (!usable) return UNMEASURED;
         double rawX = x.valueAt(cellIdx);
-        if (honourClip && clipsX(rawX)) return -1;
+        // NaN is checked before the clip: an unmeasured cell is not an extreme one, and
+        // clipsX(NaN) is false anyway (every NaN comparison is), so leaving it to the clip
+        // check would let it fall through to branchFor -- where `NaN >= threshold` is false
+        // and the cell silently becomes negative.
+        if (Double.isNaN(rawX)) return UNMEASURED;
+        if (honourClip && clipsX(rawX)) return CLIPPED;
         double vx = zScore ? x.toZScore(rawX) : rawX;
         if (!twoAxis) return node.branchFor(vx, 0.0);
         double rawY = y.valueAt(cellIdx);
-        if (honourClip && clipsY(rawY)) return -1;
+        if (Double.isNaN(rawY)) return UNMEASURED;
+        if (honourClip && clipsY(rawY)) return CLIPPED;
         double vy = zScore ? y.toZScore(rawY) : rawY;
         return node.branchFor(vx, vy);
     }

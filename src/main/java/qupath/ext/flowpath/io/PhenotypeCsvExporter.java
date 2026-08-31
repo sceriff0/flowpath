@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
@@ -79,6 +80,22 @@ public class PhenotypeCsvExporter {
      */
     public static void export(File file, CellIndex index, GatingEngine.AssignmentResult result,
                               GateTree tree, MarkerStats stats) throws IOException {
+        export(file, index, result, tree, stats, null);
+    }
+
+    /**
+     * As above, additionally naming the annotated region each cell fell in.
+     *
+     * @param regions which annotated region each cell belongs to, or {@code null} when the
+     *                annotation filter is off. When present a {@code region} column is
+     *                written, holding the region's name or blank for a cell in none --
+     *                which is what makes "does this population differ between tumour core
+     *                and invasive margin?" answerable from one export instead of one
+     *                export per region.
+     */
+    public static void export(File file, CellIndex index, GatingEngine.AssignmentResult result,
+                              GateTree tree, MarkerStats stats, RegionMask regions)
+            throws IOException {
 
         // Each column arrives already registered with MarkerStats — that is what holding a
         // MeasuredColumn means — so there is no separate ensure pass to forget.
@@ -95,6 +112,8 @@ public class PhenotypeCsvExporter {
         String[] phenotypes = result.getPhenotypes();
         boolean[] outOfAnnotation = result.getOutOfAnnotation();
         boolean[] outlier = result.getOutlier();
+        boolean[] unmeasured = result.getUnmeasured();
+        boolean withRegion = regions != null && !regions.isEmpty();
 
         // Emitted only when the export actually carries labels. An all-blank column would
         // be worse than no column: join_flowpath.py branches on the column's *presence*,
@@ -119,6 +138,14 @@ public class PhenotypeCsvExporter {
             // non-empty string is True, which would silently mark every cell an outlier.
             // The odd casing is load-bearing. Do not tidy it.
             writer.write(",Out_of_annotation,Outlier");
+            // Unmeasured: this cell reached a gate that had no measurement for it, so no
+            // branch was assigned there and its phenotype stops at the last gate that
+            // could judge it. Distinct from Outlier, which means "measured, but extreme".
+            // Not part of the join_flowpath.py contract -- extra columns are ignored by
+            // it -- but written in the same True/False casing as its neighbours so pandas
+            // infers a real boolean rather than a always-truthy string.
+            writer.write(",Unmeasured");
+            if (withRegion) writer.write(",region");
             for (MeasuredColumn col : columns) {
                 // Escape the *whole* field, suffix included: a channel name containing a
                 // comma would otherwise emit `"CD3, clone"_raw`, which is text after a
@@ -140,6 +167,12 @@ public class PhenotypeCsvExporter {
                 writer.write(outOfAnnotation[i] ? "True" : "False");
                 writer.write(',');
                 writer.write(outlier[i] ? "True" : "False");
+                writer.write(',');
+                writer.write(unmeasured[i] ? "True" : "False");
+                if (withRegion) {
+                    String region = regions.regionNameOf(i);
+                    writer.write(',' + CellTable.escape(region == null ? "" : region));
+                }
 
                 for (int c = 0; c < columns.size(); c++) {
                     MeasuredColumn col = columns.get(c);
