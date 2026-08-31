@@ -195,6 +195,55 @@ class PopulationStatsTest {
                 "a reader follows the table down the tree, so the order is the tree's");
     }
 
+    /** CD45 x CD8 quadrant gate over the same 10 cells, split at 5.5 on both axes. */
+    private static GateTree quadrantTree() {
+        QuadrantGate root = new QuadrantGate("CD45", "CD8", 5.5, 5.5);
+        root.setThresholdIsZScore(false);
+        root.setCompartmentX(Compartment.WHOLE_CELL);
+        root.setStatisticX(Statistic.MEAN);
+        root.setCompartmentY(Compartment.WHOLE_CELL);
+        root.setStatisticY(Statistic.MEAN);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+        return tree;
+    }
+
+    /**
+     * Regression: {@code getChannels()} on a quadrant/region gate returns TWO channels, and
+     * {@code gateChannel} must carry both — reporting only the X axis would mislabel every
+     * quadrant row as if it were a single-marker gate.
+     */
+    @Test
+    void quadrantGateRowsCarryBothChannelsJoined() {
+        GateTree tree = quadrantTree();
+        PopulationStats s = PopulationStats.of(
+                tree, tally(tree, null, 0), List.of(), null, null);
+
+        List<PopulationStats.Row> rows = s.rows(PopulationStats.Scope.WHOLE_SLIDE);
+        assertEquals(4, rows.size(), "a quadrant gate has four branches");
+        for (PopulationStats.Row row : rows) {
+            assertEquals("CD45 / CD8", row.gateChannel(), row.path());
+        }
+    }
+
+    /** A 1D threshold gate's rows are unaffected by the multi-channel join. */
+    @Test
+    void thresholdGateRowsReportASingleChannel() {
+        GateTree tree = twoLevelTree();
+        PopulationStats s = PopulationStats.of(
+                tree, tally(tree, null, 0), List.of(), null, null);
+
+        List<PopulationStats.Row> rows = s.rows(PopulationStats.Scope.WHOLE_SLIDE);
+        PopulationStats.Row cd45pos = rows.stream()
+                .filter(r -> r.path().equals("CD45+")).findFirst().orElseThrow();
+        assertEquals("CD45", cd45pos.gateChannel());
+
+        PopulationStats.Row cd8pos = rows.stream()
+                .filter(r -> r.path().equals("CD45+/CD8+")).findFirst().orElseThrow();
+        assertEquals("CD8", cd8pos.gateChannel());
+    }
+
     private static PopulationStats.Row rowFor(PopulationStats s, PopulationStats.Scope scope,
                                               String region, String branch) {
         return s.rows(scope).stream()

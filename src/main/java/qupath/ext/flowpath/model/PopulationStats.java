@@ -42,6 +42,9 @@ public final class PopulationStats {
      *
      * @param regionName            the region, for {@link Scope#ANNOTATION_K}; {@code null} otherwise
      * @param path                  gating route, e.g. {@code "CD45+/CD8+"}
+     * @param gateChannel           every axis the producing gate is cut on, joined by
+     *                              {@code " / "} — one marker for a threshold gate, two for a
+     *                              quadrant or region gate; never just the first axis
      * @param depth                 0 for a root branch
      * @param count                 cells in this branch at this scope
      * @param cleanCount            of those, the cleanly judged ones
@@ -123,8 +126,7 @@ public final class PopulationStats {
             // so reporting its stale counts would show populations the phenotype column
             // never mentions.
             if (!node.isEnabled()) continue;
-            List<String> channels = node.getChannels();
-            String channel = channels.isEmpty() ? "" : channels.get(0);
+            String channel = String.join(" / ", node.getChannels());
             for (Branch branch : node.getBranches()) {
                 String path = prefix.isEmpty() ? branch.getName() : prefix + "/" + branch.getName();
                 int count = region < 0 ? scopeCount(scope, branch, tally)
