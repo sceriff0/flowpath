@@ -243,7 +243,7 @@ public final class CompartmentCapability {
      * <p>
      * The one rule that matters: never return a statistic this export lacks. MIRAGE's
      * default compartment quantification emits {@code Median} only — {@code Mean} and
-     * {@code Sum} appear only when {@code --quantify_statistics} names them — so falling
+     * {@code Sum} appear only under {@code expanded_quantification} — so falling
      * back to a hardcoded Mean resolves the column to a measurement key that is not in
      * the file, and every cell reads NaN. Mean is the answer only for a legacy channel
      * with no structured statistics at all, whose bare column <em>is</em> the whole-cell

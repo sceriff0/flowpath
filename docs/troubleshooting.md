@@ -168,9 +168,9 @@ your problem, open an issue on the
     narrows it to your gated markers (given at least two of them), but an ungated
     40-plex will embed all forty. See the [performance table](usage.md#umap).
 
-    Trimming the list only started doing this in **v2.2.0**. Before that the
-    include flag was a picker preference: unticking a marker changed one label and
-    the embedding still ran over the whole panel.
+    Trimming the list only started doing this in the final 2.x release. In earlier
+    versions the include flag was a picker preference: unticking a marker changed one
+    label and the embedding still ran over the whole panel.
 
 ## AnnoMask { #annomask }
 

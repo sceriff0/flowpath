@@ -12,36 +12,39 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * Maps to the statistic token in the measurement key
  * {@code "<marker>: <Compartment>: <Stat>"}. <b>{@link #MEDIAN} is the one MIRAGE
- * always emits</b> — {@code params.quantify_statistics} defaults to {@code ['Median']}.
- * Every other name appears only when that list asks for it. Which of
- * them a given export actually carries must be read from
+ * always emits</b> — it is computed on every run. {@code Mean} and {@code Sum} appear
+ * only with {@code expanded_quantification} (the {@code --expanded} flag), which defaults
+ * to off. Which of them a given export actually carries must be read from
  * {@link CompartmentCapability}, never assumed — a default-quantification export
  * has no Mean column, and pinning a gate axis to one resolves it to a measurement
  * key that is not in the file, so every cell reads NaN.
  *
  * <h2>Open vocabulary</h2>
- * This is deliberately <b>not</b> an enum. MIRAGE's statistic list is extensible
- * and — since MIRAGE composed its vocabulary — no longer even enumerable by hand. A closed
- * enum here made FlowPath unable to see a column it had no name for: the key failed to
- * parse, then {@code MeasurementKeys.collapseToBaseMarkers} re-absorbed the whole unparsed
- * string as a marker, so the panel grew a phantom row spelled {@code "CD3: Cell: REDSEA"}
- * next to the real {@code CD3}.
- *
- * <h2>The vocabulary is composed, not listed</h2>
- * MIRAGE builds its statistic names as {@code base × normalisation}: bases
- * {@code Median}, {@code Mean}, {@code Sum} and {@code REDSEA}, each crossed with
- * {@code ""}, {@code " Z"} and {@code " RobustZ"} — twelve names, several containing a
- * space. Enumerating those on this side would be a list to hand-sync forever, which is
- * the thing this type exists to stop; FlowPath discovers them from the data and only
- * understands their <em>shape</em>, via {@link #baseToken} and {@link #normalisation}.
+ * This is deliberately <b>not</b> an enum, even though MIRAGE {@code main}'s list is
+ * currently just three names ({@code STATISTICS = ("Median", "Mean", "Sum")}). A closed
+ * enum made FlowPath unable to see a column it had no name for: the key failed to parse,
+ * then {@code MeasurementKeys.collapseToBaseMarkers} re-absorbed the whole unparsed string
+ * as a marker, so the panel grew a phantom row spelled {@code "CD3: Cell: REDSEA"} next to
+ * the real {@code CD3}. A parse failure became a fake marker rather than an error — and it
+ * did so for a statistic that a MIRAGE branch, not {@code main}, happened to emit.
  * <p>
- * {@code REDSEA} is whole-cell only — a membrane correction has no nucleus/cytoplasm
- * decomposition — which is why {@link CompartmentCapability} must store pairs rather than
- * two independent axes. FlowPath now discovers the
- * statistic vocabulary from the data and only {@link Compartment} stays closed — it is a
- * genuinely fixed set of anatomical regions, which is what makes it a reliable parsing
- * anchor. {@link #MEAN}, {@link #MEDIAN} and {@link #SUM} survive as constants because
- * FlowPath still has opinions about them: display ordering, and the bare-column rule.
+ * The list is the pipeline's to grow, and hand-syncing it across two repositories is the
+ * thing this type exists to stop. FlowPath discovers the names from the data and
+ * understands only their <em>shape</em>, via {@link #baseToken} and {@link #normalisation}
+ * — a name of the form {@code base + normalisation}, where the normalisation is one of
+ * {@code ""}, {@code " Z"} or {@code " RobustZ"}. Nothing here requires that any
+ * particular one exist.
+ * <p>
+ * {@link Compartment} stays closed by contrast: it is a genuinely fixed set of anatomical
+ * regions, which is what makes it a reliable parsing anchor. {@link #MEAN},
+ * {@link #MEDIAN} and {@link #SUM} survive as constants because FlowPath still has
+ * opinions about them: display ordering, and the bare-column rule.
+ * <p>
+ * A statistic that is whole-cell-only — a membrane correction has no nucleus/cytoplasm
+ * decomposition — is why {@link CompartmentCapability} stores {@code (compartment,
+ * statistic)} <em>pairs</em> rather than two independent axes: two independent axes would
+ * advertise a combination the file does not carry, which resolves to an absent key and
+ * reads NaN for every cell.
  *
  * <h2>Interned</h2>
  * Instances are canonical per case-insensitive token, so {@code ==} and
@@ -154,9 +157,12 @@ public final class Statistic {
      * Exposed so a consumer can ask "does a standardised sibling of this column exist?"
      * without re-spelling the suffixes. FlowPath composes candidate keys from these and
      * then checks them against {@link CompartmentCapability} -- it never assumes one is
-     * present, because which of them an export carries is decided by MIRAGE's
-     * {@code params.quantify_statistics}, and the default list is {@code ['Median']}
-     * alone.
+     * present.
+     * <p>
+     * <b>MIRAGE {@code main} emits none of them today</b> ({@code STATISTICS} is
+     * {@code ("Median", "Mean", "Sum")}). This exists so that a pipeline which does emit
+     * a pre-standardised column is understood by shape rather than by a hard-coded list,
+     * the same reason this class is not an enum.
      */
     public static List<String> standardisingNormalisations() {
         return List.of(" Z", " RobustZ");

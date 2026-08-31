@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, e.g. 1.9.1 (must match build.gradle.kts). Tag is created only if tests pass.'
+        description: 'Version to release, e.g. 0.9.0 (must match build.gradle.kts). Tag is created only if tests pass.'
         required: true
         type: string
 
@@ -41,7 +41,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libgtk-3-0
 
       # Resolve the release tag from either the dispatch input or the pushed tag,
-      # normalizing so "1.9.1" and "v1.9.1" both yield tag "v1.9.1".
+      # normalizing so "0.9.0" and "v0.9.0" both yield tag "v0.9.0".
       - name: Resolve release tag
         id: rel
         run: |

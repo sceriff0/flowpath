@@ -37,21 +37,27 @@ no renaming, no remapping. If a dataset has **no** per-compartment keys (older
 exports, or whole-cell-only masks), FlowPath falls back to whole-cell / Mean
 automatically — nothing breaks.
 
-!!! note "The statistic is whatever MIRAGE computed"
-    FlowPath does **not** carry a fixed list of statistics. MIRAGE composes its names as
-    `base × normalisation` — bases `Median`, `Mean`, `Sum` and `REDSEA`, each optionally
-    suffixed ` Z` or ` RobustZ` — and which of them an export carries is decided by
-    `params.quantify_statistics`, whose default is `['Median']` alone. FlowPath discovers
-    the vocabulary from the file and only understands its *shape*, so a statistic added on
-    the MIRAGE side needs no change here.
+!!! note "Which compartments and statistics you actually get"
+    Two independent MIRAGE settings decide this, and FlowPath reads the answer from the
+    file rather than assuming it:
 
-    Two consequences worth knowing:
+    | MIRAGE setting | Default | Effect on the keys |
+    |---|---|---|
+    | `quantify_compartments` | **`true`** | Emits `Nucleus`, `Cytoplasm` and `Cell` per marker. Set `false` for a lean whole-cell-only run. |
+    | `expanded_quantification` | **`false`** | Off: **`Median` only** — it is always computed. On (`--expanded`): adds `Mean` and `Sum` per compartment. |
 
-    - **`REDSEA` is whole-cell only.** A membrane correction has no nucleus/cytoplasm
-      decomposition, so `CD3: Cell: REDSEA` exists and `CD3: Nucleus: REDSEA` deliberately
-      does not. FlowPath will not offer you that pair.
-    - **` Z` and ` RobustZ` are MIRAGE's own z-scores**, computed per patient across every
-      cell. They are not the same number as FlowPath's — see below.
+    So a **default MIRAGE run gives you three compartments and one statistic, `Median`** —
+    which is why FlowPath's gates default to Median too. The per-gate statistic dropdown
+    will show just `Median` unless the run used `--expanded`, in which case `Mean` and
+    `Sum` join it. You are only ever offered a combination that is in the file: asking for
+    one that is not resolves to a missing key and reads as no data.
+
+    The bare `<marker>` key is separate and always present — it is the whole-cell **mean**,
+    which is why choosing whole-cell + Mean resolves to it.
+
+    FlowPath does **not** hard-code this list. It discovers the vocabulary from the file
+    and only understands its *shape*, so a statistic added on the MIRAGE side needs no
+    change here.
 
 !!! note "One index, two views"
     Gating and the UMAP share a single in-memory cell index. That is why the UMAP
@@ -198,17 +204,19 @@ cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,p
 - **Per-gate compartment & statistic** — choose Nucleus / Cytoplasm / Cell and any
   statistic the export carries, per gate. Only combinations actually present in the file
   are offered.
-- **Values selector** — per gate, choose **Raw**, whichever of **Z-score (MIRAGE)** /
-  **Robust Z (MIRAGE)** your export actually carries, or **Z-score (computed here)**. The
-  list is built from the file, so you are only ever offered a column that exists.
+- **Values selector** — per gate, choose **Raw** or **Z-score (computed here)**. On a
+  current MIRAGE export those are the two you will see, because MIRAGE emits no
+  standardised columns of its own.
 
-    The labels name who computed the number, because the two standardisations are **not
-    the same**: MIRAGE's ` Z` / ` RobustZ` columns are computed across every cell of the
-    patient and read straight from the export, while FlowPath's is computed over the cells
-    currently loaded and filtered — so it moves when you change a quality filter or an
-    annotation ROI. FlowPath's own z-score is offered but **greyed out**, with the reason
-    in its tooltip, over a constant column or over one MIRAGE has already standardised
-    (z-scoring a z-score rescales the axis by whatever is currently filtered).
+    The label says *computed here* deliberately: that z-score is FlowPath's, taken over
+  **the cells currently loaded and filtered**, so it moves when you change a quality
+  filter or an annotation ROI. It is offered but **greyed out**, with the reason in its
+  tooltip, over a channel whose values are constant — there is no spread to standardise
+  against, and standardising anyway would report every cell as exactly 0.
+
+    The selector is built from the file, so if a future MIRAGE emits pre-standardised
+  columns they appear here as their own clearly-labelled options rather than being
+  confused with FlowPath's.
 - **Quality filters** — pre-gating QC with min + max for area, eccentricity,
   solidity, total intensity, perimeter.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
@@ -277,7 +285,7 @@ What can appear there:
     needs an ARPACK native library that has no `macosx-arm64` build, so a run that
     reached it failed outright. Because FlowPath now chooses, embeddings are
     reproducible across platforms — but coordinates for datasets of 10 000 cells
-    or fewer differ from any this extension produced before v2.2.0.
+    or fewer differ from those produced by the earlier 2.x line.
 
 | Cell count | Strategy | Expected time |
 |---|---|---|

@@ -10,11 +10,15 @@ cite that too.
 > QuPath. (2026).
 > <https://github.com/sceriff0/qupath-extension-flowpath>
 
-!!! note "Citing FlowPath v1"
-    Before v2.0.0, FlowPath shipped as two extensions, *FlowPath - GatingTree* and
-    *FlowPath - qUMAP*. Work done with those versions should cite them by the
-    names and URLs current at the time; the reference above covers v2.0.0 onward,
-    where they are one tool.
+!!! note "Citing earlier versions"
+    FlowPath's version numbering restarted at **0.9.0**; earlier releases formed a
+    separate 1.x / 2.x line, and version numbers do not compare across the two. Earlier
+    still, it shipped as two extensions, *FlowPath - GatingTree* and *FlowPath - qUMAP*.
+    Work done with any of those should cite them by the names, versions and URLs current
+    at the time. The reference above covers 0.9.0 onward, where they are one tool.
+
+    **Always state the version you used** — the reference alone does not identify it, and
+    the two numbering lines overlap.
 
 If you imported cells with
 [AnnoMask](https://github.com/sceriff0/qupath-extension-annomask) — a separate

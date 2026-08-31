@@ -65,6 +65,46 @@ class ValueModeTest {
         assertTrue(modes.stream().noneMatch(m -> m.kind() == ValueMode.Kind.MIRAGE));
     }
 
+    /**
+     * <b>What a real MIRAGE run actually produces.</b> On {@code main},
+     * {@code quantify_compartments} defaults to true and {@code expanded_quantification}
+     * to false, so the export carries three compartments and exactly one statistic,
+     * {@code Median}. Nothing is pre-standardised, so the selector is Raw plus FlowPath's
+     * own z-score — and the compartment/statistic choice belongs to the dropdowns, not
+     * here.
+     */
+    @Test
+    void aDefaultMirageRunOffersRawAndTheComputedZScoreOnly() {
+        var capability = CompartmentCapability.fromKeys(Set.of(
+                "CD3: Nucleus: Median", "CD3: Cytoplasm: Median", "CD3: Cell: Median"));
+        var gate = thresholdOn("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN);
+
+        assertEquals(List.of("Raw", "Z-score (computed here)"),
+                labels(ValueMode.availableFor(gate, capability, null, null)));
+        // All three compartments are on offer, with Median the only statistic in any.
+        assertEquals(3, capability.compartmentsFor("CD3").size());
+        assertEquals(Set.of(Statistic.MEDIAN),
+                capability.statisticsFor("CD3", Compartment.WHOLE_CELL));
+    }
+
+    /**
+     * The same run with {@code --expanded_quantification}: Mean and Sum join Median per
+     * compartment. Still no standardised column, so the Values row is unchanged — the
+     * extra statistics belong to the Statistic dropdown.
+     */
+    @Test
+    void expandedQuantificationAddsStatisticsButNotValueModes() {
+        var capability = CompartmentCapability.fromKeys(Set.of(
+                "CD3: Cell: Median", "CD3: Cell: Mean", "CD3: Cell: Sum",
+                "CD3: Nucleus: Median", "CD3: Nucleus: Mean", "CD3: Nucleus: Sum"));
+        var gate = thresholdOn("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN);
+
+        assertEquals(List.of("Raw", "Z-score (computed here)"),
+                labels(ValueMode.availableFor(gate, capability, null, null)));
+        assertEquals(Set.of(Statistic.MEDIAN, Statistic.MEAN, Statistic.SUM),
+                capability.statisticsFor("CD3", Compartment.WHOLE_CELL));
+    }
+
     /** With the standardised columns present, both of MIRAGE's appear, in suffix order. */
     @Test
     void standardisedColumnsInTheFileBecomeSelectableModes() {

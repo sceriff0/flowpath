@@ -30,8 +30,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@code "Centroid X µm"}, {@code "Centroid Y µm"} — micrometres, not pixels</li>
  *   <li>the bare marker, {@code "DAPI"} — whole-cell mean</li>
  *   <li>{@code "<marker>: <Nucleus|Cytoplasm|Cell>: <Mean|Median|Sum>"} — per-compartment
- *       ({@code bin/quantify.py::compute_compartment_intensities}; Median/Sum only with
- *       {@code --expanded_quantification})</li>
+ *       ({@code bin/quantify.py::compute_compartment_intensities}. <b>Median is always
+ *       emitted</b>; Mean and Sum only with {@code expanded_quantification})</li>
  *   <li>{@code "Area µm²"}, {@code "Perimeter µm"}, {@code "Eccentricity"},
  *       {@code "Solidity"}, {@code "Convex Area µm²"},
  *       {@code "Major/Minor Axis Length µm"}</li>
@@ -151,7 +151,7 @@ class MirageInputFidelityTest {
         assertEquals(EnumSet.allOf(Compartment.class), EnumSet.copyOf(cap.compartmentsFor("CD3")));
         assertEquals(java.util.Set.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM),
                 cap.statisticsFor("CD3"),
-                "naming Mean and Sum in --quantify_statistics adds them alongside Median");
+                "--expanded_quantification adds Mean and Sum alongside the always-present Median");
     }
 
     @Test

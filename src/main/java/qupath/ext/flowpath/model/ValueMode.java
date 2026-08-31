@@ -8,19 +8,23 @@ import java.util.Objects;
  * <b>One way of reading a gate's values</b>, and the whole of what the editor's "Values"
  * selector may offer for a given gate.
  * <p>
- * The selector used to be a fixed two-way radio, {@code Raw} / {@code Z-score}, and that
- * was wrong in a way that got worse as MIRAGE grew. Standardisation is not a display mode
- * FlowPath applies on top of a column: since MIRAGE composed its statistic vocabulary,
- * {@code "CD3: Cell: Median"} and {@code "CD3: Cell: Median Z"} are two <em>different
- * measurement columns</em>, and MIRAGE's z-score is the second one -- already computed,
- * per patient, across every cell of that patient.
+ * The selector used to be a fixed two-way radio, {@code Raw} / {@code Z-score}. The
+ * trouble with a fixed pair is that <b>standardisation is not a display mode FlowPath
+ * applies on top of a column</b> -- it is a property of the column itself. If a pipeline
+ * emits {@code "CD3: Cell: Median"} and {@code "CD3: Cell: Median Z"}, those are two
+ * <em>different measurement columns</em>, and reaching the second means changing the
+ * <em>Statistic</em>, not the mode. One user intent -- "show me standardised values" --
+ * would then be split across two controls that did not know about each other, with the
+ * dropdown silently disabling the radio and nothing to say the two were about the same
+ * thing.
  * <p>
- * So one user intent -- "show me standardised values" -- was split across two unrelated
- * controls that did not know about each other: the <em>Statistic</em> dropdown (pick the
- * {@code Median Z} column) and the <em>Mode</em> radio (leave the column at {@code Median}
- * and have FlowPath standardise it). Picking the standardised column silently disabled the
- * radio, with nothing to say the two were about the same thing. This type collapses both
- * into one ordered list, derived from what the export actually carries.
+ * <b>As of MIRAGE {@code main} that second column does not exist:</b>
+ * {@code STATISTICS} is {@code ("Median", "Mean", "Sum")} and nothing is pre-standardised,
+ * so this list resolves to {@link Kind#RAW} plus {@link Kind#COMPUTED} and the
+ * {@link Kind#MIRAGE} branch stays dormant. It is here because the vocabulary is read from
+ * the file rather than hard-coded, so the day a standardised column does arrive it becomes
+ * a labelled option instead of a wrong answer -- which is the same reason {@link Statistic}
+ * stopped being an enum.
  *
  * <h2>Three kinds, and who computed the number</h2>
  * <ul>

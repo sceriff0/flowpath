@@ -80,7 +80,15 @@ The latest release published in
 
 | Extension | Latest | Minimum QuPath |
 |---|---|---|
-| FlowPath | **v2.0.0** | v0.7.0 |
+| FlowPath | **v0.9.0** | v0.7.0 |
+
+!!! warning "Versioning restarted at 0.9.0"
+    FlowPath was developed under a 1.x / 2.x line while its output formats were still
+    moving. 0.9.0 is the first release cut against a settled one, and 1.0.0 will
+    accompany the paper. Because 0.9.0 sorts *below* those earlier releases, **QuPath
+    will not offer it as an upgrade** — remove any previously installed FlowPath under
+    *Extensions → Manage extensions* and install this one fresh. Saved gate trees
+    (`.json`) load unchanged.
 
 The changelog and full release history live on the
 [repo's Releases page](https://github.com/sceriff0/qupath-extension-flowpath/releases).

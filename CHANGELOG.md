@@ -46,17 +46,20 @@ been reset to match. Saved gate trees (`.json`) load unchanged.
 
 ### Added
 
-- **The Raw / Z-score toggle is now a "Values" selector derived from the export.**
-  Standardisation is not a display mode FlowPath applies on top of a column: since MIRAGE
-  composed its statistic vocabulary, `CD3: Cell: Median` and `CD3: Cell: Median Z` are two
-  different measurement columns. One user intent — "show me standardised values" — was
-  therefore split across two controls that did not know about each other, and picking
-  MIRAGE's column from the *Statistic* dropdown silently disabled the *Mode* radio with
-  nothing to say the two were about the same thing. The selector now lists **Raw**,
-  whichever of **Z-score (MIRAGE)** / **Robust Z (MIRAGE)** the file actually carries, and
-  **Z-score (computed here)** — labelled so it is always clear who computed the number and
-  over which population. MIRAGE standardises across every cell of a patient; FlowPath
-  across the cells currently loaded and filtered. They are not the same number.
+- **The Raw / Z-score toggle is now a "Values" selector derived from the export.** On a
+  current MIRAGE export it shows **Raw** and **Z-score (computed here)** — MIRAGE emits no
+  standardised columns of its own, so those are the two that exist. The label names who
+  computed the number, which matters because FlowPath's z-score is taken over *the cells
+  currently loaded and filtered* and therefore moves with a quality filter or an
+  annotation ROI.
+
+  The selector is built from what the file actually carries rather than being a fixed
+  pair, so a statistic FlowPath has no name for is still selectable, and a
+  pre-standardised column — should a future MIRAGE emit one — appears as its own clearly
+  labelled option instead of being confused with FlowPath's own. That distinction has
+  teeth: standardisation is not a display mode applied on top of a column, it *is* a
+  different column, so a fixed Raw/Z-score pair could not express it without the
+  *Statistic* dropdown silently fighting the *Mode* radio.
 - A mode that cannot be used is **declined with a reason** rather than hidden: FlowPath's
   own z-score stays visible but disabled over a constant column, or over one MIRAGE has
   already standardised, with the explanation in its tooltip.

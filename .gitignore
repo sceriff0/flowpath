@@ -16,17 +16,21 @@ build/
 .DS_Store
 Thumbs.db
 
-# Claude
+# Agent harness / local working notes — none of this is part of the extension.
 .claude
 .planning
+.superpowers
 scripts
 Flowjo.md
 Claude.md
 docs/superpowers
 notebooks
 
-# Files
-ARCHITECTURE.md
+# Git worktrees created by the harness. Was only in .git/info/exclude, which is
+# local to one clone and never shared — so a fresh clone tracked them.
+.worktrees/
+
+# Sample / input data. cells.geojson from MIRAGE is ~150MB; never commit one.
 *.geojson
 # MkDocs build output
 site/

@@ -5,7 +5,9 @@ plugins {
 
 qupathExtension {
     name = "FlowPath"
-    group = "io.github.qupath"
+    // The publishing coordinate for this extension. NOT io.github.qupath -- that is
+    // QuPath's own group, inherited from the extension template and never changed.
+    group = "io.github.sceriff0"
     version = "0.9.0"
     description = "FlowJo-style cell phenotyping for multiplexed imaging: hierarchical gating plus UMAP visualisation of the resulting phenotypes."
     automaticModule = "qupath.ext.flowpath"

@@ -29,11 +29,12 @@ https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath/main/catalo
 [docs](https://flowpath.readthedocs.io/installation/).
 
 > [!IMPORTANT]
-> **Upgrading from v1?** FlowPath used to ship as two extensions,
-> *FlowPath - GatingTree* and *FlowPath - qUMAP*. Remove both under
-> **Extensions → Manage extensions** before installing FlowPath — QuPath keys
-> extensions by name and will not treat this as an upgrade of either. Saved gate
-> trees (`.json`) load unchanged.
+> **Upgrading from an earlier FlowPath?** Remove the old one first, under
+> **Extensions → Manage extensions**. Versioning restarted at **0.9.0** — it sorts below
+> the earlier 1.x / 2.x line, so QuPath will not offer it as an upgrade — and anything
+> older than that shipped under two different names, *FlowPath - GatingTree* and
+> *FlowPath - qUMAP*, which QuPath keys separately again. Saved gate trees (`.json`) load
+> unchanged in every case.
 
 ## How the two halves fit together
 
