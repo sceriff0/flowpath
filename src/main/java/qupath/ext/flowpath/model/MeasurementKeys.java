@@ -45,15 +45,46 @@ public final class MeasurementKeys {
      *         per-compartment key (e.g. a bare marker name or a morphology field).
      */
     public static Parsed parse(String key) {
+        return parse(key, null);
+    }
+
+    /**
+     * Parse a key, additionally accepting any compartment in {@code recognised}.
+     * <p>
+     * {@link Compartment} became an open vocabulary for the same reason {@link Statistic}
+     * did — a closed set makes FlowPath unable to see a column it has no name for — but the
+     * compartment slot cannot simply be opened, because it is what this method anchors on.
+     * Accepting any token here would make {@code "ROI: 0.50 µm per pixel: CD3"}, a name
+     * QuPath writes itself, parse as marker {@code "ROI"}, compartment
+     * {@code "0.50 µm per pixel"} and statistic {@code "CD3"}: a phantom compartment, a
+     * phantom marker, and a real channel lost.
+     * <p>
+     * So an unknown compartment is accepted only when something has established it as one.
+     * {@link #discoverCompartments} is what does that, and the evidence it requires is
+     * structural rather than a guess — see there.
+     *
+     * @param recognised compartments beyond the known three to accept, or {@code null}
+     */
+    public static Parsed parse(String key, java.util.Set<Compartment> recognised) {
         if (key == null) return null;
         int statSep = key.lastIndexOf(SEP);
         if (statSep < 0) return null;
         int compSep = key.lastIndexOf(SEP, statSep - 1);
         if (compSep < 0) return null;
 
-        // The compartment token is the anchor: reject anything that is not one, which is
-        // what keeps morphology fields and QuPath's own measurements out of the panel.
-        Compartment compartment = Compartment.fromToken(key.substring(compSep + SEP.length(), statSep));
+        // The compartment token is the anchor: reject anything that is neither a known
+        // compartment nor one discovery has vouched for, which is what keeps morphology
+        // fields and QuPath's own measurements out of the panel.
+        String compToken = key.substring(compSep + SEP.length(), statSep);
+        Compartment compartment = Compartment.known(compToken);
+        if (compartment == null && recognised != null && !recognised.isEmpty()) {
+            for (Compartment c : recognised) {
+                if (c != null && c.token().equalsIgnoreCase(compToken.trim())) {
+                    compartment = c;
+                    break;
+                }
+            }
+        }
         if (compartment == null) return null;
 
         Statistic statistic = Statistic.fromToken(key.substring(statSep + SEP.length()));
@@ -85,6 +116,44 @@ public final class MeasurementKeys {
             if (base != null && !base.isBlank()) seen.add(base);
         }
         return new java.util.ArrayList<>(seen);
+    }
+
+    /**
+     * The compartments a set of measurement keys actually contains: the known three, plus
+     * any token that <b>two or more distinct markers</b> use in the compartment slot.
+     * <p>
+     * The threshold is the whole point, and it is a structural fact rather than a
+     * heuristic. A real compartment is emitted for every marker in the panel, so on any
+     * export worth gating it appears dozens of times with dozens of different markers.
+     * QuPath's own three-part names have a <em>constant</em> token in the marker slot —
+     * {@code "ROI: 0.50 µm per pixel: CD3"}, {@code "ROI: 0.50 µm per pixel: CD8"} — so
+     * however many of them a file carries, the marker slot never reaches two distinct
+     * values and the token is never promoted.
+     * <p>
+     * A single-marker panel is unaffected: the known three are always recognised, and the
+     * two-marker rule gates only tokens FlowPath has never seen.
+     */
+    public static java.util.Set<Compartment> discoverCompartments(java.util.Collection<String> keys) {
+        java.util.LinkedHashSet<Compartment> out = new java.util.LinkedHashSet<>(Compartment.known());
+        if (keys == null) return out;
+
+        java.util.Map<String, java.util.Set<String>> markersByToken = new java.util.LinkedHashMap<>();
+        for (String key : keys) {
+            if (key == null) continue;
+            int statSep = key.lastIndexOf(SEP);
+            if (statSep < 0) continue;
+            int compSep = key.lastIndexOf(SEP, statSep - 1);
+            if (compSep < 0) continue;
+            String token = key.substring(compSep + SEP.length(), statSep).trim();
+            if (token.isEmpty() || Compartment.known(token) != null) continue;
+            String marker = stripLayerPrefix(key.substring(0, compSep)).trim();
+            if (marker.isEmpty()) continue;
+            markersByToken.computeIfAbsent(token, k -> new java.util.LinkedHashSet<>()).add(marker);
+        }
+        markersByToken.forEach((token, markers) -> {
+            if (markers.size() >= 2) out.add(Compartment.of(token));
+        });
+        return out;
     }
 
     /** Remove a leading {@code "[...] "} layer prefix if present. */

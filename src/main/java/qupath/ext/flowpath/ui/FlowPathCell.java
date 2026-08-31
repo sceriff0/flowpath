@@ -128,11 +128,13 @@ public class FlowPathCell extends TreeCell<Object> {
         Label badge = new Label(text);
         badge.setFont(Font.font(null, FontWeight.BOLD, 9));
         badge.setTextFill(Color.WHITE);
-        Color bg = switch (comp) {
-            case NUCLEAR -> Color.web("#3a6ea5");
-            case CYTOPLASMIC -> Color.web("#4a9a5a");
-            case WHOLE_CELL -> Color.web("#777777");
-        };
+        // Not a switch: the compartment vocabulary is open, so a badge has to have a
+        // colour for one FlowPath has never seen rather than failing to compile against it.
+        Color bg;
+        if (Compartment.NUCLEAR.equals(comp)) bg = Color.web("#3a6ea5");
+        else if (Compartment.CYTOPLASMIC.equals(comp)) bg = Color.web("#4a9a5a");
+        else if (Compartment.WHOLE_CELL.equals(comp)) bg = Color.web("#777777");
+        else bg = Color.web("#8a6ea5");
         badge.setBackground(new Background(new BackgroundFill(bg, new CornerRadii(4), Insets.EMPTY)));
         badge.setPadding(new Insets(0, 4, 0, 4));
         badge.setTooltip(new Tooltip(comp.displayName() + " · " + stat.displayName()));

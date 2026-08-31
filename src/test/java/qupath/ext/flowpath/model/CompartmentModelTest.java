@@ -125,7 +125,7 @@ class CompartmentModelTest {
         assertTrue(cap.isRich());
         assertTrue(cap.hasCompartments("CD3"));
         assertEquals(
-                java.util.EnumSet.of(Compartment.NUCLEAR, Compartment.CYTOPLASMIC, Compartment.WHOLE_CELL),
+                java.util.Set.of(Compartment.NUCLEAR, Compartment.CYTOPLASMIC, Compartment.WHOLE_CELL),
                 cap.compartmentsFor("CD3"));
         assertEquals(
                 java.util.Set.of(Statistic.MEAN, Statistic.MEDIAN),

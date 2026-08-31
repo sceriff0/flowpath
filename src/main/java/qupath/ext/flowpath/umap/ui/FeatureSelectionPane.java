@@ -166,10 +166,13 @@ final class FeatureSelectionPane extends VBox {
         }
     }
 
+    /**
+     * Known compartments first, then whatever else the export carries -- the mirror of
+     * {@link #orderedStats}, and for the same reason: looping a closed value list could
+     * only ever order compartments FlowPath had been told about in advance.
+     */
     private static List<Compartment> ordered(Set<Compartment> set) {
-        List<Compartment> out = new java.util.ArrayList<>();
-        for (Compartment c : Compartment.values()) if (set.contains(c)) out.add(c);
-        return out;
+        return Compartment.orderKnownFirst(set);
     }
 
     /**
@@ -182,8 +185,8 @@ final class FeatureSelectionPane extends VBox {
     }
 
     private static Compartment firstOrDefault(Set<Compartment> set, Compartment fallback) {
-        for (Compartment c : Compartment.values()) if (set.contains(c)) return c;
-        return fallback;
+        List<Compartment> ordered = Compartment.orderKnownFirst(set);
+        return ordered.isEmpty() ? fallback : ordered.get(0);
     }
 
     private static Statistic firstOrDefaultStat(Set<Statistic> set, Statistic fallback) {

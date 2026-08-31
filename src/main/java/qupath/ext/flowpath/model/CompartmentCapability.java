@@ -60,6 +60,19 @@ public final class CompartmentCapability {
     private CompartmentCapability() {}
 
     /** An empty capability (legacy: nothing rich). */
+    /** Which tokens count as compartments in the file this was scanned from. */
+    private Set<Compartment> compartments = new LinkedHashSet<>(Compartment.known());
+
+    /**
+     * The compartment vocabulary of the export this was scanned from: the known three plus
+     * anything {@link MeasurementKeys#discoverCompartments} vouched for. Pass it to
+     * {@link MeasurementKeys#parse(String, Set)} so a second reader of the same keys agrees
+     * with this one about what a compartment is.
+     */
+    public Set<Compartment> compartments() {
+        return Set.copyOf(compartments);
+    }
+
     public static CompartmentCapability empty() {
         return new CompartmentCapability();
     }
@@ -68,8 +81,14 @@ public final class CompartmentCapability {
     public static CompartmentCapability fromKeys(Collection<String> keys) {
         CompartmentCapability cap = new CompartmentCapability();
         if (keys == null) return cap;
+        // Two passes over the same keys. The first asks which tokens are compartments at
+        // all -- the vocabulary is open, so that is a question about this file, not a
+        // constant -- and the second parses with that answer in hand. Doing it in one pass
+        // would mean deciding each key's compartment before seeing whether any other
+        // marker corroborates it.
+        cap.compartments = MeasurementKeys.discoverCompartments(keys);
         for (String key : keys) {
-            MeasurementKeys.Parsed parsed = MeasurementKeys.parse(key);
+            MeasurementKeys.Parsed parsed = MeasurementKeys.parse(key, cap.compartments);
             if (parsed == null) continue;
             cap.rich = true;
             cap.pairs
@@ -151,13 +170,11 @@ public final class CompartmentCapability {
      */
     public Set<Compartment> compartmentsFor(String marker) {
         Set<Pair> ps = pairsFor(marker);
-        LinkedHashSet<Compartment> out = new LinkedHashSet<>();
-        for (Compartment c : Compartment.values()) {
-            for (Pair p : ps) {
-                if (p.compartment() == c) { out.add(c); break; }
-            }
-        }
-        return out;
+        LinkedHashSet<Compartment> seen = new LinkedHashSet<>();
+        for (Pair p : ps) seen.add(p.compartment());
+        // Known ones first, then anything this export carries that FlowPath has no name
+        // for -- the same ordering rule Statistic.orderKnownFirst applies.
+        return new LinkedHashSet<>(Compartment.orderKnownFirst(seen));
     }
 
     /**

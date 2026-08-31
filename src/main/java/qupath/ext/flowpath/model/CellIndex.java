@@ -814,6 +814,7 @@ public class CellIndex {
     }
 
     private List<MorphologyField> discoverMorphology() {
+        Set<Compartment> compartments = MeasurementKeys.discoverCompartments(sampleKeys);
         List<MorphologyField> out = new ArrayList<>();
         Set<String> claimed = new LinkedHashSet<>();
 
@@ -835,7 +836,10 @@ public class CellIndex {
         List<String> extra = new ArrayList<>();
         for (String key : sampleKeys) {
             if (key == null || key.isBlank()) continue;
-            if (MeasurementKeys.parse(key) != null) continue;              // per-compartment marker key
+            // Parsed against this file's own compartment vocabulary, so a per-compartment
+            // column in a compartment FlowPath has never seen is still recognised as a
+            // marker key rather than mistaken for a morphology field.
+            if (MeasurementKeys.parse(key, compartments) != null) continue;
             String bare = MeasurementKeys.stripLayerPrefix(key);
             if (markerIndexByName.containsKey(bare)) continue;             // bare marker column
             String slug = MorphologyField.slugOf(key);

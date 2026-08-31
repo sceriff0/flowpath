@@ -455,12 +455,16 @@ public class FlowPathSerializer {
         }
         if (raw == null || raw.isBlank()) return Compartment.WHOLE_CELL;
         String trimmed = raw.trim();
-        for (Compartment c : Compartment.values()) {
+        for (Compartment c : Compartment.known()) {
             if (c.name().equalsIgnoreCase(trimmed) || c.token().equalsIgnoreCase(trimmed)) {
                 return c;
             }
         }
-        return Compartment.WHOLE_CELL;
+        // Not one of the three, but the file named something. Honour it rather than
+        // silently substituting whole-cell: since the vocabulary opened, an unrecognised
+        // compartment is a gate pinned to a real column FlowPath has not met, and turning
+        // it into WHOLE_CELL would point that gate at a different population with no error.
+        return Compartment.of(trimmed);
     }
 
     /**

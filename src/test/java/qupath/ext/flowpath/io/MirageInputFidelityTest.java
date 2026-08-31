@@ -148,7 +148,7 @@ class MirageInputFidelityTest {
                 mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections(), 10);
 
         assertTrue(cap.isRich(), "a MIRAGE compartment export is a rich GeoJSON");
-        assertEquals(EnumSet.allOf(Compartment.class), EnumSet.copyOf(cap.compartmentsFor("CD3")));
+        assertEquals(java.util.Set.copyOf(Compartment.known()), cap.compartmentsFor("CD3"));
         assertEquals(java.util.Set.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM),
                 cap.statisticsFor("CD3"),
                 "--expanded_quantification adds Mean and Sum alongside the always-present Median");

@@ -147,7 +147,7 @@ class MeasurementKeyContractTest {
         assertEquals(new CompartmentCapability.Pair(Compartment.NUCLEAR, Statistic.MEDIAN), resolved);
 
         // Every combination of preferences resolves to something the file carries.
-        for (Compartment c : Compartment.values()) {
+        for (Compartment c : Compartment.known()) {
             for (Statistic s : List.of(Statistic.MEAN, Statistic.MEDIAN, Statistic.SUM, Statistic.of("REDSEA"))) {
                 var p = cap.resolvePair("CD3", c, s);
                 assertTrue(cap.offers("CD3", p.compartment(), p.statistic()),
@@ -291,7 +291,7 @@ class MeasurementKeyContractTest {
         assertFalse(cap.offers("CD3", Compartment.CYTOPLASMIC, Statistic.of("REDSEA Z")));
 
         // And nothing the editor can ask for resolves outside the file.
-        for (Compartment c : Compartment.values()) {
+        for (Compartment c : Compartment.known()) {
             for (Statistic st : cap.statisticsFor("CD3")) {
                 var resolved = cap.resolvePair("CD3", c, st);
                 assertTrue(cap.offers("CD3", resolved.compartment(), resolved.statistic()),
