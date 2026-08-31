@@ -46,23 +46,24 @@ been reset to match. Saved gate trees (`.json`) load unchanged.
 
 ### Added
 
-- **The Raw / Z-score toggle is now a "Values" selector derived from the export.** On a
-  current MIRAGE export it shows **Raw** and **Z-score (computed here)** — MIRAGE emits no
-  standardised columns of its own, so those are the two that exist. The label names who
-  computed the number, which matters because FlowPath's z-score is taken over *the cells
-  currently loaded and filtered* and therefore moves with a quality filter or an
-  annotation ROI.
+- **FlowPath no longer computes a z-score of its own; a gate compares against columns
+  that are in the export.** The old Raw / Z-score radio standardised the column against
+  the cells currently loaded *and filtered*, so the same slider position meant a different
+  cut once a quality filter or an annotation ROI changed. A gate defined that way could
+  not be reproduced from the export alone, and a threshold quoted in a methods section
+  would not identify the same cells on a re-run. **On a MIRAGE export there is now nothing
+  to choose and no selector is shown** — MIRAGE emits no pre-standardised columns — and
+  *what* to read stays with the compartment and statistic dropdowns, populated from the
+  file.
 
-  The selector is built from what the file actually carries rather than being a fixed
-  pair, so a statistic FlowPath has no name for is still selectable, and a
-  pre-standardised column — should a future MIRAGE emit one — appears as its own clearly
-  labelled option instead of being confused with FlowPath's own. That distinction has
-  teeth: standardisation is not a display mode applied on top of a column, it *is* a
-  different column, so a fixed Raw/Z-score pair could not express it without the
-  *Statistic* dropdown silently fighting the *Mode* radio.
-- A mode that cannot be used is **declined with a reason** rather than hidden: FlowPath's
-  own z-score stays visible but disabled over a constant column, or over one MIRAGE has
-  already standardised, with the explanation in its tooltip.
+  Should a pipeline export a pre-standardised column, that is a real column and appears
+  as its own labelled option, composed by shape rather than from a hard-coded list.
+
+  **Gate trees saved under the old mode are migrated on open**: the threshold is converted
+  out of standard deviations and back into the column's own units, so the gate keeps the
+  cells it had. Clearing the flag without converting would have left a threshold of around
+  1 compared against intensities running to hundreds — every cell negative, no error, and
+  a tree that still looked right.
 
 ### Fixed
 

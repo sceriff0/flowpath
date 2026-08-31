@@ -7,109 +7,75 @@ import java.util.Objects;
 /**
  * <b>One way of reading a gate's values</b>, and the whole of what the editor's "Values"
  * selector may offer for a given gate.
- * <p>
- * The selector used to be a fixed two-way radio, {@code Raw} / {@code Z-score}. The
- * trouble with a fixed pair is that <b>standardisation is not a display mode FlowPath
- * applies on top of a column</b> -- it is a property of the column itself. If a pipeline
- * emits {@code "CD3: Cell: Median"} and {@code "CD3: Cell: Median Z"}, those are two
- * <em>different measurement columns</em>, and reaching the second means changing the
- * <em>Statistic</em>, not the mode. One user intent -- "show me standardised values" --
- * would then be split across two controls that did not know about each other, with the
- * dropdown silently disabling the radio and nothing to say the two were about the same
- * thing.
- * <p>
- * <b>As of MIRAGE {@code main} that second column does not exist:</b>
- * {@code STATISTICS} is {@code ("Median", "Mean", "Sum")} and nothing is pre-standardised,
- * so this list resolves to {@link Kind#RAW} plus {@link Kind#COMPUTED} and the
- * {@link Kind#MIRAGE} branch stays dormant. It is here because the vocabulary is read from
- * the file rather than hard-coded, so the day a standardised column does arrive it becomes
- * a labelled option instead of a wrong answer -- which is the same reason {@link Statistic}
- * stopped being an enum.
  *
- * <h2>Three kinds, and who computed the number</h2>
- * <ul>
- *   <li>{@link Kind#RAW} -- the column as measured.</li>
- *   <li>{@link Kind#MIRAGE} -- a sibling column MIRAGE already standardised
- *       ({@code " Z"} / {@code " RobustZ"}). Offered only when that column is in the file
- *       for <em>every</em> axis of the gate. Selecting it changes each axis's statistic;
- *       FlowPath applies nothing on top.</li>
- *   <li>{@link Kind#COMPUTED} -- FlowPath standardises the base column itself, over the
- *       cells currently loaded and filtered. Always offered, but declined with a reason
- *       when the column is constant or MIRAGE already standardised it.</li>
- * </ul>
- * The last two are <b>not the same number</b>, even in principle, which is why the labels
- * name who computed them: MIRAGE standardises across every cell of a patient, FlowPath
- * across whatever survives the current quality filter and annotation ROI. A user who
- * cannot tell them apart cannot reproduce either.
+ * <h2>Only what the file carries</h2>
+ * Every entry corresponds to a measurement column that is <em>actually in the export</em>.
+ * There is no mode for a number FlowPath would compute itself.
+ * <p>
+ * That is a deliberate narrowing. The control this replaces was a fixed
+ * {@code Raw} / {@code Z-score} radio whose z-score FlowPath derived on the fly, by
+ * standardising the column against the cells currently loaded <em>and filtered</em>. It
+ * was offered whether or not anything in the data resembled it, and it moved: tighten a
+ * quality filter or draw a different annotation ROI and the same slider position meant a
+ * different cut, because the mean and standard deviation underneath it had changed. A gate
+ * defined that way cannot be reproduced from the export alone, and a threshold quoted in a
+ * paper's methods would not identify the same cells on a re-run.
+ * <p>
+ * So a gate compares against numbers that exist in the file. If a pipeline emits a
+ * pre-standardised column -- a {@code " Z"} or {@code " RobustZ"} sibling -- that is a real
+ * column and appears here as its own labelled option. If it does not, no standardised
+ * option appears, because there is nothing to select.
+ * <p>
+ * <b>On MIRAGE {@code main} there are no such columns</b> ({@code STATISTICS} is
+ * {@code ("Median", "Mean", "Sum")}, and {@code expanded_quantification} decides which of
+ * those an export carries). A gate therefore has exactly one way to be read, this list has
+ * one entry, and {@link #isAChoice} is false so the editor shows no selector at all.
+ * Which compartment and which statistic to read stays where it belongs -- the dropdowns,
+ * populated from {@link CompartmentCapability}.
  *
  * <h2>Identified by normalisation, not by statistic</h2>
  * A 2D gate's axes can sit on different base statistics (Median on X, Mean on Y), so a
- * mode cannot name one concrete {@link Statistic}. It names the <em>normalisation suffix</em>
- * instead, and {@link #applyTo} composes each axis's own sibling from its own base. One
- * gate-wide answer, whatever the axes read.
+ * mode cannot name one concrete {@link Statistic}. It names the <em>normalisation
+ * suffix</em> instead, and {@link #applyTo} composes each axis's own sibling from its own
+ * base. One gate-wide answer, whatever the axes read.
  *
  * <h2>Derived, never set</h2>
- * {@link #availableFor} is a pure function of facts -- the gate, the capability scanned
- * from the file, and (when there is one) the index and its statistics. Nothing outside
- * decides which modes exist, matching the rule {@code UmapSession.viewState()} already
- * follows on the UMAP side, and it is table-testable with no JavaFX toolkit.
+ * {@link #availableFor} is a pure function of the gate and the capability scanned at
+ * ingest. Nothing outside decides which modes exist, matching the rule
+ * {@code UmapSession.viewState()} already follows on the UMAP side, and it is
+ * table-testable with no JavaFX toolkit.
  *
- * <h2>Declined, not hidden</h2>
- * A mode the gate cannot use right now is still <em>offered</em>, carrying an
- * {@link #unavailableReason}. FlowPath's own standardisation is meaningless over a
- * constant column, and wrong over one MIRAGE already standardised — but a user who simply
- * finds the option missing learns nothing, and is left to guess whether it was ever there.
- * Only modes whose column is genuinely absent from the file are omitted, because there is
- * nothing to explain about a measurement that was never exported.
- *
- * @param kind              which of the three this is
- * @param normalisation     the suffix each axis's statistic must carry: {@code ""},
- *                          {@code " Z"} or {@code " RobustZ"}
- * @param computed          whether the gate's {@code thresholdIsZScore} flag must be set
- * @param label             what the button says, naming who computed the number
- * @param tooltip           the longer explanation behind it
- * @param unavailableReason why this mode cannot be chosen, or {@code null} when it can
+ * @param kind          which of the two this is
+ * @param normalisation the suffix each axis's statistic must carry: {@code ""} for the
+ *                      column as measured, otherwise {@code " Z"} / {@code " RobustZ"}
+ * @param label         what the button says
+ * @param tooltip       the longer explanation behind it
  */
-public record ValueMode(Kind kind, String normalisation, boolean computed,
-                        String label, String tooltip, String unavailableReason) {
+public record ValueMode(Kind kind, String normalisation, String label, String tooltip) {
 
-    /** Who produced the number the gate compares against. */
-    public enum Kind { RAW, MIRAGE, COMPUTED }
+    /** Where the number the gate compares against came from. */
+    public enum Kind {
+        /** The column as measured. */
+        RAW,
+        /** A sibling column the pipeline standardised before export. */
+        MIRAGE
+    }
 
     public ValueMode {
         Objects.requireNonNull(kind, "kind");
         normalisation = normalisation == null ? "" : normalisation;
-        if (kind == Kind.COMPUTED && !computed) {
-            throw new IllegalArgumentException("a COMPUTED mode must set the computed flag");
-        }
-        if (kind != Kind.COMPUTED && computed) {
-            throw new IllegalArgumentException(
-                    "only FlowPath's own standardisation sets the computed flag; "
-                    + kind + " reads a column that is already what it claims to be");
-        }
         if (kind == Kind.MIRAGE && normalisation.isEmpty()) {
             throw new IllegalArgumentException("a MIRAGE mode must name a normalisation");
         }
+        if (kind == Kind.RAW && !normalisation.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "RAW is the column as measured; it carries no normalisation");
+        }
     }
 
-    private static final ValueMode RAW = new ValueMode(Kind.RAW, "", false,
+    private static final ValueMode RAW = new ValueMode(Kind.RAW, "",
             "Raw",
-            "Compare the column as measured, with no standardisation.", null);
-
-    private static final String COMPUTED_LABEL = "Z-score (computed here)";
-    private static final String COMPUTED_TOOLTIP =
-            "Standardise against this column's own distribution.\n"
-            + "Computed by FlowPath over the cells currently loaded and filtered — not "
-            + "a value read from the export, and not the same number as MIRAGE's, which "
-            + "spans every cell of the patient.";
-
-    /** FlowPath's own standardisation, offered but declined, with the reason shown. */
-    private static ValueMode computedButUnavailable(String reason) {
-        return new ValueMode(Kind.COMPUTED, "", true, COMPUTED_LABEL, reason, reason);
-    }
-
-    private static final ValueMode COMPUTED = new ValueMode(Kind.COMPUTED, "", true,
-            COMPUTED_LABEL, COMPUTED_TOOLTIP, null);
+            "Compare the column as measured, exactly as the export supplied it.");
 
     /** How a normalisation suffix is named in the selector. */
     private static String labelFor(String normalisation) {
@@ -121,25 +87,23 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
     }
 
     /**
-     * Every mode this gate can offer, in display order: raw first, then MIRAGE's own
-     * standardisations in {@link Statistic#standardisingNormalisations()} order, then
-     * FlowPath's computed one last.
+     * Every mode this gate can offer: raw first, then any pre-standardised sibling the
+     * file actually carries, in {@link Statistic#standardisingNormalisations()} order.
      * <p>
-     * Raw is always present -- there is always a column to read unstandardised, and a
-     * selector with nothing in it would leave the gate unreadable.
+     * Raw is always present -- there is always a column to read as measured -- so the list
+     * is never empty and a gate is never unreadable. On a typical export it is the
+     * <em>only</em> entry; see {@link #isAChoice}.
      *
-     * @param gate       the gate to describe; every axis must agree for a mode to appear
+     * @param gate       the gate to describe; every axis must carry a sibling for that
+     *                   sibling to appear, since one mode moves the whole gate
      * @param capability what the file carries, from the one ingest scan. When {@code null}
-     *                   or not rich, no MIRAGE mode is offered: an absent capability means
-     *                   "not scanned", which is not evidence a standardised column exists,
-     *                   and offering one would pin an axis to a key that is not in the file
+     *                   or not rich, only raw is offered: an absent capability means "not
+     *                   scanned", which is not evidence a standardised column exists, and
+     *                   offering one would pin an axis to a key that is not in the file
      *                   and read NaN for every cell.
-     * @param index      the loaded cells, or {@code null} if none yet
-     * @param stats      statistics for {@code index}, or {@code null}
      */
-    public static List<ValueMode> availableFor(GateNode gate, CompartmentCapability capability,
-                                               CellIndex index, MarkerStats stats) {
-        List<ValueMode> modes = new ArrayList<>(4);
+    public static List<ValueMode> availableFor(GateNode gate, CompartmentCapability capability) {
+        List<ValueMode> modes = new ArrayList<>(3);
         if (gate == null) return modes;
         modes.add(RAW);
 
@@ -147,21 +111,26 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
         if (!axes.isEmpty() && capability != null && capability.isRich()) {
             for (String norm : Statistic.standardisingNormalisations()) {
                 if (allAxesOffer(axes, capability, norm)) {
-                    modes.add(new ValueMode(Kind.MIRAGE, norm, false,
-                            labelFor(norm),
-                            "Read MIRAGE's own " + labelFor(norm).replace(" (MIRAGE)", "")
-                            + " column.\nStandardised by MIRAGE across every cell of this "
-                            + "patient, and already in the file — FlowPath applies "
-                            + "nothing on top.", null));
+                    modes.add(new ValueMode(Kind.MIRAGE, norm, labelFor(norm),
+                            "Read the pipeline's own " + labelFor(norm).replace(" (MIRAGE)", "")
+                            + " column.\nStandardised before export, across every cell of "
+                            + "the patient, and already in the file — FlowPath applies "
+                            + "nothing on top."));
                 }
             }
         }
-
-        if (!axes.isEmpty()) {
-            String reason = whyNotStandardisedHere(axes, index, stats);
-            modes.add(reason == null ? COMPUTED : computedButUnavailable(reason));
-        }
         return modes;
+    }
+
+    /**
+     * Whether there is anything to choose between.
+     * <p>
+     * One mode is not a choice, and a radio group with a single button is a control that
+     * cannot do anything: it poses a question with one answer and implies the others were
+     * taken away. The editor hides the row entirely instead.
+     */
+    public static boolean isAChoice(List<ValueMode> modes) {
+        return modes != null && modes.size() > 1;
     }
 
     /** Every axis has the {@code norm} sibling of its own base statistic in the file. */
@@ -180,47 +149,18 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
     }
 
     /**
-     * Whether FlowPath's own standardisation is meaningful for every axis.
-     * <p>
-     * Undecidable counts as available. "This column is flat" and "no cells are loaded yet"
-     * are different answers that a single boolean would merge, and merging them disables
-     * the mode on an editor that has simply not seen data -- discarding a saved gate's
-     * preference before it could ever be honoured.
-     * <p>
-     * It is also withdrawn over a column MIRAGE already standardised: a second pass over
-     * already-centred data would not throw and would look almost right, while actually
-     * rescaling the axis by a factor that varies with the current filter.
-     */
-    private static String whyNotStandardisedHere(List<GateAxis> axes, CellIndex index,
-                                                 MarkerStats stats) {
-        for (GateAxis axis : axes) {
-            Statistic statistic = axis.statistic();
-            if (statistic != null && statistic.isStandardised()) {
-                return "This statistic is already standardised by MIRAGE, across every "
-                        + "cell of the patient.\nStandardising it again would rescale the "
-                        + "axis by whatever is currently filtered.";
-            }
-            if (index == null || stats == null) continue;
-            String channel = axis.channel();
-            if (channel == null || index.getMarkerIndex(channel) < 0) continue;
-            MeasuredColumn column = index.column(channel, axis.compartment(), statistic, stats);
-            if (column == null || !column.hasSpread()) {
-                return "This channel's values are constant, so there is no spread to "
-                        + "standardise against.";
-            }
-        }
-        return null;
-    }
-
-    /**
      * Put {@code gate} into this mode: point every axis at its own sibling column for this
-     * normalisation, and set the computed flag to match.
+     * normalisation, and clear the retired standardise-here flag.
      * <p>
-     * <b>One writer.</b> Selecting a mode changes two things that must move together -- the
-     * statistic each axis reads and whether FlowPath standardises it -- and a caller that
-     * set one without the other would leave the engine z-scoring a column the editor is
-     * drawing raw. That display/classification split is a defect this repository has
-     * shipped before; doing it here means no caller can spell it half-way.
+     * <b>One writer.</b> Selecting a mode changes what each axis reads, and the flag that
+     * used to mean "standardise it again on the way past" must come down with it. A caller
+     * that set one without the other would leave the engine standardising a column the
+     * editor is drawing as measured -- the display/classification split this repository
+     * has shipped before. Doing it here means no caller can spell it half-way.
+     * <p>
+     * Note this does <em>not</em> convert the threshold. Moving between columns is a
+     * change of scale, and only a caller holding the index can re-map it; see
+     * {@code GateEditorPane.onModeSelected}.
      */
     public void applyTo(GateNode gate) {
         if (gate == null) return;
@@ -230,33 +170,29 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
             axis.apply(new GateAxis.Signal(axis.compartment(),
                     statistic.withNormalisation(normalisation)));
         }
-        gate.setThresholdIsZScore(computed);
+        gate.setThresholdIsZScore(false);
     }
 
     /**
      * The mode {@code gate} is currently in, as one of {@code modes}.
      * <p>
-     * Falls back to the first entry -- raw -- when the gate's combination is not on offer,
-     * which is what happens when a file's capability no longer carries a column a saved
-     * gate was pinned to. Returning raw rather than null means the selector always has a
-     * selection; the caller must write that fallback back onto the gate with
-     * {@link #applyTo}, so the editor and the engine do not disagree about it.
+     * Falls back to raw when the gate's combination is not on offer -- a saved gate pinned
+     * to a column this file does not carry, or one still carrying the retired
+     * standardise-here flag. The caller must write that fallback back with
+     * {@link #applyTo} <em>and convert the threshold with it</em>, or the gate keeps
+     * comparing a standardised number against a column of raw intensities.
      */
     public static ValueMode selectedIn(List<ValueMode> modes, GateNode gate) {
         if (modes == null || modes.isEmpty()) return null;
         if (gate == null) return modes.get(0);
+        // A gate still carrying the retired flag is in no offered mode: the number it
+        // compares against is one FlowPath derived, which is what is no longer on the menu.
+        if (gate.isThresholdIsZScore()) return modes.get(0);
 
-        boolean computed = gate.isThresholdIsZScore();
         String norm = normalisationOf(gate);
         if (norm != null) {
             for (ValueMode mode : modes) {
-                // An unavailable mode is never the answer, even when the gate's own flags
-                // spell it: that is exactly the saved-gate-meets-flat-column case, and the
-                // caller writes the raw fallback back onto the gate.
-                if (mode.available() && mode.computed() == computed
-                        && mode.normalisation().equals(norm)) {
-                    return mode;
-                }
+                if (mode.normalisation().equals(norm)) return mode;
             }
         }
         return modes.get(0);
@@ -265,9 +201,9 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
     /**
      * The one normalisation every axis carries, or {@code null} if they disagree.
      * <p>
-     * Axes that disagree have no gate-wide mode -- which is a real state, reachable by
-     * loading a hand-edited file -- and answering {@code null} lets the caller fall back to
-     * raw and write that back, rather than picking one axis's answer for both.
+     * Axes that disagree have no gate-wide mode -- a real state, reachable by loading a
+     * hand-edited file -- and answering {@code null} lets the caller fall back to raw and
+     * write that back, rather than picking one axis's answer for both.
      */
     private static String normalisationOf(GateNode gate) {
         String seen = null;
@@ -279,15 +215,5 @@ public record ValueMode(Kind kind, String normalisation, boolean computed,
             else if (!seen.equals(norm)) return null;
         }
         return seen == null ? "" : seen;
-    }
-
-    /** True when this mode can actually be chosen right now. */
-    public boolean available() {
-        return unavailableReason == null;
-    }
-
-    /** True when this mode reads a number FlowPath did not compute. */
-    public boolean readsExportedValues() {
-        return kind != Kind.COMPUTED;
     }
 }

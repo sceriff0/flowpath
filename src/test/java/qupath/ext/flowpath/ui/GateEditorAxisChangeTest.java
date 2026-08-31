@@ -176,14 +176,19 @@ class GateEditorAxisChangeTest {
     }
 
     /** The clip-percentile bounds of {@code column}, z-scored, as applyClipAxisRange builds them. */
-    private static double[] zScoredClipBounds(MeasuredColumn column, GateNode gate) {
+    /**
+     * The clip percentiles of a column, as measured.
+     * <p>
+     * These used to be z-scored, because the editor rendered gates in a standardised space
+     * FlowPath derived. It no longer offers one -- a gate compares against columns that
+     * exist in the export -- so the axes are in the column's own units, and so are these.
+     * The invariant is unchanged and still has teeth: the fixture's nuclear and whole-cell
+     * columns differ by construction, so an axis built from the wrong one still fails.
+     */
+    private static double[] clipBounds(MeasuredColumn column, GateNode gate) {
         return new double[]{
-                column.toZScore(column.percentile(gate.getClipPercentileLow())),
-                column.toZScore(column.percentile(gate.getClipPercentileHigh()))};
-    }
-
-    private static double[] zScoresOf(MeasuredColumn column) {
-        return Arrays.stream(column.values()).map(column::toZScore).toArray();
+                column.percentile(gate.getClipPercentileLow()),
+                column.percentile(gate.getClipPercentileHigh())};
     }
 
     private static List<String> branchNames(GateNode gate) {
@@ -405,34 +410,10 @@ class GateEditorAxisChangeTest {
         assertEquals(expectedMax, sliders.get(0).getMax(), 1e-9);
     }
 
-    /**
-     * The z-score path, which is the default and so the one users actually see. The raw
-     * pin above cannot cover it: z-scoring is scale-invariant, so it only says anything at
-     * all because this fixture's nuclear column is deliberately not proportional to the
-     * bare one.
-     */
-    @Test
-    void theZScoredSliderRangeIsBuiltFromTheColumnTheAxisActuallyReads() {
-        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
-        QuadrantGate gate = new QuadrantGate("CD3", "CD4");
-        assertTrue(gate.isThresholdIsZScore(), "z-score is the mode a new gate opens in");
-        gate.setCompartmentX(Compartment.NUCLEAR);
-        gate.setCompartmentY(Compartment.NUCLEAR);
-        Fixture f = editorFor(gate);
-
-        double[] correct = zScoresOf(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()));
-        double[] wrong = zScoresOf(f.index().column("CD3", Compartment.WHOLE_CELL, Statistic.MEAN, f.stats()));
-        assertNotEquals(Arrays.stream(wrong).min().orElseThrow(),
-                Arrays.stream(correct).min().orElseThrow(), 1e-9,
-                "the fixture must make the two candidate columns differ AFTER z-scoring, "
-                        + "or this test passes against a plot reading either one");
-
-        List<Slider> sliders = new ArrayList<>();
-        collect(f.pane(), Slider.class, sl -> true, sliders);
-        assertEquals(Arrays.stream(correct).min().orElseThrow(), sliders.get(0).getMin(), 1e-9,
-                "the X slider spans the z-scored nuclear column the X axis is set to");
-        assertEquals(Arrays.stream(correct).max().orElseThrow(), sliders.get(0).getMax(), 1e-9);
-    }
+    // The z-scored twin of the pin above is gone with the mode it tested. FlowPath no
+    // longer derives a z-score of its own, so a gate reads its column as measured and the
+    // raw pin covers the only path there is. Should a pre-standardised column ever be
+    // gated on, it is a different column with its own range and the same pin still holds.
 
     // ---- the scatter's axes anchor per axis (commit d9c1de9) -----------------
 
@@ -453,8 +434,8 @@ class GateEditorAxisChangeTest {
         gate.setCompartmentY(Compartment.WHOLE_CELL);
         Fixture f = editorFor(gate);
 
-        double[] expected = zScoredClipBounds(GateAxis.of(gate, 1).columnIn(f.index(), f.stats()), gate);
-        double[] fromX = zScoredClipBounds(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()), gate);
+        double[] expected = clipBounds(GateAxis.of(gate, 1).columnIn(f.index(), f.stats()), gate);
+        double[] fromX = clipBounds(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()), gate);
         assertNotEquals(fromX[0], expected[0], 1e-9,
                 "the fixture must make the X and Y columns anchor differently");
 
@@ -483,7 +464,7 @@ class GateEditorAxisChangeTest {
         select(compartmentCombos(f.pane()).get(0), Compartment.NUCLEAR);
 
         assertEquals(Compartment.NUCLEAR, gate.getCompartmentX());
-        double[] nuclear = zScoresOf(GateAxis.of(gate, 0).columnIn(f.index(), f.stats()));
+        double[] nuclear = GateAxis.of(gate, 0).columnIn(f.index(), f.stats()).values();
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);
         assertEquals(Arrays.stream(nuclear).min().orElseThrow(), sliders.get(0).getMin(), 1e-9,

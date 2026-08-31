@@ -42,6 +42,9 @@ import java.util.function.IntConsumer;
  */
 public class GateEditorPane extends VBox {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(GateEditorPane.class);
+
     // --- Shared controls ---
     private final Label gateTypeLabel;
     private final Spinner<Double> clipLowSpinner;
@@ -241,37 +244,38 @@ public class GateEditorPane extends VBox {
         GateNode node = currentNode;
         if (node == null || selected == null) return;
         ValueMode previous = currentMode;
-        currentMode = selected;
-
-        boolean sameColumn = previous != null
-                && previous.normalisation().equals(selected.normalisation());
-        if (!sameColumn) {
-            // A different measurement column. applySignalChange re-maps by percentile and
-            // re-syncs this row afterwards, so nothing more is needed here.
-            applySignalChange(() -> selected.applyTo(node));
+        if (previous != null && previous.normalisation().equals(selected.normalisation())
+                && !node.isThresholdIsZScore()) {
             return;
         }
-        if (previous != null && previous.computed() == selected.computed()) return;
+        currentMode = selected;
 
-        selected.applyTo(node);
-        convertGateSpace(node, selected.computed());
+        // Every mode names a different measurement column, so switching is always a change
+        // of scale — a raw Median threshold means nothing against a "Median Z" column.
+        // applySignalChange re-maps the threshold to the same percentile of the new column
+        // and re-syncs this row afterwards, so the gate keeps the cells it had.
+        applySignalChange(() -> selected.applyTo(node));
     }
 
     /**
      * Rewrite {@code node}'s thresholds and shapes between raw and z-score space, against
      * the same resolved columns the engine compares on.
      * <p>
-     * Only valid when the column itself is unchanged — see {@link #onModeSelected}. A
-     * column with no spread is left alone rather than converted through a zero standard
+     * <b>Model only — this must not touch the UI.</b> Its one caller is the migration in
+     * {@link #syncModeSelection}, which runs <em>during</em> an editor rebuild; the
+     * {@code fireNodeChanged()} and {@code Platform.runLater(() -> setGateNode(node))}
+     * this used to end with re-entered that rebuild, and the editor came back with no
+     * sliders, no combos and no scatter plot at all. The caller finishes the build.
+     * <p>
+     * A column with no spread is left alone rather than converted through a zero standard
      * deviation.
      */
     private void convertGateSpace(GateNode node, boolean toZScore) {
         if (node == null) return;
             if (isThresholdGate(node)) {
-                // Transform threshold value between coordinate spaces, against the
-                // same resolved column the engine compares on. updateHistogram then
-                // re-ranges the axis and re-pins the slider/field to the new value,
-                // so the gate lands on the same cells and stays freely draggable.
+                // Transform the threshold against the same resolved column the engine
+                // compares on. The caller re-ranges the axis and re-pins the slider
+                // afterwards, so the gate lands on the same cells.
                 MeasuredColumn col = thresholdColumn(node);
                 if (col != null && col.hasSpread()) {
                     double oldVal = node.getThreshold();
@@ -279,7 +283,6 @@ public class GateEditorPane extends VBox {
                             ? col.toZScore(oldVal)
                             : col.fromZScore(oldVal));
                 }
-                updateHistogram();
             } else if (node instanceof QuadrantGate qg) {
                 // Transform quadrant thresholds between coordinate spaces
                 MeasuredColumn colX = columnX(qg);
@@ -293,9 +296,6 @@ public class GateEditorPane extends VBox {
                         qg.setThresholdY(colY.fromZScore(qg.getThresholdY()));
                     }
                 }
-                fireNodeChanged();
-                Platform.runLater(() -> setGateNode(node));
-                return;
             } else if (node instanceof Region2DGate) {
                 // Transform shape coordinates between raw and z-score space
                 MeasuredColumn colX = columnX(node);
@@ -344,11 +344,8 @@ public class GateEditorPane extends VBox {
                     else if (node instanceof RectangleGate rg) { rg.setMinX(0); rg.setMaxX(0); rg.setMinY(0); rg.setMaxY(0); }
                     else if (node instanceof EllipseGate eg) { eg.setCenterX(0); eg.setCenterY(0); eg.setRadiusX(0); eg.setRadiusY(0); }
                 }
-                fireNodeChanged();
-                Platform.runLater(() -> setGateNode(node));
                 return;
             }
-            fireNodeChanged();
     }
 
     public void setGateNode(GateNode node) {
@@ -1093,9 +1090,15 @@ public class GateEditorPane extends VBox {
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(java.util.function.BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
 
-    /** True when the selected mode is FlowPath's own standardisation. */
+    /**
+     * Whether the current gate still carries the retired standardise-here flag.
+     * <p>
+     * FlowPath no longer offers a z-score of its own — a gate compares against columns
+     * that exist in the export — so this is true only for a gate loaded from a file
+     * written before that change, and only until {@link #syncModeSelection} migrates it.
+     */
     public boolean isUseZScore() {
-        return currentMode != null && currentMode.computed();
+        return currentNode != null && currentNode.isThresholdIsZScore();
     }
 
     public void updatePopulationCounts() {
@@ -1522,45 +1525,53 @@ public class GateEditorPane extends VBox {
      */
     private void syncModeSelection(GateNode node) {
         if (node == null) return;
-        List<ValueMode> modes =
-                ValueMode.availableFor(node, compartmentCapability, cellIndex, markerStats);
+        List<ValueMode> modes = ValueMode.availableFor(node, compartmentCapability);
         ValueMode selected = ValueMode.selectedIn(modes, node);
         currentModes = modes;
 
+        // One mode is not a choice. On a typical export the file carries no
+        // pre-standardised column, so there is exactly one way to read the gate and the
+        // row is hidden rather than shown with a single button nobody can act on.
+        boolean offerRow = ValueMode.isAChoice(modes);
+
         withSuppressedEvents(() -> {
             modeGroup.getToggles().clear();
-            // Keep the "Values:" label, replace the buttons after it.
             modeRow.getChildren().remove(1, modeRow.getChildren().size());
+            modeRow.setVisible(offerRow);
+            modeRow.setManaged(offerRow);
+            if (!offerRow) return;
             for (ValueMode mode : modes) {
                 RadioButton button = new RadioButton(mode.label());
                 button.setToggleGroup(modeGroup);
                 button.setUserData(mode);
-                // Coloured by who computed the number: FlowPath's own standardisation is
-                // marked as derived, everything read from the export is plain, and a mode
-                // that cannot be used right now is muted and says why in its tooltip
-                // rather than quietly disappearing.
-                button.setDisable(!mode.available());
-                String colour = !mode.available() ? UNAVAILABLE_COLOR
-                        : mode.computed() ? COMPUTED_HERE_COLOR : "white";
-                button.setStyle("-fx-text-fill: " + colour + ";");
+                button.setStyle("-fx-text-fill: white;");
                 button.setTooltip(new Tooltip(mode.tooltip()));
                 if (mode.equals(selected)) button.setSelected(true);
                 modeRow.getChildren().add(button);
             }
         });
 
-        // Bring the model across by hand: the selection above was made with events
-        // suppressed, so nothing has written it to the gate yet. Skipped when the gate is
-        // already in the selected mode, so a plain refresh does not rewrite the tree.
         currentMode = selected;
-        if (selected != null && !alreadyIn(node, selected)) {
+
+        // Migration, and the reason this cannot be a silent write-back. A gate saved
+        // before FlowPath stopped deriving its own z-score carries a threshold expressed
+        // in standard deviations. Clearing the flag alone would leave that number being
+        // compared against raw intensities — a threshold of 1.5 against a column whose
+        // values run to thousands, so every cell reads negative, with no error and a gate
+        // tree that still looks right. Convert first, then clear.
+        if (node.isThresholdIsZScore()) {
+            convertGateSpace(node, false);   // z-score space -> raw, against the same column
+            node.setThresholdIsZScore(false);
+            logger.debug("Migrated gate '{}' off the retired computed z-score mode; "
+                    + "threshold converted to raw space", node.getChannel());
+        } else if (selected != null && !alreadyIn(node, selected)) {
             selected.applyTo(node);
         }
     }
 
     /** Whether {@code node} already reads the way {@code mode} says it should. */
     private static boolean alreadyIn(GateNode node, ValueMode mode) {
-        if (node.isThresholdIsZScore() != mode.computed()) return false;
+        if (node.isThresholdIsZScore()) return false;
         for (GateAxis axis : GateAxis.axesOf(node)) {
             Statistic statistic = axis.statistic();
             if (statistic == null) continue;

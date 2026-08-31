@@ -188,9 +188,9 @@ class GateEditorSignalTest {
     // ---- the histogram / scatter follow the selected compartment -------------
 
     @Test
-    void zScoreHistogramAxisFollowsSelectedCompartment() {
+    void histogramAxisFollowsSelectedCompartment() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
-        GateNode gate = new GateNode("CD3");          // z-score mode by default
+        GateNode gate = new GateNode("CD3");
         Fixture f = editorFor(gate);
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
@@ -203,17 +203,17 @@ class GateEditorSignalTest {
         assertTrue(f.stats().hasColumn(key),
                 "editor must register the resolved column with MarkerStats before displaying it");
 
-        double expLo = f.stats().toZScore(key, f.stats().getPercentileValue(key, gate.getClipPercentileLow()));
-        double expHi = f.stats().toZScore(key, f.stats().getPercentileValue(key, gate.getClipPercentileHigh()));
+        double expLo = f.stats().getPercentileValue(key, gate.getClipPercentileLow());
+        double expHi = f.stats().getPercentileValue(key, gate.getClipPercentileHigh());
 
         Slider slider = thresholdSlider(f.pane());
         assertEquals(expLo, slider.getMin(), 1e-6,
-                "z-score axis must be built from the nuclear column, not the whole-cell column");
+                "the axis must be built from the nuclear column, not the whole-cell column");
         assertEquals(expHi, slider.getMax(), 1e-6);
     }
 
     @Test
-    void zScoreHistogramAxisFollowsSelectedStatistic() {
+    void histogramAxisFollowsSelectedStatistic() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         GateNode gate = new GateNode("CD3");
         Fixture f = editorFor(gate);
@@ -222,8 +222,8 @@ class GateEditorSignalTest {
 
         assertEquals(Statistic.SUM, gate.getStatistic());
         String key = f.index().resolvedKey("CD3", Compartment.WHOLE_CELL, Statistic.SUM);
-        double expLo = f.stats().toZScore(key, f.stats().getPercentileValue(key, 1.0));
-        double expHi = f.stats().toZScore(key, f.stats().getPercentileValue(key, 99.0));
+        double expLo = f.stats().getPercentileValue(key, 1.0);
+        double expHi = f.stats().getPercentileValue(key, 99.0);
 
         Slider slider = thresholdSlider(f.pane());
         assertEquals(expLo, slider.getMin(), 1e-6, "axis must follow the Sum column");
@@ -261,70 +261,31 @@ class GateEditorSignalTest {
 
     // ---- Raw <-> Z-score: adaptive, then freely adjustable ------------------
 
-    @Test
-    void modeToggleConvertsThresholdAndResyncsSliderAndField() {
-        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
-        GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
-        gate.setThreshold(120.0);                     // raw whole-cell mean
-        gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
-        Fixture f = editorFor(gate);
-
-        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
-        flushFx();
-
-        double expected = f.stats().toZScore("CD3", 120.0);
-        assertEquals(expected, gate.getThreshold(), 1e-9, "threshold must convert into z-score space");
-
-        Slider slider = thresholdSlider(f.pane());
-        assertEquals(gate.getThreshold(), slider.getValue(), 1e-6,
-                "slider thumb must track the converted threshold, not clamp to the new range");
-        assertEquals(gate.getThreshold(), Double.parseDouble(thresholdField(f.pane()).getText()), 1e-3,
-                "threshold text field must show the converted value");
-        assertTrue(slider.getValue() >= slider.getMin() && slider.getValue() <= slider.getMax(),
-                "converted threshold must land inside the new axis so it stays draggable");
-    }
 
     @Test
-    void modeToggleUsesResolvedKeyForNonDefaultCompartment() {
+    void aColumnChangeRemapsTheThresholdAgainstTheNewColumnsOwnStatistics() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
         Fixture f = editorFor(gate);
+
+        // Sit the threshold at a known percentile of the bare whole-cell column.
+        String from = f.index().resolvedKey("CD3", Compartment.WHOLE_CELL, gate.getStatistic());
+        double before = f.stats().getPercentileValue(from, 60.0);
+        FxTestSupport.onFxRun(() -> gate.setThreshold(before));
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
         select(statisticCombo(f.pane(), 0), Statistic.MEDIAN);
 
-        String key = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEDIAN);
-        double raw = f.stats().getPercentileValue(key, 60.0);
-        FxTestSupport.onFxRun(() -> gate.setThreshold(raw));
-
-        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
-        flushFx();
-
-        assertEquals(f.stats().toZScore(key, raw), gate.getThreshold(), 1e-9,
-                "conversion must use the nuclear-median stats, not the bare CD3 stats");
-        // Bare-channel conversion would give a wildly different number; make sure we didn't get it.
-        assertNotEquals(f.stats().toZScore("CD3", raw), gate.getThreshold(), 1e-6);
+        // A bare number does not carry across columns -- a nuclear median is nothing like a
+        // whole-cell mean -- so the gate must land on the same *percentile* of the column it
+        // now reads, computed from that column's own statistics.
+        String to = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEDIAN);
+        assertEquals(f.stats().getPercentileValue(to, 60.0), gate.getThreshold(), 1e-6,
+                "the re-map must use the nuclear-median stats, not the bare CD3 stats");
+        assertNotEquals(before, gate.getThreshold(), 1e-6,
+                "the fixture must make the two columns distinguishable");
     }
 
-    @Test
-    void modeToggleRoundTripIsStable() {
-        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
-        GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
-        gate.setThreshold(120.0);
-        gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
-        Fixture f = editorFor(gate);
-
-        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
-        flushFx();
-        FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Raw").setSelected(true));
-        flushFx();
-
-        assertEquals(120.0, gate.getThreshold(), 1e-6, "raw -> z -> raw must return the original threshold");
-        assertEquals(120.0, thresholdSlider(f.pane()).getValue(), 1e-6);
-    }
 
     // ---- 2D region gates expose per-axis signal selectors -------------------
 
@@ -471,61 +432,8 @@ class GateEditorSignalTest {
         return new Fixture(pane, idx, stats);
     }
 
-    /** The ordinary case: a column with spread offers the computed z-score. */
-    @Test
-    void aChannelWithSpreadOffersTheComputedZScore() {
-        assumeTrue(FxTestSupport.toolkitAvailable());
-        GateNode gate = new GateNode("CD3");
-        gate.setStatistic(Statistic.MEDIAN);
-        Fixture f = editorForZScore(gate);
-        flushFx();
 
-        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
-        assertFalse(z.isDisable());
-    }
 
-    /**
-     * The label and colour say who computed the number. MIRAGE now emits standardised
-     * statistics of its own, so an unqualified "Z-score" no longer identifies whose.
-     */
-    @Test
-    void theToggleSaysTheNumberIsComputedHere() {
-        assumeTrue(FxTestSupport.toolkitAvailable());
-        GateNode gate = new GateNode("CD3");
-        gate.setStatistic(Statistic.MEDIAN);
-        Fixture f = editorForZScore(gate);
-        flushFx();
-
-        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
-        assertTrue(z.getText().toLowerCase(Locale.ROOT).contains("computed"),
-                "the label must say the value is derived, not read: " + z.getText());
-        assertTrue(z.getStyle().contains("#7fc4a8"),
-                "and carry the computed-here accent: " + z.getStyle());
-        assertNotNull(z.getTooltip());
-        assertTrue(z.getTooltip().getText().contains("FlowPath"),
-                "the tooltip must name who computes it: " + z.getTooltip().getText());
-    }
-
-    /**
-     * <b>The display/model agreement this exists for.</b> A constant column cannot be
-     * standardised — {@code updateHistogram} already declined to, silently. The button must
-     * decline visibly, and the gate's own flag must come with it, or the engine keeps
-     * z-scoring a column the editor is drawing raw.
-     */
-    @Test
-    void aConstantChannelDisablesTheToggleAndClearsTheFlag() {
-        assumeTrue(FxTestSupport.toolkitAvailable());
-        GateNode gate = new GateNode("FLAT");
-        gate.setStatistic(Statistic.MEDIAN);
-        gate.setThresholdIsZScore(true);
-        Fixture f = editorForZScore(gate);
-        flushFx();
-
-        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
-        assertTrue(z.isDisable(), "a flat column has no spread to standardise against");
-        assertFalse(gate.isThresholdIsZScore(),
-                "the flag the engine reads must follow the button, not outlive it");
-    }
 
     /**
      * <b>The point of the redesign.</b> Choosing MIRAGE's own z-score must move the gate to
@@ -556,30 +464,80 @@ class GateEditorSignalTest {
                 "and FlowPath must not standardise an already-standardised column");
     }
 
+    // ---- the Values row is what the file offers, and nothing else ----------------
+
     /**
-     * Switching the statistic to one MIRAGE already standardised withdraws the offer —
-     * the case that made "update on compartment/statistic change" necessary rather than
-     * merely tidy. Driven through the real combo box, as a user would.
+     * <b>No standardised column in the file, no Values row.</b> A default MIRAGE export
+     * carries compartments but nothing pre-standardised, so a gate has exactly one way to
+     * be read. A single-button radio group would pose a question with one answer; the row
+     * is hidden instead.
      */
     @Test
-    void choosingAStandardisedStatisticWithdrawsTheComputedZScore() {
+    void anExportWithNoStandardisedColumnShowsNoValuesRow() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        Fixture f = editorFor(gate);
+        flushFx();
+
+        List<RadioButton> buttons = new ArrayList<>();
+        FxTestSupport.onFxRun(() -> collect(f.pane(), RadioButton.class,
+                b -> b.getText() != null && (b.getText().startsWith("Raw")
+                        || b.getText().contains("Z-score")), buttons));
+        assertTrue(buttons.isEmpty(),
+                "nothing to choose between, so no buttons: " + buttons.stream()
+                        .map(RadioButton::getText).toList());
+        assertFalse(gate.isThresholdIsZScore(),
+                "and the gate reads its column as measured");
+    }
+
+    /** FlowPath's own z-score is not offered anywhere, on any fixture. */
+    @Test
+    void theComputedZScoreIsNotOfferedAtAll() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        Fixture f = editorForZScore(gate);   // this fixture *does* carry CD3: Cell: Median Z
+        flushFx();
+
+        List<RadioButton> buttons = new ArrayList<>();
+        FxTestSupport.onFxRun(() -> collect(f.pane(), RadioButton.class, b -> true, buttons));
+        assertTrue(buttons.stream().noneMatch(
+                        b -> b.getText() != null && b.getText().contains("computed")),
+                "no mode may name a number FlowPath derived: " + buttons.stream()
+                        .map(RadioButton::getText).toList());
+    }
+
+    /**
+     * <b>Migrating a gate saved under the retired mode.</b> Its threshold is in standard
+     * deviations. Clearing the flag without converting would leave that number — often
+     * around 1 — compared against a column whose values run to hundreds, so every cell
+     * reads negative: no error, and a gate tree that still looks right. The threshold must
+     * come back to the column's own units, landing on the same cells it did before.
+     */
+    @Test
+    void aGateSavedInTheRetiredZScoreModeIsConvertedNotJustCleared() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         GateNode gate = new GateNode("CD3");
         gate.setStatistic(Statistic.MEDIAN);
         gate.setThresholdIsZScore(true);
+
+        // Build the index first so we can express the saved threshold as a real z-score.
+        Fixture probe = editorForZScore(new GateNode("CD3"));
+        String key = probe.index().resolvedKey("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN);
+        double rawAtP60 = probe.stats().getPercentileValue(key, 60.0);
+        double savedZ = probe.stats().toZScore(key, rawAtP60);
+        gate.setThreshold(savedZ);
+
         Fixture f = editorForZScore(gate);
         flushFx();
 
-        assertFalse(FxTestSupport.onFx(() -> computedModeButton(f.pane())).isDisable(),
-                "Median is not standardised, so the toggle starts available");
-
-        select(statisticCombo(f.pane(), 0), Statistic.of("Median Z"));
-        flushFx();
-
-        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
-        assertTrue(z.isDisable(), "z-scoring a z-score rescales the axis by the current filter");
-        assertFalse(gate.isThresholdIsZScore());
-        assertTrue(z.getTooltip().getText().contains("already standardised"),
-                "and the tooltip must say why: " + z.getTooltip().getText());
+        assertFalse(gate.isThresholdIsZScore(), "the retired flag must be cleared");
+        assertEquals(rawAtP60, gate.getThreshold(), 1e-6,
+                "and the threshold converted back to the column's own units, so the gate "
+                        + "keeps the cells it had");
+        assertNotEquals(savedZ, gate.getThreshold(), 1e-6,
+                "the fixture must make the two spaces distinguishable");
     }
+
 }

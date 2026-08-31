@@ -57,7 +57,7 @@ automatically — nothing breaks.
 
     FlowPath does **not** hard-code this list. It discovers the vocabulary from the file
     and only understands its *shape*, so a statistic added on the MIRAGE side needs no
-    change here.
+    change here — and, equally, a statistic the file does **not** carry is never offered.
 
 !!! note "One index, two views"
     Gating and the UMAP share a single in-memory cell index. That is why the UMAP
@@ -204,19 +204,19 @@ cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,p
 - **Per-gate compartment & statistic** — choose Nucleus / Cytoplasm / Cell and any
   statistic the export carries, per gate. Only combinations actually present in the file
   are offered.
-- **Values selector** — per gate, choose **Raw** or **Z-score (computed here)**. On a
-  current MIRAGE export those are the two you will see, because MIRAGE emits no
-  standardised columns of its own.
+- **Values** — a gate compares against a column that is **in the export**. On a MIRAGE
+  run that means the column as measured, so there is nothing to choose and no selector
+  appears; pick *what* to read with the compartment and statistic dropdowns instead.
 
-    The label says *computed here* deliberately: that z-score is FlowPath's, taken over
-  **the cells currently loaded and filtered**, so it moves when you change a quality
-  filter or an annotation ROI. It is offered but **greyed out**, with the reason in its
-  tooltip, over a channel whose values are constant — there is no spread to standardise
-  against, and standardising anyway would report every cell as exactly 0.
+    FlowPath no longer offers a z-score of its own. It used to, computed over the cells
+  currently loaded *and filtered* — which meant the same slider position was a different
+  cut after you tightened a quality filter or drew a different ROI, and a threshold quoted
+  in a methods section would not reproduce. If a pipeline ever exports a pre-standardised
+  column, that is a real column and appears here as its own labelled option.
 
-    The selector is built from the file, so if a future MIRAGE emits pre-standardised
-  columns they appear here as their own clearly-labelled options rather than being
-  confused with FlowPath's.
+    Gate trees saved under the old mode still load: the threshold is converted back into
+  the column's own units on open, so the gate keeps the cells it had.
+
 - **Quality filters** — pre-gating QC with min + max for area, eccentricity,
   solidity, total intensity, perimeter.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
