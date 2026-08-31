@@ -774,6 +774,106 @@ public class CellIndex {
         return size;
     }
 
+    /** Discovered lazily on first ask; the build loop never touches this. */
+    private volatile List<MorphologyField> morphologyFields;
+
+    /**
+     * <b>Every morphology measurement this export carries</b>, in a stable order: the ones
+     * FlowPath computes or normalises itself first, then whatever else the file turned out
+     * to hold, in the order the key sample saw them.
+     * <p>
+     * This is the answer to "what can a quality filter filter on?", and it is read from the
+     * data rather than declared. FlowPath knew about four fields and drew five sliders; a
+     * MIRAGE export carries seven, so {@code Major Axis Length µm} and
+     * {@code Minor Axis Length µm} sat unread — no way to filter on elongation, and nothing
+     * to say the columns were there. In the other direction a file with no solidity still
+     * got a solidity slider, which filtered on NaN.
+     * <p>
+     * <b>Computed on first call, then cached.</b> The build loop is the {@code cells x
+     * markers} hot path and deliberately gains nothing here: discovery reuses the key
+     * sample already taken, and reading the extra columns costs one pass over the
+     * detections, paid only if something asks. The four known fields cost nothing at all —
+     * their arrays were filled during the build.
+     */
+    public List<MorphologyField> morphology() {
+        List<MorphologyField> cached = morphologyFields;
+        if (cached != null) return cached;
+        synchronized (this) {
+            if (morphologyFields == null) morphologyFields = discoverMorphology();
+            return morphologyFields;
+        }
+    }
+
+    /** The morphology field for {@code slug}, or {@code null} if this export has none. */
+    public MorphologyField morphology(String slug) {
+        if (slug == null) return null;
+        for (MorphologyField f : morphology()) {
+            if (f.slug().equals(slug)) return f;
+        }
+        return null;
+    }
+
+    private List<MorphologyField> discoverMorphology() {
+        List<MorphologyField> out = new ArrayList<>();
+        Set<String> claimed = new LinkedHashSet<>();
+
+        // The fields the build already resolved, with their own semantics: solidity is
+        // derived from convex area when that is what the file offers, and total intensity
+        // is summed across markers rather than exported at all. Emitted first, and only
+        // when the data actually produced something -- an all-NaN column is not a field a
+        // user can filter on, which is the "offers what is not there" half of the bug.
+        addKnown(out, claimed, "area", "Area", areas);
+        addKnown(out, claimed, "perimeter", "Perimeter", perimeters);
+        addKnown(out, claimed, "eccentricity", "Eccentricity", eccentricities);
+        addKnown(out, claimed, "solidity", "Solidity", solidities);
+        addKnown(out, claimed, "total_intensity", "Total intensity", totalIntensities);
+        // Convex area feeds the solidity derivation above; offering it as its own filter
+        // as well would be two controls over one quantity.
+        claimed.add("convex_area");
+
+        // Everything else the file carries that is not a marker, a position or an identity.
+        List<String> extra = new ArrayList<>();
+        for (String key : sampleKeys) {
+            if (key == null || key.isBlank()) continue;
+            if (MeasurementKeys.parse(key) != null) continue;              // per-compartment marker key
+            String bare = MeasurementKeys.stripLayerPrefix(key);
+            if (markerIndexByName.containsKey(bare)) continue;             // bare marker column
+            String slug = MorphologyField.slugOf(key);
+            if (slug.isEmpty() || claimed.contains(slug)) continue;
+            if (slug.startsWith("centroid_")) continue;                    // position, not shape
+            if (slug.equals("label") || slug.equals("cell_id") || slug.equals("fov")) continue;
+            claimed.add(slug);
+            extra.add(key);
+        }
+        if (!extra.isEmpty()) {
+            // One pass over the detections for all of them together, not one pass each.
+            double[][] columns = new double[extra.size()][objects.length];
+            for (double[] col : columns) java.util.Arrays.fill(col, Double.NaN);
+            for (int i = 0; i < objects.length; i++) {
+                Map<String, Number> measurements = getMeasurements(objects[i]);
+                for (int c = 0; c < extra.size(); c++) {
+                    Number v = measurements.get(extra.get(c));
+                    if (v != null) columns[c][i] = v.doubleValue();
+                }
+            }
+            for (int c = 0; c < extra.size(); c++) {
+                String key = extra.get(c);
+                MorphologyField field = new MorphologyField(
+                        MorphologyField.slugOf(key), key, MorphologyField.labelOf(key), columns[c]);
+                if (field.hasAnyValue()) out.add(field);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    private void addKnown(List<MorphologyField> out, Set<String> claimed,
+                          String slug, String label, double[] values) {
+        claimed.add(slug);
+        String key = resolveMeasurementKey(sampleKeys, slug);
+        MorphologyField field = new MorphologyField(slug, key != null ? key : label, label, values);
+        if (field.hasAnyValue()) out.add(field);
+    }
+
     public double getArea(int i) {
         return areas[i];
     }

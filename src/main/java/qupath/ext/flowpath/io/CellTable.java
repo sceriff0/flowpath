@@ -2,9 +2,11 @@ package qupath.ext.flowpath.io;
 
 import qupath.ext.flowpath.model.CellGeometry;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.MorphologyField;
 
 import java.io.IOException;
 import java.io.Writer;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -51,9 +53,8 @@ public final class CellTable {
      * so appending is always safe.
      */
     private static final String HEADER_HEAD = "cell_id";
-    private static final String HEADER_TAIL =
-            "phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px"
-            + ",area,perimeter,eccentricity,solidity";
+    private static final String HEADER_POSITION =
+            "phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px";
 
     /**
      * Write the shared header block.
@@ -64,11 +65,30 @@ public final class CellTable {
      *                  <em>presence</em> and would take the exact-join path to match
      *                  nothing, where its absence correctly selects the centroid fallback.
      */
-    public static void writeIdentityHeader(Writer w, boolean withLabel) throws IOException {
+    public static void writeIdentityHeader(Writer w, CellIndex index, boolean withLabel)
+            throws IOException {
         w.write(HEADER_HEAD);
         if (withLabel) w.write(",label");
         w.write(',');
-        w.write(HEADER_TAIL);
+        w.write(HEADER_POSITION);
+        // Every morphology column the export carries, under its unit-free slug. This was
+        // a fixed "area,perimeter,eccentricity,solidity" -- the same four CellIndex had
+        // been told about -- so a MIRAGE export's Major/Minor Axis Length were read from
+        // the file, held in memory and then dropped on the way out.
+        for (MorphologyField field : morphologyOf(index)) {
+            w.write(',');
+            w.write(escape(field.slug()));
+        }
+    }
+
+    /**
+     * The morphology columns a CSV carries, in {@link CellIndex#morphology()} order.
+     * <p>
+     * Both writers ask this, so the two files' morphology blocks are the same columns in
+     * the same order -- which is what lets a reader line them up beside each other.
+     */
+    public static List<MorphologyField> morphologyOf(CellIndex index) {
+        return index == null ? List.of() : index.morphology();
     }
 
     /**
@@ -103,14 +123,10 @@ public final class CellTable {
         w.write(',');
         w.write(fmt(geometry.pixelsY(i)));
 
-        w.write(',');
-        w.write(fmt(index.getArea(i)));
-        w.write(',');
-        w.write(fmt(index.getPerimeter(i)));
-        w.write(',');
-        w.write(fmt(index.getEccentricity(i)));
-        w.write(',');
-        w.write(fmt(index.getSolidity(i)));
+        for (MorphologyField field : morphologyOf(index)) {
+            w.write(',');
+            w.write(fmt(field.valueAt(i)));
+        }
     }
 
     /**

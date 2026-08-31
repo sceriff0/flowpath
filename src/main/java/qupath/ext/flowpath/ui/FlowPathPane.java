@@ -307,22 +307,13 @@ public class FlowPathPane extends BorderPane {
         editorPane.setRoiMask(cachedRoiMask);
         editorPane.setMarkerStats(markerStats);
 
-        // Update quality filter ranges + check which QC metrics have data
-        double maxArea = 0, maxTotalInt = 0, maxPerim = 0;
-        boolean hasEccentricity = false, hasSolidity = false, hasPerimeter = false;
-        for (int i = 0; i < cellIndex.size(); i++) {
-            maxArea = Math.max(maxArea, cellIndex.getArea(i));
-            maxTotalInt = Math.max(maxTotalInt, cellIndex.getTotalIntensity(i));
-            double perim = cellIndex.getPerimeter(i);
-            if (!Double.isNaN(perim)) {
-                maxPerim = Math.max(maxPerim, perim);
-                if (perim > 0) hasPerimeter = true;
-            }
-            if (cellIndex.getEccentricity(i) > 0) hasEccentricity = true;
-            if (cellIndex.getSolidity(i) > 0 && cellIndex.getSolidity(i) < 1.0) hasSolidity = true;
-        }
-        qualityFilterPane.updateRanges(maxArea, maxTotalInt, maxPerim);
-        qualityFilterPane.setAvailableMetrics(hasEccentricity, hasSolidity, hasPerimeter);
+        // Which QC metrics exist, and how far each slider should travel, are both read
+        // from the index's discovered morphology. This used to be a hand-rolled scan for
+        // three maxima and three booleans, which could only ever describe the five fields
+        // FlowPath had been told about -- it re-ranged area, total intensity and perimeter,
+        // and decided availability for eccentricity, solidity and perimeter, so the two
+        // lists did not even agree with each other.
+        qualityFilterPane.setCellIndex(cellIndex);
 
         // Setup preview service
         previewService.setCellIndex(cellIndex);

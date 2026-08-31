@@ -6,277 +6,204 @@ import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TitledPane;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.VBox;
+import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.QualityFilter;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Quality filter panel with min+max sliders for area, eccentricity, solidity,
- * total intensity, and perimeter. Sits below the TreeView and provides global
- * pre-gating quality control.
+ * <b>Pre-gating quality control, built from the morphology the export actually carries.</b>
+ * <p>
+ * This was five hard-coded pairs of sliders — area, eccentricity, solidity, total
+ * intensity, perimeter — which was wrong in both directions at once. A whole-cell-only
+ * mask carries no solidity, and the slider was drawn anyway over a column of NaN; a MIRAGE
+ * export carries {@code Major Axis Length µm} and {@code Minor Axis Length µm}, and there
+ * was no way to filter on either, nor anything to say the columns were there unread.
+ * <p>
+ * The rows are now one per {@link CellIndex#morphology()} entry, and each slider's travel
+ * is the observed range of that column rather than a guessed constant. A field the file
+ * does not carry has no row, because there is nothing to filter; a field FlowPath has
+ * never heard of gets a row like any other, because the panel does not need to recognise a
+ * measurement to let you threshold it.
+ *
+ * <h2>Ranges come from the data</h2>
+ * The old panel guessed: area spanned 0..50 000, eccentricity 0..1, and total intensity
+ * was re-ranged by a separate {@code updateRanges} call that knew about three of the five.
+ * A slider whose travel does not cover the data cannot express the filter you want, and
+ * one that covers far more than the data is unusable at the scale that matters. Each
+ * slider now spans its own column's observed minimum to maximum.
  */
 public class QualityFilterPane extends TitledPane {
 
     private QualityFilter filter;
     private boolean suppressEvents = false;
 
-    private final Slider areaMinSlider, areaMaxSlider;
-    private final Slider eccentMinSlider, eccentMaxSlider;
-    private final Slider solidMinSlider, solidMaxSlider;
-    private final Slider totalIntMinSlider, totalIntMaxSlider;
-    private final Slider perimMinSlider, perimMaxSlider;
+    private final VBox content = new VBox(4);
+    private final GridPane grid = new GridPane();
+    private final Label emptyLabel = new Label("No morphology measurements in this export.");
 
-    private final Label areaMinLabel, areaMaxLabel;
-    private final Label eccentMinLabel, eccentMaxLabel;
-    private final Label solidMinLabel, solidMaxLabel;
-    private final Label totalIntMinLabel, totalIntMaxLabel;
-    private final Label perimMinLabel, perimMaxLabel;
+    /** One row per field currently shown, keyed by slug. */
+    private final Map<String, Row> rows = new LinkedHashMap<>();
 
     private Consumer<QualityFilter> onFilterChanged;
 
+    /** The controls for one morphology field. */
+    private record Row(MorphologyField field, Slider min, Slider max,
+                       Label minLabel, Label maxLabel) {}
+
     public QualityFilterPane(QualityFilter filter) {
-        this.filter = filter;
+        this.filter = filter != null ? filter : new QualityFilter();
         setText("Quality Filter");
         setCollapsible(true);
         setExpanded(true);
 
-        GridPane grid = new GridPane();
         grid.setHgap(8);
         grid.setVgap(4);
         grid.setPadding(new Insets(6));
 
+        emptyLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+        emptyLabel.setWrapText(true);
+
+        Button reset = new Button("Reset");
+        reset.setOnAction(e -> resetToDefaults());
+
+        content.setPadding(new Insets(2));
+        content.getChildren().addAll(emptyLabel, grid, reset);
+        setContent(content);
+
+        showFields(List.of());
+    }
+
+    /**
+     * Rebuild the panel for {@code index}'s morphology.
+     * <p>
+     * The single entry point: what there is to filter on, and the travel of every slider,
+     * both come from here. Passing {@code null} clears the panel, which is the honest
+     * rendering of "no cells loaded" — an empty panel rather than sliders over nothing.
+     */
+    public void setCellIndex(CellIndex index) {
+        showFields(index == null ? List.of() : index.morphology());
+    }
+
+    private void showFields(List<MorphologyField> fields) {
+        rows.clear();
+        grid.getChildren().clear();
+
+        boolean any = fields != null && !fields.isEmpty();
+        emptyLabel.setVisible(!any);
+        emptyLabel.setManaged(!any);
+        grid.setVisible(any);
+        grid.setManaged(any);
+        if (!any) return;
+
         int row = 0;
+        for (MorphologyField field : fields) {
+            double[] bounds = observedRange(field);
+            if (bounds == null) continue;   // nothing measured; nothing to threshold
 
-        // Area
-        grid.add(new Label("Area:"), 0, row);
-        areaMinSlider = createSlider(0, 1000, filter.getMinArea());
-        areaMinLabel = new Label(fmt(filter.getMinArea()));
-        areaMaxSlider = createSlider(0, 50000, filter.getMaxArea() == Double.MAX_VALUE ? 50000 : filter.getMaxArea());
-        areaMaxLabel = new Label(filter.getMaxArea() == Double.MAX_VALUE ? "off" : fmt(filter.getMaxArea()));
-        grid.add(areaMinSlider, 1, row);
-        grid.add(areaMinLabel, 2, row);
-        grid.add(areaMaxSlider, 3, row);
-        grid.add(areaMaxLabel, 4, row);
-        row++;
+            QualityFilter.Range current = filter.range(field.slug());
+            double lo = Double.isFinite(current.min()) ? clamp(current.min(), bounds) : bounds[0];
+            double hi = Double.isFinite(current.max()) ? clamp(current.max(), bounds) : bounds[1];
 
-        // Eccentricity
-        grid.add(new Label("Eccent:"), 0, row);
-        eccentMinSlider = createSlider(0, 1, filter.getMinEccentricity());
-        eccentMinLabel = new Label(fmt(filter.getMinEccentricity()));
-        eccentMaxSlider = createSlider(0, 1, filter.getMaxEccentricity());
-        eccentMaxLabel = new Label(filter.getMaxEccentricity() >= 1.0 ? "off" : fmt(filter.getMaxEccentricity()));
-        grid.add(eccentMinSlider, 1, row);
-        grid.add(eccentMinLabel, 2, row);
-        grid.add(eccentMaxSlider, 3, row);
-        grid.add(eccentMaxLabel, 4, row);
-        row++;
+            Label name = new Label(field.label() + ":");
+            name.setStyle("-fx-text-fill: white; -fx-font-size: 10;");
 
-        // Solidity
-        grid.add(new Label("Solidity:"), 0, row);
-        solidMinSlider = createSlider(0, 1, filter.getMinSolidity());
-        solidMinLabel = new Label(fmt(filter.getMinSolidity()));
-        solidMaxSlider = createSlider(0, 1, filter.getMaxSolidity());
-        solidMaxLabel = new Label(filter.getMaxSolidity() >= 1.0 ? "off" : fmt(filter.getMaxSolidity()));
-        grid.add(solidMinSlider, 1, row);
-        grid.add(solidMinLabel, 2, row);
-        grid.add(solidMaxSlider, 3, row);
-        grid.add(solidMaxLabel, 4, row);
-        row++;
+            Slider minSlider = slider(bounds, lo);
+            Slider maxSlider = slider(bounds, hi);
+            Label minLabel = new Label(fmt(lo));
+            Label maxLabel = new Label(Double.isFinite(current.max()) ? fmt(hi) : "off");
+            minLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
+            maxLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
 
-        // Total intensity
-        grid.add(new Label("Total int:"), 0, row);
-        totalIntMinSlider = createSlider(0, 5000, filter.getMinTotalIntensity());
-        totalIntMinLabel = new Label(fmt(filter.getMinTotalIntensity()));
-        totalIntMaxSlider = createSlider(0, 50000, filter.getMaxTotalIntensity() == Double.MAX_VALUE ? 50000 : filter.getMaxTotalIntensity());
-        totalIntMaxLabel = new Label(filter.getMaxTotalIntensity() == Double.MAX_VALUE ? "off" : fmt(filter.getMaxTotalIntensity()));
-        grid.add(totalIntMinSlider, 1, row);
-        grid.add(totalIntMinLabel, 2, row);
-        grid.add(totalIntMaxSlider, 3, row);
-        grid.add(totalIntMaxLabel, 4, row);
-        row++;
+            Row r = new Row(field, minSlider, maxSlider, minLabel, maxLabel);
+            rows.put(field.slug(), r);
 
-        // Perimeter
-        grid.add(new Label("Perim:"), 0, row);
-        perimMinSlider = createSlider(0, 1000, filter.getMinPerimeter());
-        perimMinLabel = new Label(fmt(filter.getMinPerimeter()));
-        perimMaxSlider = createSlider(0, 5000, filter.getMaxPerimeter() == Double.MAX_VALUE ? 5000 : filter.getMaxPerimeter());
-        perimMaxLabel = new Label(filter.getMaxPerimeter() == Double.MAX_VALUE ? "off" : fmt(filter.getMaxPerimeter()));
-        grid.add(perimMinSlider, 1, row);
-        grid.add(perimMinLabel, 2, row);
-        grid.add(perimMaxSlider, 3, row);
-        grid.add(perimMaxLabel, 4, row);
-        row++;
+            minSlider.valueProperty().addListener((o, a, b) -> onSliderMoved(r));
+            maxSlider.valueProperty().addListener((o, a, b) -> onSliderMoved(r));
 
-        // Reset button spanning all 5 columns
-        Button resetBtn = new Button("Reset Filters");
-        resetBtn.setMaxWidth(Double.MAX_VALUE);
-        resetBtn.setOnAction(e -> resetToDefaults());
-        grid.add(resetBtn, 0, row, 5, 1);
-
-        setContent(grid);
-
-        // Wire all 10 listeners
-        wireMinSlider(areaMinSlider, areaMinLabel, v -> this.filter.setMinArea(v));
-        wireMinSlider(eccentMinSlider, eccentMinLabel, v -> this.filter.setMinEccentricity(v));
-        wireMinSlider(solidMinSlider, solidMinLabel, v -> this.filter.setMinSolidity(v));
-        wireMinSlider(totalIntMinSlider, totalIntMinLabel, v -> this.filter.setMinTotalIntensity(v));
-        wireMinSlider(perimMinSlider, perimMinLabel, v -> this.filter.setMinPerimeter(v));
-        wireMaxSlider(areaMaxSlider, areaMaxLabel, v -> this.filter.setMaxArea(v));
-        wireMaxSlider(eccentMaxSlider, eccentMaxLabel, v -> this.filter.setMaxEccentricity(v));
-        wireMaxSlider(solidMaxSlider, solidMaxLabel, v -> this.filter.setMaxSolidity(v));
-        wireMaxSlider(totalIntMaxSlider, totalIntMaxLabel, v -> this.filter.setMaxTotalIntensity(v));
-        wireMaxSlider(perimMaxSlider, perimMaxLabel, v -> this.filter.setMaxPerimeter(v));
-    }
-
-    private void wireMinSlider(Slider slider, Label label, java.util.function.DoubleConsumer setter) {
-        slider.valueProperty().addListener((obs, old, val) -> {
-            if (suppressEvents) return;
-            setter.accept(val.doubleValue());
-            label.setText(fmt(val.doubleValue()));
-            fireChanged();
-        });
-    }
-
-    private void wireMaxSlider(Slider slider, Label label, java.util.function.DoubleConsumer setter) {
-        slider.valueProperty().addListener((obs, old, val) -> {
-            if (suppressEvents) return;
-            double v = val.doubleValue();
-            double range = slider.getMax() - slider.getMin();
-            // "off" when slider is within 0.1% of its max (works for both [0,1] and [0,50000] ranges)
-            if (v >= slider.getMax() - range * 0.001) {
-                // For [0,1] bounded sliders (eccentricity, solidity), use the natural max (1.0)
-                // instead of Double.MAX_VALUE to keep serialized JSON clean
-                setter.accept(slider.getMax() <= 1.0 ? slider.getMax() : Double.MAX_VALUE);
-                label.setText("off");
-            } else {
-                setter.accept(v);
-                label.setText(fmt(v));
-            }
-            fireChanged();
-        });
+            grid.add(name, 0, row);
+            grid.add(minSlider, 1, row);
+            grid.add(minLabel, 2, row);
+            grid.add(maxSlider, 3, row);
+            grid.add(maxLabel, 4, row);
+            row++;
+        }
     }
 
     /**
-     * Replace the filter reference and sync all UI controls to its values.
+     * The column's observed span, or {@code null} when it has none.
+     * <p>
+     * A column that is entirely NaN, or entirely one value, cannot be thresholded into two
+     * non-empty groups — a slider over it would move without ever changing the result,
+     * which is the same "control that cannot do anything" the row hiding exists to avoid.
      */
+    private static double[] observedRange(MorphologyField field) {
+        double lo = Double.POSITIVE_INFINITY;
+        double hi = Double.NEGATIVE_INFINITY;
+        for (double v : field.values()) {
+            if (Double.isNaN(v)) continue;
+            lo = Math.min(lo, v);
+            hi = Math.max(hi, v);
+        }
+        if (!Double.isFinite(lo) || !Double.isFinite(hi) || hi - lo < 1e-12) return null;
+        return new double[]{lo, hi};
+    }
+
+    private static double clamp(double v, double[] bounds) {
+        return Math.max(bounds[0], Math.min(bounds[1], v));
+    }
+
+    private static Slider slider(double[] bounds, double value) {
+        Slider s = new Slider(bounds[0], bounds[1], clamp(value, bounds));
+        s.setPrefWidth(110);
+        SliderUtils.makeRangeFriendly(s);
+        return s;
+    }
+
+    private void onSliderMoved(Row r) {
+        if (suppressEvents) return;
+        double lo = r.min().getValue();
+        double hi = r.max().getValue();
+        r.minLabel().setText(fmt(lo));
+        r.maxLabel().setText(hi >= r.max().getMax() ? "off" : fmt(hi));
+
+        // At the very ends the control means "do not constrain this side", so the range is
+        // stored open rather than pinned to the observed extreme. Otherwise a filter saved
+        // against one slide would silently exclude cells on a slide whose values run wider.
+        double min = lo <= r.min().getMin() ? Double.NEGATIVE_INFINITY : lo;
+        double max = hi >= r.max().getMax() ? Double.POSITIVE_INFINITY : hi;
+        filter.setRange(r.field().slug(), new QualityFilter.Range(min, max));
+        fireChanged();
+    }
+
+    private void fireChanged() {
+        if (!suppressEvents && onFilterChanged != null) onFilterChanged.accept(filter);
+    }
+
+    private static String fmt(double v) {
+        if (!Double.isFinite(v)) return "off";
+        return Math.abs(v) >= 100 ? String.format(Locale.US, "%.0f", v)
+                                  : String.format(Locale.US, "%.2f", v);
+    }
+
+    /** Adopt a different filter and redraw against the fields currently shown. */
     public void setFilter(QualityFilter newFilter) {
+        this.filter = newFilter != null ? newFilter : new QualityFilter();
+        List<MorphologyField> shown = new ArrayList<>();
+        for (Row r : rows.values()) shown.add(r.field());
         suppressEvents = true;
-        this.filter = newFilter;
-        syncSlider(areaMinSlider, areaMinLabel, newFilter.getMinArea(), false);
-        syncSlider(areaMaxSlider, areaMaxLabel, newFilter.getMaxArea(), true);
-        syncSlider(eccentMinSlider, eccentMinLabel, newFilter.getMinEccentricity(), false);
-        syncSlider(eccentMaxSlider, eccentMaxLabel, newFilter.getMaxEccentricity(), true);
-        syncSlider(solidMinSlider, solidMinLabel, newFilter.getMinSolidity(), false);
-        syncSlider(solidMaxSlider, solidMaxLabel, newFilter.getMaxSolidity(), true);
-        syncSlider(totalIntMinSlider, totalIntMinLabel, newFilter.getMinTotalIntensity(), false);
-        syncSlider(totalIntMaxSlider, totalIntMaxLabel, newFilter.getMaxTotalIntensity(), true);
-        syncSlider(perimMinSlider, perimMinLabel, newFilter.getMinPerimeter(), false);
-        syncSlider(perimMaxSlider, perimMaxLabel, newFilter.getMaxPerimeter(), true);
-        suppressEvents = false;
-        updateActiveIndicator();
-    }
-
-    private void syncSlider(Slider slider, Label label, double value, boolean isMax) {
-        if (isMax && value == Double.MAX_VALUE) {
-            slider.setValue(slider.getMax());
-            label.setText("off");
-        } else if (isMax && value >= 1.0 && slider.getMax() == 1.0) {
-            slider.setValue(slider.getMax());
-            label.setText("off");
-        } else {
-            slider.setValue(value);
-            label.setText(fmt(value));
+        try {
+            showFields(shown);
+        } finally {
+            suppressEvents = false;
         }
-    }
-
-    /**
-     * Update slider ranges based on actual data statistics.
-     * Suppresses events to avoid silently corrupting filter values.
-     */
-    public void updateRanges(double maxArea, double maxTotalIntensity, double maxPerimeter) {
-        suppressEvents = true;
-
-        // Capture "off" state BEFORE rescaling so we can re-pin unbounded max
-        // sliders to the top of the new range (see rescaleMaxSlider).
-        boolean areaOff = filter.getMaxArea() == Double.MAX_VALUE;
-        boolean totalIntOff = filter.getMaxTotalIntensity() == Double.MAX_VALUE;
-        boolean perimOff = filter.getMaxPerimeter() == Double.MAX_VALUE;
-
-        rescaleSlider(areaMinSlider, maxArea);
-        rescaleMaxSlider(areaMaxSlider, maxArea * 1.1, areaOff);
-        rescaleSlider(totalIntMinSlider, maxTotalIntensity);
-        rescaleMaxSlider(totalIntMaxSlider, maxTotalIntensity * 1.1, totalIntOff);
-        rescaleSlider(perimMinSlider, maxPerimeter);
-        rescaleMaxSlider(perimMaxSlider, maxPerimeter * 1.1, perimOff);
-
-        // Sync filter values to actual slider positions in case JavaFX clamped them
-        filter.setMinArea(areaMinSlider.getValue());
-        syncMaxFilterValue(areaMaxSlider, v -> this.filter.setMaxArea(v));
-        filter.setMinTotalIntensity(totalIntMinSlider.getValue());
-        syncMaxFilterValue(totalIntMaxSlider, v -> this.filter.setMaxTotalIntensity(v));
-        filter.setMinPerimeter(perimMinSlider.getValue());
-        syncMaxFilterValue(perimMaxSlider, v -> this.filter.setMaxPerimeter(v));
-
-        // Refresh labels to match synced filter values (slider clamping can leave labels stale)
-        areaMinLabel.setText(fmt(filter.getMinArea()));
-        areaMaxLabel.setText(fmtMax(filter.getMaxArea()));
-        totalIntMinLabel.setText(fmt(filter.getMinTotalIntensity()));
-        totalIntMaxLabel.setText(fmtMax(filter.getMaxTotalIntensity()));
-        perimMinLabel.setText(fmt(filter.getMinPerimeter()));
-        perimMaxLabel.setText(fmtMax(filter.getMaxPerimeter()));
-
-        suppressEvents = false;
-    }
-
-    /**
-     * Raise a min/lower-bound slider's ceiling to match the data and keep its
-     * step proportional to the new range.
-     */
-    private void rescaleSlider(Slider slider, double newMax) {
-        if (newMax > slider.getMin()) {
-            slider.setMax(newMax);
-        }
-        SliderUtils.applyRangeStep(slider);
-    }
-
-    /**
-     * Rescale a "max"/upper-bound slider to match the data. When the slider
-     * currently represents "off" (no upper bound), re-pin it to the top of the
-     * new range so it keeps reading "off" — otherwise raising the ceiling above
-     * the old value leaves the thumb stranded mid-track and {@link #syncMaxFilterValue}
-     * writes that stale value as a real active bound. Total intensity hits this
-     * because its data sums routinely exceed the initial slider ceiling.
-     */
-    private void rescaleMaxSlider(Slider slider, double newMax, boolean isOff) {
-        if (newMax > slider.getMin()) {
-            slider.setMax(newMax);
-        }
-        if (isOff) {
-            slider.setValue(slider.getMax());
-        }
-        SliderUtils.applyRangeStep(slider);
-    }
-
-    private void syncMaxFilterValue(Slider slider, java.util.function.DoubleConsumer setter) {
-        setter.accept(SliderUtils.maxSliderToBound(slider.getValue(), slider.getMin(), slider.getMax()));
-    }
-
-    /**
-     * Enable/disable QC metric sliders based on data availability.
-     */
-    public void setAvailableMetrics(boolean hasEccentricity, boolean hasSolidity, boolean hasPerimeter) {
-        eccentMinSlider.setDisable(!hasEccentricity);
-        eccentMaxSlider.setDisable(!hasEccentricity);
-        eccentMinLabel.setText(hasEccentricity ? fmt(filter.getMinEccentricity()) : "\u2014");
-        eccentMaxLabel.setText(hasEccentricity ? (filter.getMaxEccentricity() >= 1.0 ? "off" : fmt(filter.getMaxEccentricity())) : "\u2014");
-        solidMinSlider.setDisable(!hasSolidity);
-        solidMaxSlider.setDisable(!hasSolidity);
-        solidMinLabel.setText(hasSolidity ? fmt(filter.getMinSolidity()) : "\u2014");
-        solidMaxLabel.setText(hasSolidity ? (filter.getMaxSolidity() >= 1.0 ? "off" : fmt(filter.getMaxSolidity())) : "\u2014");
-        perimMinSlider.setDisable(!hasPerimeter);
-        perimMaxSlider.setDisable(!hasPerimeter);
-        perimMinLabel.setText(hasPerimeter ? fmt(filter.getMinPerimeter()) : "\u2014");
-        perimMaxLabel.setText(hasPerimeter ? fmt(filter.getMaxPerimeter()) : "\u2014");
     }
 
     public void setOnFilterChanged(Consumer<QualityFilter> callback) {
@@ -287,92 +214,22 @@ public class QualityFilterPane extends TitledPane {
         return filter;
     }
 
-    /**
-     * Reset all filter sliders to their default (no-op) values.
-     */
+    /** The slugs currently offered, in display order. */
+    public List<String> shownFields() {
+        return List.copyOf(rows.keySet());
+    }
+
+    /** Clear every constraint and return the sliders to their columns' full span. */
     public void resetToDefaults() {
+        for (Row r : rows.values()) filter.setRange(r.field().slug(), null);
+        List<MorphologyField> shown = new ArrayList<>();
+        for (Row r : rows.values()) shown.add(r.field());
         suppressEvents = true;
-        resetSlider(areaMinSlider, areaMinLabel, 0, false);
-        filter.setMinArea(0);
-        resetSlider(areaMaxSlider, areaMaxLabel, areaMaxSlider.getMax(), true);
-        filter.setMaxArea(Double.MAX_VALUE);
-
-        resetSlider(eccentMinSlider, eccentMinLabel, 0, false);
-        filter.setMinEccentricity(0);
-        resetSlider(eccentMaxSlider, eccentMaxLabel, 1.0, true);
-        filter.setMaxEccentricity(1.0);
-
-        resetSlider(solidMinSlider, solidMinLabel, 0, false);
-        filter.setMinSolidity(0);
-        resetSlider(solidMaxSlider, solidMaxLabel, 1.0, true);
-        filter.setMaxSolidity(1.0);
-
-        resetSlider(totalIntMinSlider, totalIntMinLabel, 0, false);
-        filter.setMinTotalIntensity(0);
-        resetSlider(totalIntMaxSlider, totalIntMaxLabel, totalIntMaxSlider.getMax(), true);
-        filter.setMaxTotalIntensity(Double.MAX_VALUE);
-
-        resetSlider(perimMinSlider, perimMinLabel, 0, false);
-        filter.setMinPerimeter(0);
-        resetSlider(perimMaxSlider, perimMaxLabel, perimMaxSlider.getMax(), true);
-        filter.setMaxPerimeter(Double.MAX_VALUE);
-
-        suppressEvents = false;
-        updateActiveIndicator();
+        try {
+            showFields(shown);
+        } finally {
+            suppressEvents = false;
+        }
         fireChanged();
-    }
-
-    private void resetSlider(Slider slider, Label label, double value, boolean showOff) {
-        slider.setValue(value);
-        label.setText(showOff ? "off" : fmt(value));
-    }
-
-    /**
-     * Update the TitledPane text and color depending on whether any filter is active.
-     */
-    private void updateActiveIndicator() {
-        boolean active = filter.getMinArea() > 0
-                || filter.getMaxArea() != Double.MAX_VALUE
-                || filter.getMinEccentricity() > 0.0
-                || filter.getMaxEccentricity() < 1.0
-                || filter.getMinSolidity() > 0.0
-                || filter.getMaxSolidity() < 1.0
-                || filter.getMinTotalIntensity() > 0
-                || filter.getMaxTotalIntensity() != Double.MAX_VALUE
-                || filter.getMinPerimeter() > 0
-                || filter.getMaxPerimeter() != Double.MAX_VALUE;
-        if (active) {
-            setText("Quality Filter (active)");
-            setStyle("-fx-text-fill: #ff9900;");
-        } else {
-            setText("Quality Filter");
-            setStyle("");
-        }
-    }
-
-    private void fireChanged() {
-        updateActiveIndicator();
-        if (onFilterChanged != null) {
-            onFilterChanged.accept(filter);
-        }
-    }
-
-    private Slider createSlider(double min, double max, double value) {
-        Slider slider = new Slider(min, max, value);
-        slider.setPrefWidth(150);
-        SliderUtils.makeRangeFriendly(slider);
-        return slider;
-    }
-
-    private String fmt(double v) {
-        if (v == Double.MAX_VALUE) return "off";
-        if (v == (long) v) return String.format("%.0f", v);
-        return String.format("%.2f", v);
-    }
-
-    /** Format a max filter value, showing "off" for any sentinel (Double.MAX_VALUE or bounded 1.0). */
-    private String fmtMax(double v) {
-        if (v == Double.MAX_VALUE) return "off";
-        return fmt(v);
     }
 }

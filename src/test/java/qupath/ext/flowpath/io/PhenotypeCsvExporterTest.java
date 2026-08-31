@@ -99,10 +99,12 @@ class PhenotypeCsvExporterTest {
         assertTrue(header.contains("Outlier"), "Header should contain Outlier");
         assertTrue(header.contains("centroid_x"), "Header should contain centroid_x");
         assertTrue(header.contains("centroid_y"), "Header should contain centroid_y");
-        assertTrue(header.contains("area"), "Header should contain area");
-        assertTrue(header.contains("perimeter"), "Header should contain perimeter");
-        assertTrue(header.contains("eccentricity"), "Header should contain eccentricity");
-        assertTrue(header.contains("solidity"), "Header should contain solidity");
+        // Morphology is whatever this export carries. These cells are marker values only,
+        // so there is no area or perimeter column -- an all-blank one would assert the
+        // measurement exists and is missing per cell, which is a different claim.
+        assertFalse(header.contains("perimeter"),
+                "no perimeter in this fixture, so no perimeter column: " + header);
+        assertFalse(header.contains("solidity"), header);
         assertTrue(header.contains("CD45_raw"), "Header should contain CD45_raw");
         assertTrue(header.contains("CD45_zscore"), "Header should contain CD45_zscore");
         assertTrue(header.contains("CD45_sign"), "Header should contain CD45_sign");
@@ -110,6 +112,37 @@ class PhenotypeCsvExporterTest {
         // Every cell is a row — now includes excluded cells flagged via the two columns
         assertEquals(result.getExcluded().length, lines.size() - 1,
                 "CSV should contain one data row per cell, including excluded ones");
+    }
+
+    /**
+     * The other half of the same rule: morphology the export <em>does</em> carry is
+     * emitted, including the fields FlowPath has no name for. A MIRAGE run writes
+     * {@code Major Axis Length µm} and {@code Minor Axis Length µm}; they used to be read
+     * into the index and then dropped on the way out, because the CSV header was the fixed
+     * four FlowPath knew about.
+     */
+    @Test
+    void morphologyColumnsAreWhateverTheExportCarries() throws IOException {
+        CellIndex index = Cells.of(6)
+                .mirageMedianMarker("CD45", i -> 10.0 + i)
+                .mirageMorphology(i -> 50.0 + i * 10)
+                .morphology("Major Axis Length µm", i -> 8.0 + i * 0.5)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+
+        File csvFile = tempDir.resolve("morphology.csv").toFile();
+        PhenotypeCsvExporter.export(csvFile, index, result, tree, stats);
+        String header = Files.readAllLines(csvFile.toPath()).get(0);
+
+        assertTrue(header.contains("area"), header);
+        assertTrue(header.contains("eccentricity"), header);
+        assertTrue(header.contains("major_axis_length"),
+                "a column in the file must reach the CSV: " + header);
+        assertFalse(header.contains("convex_area"),
+                "convex area backs the solidity derivation, not a column of its own: " + header);
     }
 
     @Test

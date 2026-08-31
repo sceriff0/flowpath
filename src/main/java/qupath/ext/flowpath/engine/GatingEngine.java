@@ -148,8 +148,9 @@ public final class GatingEngine {
         QualityFilter qf = tree.getQualityFilter();
         if (qf != null) {
             for (int i = 0; i < n; i++) {
-                if (!qf.passes(index.getArea(i), index.getEccentricity(i),
-                        index.getSolidity(i), index.getTotalIntensity(i), index.getPerimeter(i))) {
+                // Every morphology field the export carries, not the five FlowPath used
+                // to know about -- see QualityFilter.passes(CellIndex, int).
+                if (!qf.passes(index, i)) {
                     outlier[i] = true;
                     excluded[i] = true;
                 }
@@ -221,12 +222,7 @@ public final class GatingEngine {
         int n = index.size();
         boolean[] mask = new boolean[n];
         for (int i = 0; i < n; i++) {
-            mask[i] = filter.passes(
-                    index.getArea(i),
-                    index.getEccentricity(i),
-                    index.getSolidity(i),
-                    index.getTotalIntensity(i),
-                    index.getPerimeter(i));
+            mask[i] = filter.passes(index, i);
         }
         return mask;
     }

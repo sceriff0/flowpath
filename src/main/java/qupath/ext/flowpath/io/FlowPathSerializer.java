@@ -215,6 +215,15 @@ public class FlowPathSerializer {
     //  Quality filter
     // -----------------------------------------------------------------------
 
+    /**
+     * The quality filter, as one entry per constrained field.
+     * <p>
+     * The five legacy {@code minArea}/{@code maxArea}/... properties are still written, so
+     * a file stays readable by an older FlowPath, and a {@code "ranges"} object carries
+     * the full set including fields FlowPath has no name for. A reader that understands
+     * only the legacy keys loses the extra constraints but reads the rest correctly, which
+     * is the right failure: it under-filters visibly rather than mis-filtering silently.
+     */
     private static JsonObject serializeQualityFilter(QualityFilter qf) {
         JsonObject obj = new JsonObject();
         obj.addProperty("minArea", qf.getMinArea());
@@ -227,31 +236,43 @@ public class FlowPathSerializer {
         obj.addProperty("maxTotalIntensity", qf.getMaxTotalIntensity());
         obj.addProperty("minPerimeter", qf.getMinPerimeter());
         obj.addProperty("maxPerimeter", qf.getMaxPerimeter());
+
+        JsonObject ranges = new JsonObject();
+        qf.ranges().forEach((slug, range) -> {
+            JsonObject r = new JsonObject();
+            if (range.min() > Double.NEGATIVE_INFINITY) r.addProperty("min", range.min());
+            if (range.max() < Double.POSITIVE_INFINITY) r.addProperty("max", range.max());
+            ranges.add(slug, r);
+        });
+        obj.add("ranges", ranges);
         return obj;
     }
 
     private static QualityFilter deserializeQualityFilter(JsonObject obj) {
         QualityFilter qf = new QualityFilter();
-        if (obj.has("minArea"))
-            qf.setMinArea(obj.get("minArea").getAsDouble());
-        if (obj.has("maxArea"))
-            qf.setMaxArea(obj.get("maxArea").getAsDouble());
-        if (obj.has("minEccentricity"))
-            qf.setMinEccentricity(obj.get("minEccentricity").getAsDouble());
-        if (obj.has("maxEccentricity"))
-            qf.setMaxEccentricity(obj.get("maxEccentricity").getAsDouble());
-        if (obj.has("minSolidity"))
-            qf.setMinSolidity(obj.get("minSolidity").getAsDouble());
-        if (obj.has("maxSolidity"))
-            qf.setMaxSolidity(obj.get("maxSolidity").getAsDouble());
-        if (obj.has("minTotalIntensity"))
-            qf.setMinTotalIntensity(obj.get("minTotalIntensity").getAsDouble());
-        if (obj.has("maxTotalIntensity"))
-            qf.setMaxTotalIntensity(obj.get("maxTotalIntensity").getAsDouble());
-        if (obj.has("minPerimeter"))
-            qf.setMinPerimeter(obj.get("minPerimeter").getAsDouble());
-        if (obj.has("maxPerimeter"))
-            qf.setMaxPerimeter(obj.get("maxPerimeter").getAsDouble());
+        // Legacy properties first, so a v1..v3 file loads exactly as it did.
+        if (obj.has("minArea")) qf.setMinArea(obj.get("minArea").getAsDouble());
+        if (obj.has("maxArea")) qf.setMaxArea(obj.get("maxArea").getAsDouble());
+        if (obj.has("minEccentricity")) qf.setMinEccentricity(obj.get("minEccentricity").getAsDouble());
+        if (obj.has("maxEccentricity")) qf.setMaxEccentricity(obj.get("maxEccentricity").getAsDouble());
+        if (obj.has("minSolidity")) qf.setMinSolidity(obj.get("minSolidity").getAsDouble());
+        if (obj.has("maxSolidity")) qf.setMaxSolidity(obj.get("maxSolidity").getAsDouble());
+        if (obj.has("minTotalIntensity")) qf.setMinTotalIntensity(obj.get("minTotalIntensity").getAsDouble());
+        if (obj.has("maxTotalIntensity")) qf.setMaxTotalIntensity(obj.get("maxTotalIntensity").getAsDouble());
+        if (obj.has("minPerimeter")) qf.setMinPerimeter(obj.get("minPerimeter").getAsDouble());
+        if (obj.has("maxPerimeter")) qf.setMaxPerimeter(obj.get("maxPerimeter").getAsDouble());
+
+        // Then the general form, which wins where both describe the same field: it is the
+        // one that can express a constraint on a field FlowPath has no name for.
+        if (obj.has("ranges") && obj.get("ranges").isJsonObject()) {
+            for (var entry : obj.getAsJsonObject("ranges").entrySet()) {
+                if (!entry.getValue().isJsonObject()) continue;
+                JsonObject r = entry.getValue().getAsJsonObject();
+                double lo = r.has("min") ? r.get("min").getAsDouble() : Double.NEGATIVE_INFINITY;
+                double hi = r.has("max") ? r.get("max").getAsDouble() : Double.POSITIVE_INFINITY;
+                qf.setRange(entry.getKey(), new QualityFilter.Range(lo, hi));
+            }
+        }
         // "hideFiltered" silently ignored for backward compat with v1 files
         return qf;
     }

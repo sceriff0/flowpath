@@ -156,7 +156,7 @@ public class UmapResult {
         }
 
         try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
-            CellTable.writeIdentityHeader(writer, withLabel);
+            CellTable.writeIdentityHeader(writer, cellIndex, withLabel);
             writer.write(",population,umap_x,umap_y");
             for (MeasuredColumn col : columns) {
                 // Escape the whole field, suffix included: a marker name containing a

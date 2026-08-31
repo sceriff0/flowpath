@@ -110,7 +110,7 @@ public class PhenotypeCsvExporter {
             // mirage/bin/join_flowpath.py hard-fails without the last three and inverts
             // centroid_x/centroid_y as `/ pixel_size - 0.5`. They must keep these names
             // and centroid_* must be micrometres. Additional columns are safe.
-            CellTable.writeIdentityHeader(writer, withLabel);
+            CellTable.writeIdentityHeader(writer, index, withLabel);
             // Capitalised, and written as Python-style True/False below, because
             // join_flowpath.py maps these two names verbatim -- ("Outlier", "fp_outlier")
             // and ("Out_of_annotation", "fp_out_of_annotation") -- and then does
