@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.engine;
 
 import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
@@ -43,11 +44,13 @@ public final class GatingEngine {
         private final int[] colors;
         private final List<int[]> perRootColors;
         private final List<String> rootLabels;
+        private final BranchTally tally;
 
         AssignmentResult(String[] phenotypes, boolean[] excluded,
                          boolean[] outOfAnnotation, boolean[] outlier,
                          boolean[] unmeasured, int[] colors,
-                         List<int[]> perRootColors, List<String> rootLabels) {
+                         List<int[]> perRootColors, List<String> rootLabels,
+                         BranchTally tally) {
             this.phenotypes = phenotypes;
             this.excluded = excluded;
             this.outOfAnnotation = outOfAnnotation;
@@ -56,6 +59,7 @@ public final class GatingEngine {
             this.colors = colors;
             this.perRootColors = perRootColors;
             this.rootLabels = rootLabels;
+            this.tally = tally;
         }
 
         /**
@@ -124,6 +128,14 @@ public final class GatingEngine {
         public List<String> getRootLabels() {
             return rootLabels;
         }
+
+        /**
+         * Per-region breakdown of the same counts {@link Branch#getCount()} carries,
+         * built alongside them during the same walk rather than recomputed from it.
+         */
+        public BranchTally getTally() {
+            return tally;
+        }
     }
 
     /**
@@ -137,6 +149,8 @@ public final class GatingEngine {
 
     /**
      * Assign phenotypes to every cell by walking the gate tree.
+     * Delegates to {@link #assignAll(GateTree, CellIndex, MarkerStats, boolean[], int[], int)}
+     * with no region breakdown ({@code regionOf = null, regionCount = 0}).
      *
      * @param tree      the gate tree (roots + quality filter)
      * @param index     columnar cell data
@@ -147,6 +161,29 @@ public final class GatingEngine {
      */
     public static AssignmentResult assignAll(GateTree tree, CellIndex index, MarkerStats stats,
                                               boolean[] roiMask) {
+        return assignAll(tree, index, stats, roiMask, null, 0);
+    }
+
+    /**
+     * Assign phenotypes to every cell by walking the gate tree, additionally tallying every
+     * branch's cell count broken down by annotated region and by whether the cell was
+     * cleanly judged.
+     *
+     * @param tree        the gate tree (roots + quality filter)
+     * @param index       columnar cell data
+     * @param stats       per-marker statistics (mean, std, percentiles)
+     * @param roiMask     optional boolean mask where {@code true} means the cell is inside
+     *                    the ROI; {@code null} means no ROI filtering
+     * @param regionOf    per-cell region index from {@code RegionMask.regionOf()}, or a
+     *                    negative value for a cell in no region; {@code null} means no
+     *                    region breakdown
+     * @param regionCount number of named regions, matching {@code RegionMask.regionNames()};
+     *                    ignored when {@code regionOf} is {@code null}
+     * @return assignment result with phenotypes, exclusion flags, colors, and the region/
+     *         cleanliness tally
+     */
+    public static AssignmentResult assignAll(GateTree tree, CellIndex index, MarkerStats stats,
+                                              boolean[] roiMask, int[] regionOf, int regionCount) {
         int n = index.size();
         String[] phenotypes = new String[n];
         boolean[] excluded = new boolean[n];
@@ -226,16 +263,31 @@ public final class GatingEngine {
         // from one root into the next -- see walkRoots.
         boolean[] baseExcluded = excluded.clone();
 
+        BranchTally tally = new BranchTally(regionCount);
+        WalkContext ctx = new WalkContext(phenotypes, excluded, baseExcluded, outlier,
+                unmeasured, colors, perRootColors, regionOf, tally);
+
         // Walk every cell — excluded cells still get their would-have-been phenotype
         // for CSV export; branch counts skip increments when excluded[i] is true so the
         // visible counts in the UI continue to reflect non-excluded cells only.
         for (int i = 0; i < n; i++) {
-            walkRoots(plan, i, phenotypes, excluded, baseExcluded, outlier, unmeasured,
-                    colors, perRootColors);
+            walkRoots(plan, i, ctx);
+        }
+
+        // Cell-level tallying runs after the walk, not folded into it: excluded[] and
+        // unmeasured[] only reach their final values once every root has run (multi-root
+        // cells are re-walked per root above), so recording "clean" any earlier would read
+        // a still-changing flag.
+        for (int i = 0; i < n; i++) {
+            int region = regionOf == null ? -1 : regionOf[i];
+            // "Clean" mirrors the R-side denominator: not clipped, not quality-filtered,
+            // and actually measurable. Recorded per cell here so every branch's clean count
+            // shares one definition rather than each reader inventing its own.
+            tally.recordCell(region, !excluded[i] && !unmeasured[i]);
         }
 
         return new AssignmentResult(phenotypes, excluded, outOfAnnotation, outlier,
-                unmeasured, colors, perRootColors, rootLabels);
+                unmeasured, colors, perRootColors, rootLabels, tally);
     }
 
     /**
@@ -454,16 +506,30 @@ public final class GatingEngine {
 
     // ---- private helpers ----
 
-    private static void walkRoots(List<ResolvedGate> roots, int cellIdx,
-                                  String[] phenotypes, boolean[] excluded, boolean[] baseExcluded,
-                                  boolean[] outlier, boolean[] unmeasured,
-                                  int[] colors, List<int[]> perRootColors) {
-        if (perRootColors == null) {
+    /**
+     * The arrays a per-cell walk reads and writes, gathered into one record so
+     * {@code walkRoots}/{@code walkNode}/{@code assignBranch} take one parameter for them
+     * instead of widening a positional parameter list every time a new one is needed —
+     * {@code region} and {@code tally} are the ones this class added. Introduced as one
+     * deliberate refactor rather than by growing the existing signatures further.
+     */
+    private record WalkContext(String[] phenotypes, boolean[] excluded, boolean[] baseExcluded,
+                                boolean[] outlier, boolean[] unmeasured, int[] colors,
+                                List<int[]> perRootColors, int[] regionOf, BranchTally tally) {
+
+        /** This cell's region index, or -1 when no region breakdown was requested. */
+        int regionOf(int cellIdx) {
+            return regionOf == null ? -1 : regionOf[cellIdx];
+        }
+    }
+
+    private static void walkRoots(List<ResolvedGate> roots, int cellIdx, WalkContext ctx) {
+        if (ctx.perRootColors() == null) {
             // Single-root fast path — walk all roots regardless of exclusion so excluded
             // cells still get a phenotype for CSV. Count increments inside walkNode are
             // guarded by excluded[] to keep UI counts consistent.
             for (ResolvedGate root : roots) {
-                walkNode(root, cellIdx, phenotypes, excluded, outlier, unmeasured, colors);
+                walkNode(root, cellIdx, ctx);
             }
             return;
         }
@@ -472,6 +538,12 @@ public final class GatingEngine {
         List<String> contributions = new ArrayList<>();
         List<Integer> contributedColors = new ArrayList<>();
         int enabledIdx = 0;
+
+        String[] phenotypes = ctx.phenotypes();
+        boolean[] excluded = ctx.excluded();
+        boolean[] baseExcluded = ctx.baseExcluded();
+        int[] colors = ctx.colors();
+        List<int[]> perRootColors = ctx.perRootColors();
 
         // Roots are independent views of the same cells, so each one is walked against the
         // same starting exclusion (quality filter + ROI) and its own outlier clipping is
@@ -490,7 +562,7 @@ public final class GatingEngine {
             colors[cellIdx] = 0;
             excluded[cellIdx] = baseExcluded[cellIdx];
 
-            walkNode(root, cellIdx, phenotypes, excluded, outlier, unmeasured, colors);
+            walkNode(root, cellIdx, ctx);
 
             anyExcluded |= excluded[cellIdx];
 
@@ -529,11 +601,13 @@ public final class GatingEngine {
      * branch decision is {@link ResolvedGate#branchOf} for every gate type, and the only
      * thing left here is bookkeeping.
      */
-    private static void walkNode(ResolvedGate rg, int cellIdx,
-                                 String[] phenotypes, boolean[] excluded, boolean[] outlier,
-                                 boolean[] unmeasured, int[] colors) {
+    private static void walkNode(ResolvedGate rg, int cellIdx, WalkContext ctx) {
         if (!rg.node.isEnabled()) return;
         if (!rg.usable) return;
+
+        boolean[] excluded = ctx.excluded();
+        boolean[] unmeasured = ctx.unmeasured();
+        boolean[] outlier = ctx.outlier();
 
         int branchIdx = rg.branchOf(cellIdx);
 
@@ -556,25 +630,29 @@ public final class GatingEngine {
             excluded[cellIdx] = true;
             branchIdx = rg.branchIgnoringClip(cellIdx);
         }
-        assignBranch(rg, branchIdx, cellIdx, phenotypes, excluded, outlier, unmeasured, colors);
+        assignBranch(rg, branchIdx, cellIdx, ctx);
     }
 
     /**
      * Land a cell in one of the gate's branches: count it (unless excluded), label it,
      * then descend into that branch's children.
      */
-    private static void assignBranch(ResolvedGate rg, int branchIdx, int cellIdx,
-                                      String[] phenotypes,
-                                      boolean[] excluded, boolean[] outlier,
-                                      boolean[] unmeasured, int[] colors) {
+    private static void assignBranch(ResolvedGate rg, int branchIdx, int cellIdx, WalkContext ctx) {
+        boolean[] excluded = ctx.excluded();
+        boolean[] unmeasured = ctx.unmeasured();
+
         Branch branch = rg.branches[branchIdx];
         if (!excluded[cellIdx]) {
             branch.setCount(branch.getCount() + 1);
         }
-        phenotypes[cellIdx] = branch.getName();
-        colors[cellIdx] = branch.getColor();
+        // Same decision, recorded with its region and cleanliness. Not a second predicate:
+        // branchIdx was decided once, by ResolvedGate.branchOf, above.
+        ctx.tally().record(branch, ctx.regionOf(cellIdx), !excluded[cellIdx] && !unmeasured[cellIdx]);
+
+        ctx.phenotypes()[cellIdx] = branch.getName();
+        ctx.colors()[cellIdx] = branch.getColor();
         for (ResolvedGate child : rg.children[branchIdx]) {
-            walkNode(child, cellIdx, phenotypes, excluded, outlier, unmeasured, colors);
+            walkNode(child, cellIdx, ctx);
         }
     }
 
