@@ -39,6 +39,15 @@ public final class AnalysisSession {
      * The caller (the gating pane) already holds the {@code RegionMask} it built the tally's
      * region indices from; it derives {@code regionNames} from
      * {@code RegionMask.regionNames()} and {@code regionAreasMm2} from each region's ROI.
+     * <p>
+     * {@code regionNames} (and {@code regionAreasMm2}, when given) and {@code tally} are two
+     * views of the <em>same</em> region set — the tally's region indices are what
+     * {@code regionNames}/{@code regionAreasMm2} label. A length mismatch means the caller
+     * paired a tally from one image with region metadata from another; the constructor
+     * rejects that rather than let {@link PopulationStats} paper over it with a
+     * {@code "Region N"} fallback name, the same way {@code PhenotypeSnapshot} rejects a
+     * length mismatch between its cells and its per-cell arrays, and
+     * {@code GatingEngine.combineMasks} rejects one between two masks.
      *
      * @param tree           the gate tree the walk classified against; disabled gates and
      *                       their subtrees contribute no rows, matching {@link PopulationStats}
@@ -46,9 +55,11 @@ public final class AnalysisSession {
      * @param stats          per-marker statistics for {@code index}
      * @param tally          per-branch counts the walk recorded, by region and by cleanliness
      * @param regionNames    region names, parallel to the tally's region indices; empty when
-     *                       there are no annotated regions
+     *                       there are no annotated regions; must have exactly
+     *                       {@code tally.regionCount()} entries
      * @param regionAreasMm2 per-region area in mm², parallel to {@code regionNames}, or
-     *                       {@code null} when unknown
+     *                       {@code null} when unknown; when given, must have exactly
+     *                       {@code tally.regionCount()} entries
      * @param imageName      the image the pass describes, for the window's own display
      */
     public record AnalysisInput(GateTree tree, CellIndex index, MarkerStats stats,
@@ -61,6 +72,16 @@ public final class AnalysisSession {
             Objects.requireNonNull(stats, "stats");
             Objects.requireNonNull(tally, "tally");
             regionNames = regionNames == null ? List.of() : List.copyOf(regionNames);
+            if (regionNames.size() != tally.regionCount()) {
+                throw new IllegalArgumentException(
+                        "regionNames describes a different region set than tally: "
+                                + regionNames.size() + " vs " + tally.regionCount() + " regions");
+            }
+            if (regionAreasMm2 != null && regionAreasMm2.length != tally.regionCount()) {
+                throw new IllegalArgumentException(
+                        "regionAreasMm2 describes a different region set than tally: "
+                                + regionAreasMm2.length + " vs " + tally.regionCount() + " regions");
+            }
         }
     }
 
