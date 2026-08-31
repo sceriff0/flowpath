@@ -65,6 +65,25 @@ been reset to match. Saved gate trees (`.json`) load unchanged.
   1 compared against intensities running to hundreds — every cell negative, no error, and
   a tree that still looked right.
 
+- **The quality filter offers what the export carries, and nothing else.** It was five
+  hard-coded pairs of sliders, wrong in both directions: a whole-cell-only mask carries no
+  solidity but the slider was drawn anyway over a column of NaN, while a MIRAGE export's
+  `Major Axis Length µm` and `Minor Axis Length µm` sat in the file unread — no way to
+  filter on elongation, and nothing to say the columns were there. `CellIndex.morphology()`
+  now discovers them, ranges are keyed by a unit-free slug so a constraint on a field
+  FlowPath has never heard of is expressible, and each slider spans its own column's
+  observed range rather than a guessed constant. **Both CSVs emit the same discovered
+  block**, so a column in the file reaches the output instead of being read into memory and
+  dropped; a column the export lacks is absent rather than blank.
+- **The compartment vocabulary is open.** `Nucleus` / `Cytoplasm` / `Cell` are no longer
+  the only compartments FlowPath can see — a pipeline adding a fourth gets it offered
+  rather than turned into a phantom marker named after the whole measurement key. The
+  parse anchor is kept safe by requiring evidence: an unknown token counts as a compartment
+  only when **two or more distinct markers use it**. That is what separates a real
+  compartment, which a pipeline emits for every marker in the panel, from QuPath's own
+  `ROI: 0.50 µm per pixel: CD3` shape, whose marker slot is a constant and so never reaches
+  two.
+
 ### Fixed
 
 - **An unrecognised compartment in a saved file silently became whole-cell.**

@@ -30,7 +30,7 @@ they understand two conventions MIRAGE and AnnoMask write:
 | Convention | Example key | Meaning |
 |---|---|---|
 | **Bare marker** | `CD45`, `DAPI` | Whole-cell mean intensity for that channel (the AnnoMask convention). |
-| **Per-compartment** | `CD3: Nucleus: Median` | `"<MARKER>: <Compartment>: <Statistic>"`, for Nucleus / Cytoplasm / Cell. |
+| **Per-compartment** | `CD3: Nucleus: Median` | `"<MARKER>: <Compartment>: <Statistic>"`. MIRAGE emits Nucleus / Cytoplasm / Cell; FlowPath reads whichever the file has, and picks up a new one a pipeline adds. |
 
 Because both sides speak the same key language, MIRAGE's output is plug-and-play:
 no renaming, no remapping. If a dataset has **no** per-compartment keys (older
@@ -217,8 +217,12 @@ cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,p
     Gate trees saved under the old mode still load: the threshold is converted back into
   the column's own units on open, so the gate keeps the cells it had.
 
-- **Quality filters** — pre-gating QC with min + max for area, eccentricity,
-  solidity, total intensity, perimeter.
+- **Quality filters** — pre-gating QC with a min + max per morphology measurement
+  **your export actually carries**. A MIRAGE run gives you area, eccentricity, perimeter,
+  solidity and both axis lengths; a whole-cell-only mask gives you fewer, and the rows you
+  do not have are simply not shown rather than being sliders over missing data. Each
+  slider spans its own column's observed range, and a measurement FlowPath has no name for
+  gets a row like any other.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
   zooming to the clipped range.
 - **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++); drag-and-drop
