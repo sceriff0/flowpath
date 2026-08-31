@@ -30,12 +30,28 @@ they understand two conventions MIRAGE and AnnoMask write:
 | Convention | Example key | Meaning |
 |---|---|---|
 | **Bare marker** | `CD45`, `DAPI` | Whole-cell mean intensity for that channel (the AnnoMask convention). |
-| **Per-compartment** | `CD3: Nucleus: Mean` | `"<MARKER>: <Compartment>: <Statistic>"`, for Nucleus / Cytoplasm / Cell and Mean / Median / Sum. |
+| **Per-compartment** | `CD3: Nucleus: Median` | `"<MARKER>: <Compartment>: <Statistic>"`, for Nucleus / Cytoplasm / Cell. |
 
 Because both sides speak the same key language, MIRAGE's output is plug-and-play:
 no renaming, no remapping. If a dataset has **no** per-compartment keys (older
 exports, or whole-cell-only masks), FlowPath falls back to whole-cell / Mean
 automatically — nothing breaks.
+
+!!! note "The statistic is whatever MIRAGE computed"
+    FlowPath does **not** carry a fixed list of statistics. MIRAGE composes its names as
+    `base × normalisation` — bases `Median`, `Mean`, `Sum` and `REDSEA`, each optionally
+    suffixed ` Z` or ` RobustZ` — and which of them an export carries is decided by
+    `params.quantify_statistics`, whose default is `['Median']` alone. FlowPath discovers
+    the vocabulary from the file and only understands its *shape*, so a statistic added on
+    the MIRAGE side needs no change here.
+
+    Two consequences worth knowing:
+
+    - **`REDSEA` is whole-cell only.** A membrane correction has no nucleus/cytoplasm
+      decomposition, so `CD3: Cell: REDSEA` exists and `CD3: Nucleus: REDSEA` deliberately
+      does not. FlowPath will not offer you that pair.
+    - **` Z` and ` RobustZ` are MIRAGE's own z-scores**, computed per patient across every
+      cell. They are not the same number as FlowPath's — see below.
 
 !!! note "One index, two views"
     Gating and the UMAP share a single in-memory cell index. That is why the UMAP
@@ -150,17 +166,28 @@ Then:
 | `umap_coordinates.csv` | UMAP | Per-cell UMAP X/Y + phenotype |
 | PathClasses | both | Named populations stored on the QuPath objects |
 
+Both per-cell files open with the **same identity block**, so they can be joined to each
+other — and back to MIRAGE — on `label`:
+
 ```csv title="gate_pheno.csv"
-cell_id,phenotype,CD45,CD3,CD8,PANCK
-0,T cytotoxic,+,+,+,-
-1,Tumor,-,-,-,+
+cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity,Out_of_annotation,Outlier,CD45_raw,CD45_zscore,CD45_sign
+0,17,T cytotoxic,6134.5990,2291.3830,18876.4892,7051.9477,65.5930,30.6559,0.5733,0.9412,False,False,1591.1916,1.8420,+
 ```
 
 ```csv title="umap_coordinates.csv"
-UMAP_X,UMAP_Y,Phenotype
--3.241519,1.872034,CD4+
-2.109384,-0.543218,CD8+
+cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity,population,umap_x,umap_y,CD45_raw,CD45_zscore
+0,17,CD4+,6134.5990,2291.3830,18876.4892,7051.9477,65.5930,30.6559,0.5733,0.9412,Cluster A,-3.2415,1.8720,1591.1916,1.8420
 ```
+
+!!! info "Units are in the names"
+    `centroid_x` / `centroid_y` are **micrometres** — MIRAGE's `join_flowpath.py` inverts
+    them as `x_px = centroid_x / pixel_size - 0.5`, so those two names are a fixed
+    contract. `centroid_x_px` / `centroid_y_px` are the same positions in level-0 pixels,
+    stated explicitly so you never have to invert the calibration yourself.
+
+    `label` is the segmentation label, present whenever MIRAGE exported it. With it, the
+    join back to a SpatialData store is exact; without it, `join_flowpath.py` falls back
+    to a mutual-nearest centroid match.
 
 ## Options reference
 
@@ -168,10 +195,20 @@ UMAP_X,UMAP_Y,Phenotype
 
 - **Gate types** — threshold (1D), quadrant (2D dual-threshold), polygon,
   rectangle, ellipse.
-- **Per-gate compartment & statistic** — choose Nucleus / Cytoplasm / Cell and
-  Mean / Median / Sum per gate (when per-compartment keys exist).
-- **Raw / Z-score toggle** — switch value modes per gate (z-score uses MIRAGE's
-  own z-scores).
+- **Per-gate compartment & statistic** — choose Nucleus / Cytoplasm / Cell and any
+  statistic the export carries, per gate. Only combinations actually present in the file
+  are offered.
+- **Values selector** — per gate, choose **Raw**, whichever of **Z-score (MIRAGE)** /
+  **Robust Z (MIRAGE)** your export actually carries, or **Z-score (computed here)**. The
+  list is built from the file, so you are only ever offered a column that exists.
+
+    The labels name who computed the number, because the two standardisations are **not
+    the same**: MIRAGE's ` Z` / ` RobustZ` columns are computed across every cell of the
+    patient and read straight from the export, while FlowPath's is computed over the cells
+    currently loaded and filtered — so it moves when you change a quality filter or an
+    annotation ROI. FlowPath's own z-score is offered but **greyed out**, with the reason
+    in its tooltip, over a constant column or over one MIRAGE has already standardised
+    (z-scoring a z-score rescales the axis by whatever is currently filtered).
 - **Quality filters** — pre-gating QC with min + max for area, eccentricity,
   solidity, total intensity, perimeter.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis

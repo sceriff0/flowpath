@@ -63,6 +63,9 @@ import java.util.function.Consumer;
  */
 final class ComputeController {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(ComputeController.class);
+
     // --- Owned controls ---
     private final ComboBox<String> qualityPreset;
     private final Spinner<Integer> kSpinner;
@@ -433,7 +436,7 @@ final class ComputeController {
         // projected — would never be visible in the UI at all.
         statusReporter.detail(report.describe());
         if (!report.isClean()) {
-            System.err.println("FlowPath UMAP: " + report.describe());
+            logger.warn("UMAP run reported: {}", report.describe());
         }
     }
 

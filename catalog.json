@@ -7,29 +7,7 @@
       "description": "Interactive tree-based cell phenotyping with hierarchical gates, plus UMAP dimensionality reduction of the resulting phenotypes. Designed for multiplexed imaging data (CODEX, MIBI, mIF).",
       "author": "sceriff0",
       "homepage": "https://github.com/sceriff0/qupath-extension-flowpath",
-      "releases": [
-        {
-          "name": "v2.1.0",
-          "main_url": "https://github.com/sceriff0/qupath-extension-flowpath/releases/download/v2.1.0/FlowPath-2.1.0-all.jar",
-          "version_range": {
-            "min": "v0.7.0"
-          }
-        },
-        {
-          "name": "v2.0.1",
-          "main_url": "https://github.com/sceriff0/qupath-extension-flowpath/releases/download/v2.0.1/FlowPath-2.0.1-all.jar",
-          "version_range": {
-            "min": "v0.7.0"
-          }
-        },
-        {
-          "name": "v2.0.0",
-          "main_url": "https://github.com/sceriff0/qupath-extension-flowpath/releases/download/v2.0.0/FlowPath-2.0.0-all.jar",
-          "version_range": {
-            "min": "v0.7.0"
-          }
-        }
-      ]
+      "releases": []
     }
   ]
 }

@@ -26,6 +26,9 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +41,12 @@ public class FlowPathSerializer {
     // v3 extends the same to the 2D region gates (polygon / rectangle / ellipse).
     // Older files load unchanged: a missing compartment defaults to whole-cell and a
     // missing statistic to mean, which is exactly how those gates used to behave.
+    //
+    // The "meta" block added alongside v3 deliberately did NOT bump this. It is pure
+    // provenance -- nothing in it changes how a gate resolves -- so a file carrying it is
+    // structurally a v3 file and an older FlowPath can still load it. Bumping would have
+    // made those readers throw "Unsupported gate tree version" over a block they were
+    // free to ignore.
     private static final int CURRENT_VERSION = 3;
 
     private FlowPathSerializer() {
@@ -45,15 +54,57 @@ public class FlowPathSerializer {
     }
 
     /**
-     * Save a gate tree to a JSON file.
+     * What produced a gate tree, recorded alongside it.
+     * <p>
+     * A gate tree on its own says which channels it gates and at what thresholds, but not
+     * which image it was drawn against, over how many cells, or by which version of
+     * FlowPath. Reloaded against the wrong slide it half-resolves -- gates pointing at
+     * channels that are not there, reading NaN for every cell -- and the file gives a
+     * reader nothing to notice that with. For a figure or a supplement, a gate tree that
+     * cannot state its own provenance is not reproducible.
+     * <p>
+     * Every field is optional; {@link #none()} records only what can be known without an
+     * image.
+     *
+     * @param imageName the image the gates were drawn against, or {@code null}
+     * @param cellCount cells in the index at save time, or {@code -1} if unknown
+     * @param channels  the marker panel discovered on that image; never null, often empty
+     */
+    public record Provenance(String imageName, int cellCount, List<String> channels) {
+
+        public Provenance {
+            channels = channels == null ? List.of() : List.copyOf(channels);
+        }
+
+        /** No image context -- the saved file still records the version and the timestamp. */
+        public static Provenance none() {
+            return new Provenance(null, -1, List.of());
+        }
+    }
+
+    /**
+     * Save a gate tree to a JSON file, with no image provenance.
      *
      * @param tree the gate tree to save
      * @param file the destination file
      * @throws IOException if writing fails
      */
     public static void save(GateTree tree, File file) throws IOException {
+        save(tree, file, Provenance.none());
+    }
+
+    /**
+     * Save a gate tree to a JSON file, recording what produced it.
+     *
+     * @param tree       the gate tree to save
+     * @param file       the destination file
+     * @param provenance what this tree was gated against; never null
+     * @throws IOException if writing fails
+     */
+    public static void save(GateTree tree, File file, Provenance provenance) throws IOException {
         JsonObject root = new JsonObject();
         root.addProperty("version", CURRENT_VERSION);
+        root.add("meta", serializeMeta(provenance));
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
         root.add("gates", serializeNodeList(tree.getRoots()));
@@ -62,6 +113,35 @@ public class FlowPathSerializer {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
             writer.write(gson.toJson(root));
         }
+    }
+
+    /**
+     * The provenance block. Fields that cannot be known are omitted rather than written
+     * as a placeholder, so a reader can distinguish "not recorded" from "recorded as
+     * unknown" -- the latter being indistinguishable from a real image called "unknown".
+     */
+    private static JsonObject serializeMeta(Provenance provenance) {
+        Provenance p = provenance == null ? Provenance.none() : provenance;
+        JsonObject meta = new JsonObject();
+
+        // Read from the JAR manifest, which the qupath-conventions plugin stamps. Absent
+        // when running from a classes directory (tests, an IDE), hence the null check.
+        String version = FlowPathSerializer.class.getPackage().getImplementationVersion();
+        if (version != null && !version.isBlank()) meta.addProperty("flowpathVersion", version);
+
+        meta.addProperty("savedAt", DateTimeFormatter.ISO_INSTANT.format(
+                Instant.now().truncatedTo(ChronoUnit.SECONDS)));
+
+        if (p.imageName() != null && !p.imageName().isBlank()) {
+            meta.addProperty("imageName", p.imageName());
+        }
+        if (p.cellCount() >= 0) meta.addProperty("cellCount", p.cellCount());
+        if (!p.channels().isEmpty()) {
+            JsonArray channels = new JsonArray();
+            for (String c : p.channels()) channels.add(c);
+            meta.add("channels", channels);
+        }
+        return meta;
     }
 
     /**
@@ -324,9 +404,40 @@ public class FlowPathSerializer {
     }
 
     /** Parse a Compartment enum from a property, defaulting to whole-cell (v1 / unknown). */
+    /**
+     * Parse a compartment from a property, accepting <b>either</b> spelling.
+     * <p>
+     * Compartments are written as the enum {@code name()} ({@code "NUCLEAR"}) while
+     * statistics are written as their display {@code token()} ({@code "Median"}), so the
+     * two sit adjacent in the same object in different dialects. The asymmetry is forced
+     * rather than chosen: {@link Statistic} stopped being an enum when MIRAGE's vocabulary
+     * opened up, so it has no {@code name()} left to write. Rather than break every
+     * existing file to make the JSON symmetric, this reads both -- the enum name and the
+     * measurement-key token ({@code "Nucleus"}) -- case-insensitively.
+     * <p>
+     * The bare {@code valueOf} inside {@code catch (Exception ignored)} that stood here
+     * was the same defect {@link #parseStatistic} was just cured of: an unrecognised
+     * compartment became {@code WHOLE_CELL}, so a gate pinned to a nuclear column silently
+     * reloaded pointing at the whole cell -- a different population, no error, and a
+     * number that still looks plausible. An unknown token now falls back only because
+     * there is genuinely nothing else to do, and a <em>missing</em> property still means
+     * a v1 file, whose gates really were whole-cell.
+     */
     private static Compartment parseCompartment(JsonObject obj, String key) {
-        if (obj.has(key)) {
-            try { return Compartment.valueOf(obj.get(key).getAsString()); } catch (Exception ignored) {}
+        if (!obj.has(key) || obj.get(key).isJsonNull()) return Compartment.WHOLE_CELL;
+        String raw;
+        try {
+            raw = obj.get(key).getAsString();
+        } catch (Exception ignored) {
+            // Not a string primitive -- malformed; fall back.
+            return Compartment.WHOLE_CELL;
+        }
+        if (raw == null || raw.isBlank()) return Compartment.WHOLE_CELL;
+        String trimmed = raw.trim();
+        for (Compartment c : Compartment.values()) {
+            if (c.name().equalsIgnoreCase(trimmed) || c.token().equalsIgnoreCase(trimmed)) {
+                return c;
+            }
         }
         return Compartment.WHOLE_CELL;
     }

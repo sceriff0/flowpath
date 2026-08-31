@@ -156,6 +156,26 @@ class GateEditorSignalTest {
                 b -> b.getText() != null && b.getText().startsWith(text));
     }
 
+    /**
+     * The button for <em>FlowPath's own</em> standardisation, specifically.
+     * <p>
+     * {@code modeButton(pane, "Z-score")} is no longer precise enough: since the selector
+     * became a projection of what the export carries, a file holding a {@code " Z"} column
+     * also offers "Z-score (MIRAGE)", and a prefix match picks whichever comes first. These
+     * tests are about the value FlowPath derives, so they must say so — the ambiguity is
+     * the point of the feature, not an accident of naming.
+     */
+    private static RadioButton computedModeButton(GateEditorPane pane) {
+        return findOne(pane, RadioButton.class,
+                b -> b.getText() != null && b.getText().contains("computed here"));
+    }
+
+    /** The button for a statistic MIRAGE already standardised, when the file carries one. */
+    private static RadioButton mirageModeButton(GateEditorPane pane) {
+        return findOne(pane, RadioButton.class,
+                b -> b.getText() != null && b.getText().contains("(MIRAGE)"));
+    }
+
     /** Select a value on a ComboBox the way a user would, firing its action handler. */
     private static <T> void select(ComboBox<T> combo, T value) {
         FxTestSupport.onFxRun(() -> {
@@ -250,7 +270,7 @@ class GateEditorSignalTest {
         gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
         Fixture f = editorFor(gate);
 
-        FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Z-score").setSelected(true));
+        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
         flushFx();
 
         double expected = f.stats().toZScore("CD3", 120.0);
@@ -279,7 +299,7 @@ class GateEditorSignalTest {
         double raw = f.stats().getPercentileValue(key, 60.0);
         FxTestSupport.onFxRun(() -> gate.setThreshold(raw));
 
-        FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Z-score").setSelected(true));
+        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
         flushFx();
 
         assertEquals(f.stats().toZScore(key, raw), gate.getThreshold(), 1e-9,
@@ -297,7 +317,7 @@ class GateEditorSignalTest {
         gate.setStatistic(Statistic.MEAN);            // 120 is a bare whole-cell-mean value
         Fixture f = editorFor(gate);
 
-        FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Z-score").setSelected(true));
+        FxTestSupport.onFxRun(() -> computedModeButton(f.pane()).setSelected(true));
         flushFx();
         FxTestSupport.onFxRun(() -> modeButton(f.pane(), "Raw").setSelected(true));
         flushFx();
@@ -460,7 +480,7 @@ class GateEditorSignalTest {
         Fixture f = editorForZScore(gate);
         flushFx();
 
-        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
         assertFalse(z.isDisable());
     }
 
@@ -476,7 +496,7 @@ class GateEditorSignalTest {
         Fixture f = editorForZScore(gate);
         flushFx();
 
-        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
         assertTrue(z.getText().toLowerCase(Locale.ROOT).contains("computed"),
                 "the label must say the value is derived, not read: " + z.getText());
         assertTrue(z.getStyle().contains("#7fc4a8"),
@@ -501,10 +521,39 @@ class GateEditorSignalTest {
         Fixture f = editorForZScore(gate);
         flushFx();
 
-        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
         assertTrue(z.isDisable(), "a flat column has no spread to standardise against");
         assertFalse(gate.isThresholdIsZScore(),
                 "the flag the engine reads must follow the button, not outlive it");
+    }
+
+    /**
+     * <b>The point of the redesign.</b> Choosing MIRAGE's own z-score must move the gate to
+     * MIRAGE's <em>column</em> and leave FlowPath's standardisation off — the two are
+     * different numbers, and the old two-way radio could not express the first at all.
+     * Reaching that column meant using the Statistic dropdown instead, a control that did
+     * not know a mode had been chosen and silently disabled this one.
+     */
+    @Test
+    void choosingMiragesOwnZScoreSwitchesColumnRatherThanStandardisingHere() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = new GateNode("CD3");
+        gate.setStatistic(Statistic.MEDIAN);
+        Fixture f = editorForZScore(gate);
+        flushFx();
+
+        RadioButton mirage = FxTestSupport.onFx(() -> mirageModeButton(f.pane()));
+        assertEquals("Z-score (MIRAGE)", mirage.getText(),
+                "the label must name who computed the number");
+        assertFalse(mirage.isDisable(), "the file carries CD3: Cell: Median Z");
+
+        FxTestSupport.onFxRun(() -> mirage.setSelected(true));
+        flushFx();
+
+        assertEquals(Statistic.of("Median Z"), gate.getStatistic(),
+                "the gate must now read MIRAGE's own standardised column");
+        assertFalse(gate.isThresholdIsZScore(),
+                "and FlowPath must not standardise an already-standardised column");
     }
 
     /**
@@ -521,13 +570,13 @@ class GateEditorSignalTest {
         Fixture f = editorForZScore(gate);
         flushFx();
 
-        assertFalse(FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score")).isDisable(),
+        assertFalse(FxTestSupport.onFx(() -> computedModeButton(f.pane())).isDisable(),
                 "Median is not standardised, so the toggle starts available");
 
         select(statisticCombo(f.pane(), 0), Statistic.of("Median Z"));
         flushFx();
 
-        RadioButton z = FxTestSupport.onFx(() -> modeButton(f.pane(), "Z-score"));
+        RadioButton z = FxTestSupport.onFx(() -> computedModeButton(f.pane()));
         assertTrue(z.isDisable(), "z-scoring a z-score rescales the axis by the current filter");
         assertFalse(gate.isThresholdIsZScore());
         assertTrue(z.getTooltip().getText().contains("already standardised"),

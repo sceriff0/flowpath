@@ -29,6 +29,9 @@ import java.util.function.Supplier;
  */
 final class TerminalDelivery {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(TerminalDelivery.class);
+
     private final AtomicBoolean delivered = new AtomicBoolean(false);
     private final Executor executor;
     private final Supplier<Consumer<UmapOutcome>> sink;
@@ -86,9 +89,8 @@ final class TerminalDelivery {
                 executor.execute(() -> consumer.accept(outcome));
             }
         } catch (Throwable t) {
-            System.err.println("FlowPath UMAP: delivering " + outcome.describe()
-                    + " threw; the run is still terminated and the service is unaffected.");
-            t.printStackTrace();
+            logger.error("Delivering {} threw; the run is still terminated and the "
+                    + "service is unaffected.", outcome.describe(), t);
         }
         return true;
     }

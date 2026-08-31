@@ -149,6 +149,35 @@ public final class Statistic {
     }
 
     /**
+     * MIRAGE's standardising normalisation suffixes, in display order.
+     * <p>
+     * Exposed so a consumer can ask "does a standardised sibling of this column exist?"
+     * without re-spelling the suffixes. FlowPath composes candidate keys from these and
+     * then checks them against {@link CompartmentCapability} -- it never assumes one is
+     * present, because which of them an export carries is decided by MIRAGE's
+     * {@code params.quantify_statistics}, and the default list is {@code ['Median']}
+     * alone.
+     */
+    public static List<String> standardisingNormalisations() {
+        return List.of(" Z", " RobustZ");
+    }
+
+    /**
+     * This statistic's sibling carrying {@code normalisation} instead of its own:
+     * {@code of("Median").withNormalisation(" Z")} is {@code "Median Z"}, and
+     * {@code of("Median RobustZ").withNormalisation("")} is back to {@code "Median"}.
+     * <p>
+     * Composing rather than enumerating is the point -- MIRAGE builds its names the same
+     * way, as {@code base x normalisation}, so a name FlowPath has never seen still
+     * composes correctly. Whether the composed column actually <em>exists</em> is a
+     * separate question, and only {@link CompartmentCapability} can answer it.
+     */
+    public Statistic withNormalisation(String normalisation) {
+        String norm = normalisation == null ? "" : normalisation;
+        return of(baseToken() + norm);
+    }
+
+    /**
      * True when MIRAGE has <b>already standardised</b> this column across the cells of one
      * patient — the {@code " Z"} and {@code " RobustZ"} variants.
      * <p>

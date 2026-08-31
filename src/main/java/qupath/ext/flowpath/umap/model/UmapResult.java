@@ -1,15 +1,20 @@
 package qupath.ext.flowpath.umap.model;
 
+import qupath.ext.flowpath.io.CellTable;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.Statistic;
 import qupath.lib.objects.PathObject;
 
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -85,14 +90,32 @@ public class UmapResult {
     public String[] getMarkerNamesRaw() { return markerNames; }
 
     /**
-     * Export cell data to CSV in FlowPath-compatible format with UMAP coordinates
-     * and population tags.
+     * Export the embedding as {@code umap_coordinates.csv}.
      * <p>
-     * Columns: cell_id, phenotype, population, centroid_x, centroid_y, umap_x, umap_y,
-     * then per-marker: {marker}_raw, {marker}_zscore.
+     * Columns are {@link CellTable}'s shared identity block -- {@code cell_id},
+     * {@code label} (when present), {@code phenotype}, the micrometre and pixel centroid
+     * pairs and the morphology fields -- then {@code population}, {@code umap_x},
+     * {@code umap_y}, then per resolved column {@code {column}_raw} and
+     * {@code {column}_zscore}.
+     * <p>
+     * <b>This file and {@code gate_pheno.csv} are joinable on {@code label}.</b> They were
+     * not before. This writer took its centroids from {@link CellIndex#getCentroidX},
+     * which returns {@code CellGeometry.sourceX} -- the space the measurement happened to
+     * arrive in -- while {@code PhenotypeCsvExporter} wrote micrometres, under the same
+     * {@code centroid_x} name and with the unit recorded in neither file. On MIRAGE input
+     * the two agreed by luck, because MIRAGE emits µm and the source space <em>is</em> µm.
+     * On the AnnoMask on-ramp, where the image is calibrated but centroids arrive in
+     * pixels, they disagreed by the pixel size and nothing threw. {@code CellGeometry}'s
+     * own javadoc says to prefer {@code micronsX}/{@code pixelsX} over {@code sourceX};
+     * this was the call site that did not.
+     * <p>
+     * Intensities are read through {@link MeasuredColumn} rather than by panel index, so
+     * the {@code _raw}/{@code _zscore} headers and the z-scores behind them are the same
+     * columns {@code gate_pheno.csv} reports and the gating actually compared on.
      * <p>
      * When cells have been tagged via polygon gating, the PathClass has the form
-     * "BasePhenotype: TagName". This method splits that into phenotype and population columns.
+     * {@code "BasePhenotype: TagName"}; that is split into {@code phenotype} and
+     * {@code population}.
      *
      * @param file           destination CSV file
      * @param cellIndex      the cell index containing marker data and centroids
@@ -107,23 +130,45 @@ public class UmapResult {
                             .formatted(cellIndex.size(), umapX.length));
         }
         boolean hasTags = populationTags != null && !populationTags.isEmpty();
-        String[] markers = cellIndex.getMarkerNames();
+        boolean withLabel = cellIndex.hasLabels();
 
-        // Pre-fetch all marker value columns once. Raw (non-cloning) accessor: this
-        // loop only reads, and cloning every column here would duplicate the whole
-        // dataset just to write it out.
-        double[][] allMarkerValues = new double[markers.length][];
-        for (int m = 0; m < markers.length; m++) {
-            allMarkerValues[m] = cellIndex.getMarkerValuesRaw(m);
+        // Resolve every panel marker to the same default column gate_pheno.csv reports:
+        // whole-cell mean, which CellIndex resolves to the bare marker key. Going through
+        // MeasuredColumn rather than indexing getMarkerValuesRaw by panel position is what
+        // makes the two files' _raw/_zscore columns the same columns -- and it registers
+        // each one with MarkerStats on construction, so the z-scores below cannot be the
+        // silent 0.0 an unregistered column used to produce.
+        List<MeasuredColumn> columns = new ArrayList<>();
+        if (markerStats != null) {
+            for (String marker : cellIndex.getMarkerNames()) {
+                columns.add(cellIndex.column(marker, Compartment.WHOLE_CELL,
+                        Statistic.MEAN, markerStats));
+            }
+        }
+        // Without statistics there is nothing to standardise against, so the panel is
+        // written raw. Reading the backing arrays directly here is CellIndex's no-copy
+        // contract: cloning a 40-marker slide's columns to write them out would duplicate
+        // the whole dataset.
+        String[] rawMarkers = markerStats == null ? cellIndex.getMarkerNames() : new String[0];
+        double[][] rawValues = new double[rawMarkers.length][];
+        for (int m = 0; m < rawMarkers.length; m++) {
+            rawValues[m] = cellIndex.getMarkerValuesRaw(m);
         }
 
-        try (var writer = new BufferedWriter(new FileWriter(file))) {
-            // Header
-            writer.write("cell_id,phenotype,population,centroid_x,centroid_y,umap_x,umap_y");
-            for (String marker : markers) {
-                String safe = escapeCsv(marker);
-                writer.write("," + safe + "_raw");
-                writer.write("," + safe + "_zscore");
+        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
+            CellTable.writeIdentityHeader(writer, withLabel);
+            writer.write(",population,umap_x,umap_y");
+            for (MeasuredColumn col : columns) {
+                // Escape the whole field, suffix included: a marker name containing a
+                // comma would otherwise emit `"CD3, clone"_raw`, which is text after a
+                // closing quote and not valid CSV.
+                String base = col.key().replace(": ", "_");
+                writer.write("," + CellTable.escape(base + "_raw"));
+                writer.write("," + CellTable.escape(base + "_zscore"));
+            }
+            for (String marker : rawMarkers) {
+                writer.write("," + CellTable.escape(marker + "_raw"));
+                writer.write("," + CellTable.escape(marker + "_zscore"));
             }
             writer.newLine();
 
@@ -149,48 +194,27 @@ public class UmapResult {
                     phenotype = fullLabel;
                 }
 
-                // cell_id, phenotype, population
-                writer.write(String.valueOf(i));
+                CellTable.writeIdentityRow(writer, cellIndex, i, withLabel, phenotype);
+
                 writer.write(',');
-                writer.write(escapeCsv(phenotype));
-                writer.write(',');
-                writer.write(escapeCsv(population));
+                writer.write(CellTable.escape(population));
+                writer.write(',' + CellTable.fmt(umapX[i]));
+                writer.write(',' + CellTable.fmt(umapY[i]));
 
-                // centroid_x, centroid_y
-                writer.write(',' + fmt(cellIndex.getCentroidX(i)));
-                writer.write(',' + fmt(cellIndex.getCentroidY(i)));
-
-                // umap_x, umap_y
-                writer.write(',' + fmt(umapX[i]));
-                writer.write(',' + fmt(umapY[i]));
-
-                // Per-marker: raw, zscore
-                for (int m = 0; m < markers.length; m++) {
-                    double raw = allMarkerValues[m][i];
-                    double zscore;
-                    if (Double.isNaN(raw) || markerStats == null) {
-                        zscore = Double.NaN;
-                    } else {
-                        zscore = markerStats.toZScore(markers[m], raw);
-                    }
-                    writer.write(',' + fmt(raw));
-                    writer.write(',' + fmt(zscore));
+                for (MeasuredColumn col : columns) {
+                    double raw = col.valueAt(i);
+                    double zscore = (Double.isNaN(raw) || !col.hasSpread())
+                            ? Double.NaN
+                            : col.toZScore(raw);
+                    writer.write(',' + CellTable.fmt(raw));
+                    writer.write(',' + CellTable.fmt(zscore));
+                }
+                for (int m = 0; m < rawMarkers.length; m++) {
+                    writer.write(',' + CellTable.fmt(rawValues[m][i]));
+                    writer.write(",");
                 }
                 writer.newLine();
             }
         }
-    }
-
-    /** Format a double for CSV; NaN → empty string. */
-    private static String fmt(double val) {
-        return Double.isNaN(val) ? "" : String.format(Locale.US, "%.4f", val);
-    }
-
-    private static String escapeCsv(String value) {
-        if (value == null) return "";
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
-        }
-        return value;
     }
 }

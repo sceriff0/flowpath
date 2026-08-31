@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 31/08/2026
+
+**Version numbering restarts here.** FlowPath was developed under a 1.x/2.x line while
+its output formats were still moving; 0.9.0 is the first release cut against a settled
+one, and 1.0.0 will accompany the paper. Because 0.9.0 sorts *below* the 2.x releases,
+QuPath will not offer it as an upgrade — **remove any previously installed FlowPath under
+Extensions → Manage extensions and install this one fresh.** The extension catalog has
+been reset to match. Saved gate trees (`.json`) load unchanged.
+
+### Changed — outputs
+
+- **The two per-cell CSVs are joinable.** They were not. `umap_coordinates.csv` took its
+  centroids from `CellIndex.getCentroidX`, which returns whatever space the measurement
+  arrived in, while `gate_pheno.csv` wrote micrometres — both under a bare `centroid_x`,
+  with the unit recorded in neither file. On MIRAGE input the two agreed by luck (MIRAGE
+  emits µm, so the source space *is* µm); on the AnnoMask on-ramp, where the image is
+  calibrated but centroids arrive in pixels, they disagreed by the pixel size and nothing
+  threw. Both files now share one identity block from `io/CellTable`, and **the pixel
+  space is named** (`centroid_x_px` / `centroid_y_px`) instead of being implied.
+- **`umap_coordinates.csv` gained `label`**, the segmentation key, so it can be joined
+  back to MIRAGE exactly rather than by nearest centroid. It also gained the morphology
+  columns and now reports intensities per *resolved column* through `MeasuredColumn`, so
+  its `_raw`/`_zscore` headers are the same columns `gate_pheno.csv` reports and the
+  gating actually compared on.
+- **`umap_coordinates.csv` is written as UTF-8 explicitly** rather than in the platform
+  default charset.
+- `centroid_x` / `centroid_y` keep their names and stay micrometres, and
+  `Out_of_annotation` / `Outlier` keep their capitalisation and their `True`/`False`
+  spelling. All four are a cross-repo contract with `mirage/bin/join_flowpath.py`, which
+  addresses them verbatim; the odd casing in particular is load-bearing, because pandas
+  infers real booleans from `True`/`False` and would read `true`/`false` as non-empty
+  strings — every one of which is truthy.
+- **Saved gate trees record their provenance.** `flowpath.json` gains a `meta` block with
+  the FlowPath version, the save timestamp, the image name, the cell count and the marker
+  panel. A gate tree reloaded against the wrong slide half-resolves — gates pointing at
+  channels that are not there, NaN for every cell — and the file previously gave a reader
+  nothing to notice that with. The format version is deliberately **not** bumped: the
+  block is pure provenance, so an older FlowPath can still load the file.
+
+### Added
+
+- **The Raw / Z-score toggle is now a "Values" selector derived from the export.**
+  Standardisation is not a display mode FlowPath applies on top of a column: since MIRAGE
+  composed its statistic vocabulary, `CD3: Cell: Median` and `CD3: Cell: Median Z` are two
+  different measurement columns. One user intent — "show me standardised values" — was
+  therefore split across two controls that did not know about each other, and picking
+  MIRAGE's column from the *Statistic* dropdown silently disabled the *Mode* radio with
+  nothing to say the two were about the same thing. The selector now lists **Raw**,
+  whichever of **Z-score (MIRAGE)** / **Robust Z (MIRAGE)** the file actually carries, and
+  **Z-score (computed here)** — labelled so it is always clear who computed the number and
+  over which population. MIRAGE standardises across every cell of a patient; FlowPath
+  across the cells currently loaded and filtered. They are not the same number.
+- A mode that cannot be used is **declined with a reason** rather than hidden: FlowPath's
+  own z-score stays visible but disabled over a constant column, or over one MIRAGE has
+  already standardised, with the explanation in its tooltip.
+
+### Fixed
+
+- **An unrecognised compartment in a saved file silently became whole-cell.**
+  `parseCompartment` was a bare `valueOf` inside `catch (Exception ignored)`, so a gate
+  pinned to a nuclear column could reload pointing at the whole cell — a different
+  population, no error, and a number that still looks plausible. The same defect
+  `parseStatistic` was cured of. Both spellings are now accepted, case-insensitively.
+- **UMAP diagnostics never reached QuPath's log viewer.** Six `System.err.println` calls
+  (and one bare `printStackTrace`) in the UMAP engine wrote to a stdout nobody launching
+  QuPath from the Finder ever sees. All now go through SLF4J, like the rest of the
+  extension.
+- Two swallowed `catch (Exception ignored)` blocks on measurement-resolution paths — the
+  places where a silent failure becomes an all-NaN column — now log at debug.
+
+<details>
+<summary><b>Releases before the 0.9.0 renumbering</b></summary>
+
+The entries below were released as 1.x and 2.x. They are kept for the record; version
+numbers in them refer to that earlier line and do not compare with 0.9.0 onwards.
+
 ## [2.2.0] - 12/08/2026
 
 The UMAP half works on a Mac. It did not before, and it did not say so.
@@ -354,3 +430,5 @@ opens from it already knowing what the gates mean.
 - Export phenotype assignments as CSV
 - QuPath Extension Manager catalog support
 - GitHub Actions release workflow
+
+</details>

@@ -27,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class CellIndex {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(CellIndex.class);
+
     // Lazily-built compartment columns, keyed by resolved measurement key.
     private final Map<String, double[]> resolvedColumns = new ConcurrentHashMap<>();
 
@@ -475,11 +478,20 @@ public class CellIndex {
         return null;
     }
 
+    /**
+     * A detection's measurements, or an empty map if they cannot be read.
+     * <p>
+     * An empty map here becomes an all-NaN row rather than an error, which is deliberate:
+     * one bad detection should not stop a slide loading. It is logged because the symptom
+     * otherwise arrives much later and in a different shape -- a marker that reads NaN for
+     * some cells, with nothing pointing back to the detection that could not be read.
+     */
     static Map<String, Number> getMeasurements(PathObject obj) {
         try {
             var m = obj.getMeasurements();
             if (m != null) return m;
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            logger.debug("Detection has unreadable measurements; treating as empty", e);
         }
         return Map.of();
     }

@@ -2,6 +2,7 @@ package qupath.ext.flowpath.ui;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
@@ -26,6 +27,7 @@ import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.ext.flowpath.model.ValueMode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,8 +69,16 @@ public class GateEditorPane extends VBox {
             + "not a value read from the export.";
 
     private final ToggleGroup modeGroup;
-    private final RadioButton rawModeBtn;
-    private final RadioButton zscoreModeBtn;
+    /**
+     * The "Values" selector. One row, rebuilt from {@link ValueMode#availableFor} whenever
+     * the gate or its resolved columns change, and reused by all three editors because only
+     * one is on screen at a time.
+     */
+    private final HBox modeRow;
+    /** What the row currently offers, in the order it offers them. */
+    private List<ValueMode> currentModes = List.of();
+    /** The mode the gate is in, so a selection change knows what it is changing <em>from</em>. */
+    private ValueMode currentMode;
 
     private GateNode currentNode;
     private CellIndex cellIndex;
@@ -110,105 +120,12 @@ public class GateEditorPane extends VBox {
         channelCombo.setTooltip(new Tooltip("Select the marker channel for this gate"));
 
         modeGroup = new ToggleGroup();
-        rawModeBtn = new RadioButton("Raw");
-        rawModeBtn.setToggleGroup(modeGroup);
-        rawModeBtn.setStyle("-fx-text-fill: white;");
-        rawModeBtn.setTooltip(new Tooltip("Compare marker raw intensity values against threshold"));
-        // Marked, in colour and in words, as a value FlowPath derives rather than one it
-        // read: MIRAGE now emits standardised statistics of its own (" Z" / " RobustZ"),
-        // so "z-score" alone no longer says who computed it or over which population.
-        zscoreModeBtn = new RadioButton("Z-score (computed)");
-        zscoreModeBtn.setToggleGroup(modeGroup);
-        zscoreModeBtn.setSelected(true);
-        zscoreModeBtn.setStyle("-fx-text-fill: " + COMPUTED_HERE_COLOR + ";");
-        zscoreModeBtn.setTooltip(new Tooltip(ZSCORE_AVAILABLE_TOOLTIP));
+        // Built empty; syncModeSelection fills it from what the file turns out to carry.
+        modeRow = new HBox(12, new Label("Values:") {{ setStyle("-fx-text-fill: white;"); }});
+        modeRow.setAlignment(Pos.CENTER_LEFT);
         modeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents && currentNode != null) {
-                boolean toZScore = zscoreModeBtn.isSelected();
-                currentNode.setThresholdIsZScore(toZScore);
-                if (isThresholdGate(currentNode)) {
-                    // Transform threshold value between coordinate spaces, against the
-                    // same resolved column the engine compares on. updateHistogram then
-                    // re-ranges the axis and re-pins the slider/field to the new value,
-                    // so the gate lands on the same cells and stays freely draggable.
-                    MeasuredColumn col = thresholdColumn(currentNode);
-                    if (col != null && col.hasSpread()) {
-                        double oldVal = currentNode.getThreshold();
-                        currentNode.setThreshold(toZScore
-                                ? col.toZScore(oldVal)
-                                : col.fromZScore(oldVal));
-                    }
-                    updateHistogram();
-                } else if (currentNode instanceof QuadrantGate qg) {
-                    // Transform quadrant thresholds between coordinate spaces
-                    MeasuredColumn colX = columnX(qg);
-                    MeasuredColumn colY = columnY(qg);
-                    if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
-                        if (toZScore) {
-                            qg.setThresholdX(colX.toZScore(qg.getThresholdX()));
-                            qg.setThresholdY(colY.toZScore(qg.getThresholdY()));
-                        } else {
-                            qg.setThresholdX(colX.fromZScore(qg.getThresholdX()));
-                            qg.setThresholdY(colY.fromZScore(qg.getThresholdY()));
-                        }
-                    }
-                    fireNodeChanged();
-                    Platform.runLater(() -> setGateNode(currentNode));
-                    return;
-                } else if (currentNode instanceof Region2DGate) {
-                    // Transform shape coordinates between raw and z-score space
-                    MeasuredColumn colX = columnX(currentNode);
-                    MeasuredColumn colY = columnY(currentNode);
-                    if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
-                        if (currentNode instanceof PolygonGate pg && !pg.getVertices().isEmpty()) {
-                            List<double[]> transformed = new ArrayList<>();
-                            for (double[] v : pg.getVertices()) {
-                                transformed.add(new double[]{
-                                        toZScore ? colX.toZScore(v[0]) : colX.fromZScore(v[0]),
-                                        toZScore ? colY.toZScore(v[1]) : colY.fromZScore(v[1])
-                                });
-                            }
-                            pg.setVertices(transformed);
-                        } else if (currentNode instanceof RectangleGate rg
-                                && rg.getMaxX() - rg.getMinX() > 1e-10) {
-                            if (toZScore) {
-                                rg.setMinX(colX.toZScore(rg.getMinX()));
-                                rg.setMaxX(colX.toZScore(rg.getMaxX()));
-                                rg.setMinY(colY.toZScore(rg.getMinY()));
-                                rg.setMaxY(colY.toZScore(rg.getMaxY()));
-                            } else {
-                                rg.setMinX(colX.fromZScore(rg.getMinX()));
-                                rg.setMaxX(colX.fromZScore(rg.getMaxX()));
-                                rg.setMinY(colY.fromZScore(rg.getMinY()));
-                                rg.setMaxY(colY.fromZScore(rg.getMaxY()));
-                            }
-                        } else if (currentNode instanceof EllipseGate eg && eg.getRadiusX() > 1e-10) {
-                            double stdX = colX.std();
-                            double stdY = colY.std();
-                            if (toZScore) {
-                                eg.setCenterX(colX.toZScore(eg.getCenterX()));
-                                eg.setCenterY(colY.toZScore(eg.getCenterY()));
-                                eg.setRadiusX(eg.getRadiusX() / stdX);
-                                eg.setRadiusY(eg.getRadiusY() / stdY);
-                            } else {
-                                eg.setCenterX(colX.fromZScore(eg.getCenterX()));
-                                eg.setCenterY(colY.fromZScore(eg.getCenterY()));
-                                eg.setRadiusX(eg.getRadiusX() * stdX);
-                                eg.setRadiusY(eg.getRadiusY() * stdY);
-                            }
-                        }
-                    } else {
-                        // Can't transform — clear shape as fallback
-                        if (currentNode instanceof PolygonGate pg) pg.setVertices(List.of());
-                        else if (currentNode instanceof RectangleGate rg) { rg.setMinX(0); rg.setMaxX(0); rg.setMinY(0); rg.setMaxY(0); }
-                        else if (currentNode instanceof EllipseGate eg) { eg.setCenterX(0); eg.setCenterY(0); eg.setRadiusX(0); eg.setRadiusY(0); }
-                    }
-                    fireNodeChanged();
-                    Platform.runLater(() -> setGateNode(currentNode));
-                    return;
-                }
-                fireNodeChanged();
-            }
+            if (suppressEvents || currentNode == null || val == null) return;
+            if (val.getUserData() instanceof ValueMode selected) onModeSelected(selected);
         });
 
         // --- Shared: Outlier Clipping ---
@@ -297,6 +214,143 @@ public class GateEditorPane extends VBox {
      * Populate the editor with a gate node's current values.
      * Rebuilds the gate-specific UI section based on gate type.
      */
+
+    /**
+     * Move the current gate into {@code selected}.
+     * <p>
+     * Two different transitions hide behind one selector, and telling them apart is the
+     * whole job:
+     * <ul>
+     *   <li><b>Same column, different space</b> — Raw &harr; the computed z-score. The gate
+     *       keeps reading the same measurement; only the units it is written in change, so
+     *       thresholds and shapes are <em>converted</em> through that column's own mean and
+     *       standard deviation.</li>
+     *   <li><b>A different column</b> — anything that changes the normalisation suffix, such
+     *       as Raw to MIRAGE's {@code " Z"}. A bare threshold does not carry across columns
+     *       (a Sum is ~100x the corresponding Mean), which is exactly what
+     *       {@link #applySignalChange} exists for: it re-maps the threshold to the same
+     *       percentile of the new column, so the gate lands on the same cells rather than
+     *       collapsing to all-positive or all-negative.</li>
+     * </ul>
+     * Conflating the two was the old defect in miniature. The previous radio could only
+     * express the first, so reaching MIRAGE's already-standardised column meant using the
+     * Statistic dropdown instead — a different control, which did not know a mode had been
+     * chosen at all and silently disabled this one.
+     */
+    private void onModeSelected(ValueMode selected) {
+        GateNode node = currentNode;
+        if (node == null || selected == null) return;
+        ValueMode previous = currentMode;
+        currentMode = selected;
+
+        boolean sameColumn = previous != null
+                && previous.normalisation().equals(selected.normalisation());
+        if (!sameColumn) {
+            // A different measurement column. applySignalChange re-maps by percentile and
+            // re-syncs this row afterwards, so nothing more is needed here.
+            applySignalChange(() -> selected.applyTo(node));
+            return;
+        }
+        if (previous != null && previous.computed() == selected.computed()) return;
+
+        selected.applyTo(node);
+        convertGateSpace(node, selected.computed());
+    }
+
+    /**
+     * Rewrite {@code node}'s thresholds and shapes between raw and z-score space, against
+     * the same resolved columns the engine compares on.
+     * <p>
+     * Only valid when the column itself is unchanged — see {@link #onModeSelected}. A
+     * column with no spread is left alone rather than converted through a zero standard
+     * deviation.
+     */
+    private void convertGateSpace(GateNode node, boolean toZScore) {
+        if (node == null) return;
+            if (isThresholdGate(node)) {
+                // Transform threshold value between coordinate spaces, against the
+                // same resolved column the engine compares on. updateHistogram then
+                // re-ranges the axis and re-pins the slider/field to the new value,
+                // so the gate lands on the same cells and stays freely draggable.
+                MeasuredColumn col = thresholdColumn(node);
+                if (col != null && col.hasSpread()) {
+                    double oldVal = node.getThreshold();
+                    node.setThreshold(toZScore
+                            ? col.toZScore(oldVal)
+                            : col.fromZScore(oldVal));
+                }
+                updateHistogram();
+            } else if (node instanceof QuadrantGate qg) {
+                // Transform quadrant thresholds between coordinate spaces
+                MeasuredColumn colX = columnX(qg);
+                MeasuredColumn colY = columnY(qg);
+                if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
+                    if (toZScore) {
+                        qg.setThresholdX(colX.toZScore(qg.getThresholdX()));
+                        qg.setThresholdY(colY.toZScore(qg.getThresholdY()));
+                    } else {
+                        qg.setThresholdX(colX.fromZScore(qg.getThresholdX()));
+                        qg.setThresholdY(colY.fromZScore(qg.getThresholdY()));
+                    }
+                }
+                fireNodeChanged();
+                Platform.runLater(() -> setGateNode(node));
+                return;
+            } else if (node instanceof Region2DGate) {
+                // Transform shape coordinates between raw and z-score space
+                MeasuredColumn colX = columnX(node);
+                MeasuredColumn colY = columnY(node);
+                if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
+                    if (node instanceof PolygonGate pg && !pg.getVertices().isEmpty()) {
+                        List<double[]> transformed = new ArrayList<>();
+                        for (double[] v : pg.getVertices()) {
+                            transformed.add(new double[]{
+                                    toZScore ? colX.toZScore(v[0]) : colX.fromZScore(v[0]),
+                                    toZScore ? colY.toZScore(v[1]) : colY.fromZScore(v[1])
+                            });
+                        }
+                        pg.setVertices(transformed);
+                    } else if (node instanceof RectangleGate rg
+                            && rg.getMaxX() - rg.getMinX() > 1e-10) {
+                        if (toZScore) {
+                            rg.setMinX(colX.toZScore(rg.getMinX()));
+                            rg.setMaxX(colX.toZScore(rg.getMaxX()));
+                            rg.setMinY(colY.toZScore(rg.getMinY()));
+                            rg.setMaxY(colY.toZScore(rg.getMaxY()));
+                        } else {
+                            rg.setMinX(colX.fromZScore(rg.getMinX()));
+                            rg.setMaxX(colX.fromZScore(rg.getMaxX()));
+                            rg.setMinY(colY.fromZScore(rg.getMinY()));
+                            rg.setMaxY(colY.fromZScore(rg.getMaxY()));
+                        }
+                    } else if (node instanceof EllipseGate eg && eg.getRadiusX() > 1e-10) {
+                        double stdX = colX.std();
+                        double stdY = colY.std();
+                        if (toZScore) {
+                            eg.setCenterX(colX.toZScore(eg.getCenterX()));
+                            eg.setCenterY(colY.toZScore(eg.getCenterY()));
+                            eg.setRadiusX(eg.getRadiusX() / stdX);
+                            eg.setRadiusY(eg.getRadiusY() / stdY);
+                        } else {
+                            eg.setCenterX(colX.fromZScore(eg.getCenterX()));
+                            eg.setCenterY(colY.fromZScore(eg.getCenterY()));
+                            eg.setRadiusX(eg.getRadiusX() * stdX);
+                            eg.setRadiusY(eg.getRadiusY() * stdY);
+                        }
+                    }
+                } else {
+                    // Can't transform — clear shape as fallback
+                    if (node instanceof PolygonGate pg) pg.setVertices(List.of());
+                    else if (node instanceof RectangleGate rg) { rg.setMinX(0); rg.setMaxX(0); rg.setMinY(0); rg.setMaxY(0); }
+                    else if (node instanceof EllipseGate eg) { eg.setCenterX(0); eg.setCenterY(0); eg.setRadiusX(0); eg.setRadiusY(0); }
+                }
+                fireNodeChanged();
+                Platform.runLater(() -> setGateNode(node));
+                return;
+            }
+            fireNodeChanged();
+    }
+
     public void setGateNode(GateNode node) {
         this.currentNode = node;
         this.currentScatter = null;
@@ -367,7 +421,6 @@ public class GateEditorPane extends VBox {
         addSignalControls(channelRow, GateAxis.of(node, 0));
         wireChannelCombo(channelCombo, node, 0);
 
-        HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
         syncModeSelection(node);
 
         // Create fresh controls for this gate (local-creation pattern, like quadrant editor)
@@ -513,7 +566,6 @@ public class GateEditorPane extends VBox {
             }
         });
 
-        HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
         syncModeSelection(gate);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
@@ -589,7 +641,6 @@ public class GateEditorPane extends VBox {
         else if (node instanceof RectangleGate) rectBtn.setSelected(true);
         else if (node instanceof EllipseGate) ellipseBtn.setSelected(true);
 
-        HBox modeRow = new HBox(12, new Label("Mode:") {{ setStyle("-fx-text-fill: white;"); }}, rawModeBtn, zscoreModeBtn);
         syncModeSelection(node);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
@@ -1042,7 +1093,10 @@ public class GateEditorPane extends VBox {
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(java.util.function.BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
 
-    public boolean isUseZScore() { return zscoreModeBtn.isSelected(); }
+    /** True when the selected mode is FlowPath's own standardisation. */
+    public boolean isUseZScore() {
+        return currentMode != null && currentMode.computed();
+    }
 
     public void updatePopulationCounts() {
         if (currentPopulationLabel == null) return;
@@ -1447,30 +1501,72 @@ public class GateEditorPane extends VBox {
      * compartment or the statistic changes which column the axis resolves to — and
      * therefore both answers.
      */
+    /**
+     * Rebuild the "Values" row from what this gate can actually offer, and select the mode
+     * it is in.
+     * <p>
+     * The row is <b>derived, never set</b>: {@link ValueMode#availableFor} is the only
+     * thing that decides which buttons exist, from the gate, the capability scanned at
+     * ingest and (when loaded) the data. This method renders that answer and decides
+     * nothing — the same division {@code UiStateController} keeps on the UMAP side, and for
+     * the same reason. The control it replaces was a fixed pair whose disabled state was
+     * computed here, in the editor, from three separate predicates; a second caller
+     * answering "can this be z-scored?" slightly differently is how a display and a
+     * classification path drift apart.
+     * <p>
+     * When the gate's own combination is not on offer — a saved gate pinned to a column
+     * this file does not carry — {@link ValueMode#selectedIn} falls back to raw, and that
+     * fallback is <b>written back onto the gate</b>. Selecting a button while events are
+     * suppressed changes no model state, so without this the engine would keep reading a
+     * column the editor has stopped drawing.
+     */
     private void syncModeSelection(GateNode node) {
-        boolean alreadyStandardised = GateAxis.readsStandardisedStatistic(node);
-        boolean decidable = GateAxis.columnsResolvable(node, cellIndex, markerStats);
-        boolean offersZScore = !alreadyStandardised
-                && (!decidable || GateAxis.offersZScore(node, cellIndex, markerStats));
+        if (node == null) return;
+        List<ValueMode> modes =
+                ValueMode.availableFor(node, compartmentCapability, cellIndex, markerStats);
+        ValueMode selected = ValueMode.selectedIn(modes, node);
+        currentModes = modes;
 
         withSuppressedEvents(() -> {
-            zscoreModeBtn.setDisable(!offersZScore);
-            zscoreModeBtn.setStyle("-fx-text-fill: "
-                    + (offersZScore ? COMPUTED_HERE_COLOR : UNAVAILABLE_COLOR) + ";");
-            zscoreModeBtn.setTooltip(new Tooltip(
-                    offersZScore ? ZSCORE_AVAILABLE_TOOLTIP
-                                 : unavailableZScoreReason(alreadyStandardised)));
-            if (node.isThresholdIsZScore() && offersZScore) zscoreModeBtn.setSelected(true);
-            else rawModeBtn.setSelected(true);
+            modeGroup.getToggles().clear();
+            // Keep the "Values:" label, replace the buttons after it.
+            modeRow.getChildren().remove(1, modeRow.getChildren().size());
+            for (ValueMode mode : modes) {
+                RadioButton button = new RadioButton(mode.label());
+                button.setToggleGroup(modeGroup);
+                button.setUserData(mode);
+                // Coloured by who computed the number: FlowPath's own standardisation is
+                // marked as derived, everything read from the export is plain, and a mode
+                // that cannot be used right now is muted and says why in its tooltip
+                // rather than quietly disappearing.
+                button.setDisable(!mode.available());
+                String colour = !mode.available() ? UNAVAILABLE_COLOR
+                        : mode.computed() ? COMPUTED_HERE_COLOR : "white";
+                button.setStyle("-fx-text-fill: " + colour + ";");
+                button.setTooltip(new Tooltip(mode.tooltip()));
+                if (mode.equals(selected)) button.setSelected(true);
+                modeRow.getChildren().add(button);
+            }
         });
 
-        // Events are suppressed above, so the flag the engine reads has to be brought
-        // across by hand — otherwise GatingEngine keeps z-scoring a column the editor is
-        // drawing raw, which is the display/classification split this repo has been bitten
-        // by before.
-        if (!offersZScore && node.isThresholdIsZScore()) {
-            node.setThresholdIsZScore(false);
+        // Bring the model across by hand: the selection above was made with events
+        // suppressed, so nothing has written it to the gate yet. Skipped when the gate is
+        // already in the selected mode, so a plain refresh does not rewrite the tree.
+        currentMode = selected;
+        if (selected != null && !alreadyIn(node, selected)) {
+            selected.applyTo(node);
         }
+    }
+
+    /** Whether {@code node} already reads the way {@code mode} says it should. */
+    private static boolean alreadyIn(GateNode node, ValueMode mode) {
+        if (node.isThresholdIsZScore() != mode.computed()) return false;
+        for (GateAxis axis : GateAxis.axesOf(node)) {
+            Statistic statistic = axis.statistic();
+            if (statistic == null) continue;
+            if (!statistic.normalisation().equals(mode.normalisation())) return false;
+        }
+        return true;
     }
 
     /** Why the computed z-score is not on offer, in the user's terms. */

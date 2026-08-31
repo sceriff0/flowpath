@@ -55,6 +55,9 @@ import java.util.stream.IntStream;
  */
 public class UmapComputeService {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(UmapComputeService.class);
+
     /**
      * Upper bound on the training-set size chosen by Auto mode. Beyond this point,
      * UMAP runtime grows roughly linearly while marginal embedding quality is
@@ -265,8 +268,8 @@ public class UmapComputeService {
     private void recordOutcome(UmapOutcome outcome) {
         lastOutcome = outcome;
         if (outcome instanceof UmapOutcome.Failed failed && onOutcome == null) {
-            System.err.println("FlowPath UMAP (no outcome consumer registered): "
-                    + failed.describe());
+            logger.error("UMAP failed with no outcome consumer registered: {}",
+                    failed.describe());
         }
     }
 
@@ -369,7 +372,7 @@ public class UmapComputeService {
         long nnMs = (System.nanoTime() - nnStart) / 1_000_000L;
         String nnMsg = "NN-Descent: %dms".formatted(nnMs);
         postStatus(nnMsg);
-        System.err.println(nnMsg);
+        logger.info("{}", nnMsg);
 
         if (cancelled || generation.get() != myGeneration) return staleOutcome();
 
@@ -402,7 +405,7 @@ public class UmapComputeService {
         long fitMs = (System.nanoTime() - fitStart) / 1_000_000L;
         String fitMsg = "NN-Descent: %dms | UMAP.fit: %dms".formatted(nnMs, fitMs);
         postStatus(fitMsg);
-        System.err.println(fitMsg);
+        logger.info("{}", fitMsg);
 
         // Build result arrays
         double[] umapX = new double[n];
@@ -433,7 +436,7 @@ public class UmapComputeService {
             String projMsg = "NN-Descent: %dms | UMAP.fit: %dms | Project: %dms"
                     .formatted(nnMs, fitMs, projMs);
             postStatus(projMsg);
-            System.err.println(projMsg);
+            logger.info("{}", projMsg);
         } else {
             for (int i = 0; i < n; i++) {
                 umapX[i] = embedding[i][0];

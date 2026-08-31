@@ -2,7 +2,6 @@ package qupath.ext.flowpath.io;
 
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
-import qupath.ext.flowpath.model.CellGeometry;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
@@ -97,7 +96,6 @@ public class PhenotypeCsvExporter {
         boolean[] outOfAnnotation = result.getOutOfAnnotation();
         boolean[] outlier = result.getOutlier();
 
-        CellGeometry geometry = index.geometry();
         // Emitted only when the export actually carries labels. An all-blank column would
         // be worse than no column: join_flowpath.py branches on the column's *presence*,
         // so a blank one sends it down the exact-join path to match nothing, where its
@@ -112,19 +110,24 @@ public class PhenotypeCsvExporter {
             // mirage/bin/join_flowpath.py hard-fails without the last three and inverts
             // centroid_x/centroid_y as `/ pixel_size - 0.5`. They must keep these names
             // and centroid_* must be micrometres. Additional columns are safe.
-            writer.write("cell_id");
-            if (withLabel) writer.write(",label");
-            writer.write(",phenotype,Out_of_annotation,Outlier,centroid_x,centroid_y"
-                    + ",centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity");
+            CellTable.writeIdentityHeader(writer, withLabel);
+            // Capitalised, and written as Python-style True/False below, because
+            // join_flowpath.py maps these two names verbatim -- ("Outlier", "fp_outlier")
+            // and ("Out_of_annotation", "fp_out_of_annotation") -- and then does
+            // .fillna(False).astype(bool). pandas infers real booleans from True/False;
+            // lower-cased true/false would be read as *strings*, and astype(bool) on any
+            // non-empty string is True, which would silently mark every cell an outlier.
+            // The odd casing is load-bearing. Do not tidy it.
+            writer.write(",Out_of_annotation,Outlier");
             for (MeasuredColumn col : columns) {
                 // Escape the *whole* field, suffix included: a channel name containing a
                 // comma would otherwise emit `"CD3, clone"_raw`, which is text after a
                 // closing quote and not valid CSV (lenient parsers recover; strict ones
                 // do not).
                 String base = header(col);
-                writer.write("," + escapeCsv(base + "_raw"));
-                writer.write("," + escapeCsv(base + "_zscore"));
-                writer.write("," + escapeCsv(base + "_sign"));
+                writer.write("," + CellTable.escape(base + "_raw"));
+                writer.write("," + CellTable.escape(base + "_zscore"));
+                writer.write("," + CellTable.escape(base + "_sign"));
             }
             writer.newLine();
 
@@ -132,30 +135,11 @@ public class PhenotypeCsvExporter {
             for (int i = 0; i < n; i++) {
                 String phenotype = phenotypes[i] != null ? phenotypes[i] : "";
 
-                writer.write(String.valueOf(i));
-                if (withLabel) writer.write(',' + fmtLabel(index.getLabel(i)));
-                writer.write(',');
-                writer.write(escapeCsv(phenotype));
+                CellTable.writeIdentityRow(writer, index, i, withLabel, phenotype);
                 writer.write(',');
                 writer.write(outOfAnnotation[i] ? "True" : "False");
                 writer.write(',');
                 writer.write(outlier[i] ? "True" : "False");
-
-                // centroid_x/centroid_y are micrometres whenever micrometres can be
-                // known — either measured, or derived from the ROI via the image's
-                // calibration. Only an uncalibrated image with no µm measurement leaves
-                // them in the source space (pixels), which is what they have always been
-                // in that case; blanking them instead would lose the position entirely.
-                writer.write(',' + fmt(micronsOrSource(geometry, i, true)));
-                writer.write(',' + fmt(micronsOrSource(geometry, i, false)));
-                // The pixel space, stated explicitly. Additive, and it saves a consumer
-                // from inverting the calibration to get back to mask coordinates.
-                writer.write(',' + fmt(geometry.pixelsX(i)));
-                writer.write(',' + fmt(geometry.pixelsY(i)));
-                writer.write(',' + fmt(index.getArea(i)));
-                writer.write(',' + fmt(index.getPerimeter(i)));
-                writer.write(',' + fmt(index.getEccentricity(i)));
-                writer.write(',' + fmt(index.getSolidity(i)));
 
                 for (int c = 0; c < columns.size(); c++) {
                     MeasuredColumn col = columns.get(c);
@@ -169,9 +153,9 @@ public class PhenotypeCsvExporter {
                                               thresholdsByColumn.get(col.key()),
                                               regionGatesByColumn.get(col.key()));
 
-                    writer.write(',' + fmt(raw));
-                    writer.write(',' + fmt(zscore));
-                    writer.write(',' + escapeCsv(sign));
+                    writer.write(',' + CellTable.fmt(raw));
+                    writer.write(',' + CellTable.fmt(zscore));
+                    writer.write(',' + CellTable.escape(sign));
                 }
                 writer.newLine();
             }
@@ -283,36 +267,6 @@ public class PhenotypeCsvExporter {
         return "-";
     }
 
-    /** Format a double for CSV; NaN → empty string. Uses US locale to ensure dot decimal separator. */
-    private static String fmt(double val) {
-        return Double.isNaN(val) ? "" : String.format(java.util.Locale.US, "%.4f", val);
-    }
-
-    /**
-     * Format a segmentation label. Written without a decimal part when it is integral,
-     * which it always is for a label — {@code join_flowpath.py} does {@code int(v)} on
-     * the column, and an integer reads as an identity rather than as a measurement.
-     */
-    private static String fmtLabel(double val) {
-        if (Double.isNaN(val)) return "";
-        if (val == Math.rint(val) && !Double.isInfinite(val)) {
-            return String.valueOf((long) val);
-        }
-        return fmt(val);
-    }
-
-    /**
-     * The micrometre coordinate, or the raw source coordinate when micrometres cannot be
-     * derived (an uncalibrated image whose cells carry no µm centroid). Never mixes the
-     * two <em>within</em> a column: {@link CellGeometry} decides one source space for the
-     * whole index, so this either resolves to µm for every row or to pixels for every row.
-     */
-    private static double micronsOrSource(CellGeometry geometry, int i, boolean xAxis) {
-        double microns = xAxis ? geometry.micronsX(i) : geometry.micronsY(i);
-        if (!Double.isNaN(microns)) return microns;
-        return xAxis ? geometry.sourceX(i) : geometry.sourceY(i);
-    }
-
     /**
      * Collect every column to export: the resolved columns each gate axis uses
      * (depth-first order), then the bare column for any marker in the cell index not
@@ -349,17 +303,5 @@ public class PhenotypeCsvExporter {
                 collectColumnsRecursive(child, index, stats, byKey);
             }
         }
-    }
-
-    /**
-     * Escape a value for CSV output. Wraps in double quotes if it contains a
-     * comma, double quote, or newline.
-     */
-    private static String escapeCsv(String value) {
-        if (value == null) return "";
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
-        }
-        return value;
     }
 }

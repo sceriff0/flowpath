@@ -9,6 +9,7 @@ import qupath.lib.objects.classes.PathClass;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.StringWriter;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,8 +48,47 @@ class UmapResultTest {
         result.exportToCsv(temp, index, stats, null);
 
         List<String> lines = Files.readAllLines(temp.toPath());
-        assertEquals("cell_id,phenotype,population,centroid_x,centroid_y,umap_x,umap_y,CD45_raw,CD45_zscore",
+        // The identity block comes from CellTable and is byte-identical to the one
+        // gate_pheno.csv writes -- that shared prefix is what makes the two files
+        // joinable. The UMAP-specific columns follow it.
+        assertEquals("cell_id,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px"
+                + ",area,perimeter,eccentricity,solidity"
+                + ",population,umap_x,umap_y,CD45_raw,CD45_zscore",
                 lines.get(0));
+    }
+
+    /**
+     * Both per-cell CSVs must place cells in the same coordinate space under the same
+     * column names, or they cannot be joined to each other.
+     * <p>
+     * They could not before: this writer took centroids from {@code CellIndex.getCentroidX},
+     * which returns the space the measurement arrived in, while {@code PhenotypeCsvExporter}
+     * wrote micrometres -- both under a bare {@code centroid_x} with the unit recorded in
+     * neither file. Asserting the shared header prefix pins the fix at the level the bug
+     * lived at, rather than re-testing one writer's formatting.
+     */
+    @Test
+    void sharesItsIdentityBlockWithThePhenotypeExport() throws IOException {
+        var obj = createCell("T-cell", 5.0);
+        var index = buildIndex(List.of(obj), List.of("CD45"));
+        var stats = MarkerStats.compute(index);
+
+        var result = new UmapResult(
+                new double[]{1.0}, new double[]{2.0},
+                new PathObject[]{obj}, new String[]{"CD45"},
+                UmapParameters.defaults());
+
+        File temp = File.createTempFile("umap", ".csv");
+        temp.deleteOnExit();
+        result.exportToCsv(temp, index, stats, null);
+        String header = Files.readAllLines(temp.toPath()).get(0);
+
+        var expected = new StringWriter();
+        qupath.ext.flowpath.io.CellTable.writeIdentityHeader(expected, index.hasLabels());
+        assertTrue(header.startsWith(expected.toString()),
+                "UMAP CSV must open with CellTable's identity block; was: " + header);
+        assertTrue(header.contains("centroid_x_px"),
+                "the pixel space must be named, not left implicit");
     }
 
     @Test
@@ -119,12 +159,21 @@ class UmapResultTest {
         result.exportToCsv(temp, index, stats, List.of(tag));
 
         List<String> lines = Files.readAllLines(temp.toPath());
-        // Header includes population column
-        assertTrue(lines.get(0).contains("population"));
-        // Cell 0: phenotype=CD4+, population=Cluster A
-        assertTrue(lines.get(1).contains(",CD4+,Cluster A,"));
-        // Cell 1: phenotype=CD8+, population=(empty)
-        assertTrue(lines.get(2).contains(",CD8+,,"));
+        // Addressed by column name rather than by adjacency: phenotype and population are
+        // no longer neighbours now that the shared identity block sits between them, and a
+        // positional assertion would have to be rewritten every time a column is added.
+        List<String> header = List.of(lines.get(0).split(",", -1));
+        int phenotypeCol = header.indexOf("phenotype");
+        int populationCol = header.indexOf("population");
+        assertTrue(phenotypeCol >= 0 && populationCol >= 0, "both columns present");
+
+        String[] row0 = lines.get(1).split(",", -1);
+        assertEquals("CD4+", row0[phenotypeCol]);
+        assertEquals("Cluster A", row0[populationCol]);
+
+        String[] row1 = lines.get(2).split(",", -1);
+        assertEquals("CD8+", row1[phenotypeCol]);
+        assertEquals("", row1[populationCol]);
     }
 
     @Test

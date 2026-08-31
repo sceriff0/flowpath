@@ -43,6 +43,9 @@ import java.util.Set;
  */
 public final class CompartmentCapability {
 
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(CompartmentCapability.class);
+
     /**
      * One (compartment, statistic) combination a marker actually carries. The unit the
      * capability is stored in — see the class javadoc on why the two axes cannot be
@@ -97,7 +100,11 @@ public final class CompartmentCapability {
             try {
                 var m = obj.getMeasurements();
                 if (m != null) keys.addAll(m.keySet());
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                // One unreadable detection must not abort capability discovery for the
+                // slide -- but silence here shows up much later as a compartment the
+                // editor never offers, with nothing to trace it to.
+                logger.debug("Skipping detection with unreadable measurements", e);
             }
             if (++sampled >= sampleLimit) break;
         }

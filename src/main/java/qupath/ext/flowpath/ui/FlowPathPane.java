@@ -39,6 +39,8 @@ import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
+
+import java.util.List;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.events.PathObjectHierarchyEvent;
 import qupath.lib.objects.hierarchy.events.PathObjectHierarchyListener;
@@ -53,6 +55,9 @@ import java.util.*;
  * Toolbar at bottom for save/load/export.
  */
 public class FlowPathPane extends BorderPane {
+
+    private static final org.slf4j.Logger logger =
+            org.slf4j.LoggerFactory.getLogger(FlowPathPane.class);
 
     private final QuPathGUI qupath;
     private final TreeView<Object> treeView;
@@ -722,7 +727,6 @@ public class FlowPathPane extends BorderPane {
     private void syncViewerChannels(GateNode gate) {
         if (syncViewerChannelsToggle == null || !syncViewerChannelsToggle.isSelected()) return;
         if (gate == null) return;
-        var log = org.slf4j.LoggerFactory.getLogger(FlowPathPane.class);
         try {
             QuPathViewer viewer = qupath.getViewer();
             if (viewer == null) return;
@@ -768,10 +772,10 @@ public class FlowPathPane extends BorderPane {
             if (matchCount == 0) {
                 // No match — leave display untouched and tell the user why so they can
                 // check for a name-format mismatch.
-                if (log.isDebugEnabled()) {
+                if (logger.isDebugEnabled()) {
                     List<String> availNames = available.stream()
                         .map(ChannelDisplayInfo::getName).toList();
-                    log.debug("Viewer channel sync: no match for gate channels {} in available {}",
+                    logger.debug("Viewer channel sync: no match for gate channels {} in available {}",
                         gateChannels, availNames);
                 }
                 return;
@@ -780,13 +784,13 @@ public class FlowPathPane extends BorderPane {
             for (Decision d : decisions) {
                 display.setChannelSelected(d.info, d.show);
             }
-            if (log.isTraceEnabled()) {
-                log.trace("Viewer channel sync: {} of {} channels selected (gate channels {})",
+            if (logger.isTraceEnabled()) {
+                logger.trace("Viewer channel sync: {} of {} channels selected (gate channels {})",
                     matchCount, available.size(), gateChannels);
             }
         } catch (Exception ex) {
             // Never let a viewer-sync failure break gate editing.
-            log.warn("Failed to sync viewer channels: {}", ex.toString());
+            logger.warn("Failed to sync viewer channels: {}", ex.toString());
         }
     }
 
@@ -988,11 +992,35 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptToSaveFile("Save FlowPath", null, "flowpath.json", "JSON", ".json");
         if (file == null) return;
         try {
-            FlowPathSerializer.save(gateTree, file);
+            FlowPathSerializer.save(gateTree, file, currentProvenance());
             Dialogs.showInfoNotification("FlowPath", "Saved to " + file.getName());
         } catch (Exception ex) {
             Dialogs.showErrorMessage("Save Error", ex.getMessage());
         }
+    }
+
+    /**
+     * What this gate tree was drawn against, for the saved file's {@code meta} block.
+     * <p>
+     * Read defensively: a tree can be saved before any image is open, or with the index
+     * still null, and neither is a reason to refuse the save. Unknown fields are simply
+     * not recorded -- see {@link FlowPathSerializer.Provenance}.
+     */
+    private FlowPathSerializer.Provenance currentProvenance() {
+        String imageName = null;
+        try {
+            ImageData<?> data = qupath.getImageData();
+            if (data != null && data.getServer() != null) {
+                imageName = data.getServer().getMetadata().getName();
+            }
+        } catch (Exception e) {
+            logger.debug("No image name available for gate-tree provenance", e);
+        }
+        int cells = cellIndex != null ? cellIndex.getSize() : -1;
+        List<String> channels = cellIndex != null
+                ? List.of(cellIndex.getMarkerNames())
+                : List.of();
+        return new FlowPathSerializer.Provenance(imageName, cells, channels);
     }
 
     private void loadTree() {
