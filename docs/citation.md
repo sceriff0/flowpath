@@ -8,7 +8,7 @@ cite that too.
 
 > FlowPath: Interactive tree-based cell phenotyping and UMAP exploration for
 > QuPath. (2026).
-> <https://github.com/sceriff0/qupath-extension-flowpath>
+> <https://github.com/sceriff0/flowpath>
 
 !!! note "Citing earlier versions"
     FlowPath's version numbering restarted at **0.9.0**; earlier releases formed a

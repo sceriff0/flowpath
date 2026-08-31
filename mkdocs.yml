@@ -5,8 +5,8 @@ site_description: >-
   MIRAGE pipeline leaves off.
 site_author: FlowPath Team
 site_url: https://flowpath.readthedocs.io/
-repo_url: https://github.com/sceriff0/qupath-extension-flowpath
-repo_name: sceriff0/qupath-extension-flowpath
+repo_url: https://github.com/sceriff0/flowpath
+repo_name: sceriff0/flowpath
 edit_uri: edit/main/docs/
 copyright: >-
   Copyright &copy; sceriff0 — FlowPath extensions released under the MIT License.
@@ -104,7 +104,7 @@ extra_css:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/sceriff0/qupath-extension-flowpath
+      link: https://github.com/sceriff0/flowpath
       name: FlowPath catalog on GitHub
     - icon: material/microscope
       link: https://qupath.github.io/

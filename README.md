@@ -20,7 +20,7 @@ pipeline, and with any QuPath detections carrying per-marker measurements.
 In QuPath, add the FlowPath catalog and install **FlowPath**:
 
 ```
-https://raw.githubusercontent.com/sceriff0/qupath-extension-flowpath/main/catalog.json
+https://raw.githubusercontent.com/sceriff0/flowpath/main/catalog.json
 ```
 
 (Extensions → Manage extensions → Manage extension catalogs → Add.) Launch with
@@ -58,8 +58,8 @@ you gate rather than needing a recompute.
 Requires **JDK 25**.
 
 ```bash
-git clone https://github.com/sceriff0/qupath-extension-flowpath.git
-cd qupath-extension-flowpath
+git clone https://github.com/sceriff0/flowpath.git
+cd flowpath
 ./gradlew build shadowJar
 ```
 
@@ -76,7 +76,7 @@ Features, the gating workflow, output formats, and troubleshooting are all at
 
 > FlowPath: Interactive tree-based cell phenotyping and UMAP exploration for
 > QuPath. (2026).
-> https://github.com/sceriff0/qupath-extension-flowpath
+> https://github.com/sceriff0/flowpath
 
 See the [citation page](https://flowpath.readthedocs.io/citation/) for QuPath,
 UMAP/SMILE and MIRAGE references.

@@ -18,7 +18,7 @@ explore those phenotypes in a UMAP you can lasso. FlowPath picks up where the
 <div class="flowpath-badges" markdown>
 [:material-rocket-launch: Install](installation.md){ .md-button .md-button--primary }
 [:material-walk: How to use](usage.md){ .md-button }
-[:fontawesome-brands-github: GitHub](https://github.com/sceriff0/qupath-extension-flowpath){ .md-button }
+[:fontawesome-brands-github: GitHub](https://github.com/sceriff0/flowpath){ .md-button }
 </div>
 
 </div>
