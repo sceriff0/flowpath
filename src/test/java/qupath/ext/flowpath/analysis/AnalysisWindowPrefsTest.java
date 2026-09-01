@@ -2,7 +2,9 @@ package qupath.ext.flowpath.analysis;
 
 import javafx.geometry.Rectangle2D;
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.analysis.ui.ScaleOptions;
 
+import java.util.List;
 import java.util.prefs.Preferences;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,18 +16,32 @@ class AnalysisWindowPrefsTest {
         return Preferences.userRoot().node("flowpath-test/" + java.util.UUID.randomUUID());
     }
 
+    /** Four distinct {@link ScaleOptions}, one per tab, so a test can catch index-swapping bugs
+     * that four identical entries would hide. */
+    private static List<ScaleOptions> distinctPerTab() {
+        return List.of(
+                new ScaleOptions(true, true, 90),
+                new ScaleOptions(false, false, 95),
+                new ScaleOptions(true, false, 70),
+                new ScaleOptions(false, true, 60));
+    }
+
+    private static List<ScaleOptions> uniform(ScaleOptions options) {
+        return List.of(options, options, options, options);
+    }
+
     @Test
     void roundTripsEverySetting() throws Exception {
         Preferences node = scratch();
         try {
-            new AnalysisWindowPrefs(100, 200, 1200, 800, 2, "ANNOTATION_K", true, true, 90).save(node);
+            new AnalysisWindowPrefs(100, 200, 1200, 800, 2, "ANNOTATION_K", distinctPerTab())
+                    .save(node);
             AnalysisWindowPrefs read = AnalysisWindowPrefs.load(node);
             assertEquals(1200, read.width(), 1e-9);
             assertEquals(2, read.selectedTab());
             assertEquals("ANNOTATION_K", read.scope());
-            assertTrue(read.log());
-            assertTrue(read.clip());
-            assertEquals(90, read.percentile(), 1e-9);
+            assertEquals(distinctPerTab(), read.scaleOptionsByTab(),
+                    "all four tabs' scale options round-trip, in order, not only one of them");
         } finally {
             node.removeNode();
         }
@@ -43,10 +59,11 @@ class AnalysisWindowPrefsTest {
     void nonsenseValuesFallBackRatherThanThrow() {
         Preferences node = scratch();
         node.put("width", "not-a-number");
-        node.put("percentile", "999");
+        node.put("percentile0", "999");
         AnalysisWindowPrefs read = assertDoesNotThrow(() -> AnalysisWindowPrefs.load(node));
         assertEquals(AnalysisWindowPrefs.defaults().width(), read.width(), 1e-9);
-        assertTrue(read.percentile() >= 50 && read.percentile() <= 100,
+        double tab0Percentile = read.scaleOptionsByTab().get(0).percentile();
+        assertTrue(tab0Percentile >= 50 && tab0Percentile <= 100,
                 "a percentile outside [50,100] would throw inside ScaleOptions");
     }
 
@@ -60,9 +77,60 @@ class AnalysisWindowPrefsTest {
     @Test
     void aPercentileBelowFiftyAlsoFallsBackRatherThanThrow() {
         Preferences node = scratch();
-        node.putDouble("percentile", -12.0);
+        node.putDouble("percentile0", -12.0);
         AnalysisWindowPrefs read = assertDoesNotThrow(() -> AnalysisWindowPrefs.load(node));
-        assertTrue(read.percentile() >= 50 && read.percentile() <= 100);
+        double tab0Percentile = read.scaleOptionsByTab().get(0).percentile();
+        assertTrue(tab0Percentile >= 50 && tab0Percentile <= 100);
+    }
+
+    /**
+     * The assertion that catches a loop bailing out on its first error: a corrupt value in ONE
+     * tab's stored percentile must repair only that tab, leaving the other three exactly as
+     * they were saved. {@link AnalysisWindowPrefs#load} reads and repairs each tab's
+     * {@code logN}/{@code clipN}/{@code percentileN} keys in an independent loop iteration --
+     * this pins that tab 1's corruption cannot reach tabs 0, 2 or 3, which a naive
+     * "parse everything, then validate the whole record at the end and fall back entirely on
+     * any failure" implementation would get wrong.
+     */
+    @Test
+    void aBadPercentileInOneTabLeavesTheOtherThreeIntact() throws Exception {
+        Preferences node = scratch();
+        try {
+            List<ScaleOptions> saved = distinctPerTab();
+            new AnalysisWindowPrefs(0, 0, 960, 640, 0, "WHOLE_SLIDE", saved).save(node);
+            // Corrupt ONLY tab 1's percentile after a legitimate save of all four.
+            node.putDouble("percentile1", 250.0);
+
+            AnalysisWindowPrefs read = AnalysisWindowPrefs.load(node);
+            List<ScaleOptions> perTab = read.scaleOptionsByTab();
+
+            assertEquals(saved.get(0), perTab.get(0), "tab 0 untouched");
+            assertEquals(saved.get(2), perTab.get(2), "tab 2 untouched");
+            assertEquals(saved.get(3), perTab.get(3), "tab 3 untouched");
+
+            ScaleOptions tab1 = perTab.get(1);
+            assertTrue(tab1.percentile() >= 50 && tab1.percentile() <= 100,
+                    "tab 1's own corrupted percentile is repaired rather than thrown");
+            assertEquals(saved.get(1).log(), tab1.log(), "tab 1's log/clip are unaffected");
+            assertEquals(saved.get(1).clip(), tab1.clip());
+        } finally {
+            node.removeNode();
+        }
+    }
+
+    /**
+     * A record hand-built with the wrong number of tab entries is rejected outright, the same
+     * "throw rather than migrate half-way" rule this codebase applies elsewhere to two things
+     * that are supposed to describe the same set (e.g. {@code GateTree}/{@code PhenotypeSnapshot}
+     * length mismatches) -- every reader of {@link AnalysisWindowPrefs#scaleOptionsByTab()}
+     * indexes it positionally against a fixed four-tab list, so a shorter or longer one is not a
+     * value this type can represent at all.
+     */
+    @Test
+    void aWrongNumberOfTabEntriesIsRejected() {
+        assertThrows(IllegalArgumentException.class, () ->
+                new AnalysisWindowPrefs(0, 0, 960, 640, 0, "WHOLE_SLIDE",
+                        List.of(ScaleOptions.LINEAR, ScaleOptions.LINEAR)));
     }
 
     /**
@@ -76,7 +144,8 @@ class AnalysisWindowPrefsTest {
     @Test
     void clampToScreenPullsAnOffScreenWindowBackOntoTheScreen() {
         AnalysisWindowPrefs savedOnDisconnectedMonitor =
-                new AnalysisWindowPrefs(5000, 5000, 960, 640, 0, "WHOLE_SLIDE", false, false, 95);
+                new AnalysisWindowPrefs(5000, 5000, 960, 640, 0, "WHOLE_SLIDE",
+                        uniform(ScaleOptions.LINEAR));
         Rectangle2D primary = new Rectangle2D(0, 0, 1920, 1080);
 
         AnalysisWindowPrefs clamped = savedOnDisconnectedMonitor.clampToScreen(primary);
@@ -91,7 +160,8 @@ class AnalysisWindowPrefsTest {
     @Test
     void clampToScreenLeavesAnOnScreenWindowUntouched() {
         AnalysisWindowPrefs prefs =
-                new AnalysisWindowPrefs(100, 150, 960, 640, 1, "WHOLE_SLIDE", true, false, 95);
+                new AnalysisWindowPrefs(100, 150, 960, 640, 1, "WHOLE_SLIDE",
+                        uniform(new ScaleOptions(true, false, 95)));
         Rectangle2D primary = new Rectangle2D(0, 0, 1920, 1080);
 
         AnalysisWindowPrefs clamped = prefs.clampToScreen(primary);
@@ -100,13 +170,16 @@ class AnalysisWindowPrefsTest {
         assertEquals(150, clamped.y(), 1e-9);
         assertEquals(960, clamped.width(), 1e-9);
         assertEquals(640, clamped.height(), 1e-9);
+        assertEquals(prefs.scaleOptionsByTab(), clamped.scaleOptionsByTab(),
+                "clamping is geometry-only -- it must not touch the plot settings");
     }
 
     /** A saved window larger than the screen itself is shrunk to fit, not merely repositioned. */
     @Test
     void clampToScreenShrinksAWindowLargerThanTheScreen() {
         AnalysisWindowPrefs prefs =
-                new AnalysisWindowPrefs(0, 0, 4000, 3000, 0, "WHOLE_SLIDE", false, false, 95);
+                new AnalysisWindowPrefs(0, 0, 4000, 3000, 0, "WHOLE_SLIDE",
+                        uniform(ScaleOptions.LINEAR));
         Rectangle2D primary = new Rectangle2D(0, 0, 1920, 1080);
 
         AnalysisWindowPrefs clamped = prefs.clampToScreen(primary);
@@ -131,8 +204,10 @@ class AnalysisWindowPrefsTest {
         assertEquals(640, d.height(), 1e-9);
         assertEquals(0, d.selectedTab());
         assertEquals("WHOLE_SLIDE", d.scope());
-        assertFalse(d.log());
-        assertFalse(d.clip());
+        assertEquals(AnalysisWindowPrefs.TAB_COUNT, d.scaleOptionsByTab().size());
+        for (ScaleOptions options : d.scaleOptionsByTab()) {
+            assertEquals(ScaleOptions.LINEAR, options, "every tab starts linear/unclipped");
+        }
     }
 
     /** NaN geometry (the default, first-run case) must pass through clamping untouched. */

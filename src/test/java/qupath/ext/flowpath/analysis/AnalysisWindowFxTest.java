@@ -9,6 +9,7 @@ import qupath.ext.flowpath.analysis.ui.ScaleOptions;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.prefs.Preferences;
 
@@ -25,9 +26,10 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>a close/reopen keeps the pane's own state because the SAME {@link AnalysisPane}
  *       instance stays alive in memory, not because {@code AnalysisWindow} re-reads it from
  *       {@code AnalysisWindowPrefs} on the way back in — see
- *       {@link #stateSurvivesACloseReopenEvenWithPreferencesWipedInBetween}, which proves the
- *       negative directly by wiping the scratch preferences node between the close and the
- *       reopen and asserting nothing regresses.
+ *       {@link #allFourTabsScaleOptionsSurviveACloseReopenEvenWithPreferencesWipedInBetween},
+ *       which proves the negative directly by wiping the scratch preferences node between the
+ *       close and the reopen and asserting nothing regresses — for all four tabs, not only
+ *       whichever one happened to be selected.
  * </ol>
  * Both use the package-private {@link AnalysisWindow#AnalysisWindow(Preferences)} constructor
  * pointed at a scratch node, so this class's real open()/close() geometry-persistence code
@@ -85,20 +87,26 @@ class AnalysisWindowFxTest {
 
     /**
      * Proves the in-memory survival is real, not merely reading the same values back from
-     * preferences by coincidence: seeds the scratch node with a non-default tab and scale
-     * options so the FIRST open's freshly-built pane visibly differs from
-     * {@code AnalysisWindowPrefs.defaults()}, then WIPES the node before the second open. If
-     * {@code AnalysisWindow} depended on preferences to restore pane state on every open (the
+     * preferences by coincidence: seeds the scratch node with a non-default tab and FOUR
+     * DISTINCT tabs' scale options (log on for tab 0 AND tab 3, off for the other two -- exactly
+     * the "two different tabs configured differently" case a single remembered triple could not
+     * represent) so the FIRST open's freshly-built pane visibly differs from {@code
+     * AnalysisWindowPrefs.defaults()} on every tab, then WIPES the node before the second open.
+     * If {@code AnalysisWindow} depended on preferences to restore pane state on every open (the
      * bug this task's brief warns against reintroducing), the second open would read only
      * defaults from the now-empty node and this test would fail.
      */
     @Test
-    void stateSurvivesACloseReopenEvenWithPreferencesWipedInBetween() throws Exception {
+    void allFourTabsScaleOptionsSurviveACloseReopenEvenWithPreferencesWipedInBetween() throws Exception {
         Preferences node = scratch();
         try {
-            ScaleOptions seeded = new ScaleOptions(true, true, 80);
-            new AnalysisWindowPrefs(Double.NaN, Double.NaN, 960, 640, 2, "WHOLE_SLIDE",
-                    seeded.log(), seeded.clip(), seeded.percentile()).save(node);
+            List<ScaleOptions> seeded = List.of(
+                    new ScaleOptions(true, true, 80),
+                    new ScaleOptions(false, false, 95),
+                    new ScaleOptions(false, false, 95),
+                    new ScaleOptions(true, false, 65));
+            new AnalysisWindowPrefs(Double.NaN, Double.NaN, 960, 640, 2, "WHOLE_SLIDE", seeded)
+                    .save(node);
 
             AnalysisWindow window = new AnalysisWindow(node);
             Stage owner = FxTestSupport.onFx(() -> {
@@ -112,7 +120,8 @@ class AnalysisWindowFxTest {
             AnalysisPane pane = FxTestSupport.onFx(window::paneForTest);
             assertEquals(2, FxTestSupport.onFx(pane::selectedTabIndex),
                     "the FIRST open should have seeded the tab from the pre-populated prefs");
-            assertEquals(seeded, FxTestSupport.onFx(pane::currentScaleOptions));
+            assertEquals(seeded, FxTestSupport.onFx(pane::scaleOptionsByTab),
+                    "all four tabs, not only whichever one is selected, seeded from prefs");
 
             FxTestSupport.onFxRun(window::close);
             // Simulate preferences being unavailable or corrupted between the close and the
@@ -126,8 +135,9 @@ class AnalysisWindowFxTest {
             assertEquals(2, FxTestSupport.onFx(paneAfterReopen::selectedTabIndex),
                     "tab 2 survived with an EMPTY preferences node -- it came from the live "
                             + "pane, not from AnalysisWindowPrefs.load()");
-            assertEquals(seeded, FxTestSupport.onFx(paneAfterReopen::currentScaleOptions),
-                    "scale options survived with an EMPTY preferences node, for the same reason");
+            assertEquals(seeded, FxTestSupport.onFx(paneAfterReopen::scaleOptionsByTab),
+                    "all four tabs' scale options survived with an EMPTY preferences node, for "
+                            + "the same reason -- not just whichever tab was selected");
 
             FxTestSupport.onFxRun(window::close);
         } finally {

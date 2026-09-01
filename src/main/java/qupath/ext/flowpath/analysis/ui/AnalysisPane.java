@@ -199,15 +199,17 @@ public final class AnalysisPane extends BorderPane {
     private Consumer<PopulationRef> onPopulationSelected;
 
     public AnalysisPane(AnalysisSession session) {
-        this(session, 0, null, ScaleOptions.LINEAR);
+        this(session, 0, null,
+                List.of(ScaleOptions.LINEAR, ScaleOptions.LINEAR, ScaleOptions.LINEAR, ScaleOptions.LINEAR));
     }
 
     /**
      * As {@link #AnalysisPane(AnalysisSession)}, but seeded with a previously remembered tab,
-     * scope and Y-axis remedy — what {@code AnalysisWindow} restores a freshly built pane with
-     * from {@code AnalysisWindowPrefs} after a JVM restart (see that class's own javadoc for why
-     * an ordinary close/reopen within one session never reaches this constructor at all: {@code
-     * AnalysisWindow} keeps the SAME pane instance alive across those).
+     * scope and — for EVERY plot tab, not only {@code initialTab} — Y-axis remedy. What {@code
+     * AnalysisWindow} restores a freshly built pane with from {@code AnalysisWindowPrefs} after
+     * a JVM restart (see that class's own javadoc for why an ordinary close/reopen within one
+     * session never reaches this constructor at all: {@code AnalysisWindow} keeps the SAME pane
+     * instance alive across those).
      * <p>
      * <b>This has to be a constructor argument, not a setter called afterward.</b>
      * {@link PlotControls} reads {@link PlotCanvas#scaleOptions()} exactly once, at its own
@@ -216,24 +218,31 @@ public final class AnalysisPane extends BorderPane {
      * fact" divergence {@link PlotControls}'s own class javadoc rules out for the log/clip
      * toggles themselves.
      *
-     * @param initialTab          which plot tab to select — {@link #clampTabIndex} tolerates any
-     *                            {@code int}, including a stale index from a build with more or
-     *                            fewer tabs than this one has
-     * @param initialScope        {@link qupath.ext.flowpath.model.PopulationStats.Scope#name()}
-     *                            of the scope to preselect, or {@code null}/an unrecognised name
-     *                            — either way {@link #refresh()}'s own existing fallback (a scope
-     *                            no longer on offer picks the first available one) applies
-     *                            unchanged, so this constructor does not need a second copy of
-     *                            that reconciliation
-     * @param initialScaleOptions the Y-axis remedy applied to the tab {@code initialTab} names;
-     *                            the other three tabs start at {@link ScaleOptions#LINEAR}, since
-     *                            only one remembered triple exists — see {@code
-     *                            AnalysisWindowPrefs}'s own javadoc for why
+     * @param initialTab             which plot tab to select — {@link #clampTabIndex} tolerates
+     *                               any {@code int}, including a stale index from a build with
+     *                               more or fewer tabs than this one has
+     * @param initialScope           {@link qupath.ext.flowpath.model.PopulationStats.Scope#name()}
+     *                               of the scope to preselect, or {@code null}/an unrecognised
+     *                               name — either way {@link #refresh()}'s own existing fallback
+     *                               (a scope no longer on offer picks the first available one)
+     *                               applies unchanged, so this constructor does not need a second
+     *                               copy of that reconciliation
+     * @param initialScaleOptionsByTab the Y-axis remedy of EVERY tab, in the same order as
+     *                               {@link #plotCanvases} — Composition, By Region, By Scope,
+     *                               Marker Positivity — so a user who had log on for two
+     *                               different tabs gets both back, not only whichever tab
+     *                               happened to be selected when the window last closed. Must
+     *                               have exactly {@code plotCanvases.size()} entries.
      */
     public AnalysisPane(AnalysisSession session, int initialTab, String initialScope,
-                         ScaleOptions initialScaleOptions) {
+                         List<ScaleOptions> initialScaleOptionsByTab) {
         this.session = Objects.requireNonNull(session, "session");
-        Objects.requireNonNull(initialScaleOptions, "initialScaleOptions");
+        Objects.requireNonNull(initialScaleOptionsByTab, "initialScaleOptionsByTab");
+        if (initialScaleOptionsByTab.size() != plotCanvases.size()) {
+            throw new IllegalArgumentException(
+                    "initialScaleOptionsByTab must have exactly " + plotCanvases.size()
+                            + " entries (one per plot tab), got " + initialScaleOptionsByTab.size());
+        }
         // Set before the first refresh() below reconciles it against whatever scopes the
         // (currently empty) session actually offers -- refresh() keeps a selectedScope that is
         // still on offer and only falls back to the first available one otherwise, so seeding it
@@ -369,10 +378,15 @@ public final class AnalysisPane extends BorderPane {
                 filterField,
                 exportMenu);
 
-        // Applied to the SEED tab's canvas before plotTab() below builds that tab's own
-        // PlotControls -- see this constructor's own javadoc for why any later would leave the
-        // checkbox and the canvas disagreeing.
-        plotCanvases.get(seedTab).setScaleOptions(initialScaleOptions);
+        // Applied to EVERY canvas's own ScaleOptions before plotTab() below builds each tab's
+        // own PlotControls -- see this constructor's own javadoc for why any later would leave a
+        // checkbox and its canvas disagreeing, and for why this is a loop over all four rather
+        // than a single assignment to plotCanvases.get(seedTab): a user who had log on for two
+        // different tabs gets both back, not only whichever tab happened to be showing when the
+        // window last closed.
+        for (int i = 0; i < plotCanvases.size(); i++) {
+            plotCanvases.get(i).setScaleOptions(initialScaleOptionsByTab.get(i));
+        }
 
         plotTabs = new TabPane(
                 plotTab("Composition", compositionCanvas, new Label("Root:"), rootCombo),
@@ -702,22 +716,25 @@ public final class AnalysisPane extends BorderPane {
      * {@code AnalysisWindow} persists via {@code AnalysisWindowPrefs} on close. The raw enum
      * name, not {@link PopulationStats.Scope} itself, so {@code AnalysisWindowPrefs} (in a
      * sibling package one level up) never has to import this pane's model type — the same
-     * reasoning {@link #AnalysisPane(AnalysisSession, int, String, ScaleOptions)} follows for
-     * its own {@code initialScope} parameter.
+     * reasoning {@link #AnalysisPane(AnalysisSession, int, String, List)} follows for its own
+     * {@code initialScope} parameter.
      */
     public String selectedScopeName() {
         return selectedScope == null ? null : selectedScope.name();
     }
 
     /**
-     * The Y-axis remedy of whichever plot is in the currently selected tab — what {@code
-     * AnalysisWindow} persists via {@code AnalysisWindowPrefs} on close, paired with {@link
-     * #selectedTabIndex()} so the two are restored together onto the same tab next time. Reads
-     * {@link #currentPlotCanvas()} rather than a copy kept on this pane, for the same
-     * single-owner reason {@link PlotCanvas#scaleOptions()}'s own javadoc gives.
+     * The Y-axis remedy of EVERY plot tab, in {@link #plotCanvases}' own order (Composition, By
+     * Region, By Scope, Marker Positivity) — what {@code AnalysisWindow} persists via {@code
+     * AnalysisWindowPrefs} on close. All four, not only whichever tab is currently selected: a
+     * user who set log/clip differently on two different tabs gets both back on the next fresh
+     * pane, rather than losing whichever one was not on screen at save time — see {@code
+     * AnalysisWindowPrefs}'s own javadoc for the fuller reasoning. Reads straight off each
+     * {@link PlotCanvas#scaleOptions()} rather than a copy kept on this pane, for the same
+     * single-owner reason that method's own javadoc gives.
      */
-    public ScaleOptions currentScaleOptions() {
-        return currentPlotCanvas().scaleOptions();
+    public List<ScaleOptions> scaleOptionsByTab() {
+        return plotCanvases.stream().map(PlotCanvas::scaleOptions).toList();
     }
 
     /**

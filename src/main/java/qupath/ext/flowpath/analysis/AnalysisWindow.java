@@ -8,7 +8,6 @@ import javafx.stage.Window;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.AnalysisPane;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
-import qupath.ext.flowpath.analysis.ui.ScaleOptions;
 import qupath.lib.gui.QuPathGUI;
 
 import java.util.Objects;
@@ -118,7 +117,7 @@ public final class AnalysisWindow {
             // back on and AnalysisWindowPrefs is the only source left. Every later open() in
             // this same session skips this branch entirely; see this class's own javadoc.
             pane = new AnalysisPane(session, prefs.selectedTab(), prefs.scope(),
-                    new ScaleOptions(prefs.log(), prefs.clip(), prefs.percentile()));
+                    prefs.scaleOptionsByTab());
             pane.setOnPopulationSelected(populationSelectionListener);
         }
         stage = new Stage();
@@ -223,12 +222,15 @@ public final class AnalysisWindow {
     /**
      * Hide the window for the rest of this session. Safe to call when already closed.
      * <p>
-     * <b>Deliberately does not release {@link #pane}.</b> That is the whole point of this
-     * task: closing the window used to discard the panel along with the stage, so every
-     * selection reset on the next {@link #open}. Genuine teardown — the point {@code
-     * FlowPathPane} calls when the extension pane itself is going away — is {@link #dispose()}
-     * instead; see that method and this class's own javadoc for why the two are not the same
-     * operation.
+     * <b>Not the same operation as {@link #dispose()}, even though both calls look
+     * interchangeable from a call site — this is "the user closed the window", {@link
+     * #dispose()} is "this {@code AnalysisWindow} itself is being torn down".</b> The one
+     * behavioural difference that makes the distinction matter: this method keeps {@link #pane}
+     * alive, {@link #dispose()} releases it. That is the whole point of this task — closing the
+     * window used to discard the panel along with the stage, so every selection reset on the
+     * next {@link #open}. Call this from anywhere the window is merely being hidden; call
+     * {@link #dispose()} only from the one place ({@code FlowPathPane.shutdown()}) where THIS
+     * {@code AnalysisWindow} instance itself will never {@link #open} again.
      */
     public void close() {
         if (stage != null) {
@@ -266,11 +268,13 @@ public final class AnalysisWindow {
     }
 
     /**
-     * True teardown: releases {@link #pane} along with the {@link Stage}. {@code FlowPathPane}
-     * calls this from {@code shutdown()} — the extension builds an entirely new
-     * {@code FlowPathPane} (and a new {@code AnalysisWindow} inside it) the next time its own
-     * window is reopened, so there is no future {@link #open} on THIS instance left to benefit
-     * from keeping {@link #pane} around; holding onto it past this point would only be a leak.
+     * True teardown, as opposed to {@link #close()}: releases {@link #pane} along with the
+     * {@link Stage}, where {@link #close()} deliberately keeps {@link #pane} alive. {@code
+     * FlowPathPane} calls this — never {@link #close()} — from {@code shutdown()}, because the
+     * extension builds an entirely new {@code FlowPathPane} (and a new {@code AnalysisWindow}
+     * inside it) the next time its own window is reopened, so there is no future {@link #open}
+     * on THIS instance left to benefit from keeping {@link #pane} around; holding onto it past
+     * this point would only be a leak — exactly the failure this method exists to prevent.
      * <p>
      * Saves first, exactly like {@link #close()} — the tab, scope and scale settings the
      * user had open are what the NEXT {@code AnalysisWindow}, built fresh after this one, seeds
@@ -287,20 +291,19 @@ public final class AnalysisWindow {
     }
 
     /**
-     * Persist the current stage geometry and the pane's own tab/scope/scale — a no-op with
-     * nothing open to read them from. Called from both {@link #close()}'s explicit path and
-     * {@code setOnCloseRequest} in {@link #open}, since a user clicking the window's own close
-     * button never goes through {@link #close()} at all.
+     * Persist the current stage geometry and the pane's own tab/scope/per-tab scale options —
+     * a no-op with nothing open to read them from. Called from both {@link #close()}'s explicit
+     * path and {@code setOnCloseRequest} in {@link #open}, since a user clicking the window's
+     * own close button never goes through {@link #close()} at all.
      */
     private void saveWindowPrefs() {
         if (stage == null || pane == null) return;
         String scope = pane.selectedScopeName();
-        ScaleOptions scale = pane.currentScaleOptions();
         new AnalysisWindowPrefs(
                 stage.getX(), stage.getY(), stage.getWidth(), stage.getHeight(),
                 pane.selectedTabIndex(),
                 scope == null ? AnalysisWindowPrefs.defaults().scope() : scope,
-                scale.log(), scale.clip(), scale.percentile())
+                pane.scaleOptionsByTab())
                 .save(prefsNode);
     }
 }
