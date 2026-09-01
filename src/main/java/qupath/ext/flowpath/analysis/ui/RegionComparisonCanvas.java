@@ -55,6 +55,15 @@ public final class RegionComparisonCanvas extends PlotCanvas {
     }
 
     /**
+     * The population this canvas is currently comparing. Package-private, exercised directly
+     * by {@code AnalysisPaneFxTest} to pin that the By Region and By Scope tabs' own combos
+     * (Task 11) drive one shared selection rather than two independent ones.
+     */
+    PopulationRef selectedPopulation() {
+        return selected;
+    }
+
+    /**
      * The selected population's rows, one per region, in region order — the bars.
      * <p>
      * The row itself is the unit, not its name. Region names are not unique:

@@ -298,6 +298,44 @@ class AnalysisPaneFxTest {
         assertEquals(75.0, desc.get(0), 1e-9, desc.toString());
     }
 
+    /**
+     * The regression Task 11 fixes: four pickers used to sit in one flat control row and read
+     * as global, but only Scope and Denominator actually drive the table. Root drives only the
+     * Composition tab and Population drives only the two comparison tabs -- both must live on
+     * the tab they actually affect, not above the table where they read as broken when a user
+     * changes them and nothing visible happens.
+     */
+    @Test
+    void eachPlotCarriesItsOwnPickersRatherThanTrustingAGlobalBar() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        // The Root picker belongs to the Composition tab; the Population picker to the
+        // comparison tabs. Neither may sit in the table's control row, where it read as global.
+        assertTrue(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Scope:")));
+        assertTrue(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Denominator:")));
+        assertFalse(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Root:")),
+                "Root drives one plot, so it lives on that plot");
+        assertFalse(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Population:")));
+    }
+
+    /**
+     * By Region and By Scope each carry their own {@code ComboBox} for the Population picker
+     * (Task 11's layout), but there is only ONE selection behind them -- a user comparing
+     * "CD45+/CD8+" on By Region must still be looking at "CD45+/CD8+" after flipping to By
+     * Scope, not silently back at whatever the other combo happened to default to.
+     */
+    @Test
+    void thePopulationChoiceIsSharedBetweenTheTwoComparisonTabs() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        PopulationRef second = FxTestSupport.onFx(() -> pane.populationChoices().get(1));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation(second));
+        assertEquals(second, FxTestSupport.onFx(() -> pane.regionComparisonCanvas().selectedPopulation()));
+        assertEquals(second, FxTestSupport.onFx(() -> pane.scopeComparisonCanvas().selectedPopulation()));
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));

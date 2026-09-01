@@ -10,7 +10,6 @@ import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
-import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ChoiceBox;
@@ -34,7 +33,7 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.HBox;
+import javafx.scene.layout.FlowPane;
 import javafx.util.StringConverter;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.session.AnalysisState;
@@ -77,12 +76,23 @@ public final class AnalysisPane extends BorderPane {
     private final ChoiceBox<PopulationStats.Scope> scopeChoice = new ChoiceBox<>();
     private final ComboBox<DenominatorRef> denominatorCombo = new ComboBox<>();
     private final ComboBox<Integer> rootCombo = new ComboBox<>();
+    // Two ComboBox INSTANCES, one selection. The By Region and By Scope tabs each need their
+    // own picker -- Task 11 moves Population off the table's control row and onto the tabs it
+    // actually drives, and a shared row above two tabs is not an option once each tab has its
+    // own bottom FlowPane -- but "which population" is one fact, not two: see
+    // applyPopulationSelection() for how the pair stays in lockstep without looping.
     private final ComboBox<PopulationRef> populationCombo = new ComboBox<>();
+    private final ComboBox<PopulationRef> scopePopulationCombo = new ComboBox<>();
     private final TextField filterField = new TextField();
     private final Button exportButton = new Button("Export CSV...");
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
     private final Label summaryLabel = new Label();
+    // The table's own control row -- Scope, Denominator, the filter field, and (Task 12) the
+    // export control. Kept as a field, not a local built once, so tableControlLabels() can read
+    // it back; a FlowPane rather than the old HBox so it wraps instead of clipping at the 720px
+    // minimum stage width.
+    private final FlowPane tableControls = new FlowPane();
 
     // The table's items are this fixed FilteredList-over-SortedList pipeline, built once and
     // never replaced by updateTable() -- only backingRows' CONTENT changes on a push. Rebuilding
@@ -119,6 +129,18 @@ public final class AnalysisPane extends BorderPane {
     // rebuilt PopulationStats three times (scope listener, denominator listener, then refresh()'s
     // own call), and did so on every live-preview push.
     private boolean refreshing;
+
+    // Set for the duration of applyPopulationSelection()'s own setValue calls on BOTH population
+    // combos, so writing the second combo does not re-enter this method through ITS OWN listener
+    // -- the same guard shape `refreshing` uses above, applied to the two-combos-one-selection
+    // problem instead of the scope/denominator one. Without it, populationCombo's listener would
+    // call applyPopulationSelection(), which sets scopePopulationCombo's value, which fires that
+    // combo's own listener, which calls applyPopulationSelection() again -- reading the correct
+    // value each time, so it would not diverge, but it would run the canvas updates and the
+    // opposite combo's setValue twice per user click, and a future edit to this method that is
+    // NOT idempotent (e.g. one that mutates something rather than just re-asserting the same
+    // value) would then double-apply silently.
+    private boolean updatingPopulationSelection;
 
     public AnalysisPane(AnalysisSession session) {
         this.session = Objects.requireNonNull(session, "session");
@@ -181,17 +203,11 @@ public final class AnalysisPane extends BorderPane {
                 return null;
             }
         });
-        populationCombo.setConverter(new StringConverter<>() {
-            @Override
-            public String toString(PopulationRef population) {
-                return population == null ? "" : population.label(rootCombo.getItems().size() > 1);
-            }
-
-            @Override
-            public PopulationRef fromString(String s) {
-                return null;
-            }
-        });
+        // Both Population combos render identically -- they are two views of one selection
+        // (see applyPopulationSelection()), so they share this converter's logic rather than
+        // each carrying its own copy that could drift out of sync with the other's rendering.
+        populationCombo.setConverter(populationConverter());
+        scopePopulationCombo.setConverter(populationConverter());
 
         scopeChoice.valueProperty().addListener((obs, old, value) -> {
             selectedScope = value;
@@ -209,10 +225,18 @@ public final class AnalysisPane extends BorderPane {
             selectedRoot = value;
             compositionCanvas.setSelectedRoot(value);
         });
+        // Both Population combos share ONE listener shape: whichever fires forwards straight to
+        // applyPopulationSelection(), which is also what selectPopulation() calls. That is
+        // deliberate -- a user driving populationCombo directly, a user driving
+        // scopePopulationCombo directly, and a caller going through selectPopulation() are the
+        // same event as far as this pane is concerned, and routing all three through one method
+        // is what keeps "reach both canvases and the other combo" a single fact instead of two
+        // (or three) hand-synchronised copies of it.
         populationCombo.valueProperty().addListener((obs, old, value) -> {
-            selectedPopulation = value;
-            regionComparisonCanvas.setSelectedPopulation(value);
-            scopeComparisonCanvas.setSelectedPopulation(value);
+            if (!updatingPopulationSelection) applyPopulationSelection(value);
+        });
+        scopePopulationCombo.valueProperty().addListener((obs, old, value) -> {
+            if (!updatingPopulationSelection) applyPopulationSelection(value);
         });
 
         exportButton.setOnAction(e -> exportCsv());
@@ -223,21 +247,30 @@ public final class AnalysisPane extends BorderPane {
 
         summaryLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 11; -fx-padding: 4 8 4 8;");
 
-        HBox controls = new HBox(10,
+        // Only the two controls that drive the TABLE live here, plus the filter -- Root and
+        // Population each drive exactly one plot tab and live there instead (see plotTab()
+        // below), which is the whole point of this task: a picker that visibly does nothing on
+        // the tab a user is looking at is the single worst intuitiveness problem in this window.
+        // A FlowPane, not the old HBox, so this row wraps rather than clipping off the right
+        // edge at the 720px minimum stage width; hgap/vgap/padding match the brief exactly so a
+        // reflow looks intentional rather than merely "whatever wrapped".
+        tableControls.setHgap(10);
+        tableControls.setVgap(6);
+        tableControls.setPadding(new Insets(8));
+        tableControls.getChildren().addAll(
                 new Label("Scope:"), scopeChoice,
                 new Label("Denominator:"), denominatorCombo,
-                new Label("Root:"), rootCombo,
-                new Label("Population:"), populationCombo,
                 filterField,
+                // Task 12 replaces this with an "Export ▾" control; the row is a FlowPane
+                // that simply appends its next child, so that swap needs no layout rework.
                 exportButton);
-        controls.setPadding(new Insets(8));
-        controls.setAlignment(Pos.CENTER_LEFT);
 
         TabPane plotTabs = new TabPane(
-                plotTab("Composition", compositionCanvas),
-                plotTab("By Region", regionComparisonCanvas),
-                plotTab("By Scope", scopeComparisonCanvas),
-                plotTab("Marker Positivity", markerPositivityCanvas));
+                plotTab("Composition", compositionCanvas, new Label("Root:"), rootCombo),
+                plotTab("By Region", regionComparisonCanvas, new Label("Population:"), populationCombo),
+                plotTab("By Scope", scopeComparisonCanvas, new Label("Population:"), scopePopulationCombo),
+                plotTab("Marker Positivity", markerPositivityCanvas,
+                        new Label("All single-marker gates, whole slide")));
         plotTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
 
         SplitPane body = new SplitPane(table, plotTabs);
@@ -245,7 +278,7 @@ public final class AnalysisPane extends BorderPane {
         body.setDividerPositions(0.45);
 
         BorderPane top = new BorderPane();
-        top.setTop(controls);
+        top.setTop(tableControls);
         top.setCenter(summaryLabel);
 
         setTop(top);
@@ -255,17 +288,73 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * One tab: its canvas centred, its scale controls docked below. This is the simple form —
-     * Task 11 later replaces the bottom region with a wrapping {@code FlowPane} that also
-     * carries each plot's own Root/Population picker; that restructuring is deliberately not
-     * built here, only the controls this task owns.
+     * One tab: its canvas centred, and at the bottom a wrapping {@code FlowPane} holding this
+     * plot's own picker(s) — {@code leadingControls}, shown before everything else — followed
+     * by the Task 6 {@link PlotControls} every tab still carries. Marker Positivity passes a
+     * bare {@link Label} instead of a picker: it obeys no picker at all, and saying so in the
+     * tab itself is what stops it reading as unresponsive the way Root and Population used to
+     * on the tabs they did not drive.
+     * <p>
+     * An instance method, not the static helper this used to be, because {@code leadingControls}
+     * is built from this pane's own combo fields (whose converters close over {@code
+     * compositionCanvas} and {@code rootCombo}) rather than from anything the method could be
+     * handed as plain arguments alone.
      */
-    private static Tab plotTab(String title, PlotCanvas canvas) {
+    private Tab plotTab(String title, PlotCanvas canvas, Node... leadingControls) {
         BorderPane body = new BorderPane(canvas);
-        body.setBottom(new PlotControls(canvas));
+        FlowPane bottom = new FlowPane(10, 6, leadingControls);
+        bottom.setPadding(new Insets(8));
+        bottom.getChildren().add(new PlotControls(canvas));
+        body.setBottom(bottom);
         Tab tab = new Tab(title, body);
         tab.setClosable(false);
         return tab;
+    }
+
+    /**
+     * The one {@link StringConverter} both Population combos render with — see the field
+     * comments on {@link #populationCombo}/{@link #scopePopulationCombo} for why there are two
+     * combos sharing one selection; this is what keeps them rendering it identically too.
+     */
+    private StringConverter<PopulationRef> populationConverter() {
+        return new StringConverter<>() {
+            @Override
+            public String toString(PopulationRef population) {
+                return population == null ? "" : population.label(rootCombo.getItems().size() > 1);
+            }
+
+            @Override
+            public PopulationRef fromString(String s) {
+                return null;
+            }
+        };
+    }
+
+    /**
+     * The one place a new Population selection is applied — reached from
+     * {@link #selectPopulation}, from either combo's own listener, and from
+     * {@link #setAllPlotRows}'s post-push reconciliation. Updates {@link #selectedPopulation},
+     * pushes it into both comparison canvases, and mirrors it onto whichever combo did not
+     * just fire, guarded by {@link #updatingPopulationSelection} so that mirrored {@code
+     * setValue} call cannot re-enter this method through the other combo's own listener — the
+     * same shape {@link #refresh}'s {@code refreshing} guard uses for scope/denominator.
+     * <p>
+     * A user driving {@code populationCombo} directly, a user driving {@code
+     * scopePopulationCombo} directly, and a caller going through {@link #selectPopulation} all
+     * end up here, so "switching tabs never changes which population is being compared" holds
+     * regardless of which of the three a caller used to make the choice.
+     */
+    private void applyPopulationSelection(PopulationRef population) {
+        selectedPopulation = population;
+        updatingPopulationSelection = true;
+        try {
+            populationCombo.setValue(population);
+            scopePopulationCombo.setValue(population);
+        } finally {
+            updatingPopulationSelection = false;
+        }
+        regionComparisonCanvas.setSelectedPopulation(population);
+        scopeComparisonCanvas.setSelectedPopulation(population);
     }
 
     /**
@@ -300,10 +389,14 @@ public final class AnalysisPane extends BorderPane {
         rootCombo.setValue(rootIndex);
     }
 
-    /** Choose which population {@link #regionComparisonCanvas()} and {@link #scopeComparisonCanvas()} compare. */
+    /**
+     * Choose which population {@link #regionComparisonCanvas()} and {@link #scopeComparisonCanvas()}
+     * compare. Goes through {@link #applyPopulationSelection}, the same path either combo's own
+     * listener uses, so a test driving this method and a user driving a combo directly are
+     * exercising identical behaviour.
+     */
     void selectPopulation(PopulationRef population) {
-        selectedPopulation = population;
-        populationCombo.setValue(population);
+        applyPopulationSelection(population);
     }
 
     /**
@@ -326,6 +419,20 @@ public final class AnalysisPane extends BorderPane {
     /** The populations currently offered by the picker. */
     List<PopulationRef> populationChoices() {
         return List.copyOf(populationCombo.getItems());
+    }
+
+    /**
+     * The {@link Label#getText()} of every {@link Label} in the table's own control row, in
+     * row order — what pins Task 11's fix: "Scope:" and "Denominator:" (and the filter field,
+     * which carries no label) belong here because they drive the table; "Root:" and
+     * "Population:" must never appear here, because each drives exactly one plot tab and lives
+     * on that tab's own {@link FlowPane} instead (see {@link #plotTab}).
+     */
+    List<String> tableControlLabels() {
+        return tableControls.getChildren().stream()
+                .filter(Label.class::isInstance)
+                .map(node -> ((Label) node).getText())
+                .toList();
     }
 
     /**
@@ -821,12 +928,27 @@ public final class AnalysisPane extends BorderPane {
         }
         rootCombo.setValue(selectedRoot);
 
+        // Both combos' item lists are rebuilt from the same availablePopulations() call, so By
+        // Region and By Scope always offer the identical set of choices -- neither tab's combo
+        // can drift to offering a population the other does not, which would make the "one
+        // shared selection" promise meaningless for whichever population went missing from one
+        // side. Both combos stay live in the scene graph regardless of which tab is currently
+        // selected (TabPane does not lazily build tab content), so this keeps every tab's picker
+        // current even while a user is looking at a different one.
         List<PopulationRef> populations = scopeComparisonCanvas.availablePopulations();
         populationCombo.getItems().setAll(populations);
+        scopePopulationCombo.getItems().setAll(populations);
         if (selectedPopulation == null || !populations.contains(selectedPopulation)) {
             selectedPopulation = populations.isEmpty() ? null : populations.get(0);
         }
-        populationCombo.setValue(selectedPopulation);
+        // Routed through applyPopulationSelection(), not a bare setValue() on each combo, so
+        // the reconciled choice reaches both canvases unconditionally -- applyPopulationSelection
+        // pushes to regionComparisonCanvas/scopeComparisonCanvas OUTSIDE the
+        // updatingPopulationSelection guard (see its own javadoc), whereas a plain setValue()
+        // here would silently do nothing when the value already matched what the combo held,
+        // leaving whichever canvas's own setRows() fallback (above) had picked a different
+        // population unreconciled with the pane's own choice for the rest of this push.
+        applyPopulationSelection(selectedPopulation);
     }
 
     /**
