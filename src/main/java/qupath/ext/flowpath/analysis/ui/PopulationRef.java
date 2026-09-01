@@ -8,6 +8,19 @@ import java.util.Objects;
  * Which population a plot is showing: the root gate it descends from, and its gating route
  * under that root.
  * <p>
+ * <b>Why this lives in {@code ui}, unlike its sibling
+ * {@link qupath.ext.flowpath.analysis.session.DenominatorRef}.</b> Only {@code ui} classes
+ * construct or consume a {@code PopulationRef} — the four plot canvases and
+ * {@code AnalysisPane} itself — so keeping it here creates no dependency {@code session}
+ * does not already have. {@code DenominatorRef} differs precisely because
+ * {@code AnalysisSession} is the one that enumerates and resolves it
+ * ({@code denominatorOptions()}/{@code resolveDenominator}); moving {@code PopulationRef}
+ * here to match it would be churn for symmetry's sake with no such reason behind it. If a
+ * future change makes {@code session} reach for a {@code PopulationRef}, that is new
+ * information, not a cue to "fix" this asymmetry by moving it — it would mean the
+ * {@code ui}/{@code session} boundary needs a wider look, since the same bidirectional-import
+ * cycle {@code DenominatorRef} was moved out of session to avoid would reappear here.
+ * <p>
  * <b>Why the root index is part of the identity.</b> Two un-renamed root gates on the
  * identical channel emit rows with byte-identical {@link PopulationStats.Row#path()} values —
  * {@code GateNode} names its branches {@code channel + "+"} / {@code channel + "-"} purely

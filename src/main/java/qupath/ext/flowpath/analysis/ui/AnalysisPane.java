@@ -20,6 +20,7 @@ import javafx.scene.layout.HBox;
 import javafx.util.StringConverter;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.session.AnalysisState;
+import qupath.ext.flowpath.analysis.session.DenominatorRef;
 import qupath.ext.flowpath.io.PopulationStatsExporter;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.lib.gui.dialogs.Dialogs;

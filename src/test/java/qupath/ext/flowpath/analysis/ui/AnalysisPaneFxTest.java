@@ -3,6 +3,7 @@ package qupath.ext.flowpath.analysis.ui;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
+import qupath.ext.flowpath.analysis.session.DenominatorRef;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.FxTestSupport;

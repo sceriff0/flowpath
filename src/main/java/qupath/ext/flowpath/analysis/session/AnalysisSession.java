@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.analysis.session;
 
-import qupath.ext.flowpath.analysis.ui.DenominatorRef;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;

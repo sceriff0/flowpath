@@ -1,7 +1,6 @@
 package qupath.ext.flowpath.analysis.session;
 
 import org.junit.jupiter.api.Test;
-import qupath.ext.flowpath.analysis.ui.DenominatorRef;
 import qupath.ext.flowpath.model.*;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.Cells;
