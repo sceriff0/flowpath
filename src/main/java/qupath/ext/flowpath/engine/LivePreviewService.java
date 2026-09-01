@@ -3,6 +3,7 @@ package qupath.ext.flowpath.engine;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.util.Duration;
+import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
@@ -35,6 +36,10 @@ public class LivePreviewService {
     private volatile MarkerStats markerStats;
     private volatile ImageData<?> imageData;
     private volatile boolean[] roiMask;
+    /** Per-cell annotated-region index (from {@code RegionMask.regionOf()}), or {@code null}. */
+    private volatile int[] regionOf;
+    /** Named regions {@link #regionOf} indexes into; ignored when {@link #regionOf} is null. */
+    private volatile int regionCount;
 
     /** Optional callback fired after MarkerStats is recomputed (e.g., to refresh UI sliders). */
     private volatile Runnable onStatsRecomputed;
@@ -97,6 +102,22 @@ public class LivePreviewService {
 
     public void setRoiMask(boolean[] roiMask) {
         this.roiMask = roiMask;
+    }
+
+    /**
+     * Give the gating walk the per-cell region breakdown, so the {@link BranchTally} it
+     * builds carries per-region counts the Analysis window can read straight off
+     * {@link #getLastResult()} rather than a second walk over the same cells.
+     *
+     * @param regionOf    per-cell region index, or {@code null} for no region breakdown —
+     *                    see {@code GatingEngine.assignAll(GateTree, CellIndex, MarkerStats,
+     *                    boolean[], int[], int)}
+     * @param regionCount named regions {@code regionOf} indexes into; ignored when
+     *                    {@code regionOf} is {@code null}
+     */
+    public void setRegions(int[] regionOf, int regionCount) {
+        this.regionOf = regionOf;
+        this.regionCount = regionCount;
     }
 
     public void setOnStatsRecomputed(Runnable onStatsRecomputed) {
@@ -215,6 +236,12 @@ public class LivePreviewService {
         final MarkerStats stats = this.markerStats;
         final ImageData<?> data = this.imageData;
         final boolean[] roi = this.roiMask != null ? this.roiMask.clone() : null;
+        // Captured together, at the same instant, so the BranchTally this pass builds is
+        // sized for exactly the region set regionOf indexes into -- a regionOf snapshotted
+        // here against a regionCount read moments later (if setRegions() ran in between)
+        // would silently mislabel every per-region count.
+        final int[] regionOf = this.regionOf;
+        final int regionCount = regionOf != null ? this.regionCount : 0;
 
         if (originalTree == null || index == null || stats == null || data == null) {
             return;
@@ -228,7 +255,8 @@ public class LivePreviewService {
         }
 
         executor.submit(() -> {
-            GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats, roi);
+            GatingEngine.AssignmentResult result =
+                    GatingEngine.assignAll(tree, index, stats, roi, regionOf, regionCount);
 
             Platform.runLater(() -> {
                 // Discard result if the live tree changed (e.g. undo/redo) while we were computing

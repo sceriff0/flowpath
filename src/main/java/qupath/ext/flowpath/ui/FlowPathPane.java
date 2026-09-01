@@ -11,6 +11,8 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import qupath.ext.flowpath.analysis.AnalysisWindow;
+import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.io.FlowPathSerializer;
@@ -19,6 +21,7 @@ import qupath.ext.flowpath.ingest.IngestReport;
 import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.io.PhenotypeCsvExporter;
 import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.EllipseGate;
@@ -40,6 +43,7 @@ import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
+import qupath.lib.images.servers.PixelCalibration;
 
 import java.util.List;
 import qupath.lib.objects.PathObject;
@@ -70,12 +74,18 @@ public class FlowPathPane extends BorderPane {
     private final Label statusBar;
     private final ComboBox<String> colorByRootCombo;
     private final Button umapButton;
+    private final Button analysisButton;
 
     /**
      * The UMAP view this pane opens and keeps fed. Created eagerly but does not build
      * any UI until the user asks for it — an unopened window costs one object.
      */
     private final UmapWindow umapWindow = new UmapWindow();
+
+    /**
+     * The Analysis view this pane opens and keeps fed, the same way {@link #umapWindow} is.
+     */
+    private final AnalysisWindow analysisWindow = new AnalysisWindow();
 
     private final UndoHistory<GateTree> undoHistory =
         new UndoHistory<>(UndoHistory.DEFAULT_MAX_DEPTH, GateTree::deepCopy, System::currentTimeMillis);
@@ -221,11 +231,21 @@ public class FlowPathPane extends BorderPane {
             + "Edits to the gate tree recolour the UMAP live — no recompute needed."));
         umapButton.setOnAction(e -> openUmapWindow());
 
+        // Beside UMAP, not folded into it: this reports what the gate tree already found
+        // (counts, percentages, density) rather than re-embedding the cells in a new space.
+        analysisButton = new Button("Analysis");
+        analysisButton.setDisable(true);
+        analysisButton.setTooltip(new Tooltip(
+            "Population counts, percentages and density for the current gating, live.\n"
+            + "Three nested scopes when annotations are in use: per region, all regions, "
+            + "whole slide."));
+        analysisButton.setOnAction(e -> openAnalysisWindow());
+
         HBox toolbarSpacer = new HBox();
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, toolbarSpacer, umapButton);
+            exportBtn, toolbarSpacer, analysisButton, umapButton);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -381,10 +401,12 @@ public class FlowPathPane extends BorderPane {
         ingestReport = IngestReport.empty();
         cachedQualityMask = null;
         cachedRoiMask = null;
+        cachedRegions = null;
         previewService.setCellIndex(null);
         previewService.setMarkerStats(null);
         previewService.setImageData(null);
         previewService.setRoiMask(null);
+        previewService.setRegions(null, 0);
     }
 
     /**
@@ -656,6 +678,7 @@ public class FlowPathPane extends BorderPane {
             cachedRoiMask = null;
             cachedRegions = null;
             previewService.setRoiMask(null);
+            previewService.setRegions(null, 0);
             return;
         }
 
@@ -664,6 +687,7 @@ public class FlowPathPane extends BorderPane {
             cachedRoiMask = null;
             cachedRegions = null;
             previewService.setRoiMask(null);
+            previewService.setRegions(null, 0);
             return;
         }
 
@@ -677,10 +701,12 @@ public class FlowPathPane extends BorderPane {
             cachedRegions = null;
             cachedRoiMask = null;
             previewService.setRoiMask(null);
+            previewService.setRegions(null, 0);
         } else {
             cachedRegions = regions;
             cachedRoiMask = regions.included();
             previewService.setRoiMask(cachedRoiMask);
+            previewService.setRegions(regions.regionOf(), regions.regionNames().size());
         }
     }
 
@@ -841,6 +867,7 @@ public class FlowPathPane extends BorderPane {
         updateStatusBar();
         refreshColorByRootCombo();
         umapButton.setDisable(cellIndex == null);
+        analysisButton.setDisable(cellIndex == null);
 
         // Push the new phenotyping to the UMAP if it is open. push() is a no-op when it
         // is not, so the common case costs one boolean check rather than the snapshot
@@ -850,6 +877,19 @@ public class FlowPathPane extends BorderPane {
             PhenotypeSnapshot snap = buildSnapshot();
             if (snap != null) {
                 umapWindow.push(snap);
+            }
+        }
+
+        // Same idea for the Analysis window. Skipped (not merely a no-op push) when the
+        // tree has no enabled root gate: PopulationStats.rows() would then be empty at
+        // every scope, and pushing that would show a blank table with no explanation --
+        // see AnalysisState.emptyMessage(), which is deliberately null whenever hasData()
+        // is true and has nothing to say about "there are no gates". The window simply
+        // keeps showing its last real report until a gate exists again.
+        if (analysisWindow.isShowing() && hasEnabledRootGate()) {
+            AnalysisSession.AnalysisInput input = buildAnalysisInput();
+            if (input != null) {
+                analysisWindow.push(input);
             }
         }
     }
@@ -923,6 +963,124 @@ public class FlowPathPane extends BorderPane {
             // A server mid-teardown can throw; identity is still better than nothing.
         }
         return "image@" + System.identityHashCode(data);
+    }
+
+    // --- Analysis handoff ---
+
+    /**
+     * Open (or focus) the Analysis window on the current gating pass.
+     * <p>
+     * Mirrors {@link #openUmapWindow()}'s own refusals exactly, including the tone: a
+     * missing prerequisite says so and leaves the user where they are, rather than opening
+     * an empty or unexplained window. The one refusal UMAP does not need is the gate check
+     * — {@code PopulationStats.rows()} is empty at every scope when the tree has no
+     * enabled root gate, which would otherwise open straight onto a blank table with
+     * nothing in {@code AnalysisState.emptyMessage()} to explain why.
+     */
+    private void openAnalysisWindow() {
+        if (cellIndex == null) {
+            Dialogs.showWarningNotification("FlowPath", "Load an image with cell detections first.");
+            return;
+        }
+        if (previewService.getLastResult() == null) {
+            Dialogs.showWarningNotification("FlowPath",
+                "Waiting for the first gating pass to finish — try again in a moment.");
+            return;
+        }
+        if (!hasEnabledRootGate()) {
+            Dialogs.showWarningNotification("FlowPath",
+                "Add at least one gate to see population statistics.");
+            return;
+        }
+        AnalysisSession.AnalysisInput input = buildAnalysisInput();
+        if (input == null) {
+            Dialogs.showWarningNotification("FlowPath",
+                "Waiting for the first gating pass to finish — try again in a moment.");
+            return;
+        }
+        analysisWindow.open(qupath, input, getScene() != null ? getScene().getWindow() : null);
+    }
+
+    /** {@code true} when the tree has at least one enabled root gate. */
+    private boolean hasEnabledRootGate() {
+        for (GateNode root : gateTree.getRoots()) {
+            if (root.isEnabled()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Build the current gating pass as an {@link AnalysisSession.AnalysisInput}, or
+     * {@code null} if there is nothing to report yet.
+     * <p>
+     * The tally comes straight off {@link LivePreviewService#getLastResult()} — the same
+     * walk that just ran, never a second one — per {@code BranchTally}'s own invariant that
+     * counting outside the walk would be a second gate predicate. Region names and areas
+     * come from {@link #cachedRegions}, the same {@link RegionMask} instance the walk's
+     * region indices were assigned from, so the two can never describe different region
+     * sets.
+     */
+    private AnalysisSession.AnalysisInput buildAnalysisInput() {
+        if (cellIndex == null || markerStats == null) return null;
+        GatingEngine.AssignmentResult result = previewService.getLastResult();
+        if (result == null) return null;
+        BranchTally tally = result.getTally();
+
+        List<String> regionNames = cachedRegions != null ? cachedRegions.regionNames() : List.of();
+        // A pass computed just before cachedRegions changed underneath it (recomputeRoiMask
+        // ran between this preview's submit and its completion) would carry a tally sized
+        // for the region set that pass actually walked, not the one cachedRegions now
+        // describes. Drop it and wait for the next pass rather than hand
+        // AnalysisSession.AnalysisInput's constructor a mismatch it would only reject.
+        if (tally.regionCount() != regionNames.size()) return null;
+
+        double[] regionAreas = cachedRegions != null
+                ? regionAreasMm2(cachedRegions, qupath.getImageData()) : null;
+
+        return new AnalysisSession.AnalysisInput(gateTree, cellIndex, markerStats, tally,
+                regionNames, regionAreas, currentImageName());
+    }
+
+    /**
+     * Each region's area in mm², parallel to {@code regions.regionNames()}.
+     * <p>
+     * {@code ROI.getArea()} is in pixels²; {@code pixelWidthMicrons * pixelHeightMicrons}
+     * converts to µm², and {@code / 1e6} to mm². An uncalibrated image, or the implicit
+     * "whole image minus exclusions" region (which has no single ROI — see
+     * {@link RegionMask#regionRois()}), leaves that entry {@link Double#NaN}: a density in
+     * the wrong unit reads as an answer, so an unknown area must never be reported as zero
+     * or as a raw pixel count.
+     */
+    private double[] regionAreasMm2(RegionMask regions, ImageData<?> imageData) {
+        List<ROI> rois = regions.regionRois();
+        PixelCalibration cal = DetectionIngest.calibration(imageData);
+        boolean calibrated = cal != null && cal.hasPixelSizeMicrons();
+        double pw = calibrated ? cal.getPixelWidthMicrons() : Double.NaN;
+        double ph = calibrated ? cal.getPixelHeightMicrons() : Double.NaN;
+        boolean usable = calibrated && pw > 0 && ph > 0;
+
+        double[] areas = new double[rois.size()];
+        for (int i = 0; i < rois.size(); i++) {
+            ROI roi = rois.get(i);
+            areas[i] = (roi == null || !usable) ? Double.NaN : roi.getArea() * pw * ph / 1e6;
+        }
+        return areas;
+    }
+
+    /**
+     * What the active image is called, defensively: a server mid-teardown, or no image at
+     * all, is not a reason to refuse whatever is asking for a name.
+     */
+    private String currentImageName() {
+        try {
+            ImageData<?> data = qupath.getImageData();
+            if (data != null && data.getServer() != null) {
+                return data.getServer().getMetadata().getName();
+            }
+        } catch (Exception e) {
+            logger.debug("No image name available", e);
+        }
+        return null;
     }
 
     private void refreshColorByRootCombo() {
@@ -1049,15 +1207,7 @@ public class FlowPathPane extends BorderPane {
      * not recorded -- see {@link FlowPathSerializer.Provenance}.
      */
     private FlowPathSerializer.Provenance currentProvenance() {
-        String imageName = null;
-        try {
-            ImageData<?> data = qupath.getImageData();
-            if (data != null && data.getServer() != null) {
-                imageName = data.getServer().getMetadata().getName();
-            }
-        } catch (Exception e) {
-            logger.debug("No image name available for gate-tree provenance", e);
-        }
+        String imageName = currentImageName();
         int cells = cellIndex != null ? cellIndex.getSize() : -1;
         List<String> channels = cellIndex != null
                 ? List.of(cellIndex.getMarkerNames())
@@ -1230,6 +1380,7 @@ public class FlowPathPane extends BorderPane {
     public void shutdown() {
         detachHierarchyListener();
         umapWindow.close();
+        analysisWindow.close();
         previewService.shutdown();
     }
 }
