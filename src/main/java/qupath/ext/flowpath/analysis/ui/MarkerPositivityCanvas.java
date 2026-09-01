@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -314,6 +315,72 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             data.add(new PlotDatum(marker, "ungated", ungatedCount(marker)));
         }
         return data;
+    }
+
+    /**
+     * The segment at {@code (x, y)}: which marker's bar {@link #categorySlotAt} resolves to,
+     * and which of its three stacked segments {@code y} falls in — found by inverting the
+     * exact cumulative boundaries {@link #draw} filled the bar with ({@code baseY}, {@code
+     * yAfterPositive}, {@code yAfterNegative}), not a fresh guess at where a segment "should"
+     * be. Recomputing the {@link AxisScale} here (rather than reading one back) is safe in a
+     * way recomputing a {@link LabelLayout} would not be: an axis scale is a pure function of
+     * {@code values} and {@link #scaleOptions()} with no text measurement involved, so it
+     * cannot disagree with {@link #draw}'s own the way a re-measured label could — see {@link
+     * #categorySlotAt} for why the {@link LabelLayout} and legend row count are still read
+     * back from {@link #paintedLayout()} rather than recomputed.
+     * <p>
+     * The three ranges are, from the axis up: {@code [baseY, yAfterPositive)} is Positive,
+     * {@code [yAfterPositive, yAfterNegative)} is Negative, and everything above that —
+     * including the gap between a short bar's own top and the top of the plot rectangle — is
+     * Ungated. That last range is deliberately open-ended for the same reason {@link
+     * #categorySlotAt} resolves a click beside a thin bar to its slot rather than to nothing:
+     * this plot exists specifically to make the Ungated segment visible, so a click just above
+     * a bar that does not reach very high should still land on the segment the plot is making
+     * the point about, not fall through to no hit.
+     * <p>
+     * <b>No population.</b> A marker's positive (or negative) count can be pooled across
+     * several sibling gate nodes (see the class javadoc's "sibling gates pool" section), so a
+     * segment does not in general correspond to one gate node a click could select unambiguously
+     * — {@link PlotHit#population()} is always {@code null} here.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<String> markerList = markers();
+        if (idx == null || idx >= markerList.size()) {
+            return null;
+        }
+        String marker = markerList.get(idx);
+
+        double[] values = markerList.stream()
+                .mapToDouble(m -> positiveCount(m) + negativeCount(m) + ungatedCount(m))
+                .toArray();
+        AxisScale scale = AxisScale.of(values, scaleOptions());
+        PaintedLayout layout = paintedLayout();
+        LabelLayout labels = layout.labels();
+        int legendRows = layout.legendRows();
+
+        double baseY = fractionToY(0, labels, legendRows);
+        double yAfterPositive = fractionToY(scale.toFraction(positiveCount(marker)), labels, legendRows);
+        double yAfterNegative = fractionToY(
+                scale.toFraction(positiveCount(marker) + negativeCount(marker)), labels, legendRows);
+
+        String segment;
+        int count;
+        if (y >= yAfterPositive) {
+            segment = "Positive";
+            count = positiveCount(marker);
+        } else if (y >= yAfterNegative) {
+            segment = "Negative";
+            count = negativeCount(marker);
+        } else {
+            segment = "Ungated";
+            count = ungatedCount(marker);
+        }
+        double total = values[idx];
+        double percent = total <= 0 ? 0.0 : count * 100.0 / total;
+        String detail = String.format(Locale.US, "%s: %d cells (%.1f%%)", segment, count, percent);
+        return new PlotHit(marker, detail, null);
     }
 
     /**

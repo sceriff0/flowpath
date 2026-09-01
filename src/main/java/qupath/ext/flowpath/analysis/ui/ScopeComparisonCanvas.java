@@ -109,6 +109,26 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
     }
 
     /**
+     * The bar at {@code (x, y)}, named by its scope's display name and the selected
+     * population's count there — {@link #scopesPresent()} and {@link #valueForScope}, the
+     * exact calls {@link #draw} makes for each bar, indexed by {@link #categorySlotAt}. Every
+     * bar names the same {@link #selected} population — that is what "compared at all three
+     * scopes" means — so the population a click hands over does not depend on which scope's
+     * bar was clicked.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<PopulationStats.Scope> scopes = scopesPresent();
+        if (idx == null || idx >= scopes.size() || selected == null) {
+            return null;
+        }
+        PopulationStats.Scope scope = scopes.get(idx);
+        String detail = valueForScope(scope) + " cells";
+        return new PlotHit(scope.displayName(), detail, selected);
+    }
+
+    /**
      * {@code theme.series(1)} for every bar — deliberately the <em>second</em> palette entry,
      * not the first, so this plot and {@code RegionComparisonCanvas} do not read as the same
      * chart when a user flips between their two tabs.

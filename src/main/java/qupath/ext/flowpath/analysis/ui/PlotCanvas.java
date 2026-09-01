@@ -3,11 +3,14 @@ package qupath.ext.flowpath.analysis.ui;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.value.ObservableBooleanValue;
 import javafx.scene.canvas.Canvas;
+import javafx.scene.control.Tooltip;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.paint.Color;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * Shared drawing base for the Analysis window's four plots: axes, tick labels, category
@@ -152,6 +155,19 @@ public abstract class PlotCanvas extends Canvas {
      */
     private final TextMeasurer measurer = new FxTextMeasurer();
 
+    /**
+     * The one {@link Tooltip} this canvas ever shows, built lazily on the first real hover —
+     * see {@link #updateTooltip} for why it cannot be built eagerly in this constructor.
+     */
+    private Tooltip tooltip;
+
+    /**
+     * Where a click's population goes once Task 14 wires a consumer in. {@code null} until
+     * {@link #setOnPopulationPicked} is called, which is every canvas's state today — {@link
+     * #pick} is written to do nothing rather than throw against that default.
+     */
+    private Consumer<PopulationRef> onPopulationPicked;
+
     protected PlotCanvas(double width, double height) {
         super(width, height);
         widthProperty().addListener((obs, o, n) -> repaint());
@@ -165,6 +181,9 @@ public abstract class PlotCanvas extends Canvas {
                 setTheme(PlotTheme.detect(this));
             }
         });
+        setOnMouseMoved(this::updateTooltip);
+        setOnMouseExited(e -> hideTooltip());
+        setOnMouseClicked(e -> pick(e.getX(), e.getY()));
     }
 
     @Override public boolean isResizable() { return true; }
@@ -248,6 +267,14 @@ public abstract class PlotCanvas extends Canvas {
      */
     protected final void repaint() {
         render(new CanvasSurface(getGraphicsContext2D(), getWidth(), getHeight(), measurer));
+        // The pointer can be sitting over a bar whose number this very paint just changed --
+        // new rows, a scale toggle, a theme switch. JavaFX does not re-fire mouseMoved just
+        // because the content under an unmoved cursor changed, so without this a tooltip
+        // would go on reporting the previous paint's count until the pointer happens to move
+        // again. Hiding it here is a no-op when nothing is showing -- including every
+        // headless unit test, where `tooltip` is still null because it is never built except
+        // by a real hover (see updateTooltip) -- so this costs nothing off the FX toolkit.
+        hideTooltip();
     }
 
     /**
@@ -321,6 +348,148 @@ public abstract class PlotCanvas extends Canvas {
      */
     protected PaintedLayout paintedLayout() {
         return painted;
+    }
+
+    /**
+     * What the pointer at {@code (x, y)} — in this canvas's own coordinate space — is over,
+     * or {@code null} when it is over nothing this plot names: outside the plot rectangle, or
+     * before the first paint (or after an empty-state one) when {@link #paintedLayout()}
+     * itself is {@code null}.
+     * <p>
+     * The default answers {@code null} unconditionally. Every subclass overrides it; the base
+     * class supplies the default so a future plot that has not implemented hit-testing yet is
+     * merely inert rather than obligated to override something it may not need immediately.
+     */
+    protected PlotHit hitAt(double x, double y) {
+        return null;
+    }
+
+    /**
+     * Which of the {@code n} category slots the last paint laid out contains {@code (x, y)},
+     * or {@code null} when nothing has been painted, that paint drew no categories at all, or
+     * the point falls outside the plot rectangle that paint actually used.
+     * <p>
+     * <b>Reads {@link #paintedLayout()}; never recomputes it.</b> A mouse handler has no
+     * {@link PlotSurface} to measure text with, so it cannot re-run {@link #layoutLabels}, and
+     * building a throwaway one per pointer move would both cost a text measurement on every
+     * movement and could disagree with what is actually on screen if anything changed in
+     * between — see {@link #paintedLayout()}'s own javadoc. {@code n}, the slot count, is read
+     * from {@link LabelLayout#text()}'s own size rather than from a subclass's live row list
+     * for the identical reason: that list is exactly what {@link #drawCategoryLabels} laid one
+     * entry per slot for, so its size <em>is</em> the number of slots the last paint drew, by
+     * construction, not by the two happening to agree.
+     * <p>
+     * <b>Slot-based, not bar-based.</b> The index depends only on which of the {@code n}
+     * equal-width slots {@link #categoryToX} / {@link #categoryWidth} lay out {@code x} falls
+     * in, and on {@code (x, y)} landing inside the plot rectangle at all — never on the
+     * narrower, cosmetic bar rectangle a subclass actually fills (its {@code 0.7} or
+     * {@code 0.6} width factor). A click just beside a thin bar still resolves to that bar's
+     * slot; see {@link #paintedLayout()}'s own javadoc for why no bar extent is published here
+     * to test against in the first place.
+     */
+    protected final Integer categorySlotAt(double x, double y) {
+        PaintedLayout layout = paintedLayout();
+        if (layout == null) {
+            return null;
+        }
+        int n = layout.labels().text().size();
+        if (n == 0) {
+            return null;
+        }
+        double top = plotTop(layout.legendRows());
+        double height = plotHeight(layout.labels(), layout.legendRows());
+        double left = PADDING_LEFT;
+        double width = plotWidth();
+        if (x < left || x > left + width || y < top || y > top + height) {
+            return null;
+        }
+        int idx = (int) Math.floor((x - left) / categoryWidth(n));
+        if (idx < 0 || idx >= n) {
+            return null;
+        }
+        return idx;
+    }
+
+    /**
+     * Show or move the single reused {@link Tooltip} for this canvas at the pointer, or hide
+     * it, driven entirely by {@link #hitAt}. One {@link Tooltip} is reused rather than built
+     * per move because it is a full {@code PopupControl} with its own skin; constructing one
+     * on every pixel of pointer travel across a bar chart would churn a control many times a
+     * second for no benefit over updating the text of the one this canvas already owns.
+     * <p>
+     * Built lazily, on the first real hover, rather than in the constructor. Every one of this
+     * class's four subclasses is constructed directly by a headless unit test with no JavaFX
+     * toolkit running at all ({@code CompositionCanvasTest} and its three siblings) — unlike
+     * {@link Canvas} itself, {@link Tooltip} is a {@code Control}, and its construction is not
+     * something this class can guarantee survives a missing toolkit. A canvas that is only
+     * ever driven through {@link #hitAtForTest} / {@link #pickForTest} never calls this method
+     * at all, so that dependency never reaches a test that does not fire real mouse events.
+     */
+    private void updateTooltip(MouseEvent e) {
+        PlotHit hit = hitAt(e.getX(), e.getY());
+        if (hit == null) {
+            hideTooltip();
+            return;
+        }
+        if (tooltip == null) {
+            tooltip = new Tooltip();
+        }
+        tooltip.setText(hit.title() + "\n" + hit.detail());
+        tooltip.show(this, e.getScreenX() + 12, e.getScreenY() + 12);
+    }
+
+    /** Hide the tooltip if one is currently shown. A no-op, including when none was ever built. */
+    private void hideTooltip() {
+        if (tooltip != null) {
+            tooltip.hide();
+        }
+    }
+
+    /**
+     * Notify {@code handler} of the population a click should select. Nothing calls this yet
+     * — Task 14 wires the tree selection — so a canvas with no handler installed does nothing
+     * on click beyond running {@link #hitAt}; see {@link #pick}.
+     */
+    public void setOnPopulationPicked(Consumer<PopulationRef> handler) {
+        this.onPopulationPicked = handler;
+    }
+
+    /**
+     * What a click at {@code (x, y)} does: resolve the hit and, only when it names a
+     * population AND a handler is installed, hand that population over. A hit with no
+     * population (every hit {@link MarkerPositivityCanvas} reports — see its own {@code
+     * hitAt} for why a stacked segment cannot always name one unambiguous population) or a
+     * canvas nobody has called {@link #setOnPopulationPicked} on does nothing, deliberately:
+     * this class's job stops at handing over which population was clicked, never deciding
+     * what "selecting" one means.
+     */
+    private void pick(double x, double y) {
+        PlotHit hit = hitAt(x, y);
+        if (hit != null && hit.population() != null && onPopulationPicked != null) {
+            onPopulationPicked.accept(hit.population());
+        }
+    }
+
+    /** Test seam for {@link #hitAt}, reachable without synthesising a {@link MouseEvent}. */
+    final PlotHit hitAtForTest(double x, double y) {
+        return hitAt(x, y);
+    }
+
+    /** Test seam for {@link #pick}, reachable without synthesising a {@link MouseEvent}. */
+    final void pickForTest(double x, double y) {
+        pick(x, y);
+    }
+
+    /**
+     * Test seam: the X centre {@link #categoryToX} computed for slot {@code index} of the
+     * last paint, reading the slot count back from {@link #paintedLayout()} — as {@link
+     * #categorySlotAt} does — rather than from a subclass's own row list, so a test driving
+     * this method is guaranteed to be probing the same geometry {@link #hitAt} itself reads.
+     */
+    final double centreXOfBar(int index) {
+        PaintedLayout layout = paintedLayout();
+        int n = layout == null ? 0 : layout.labels().text().size();
+        return categoryToX(index, n);
     }
 
     /**

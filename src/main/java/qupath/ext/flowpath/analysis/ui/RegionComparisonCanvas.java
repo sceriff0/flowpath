@@ -128,6 +128,27 @@ public final class RegionComparisonCanvas extends PlotCanvas {
     }
 
     /**
+     * The bar at {@code (x, y)}, named by its region and the selected population's count
+     * there — {@link #regionBars()}, the exact rows {@link #draw} iterates over, indexed by
+     * {@link #categorySlotAt}. The blank-name fallback matches {@link #regionLabels()} (the
+     * axis label this bar was drawn under), not {@link #plotData()}'s {@code "Region " + N}
+     * fallback — a tooltip is naming what is on screen, and what is on screen is the axis
+     * label, blank or not.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<PopulationStats.Row> bars = regionBars();
+        if (idx == null || idx >= bars.size()) {
+            return null;
+        }
+        PopulationStats.Row row = bars.get(idx);
+        String title = row.regionName() == null ? "" : row.regionName();
+        String detail = row.count() + " cells";
+        return new PlotHit(title, detail, PopulationRef.of(row));
+    }
+
+    /**
      * One series, so one colour — {@code theme.series(0)}, at full opacity. The 0.85 alpha the
      * bars used to carry was there to soften a hardcoded blue against a hardcoded dark
      * background; the palette is now contrast-checked against its own background (see {@code

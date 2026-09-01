@@ -5,6 +5,7 @@ import qupath.ext.flowpath.model.PopulationStats;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * A composition bar chart: how the whole-slide population splits across its leaf
@@ -167,6 +168,28 @@ public final class CompositionCanvas extends PlotCanvas {
         return leafRows.stream()
                 .map(r -> new PlotDatum(r.path(), "count", r.count()))
                 .toList();
+    }
+
+    /**
+     * The bar at {@code (x, y)}, named by its own leaf path and the count behind it —
+     * {@link #leafRows}, the exact list {@link #draw} iterates over, indexed by {@link
+     * #categorySlotAt}, which reads back the geometry {@link #draw} actually laid out rather
+     * than re-deriving it. {@link #total()} is the true whole-slide denominator (a root
+     * branch's own {@code parentCount}, not a re-sum of the bars), so the percentage this
+     * reports agrees with the one a re-sum of every bar's own percentage would not
+     * necessarily agree with if a leaf were silently dropped or double-counted.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        if (idx == null || idx >= leafRows.size()) {
+            return null;
+        }
+        PopulationStats.Row row = leafRows.get(idx);
+        int total = total();
+        double percent = total <= 0 ? 0.0 : row.count() * 100.0 / total;
+        String detail = String.format(Locale.US, "%d cells · %.1f%% of root", row.count(), percent);
+        return new PlotHit(row.path(), detail, PopulationRef.of(row));
     }
 
     /**
