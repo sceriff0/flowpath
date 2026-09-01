@@ -1,7 +1,9 @@
 package qupath.ext.flowpath.analysis.session;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.analysis.ui.DenominatorRef;
 import qupath.ext.flowpath.model.*;
+import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.Cells;
 
 import java.util.List;
@@ -54,11 +56,12 @@ class AnalysisSessionTest {
     }
 
     @Test
-    void denominatorChoicesAreEveryBranchInTheTree() {
+    void denominatorOptionsAreEveryBranchInTheTree() {
         AnalysisSession session = new AnalysisSession();
         session.accept(input(null, 0));
 
-        List<String> names = session.denominatorChoices().stream().map(Branch::getName).toList();
+        List<String> names = session.denominatorOptions().stream()
+                .map(o -> o.branch().getName()).toList();
         assertEquals(List.of("CD45+", "CD45-"), names);
     }
 
@@ -67,13 +70,84 @@ class AnalysisSessionTest {
         AnalysisSession session = new AnalysisSession();
         session.accept(input(null, 0));
 
-        Branch cd45pos = session.denominatorChoices().get(0);
+        Branch cd45pos = session.denominatorOptions().get(0).branch();
         PopulationStats withDenominator = session.stats(cd45pos);
         assertFalse(withDenominator.rows().isEmpty());
         assertEquals(5, withDenominator.rows().get(0).denominatorCount());
 
         assertTrue(Double.isNaN(session.stats(null).rows().get(0).percentOfDenominator()),
                 "no denominator chosen leaves that column NaN");
+    }
+
+    /**
+     * The regression this task fixes, at the session layer: every {@link DenominatorRef}
+     * {@link AnalysisSession#denominatorOptions()} hands out must name exactly one row
+     * {@link PopulationStats} actually reports — the same guarantee
+     * {@code denominatorOptionsAreEveryBranchInTheTree} pins for the plain-{@link Branch}
+     * accessor it replaced, restated for the ref that survives a deep copy.
+     */
+    @Test
+    void everyDenominatorOptionMatchesExactlyOneReportedPopulation() {
+        AnalysisSession session = new AnalysisSession();
+        session.accept(AnalysisFixtures.twoRootsSameChannelInput());
+        List<PopulationStats.Row> whole = session.stats(null).rows(PopulationStats.Scope.WHOLE_SLIDE);
+        for (AnalysisSession.DenominatorOption option : session.denominatorOptions()) {
+            long matches = whole.stream()
+                    .filter(r -> r.rootIndex() == option.ref().rootIndex()
+                            && r.path().equals(option.ref().path()))
+                    .count();
+            assertEquals(1, matches,
+                    "a denominator the user can pick must name exactly one population: " + option.ref());
+        }
+    }
+
+    /**
+     * The core of the bug: {@link AnalysisSession#resolveDenominator} must re-find a branch
+     * across a deep copy of the identical tree, since {@code FlowPathPane.buildAnalysisInput()}
+     * hands the session a fresh copy on every gating pass and {@code Branch} carries no
+     * value equality of its own.
+     */
+    @Test
+    void aRefResolvesAcrossADeepCopyOfTheSameTree() {
+        AnalysisSession session = new AnalysisSession();
+        session.accept(AnalysisFixtures.twoRootsSameChannelInput());
+        DenominatorRef ref = session.denominatorOptions().get(1).ref();
+        session.accept(AnalysisFixtures.twoRootsSameChannelInput());   // fresh Branch objects
+        assertNotNull(session.resolveDenominator(ref),
+                "the ref outlives the objects it was derived from");
+    }
+
+    /**
+     * The other half of the same fix: a ref must resolve to {@code null}, not to some
+     * unrelated branch, once the population it named is genuinely gone -- distinct from
+     * merely being rebuilt by a deep copy (the previous test). Disabling the gate the ref's
+     * branch hung from is a hard stop for its whole subtree in {@code GatingEngine.walkNode},
+     * so {@code PopulationStats} emits no row for it any more either.
+     */
+    @Test
+    void aRefDoesNotResolveOnceItsGateIsDisabled() {
+        AnalysisSession session = new AnalysisSession();
+        session.accept(input(null, 0));
+        DenominatorRef ref = session.denominatorOptions().get(0).ref();
+        assertNotNull(session.resolveDenominator(ref));
+
+        CellIndex index = Cells.columns(List.of("CD45"),
+                new double[][] {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+        GateNode root = new GateNode("CD45", 5.5);
+        root.setStatistic(Statistic.MEAN);
+        root.setThresholdIsZScore(false);
+        root.setEnabled(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+        BranchTally tally = qupath.ext.flowpath.engine.GatingEngine
+                .assignAll(tree, index, stats, null, null, 0).getTally();
+        session.accept(new AnalysisSession.AnalysisInput(
+                tree, index, stats, tally, List.of(), null, "test-image"));
+
+        assertNull(session.resolveDenominator(ref),
+                "the gate the ref's branch hung from is now disabled -- no row names it any more");
     }
 
     /** A new image replaces the previous one wholesale; nothing carries over. */
@@ -133,13 +207,13 @@ class AnalysisSessionTest {
     }
 
     /**
-     * {@link AnalysisSession#denominatorChoices()} exists to stop a user picking a
+     * {@link AnalysisSession#denominatorOptions()} exists to stop a user picking a
      * denominator with no row to go with it. That guarantee has two independent parts —
      * the depth-first walk into a branch's children, and the skip of a disabled gate's
      * whole subtree — and a single flat, all-enabled root cannot exercise either.
      */
     @Test
-    void denominatorChoicesAreDepthFirstAndSkipDisabledGates() {
+    void denominatorOptionsAreDepthFirstAndSkipDisabledGates() {
         CellIndex index = Cells.of(10)
                 .marker("CD45", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
                 .marker("CD3", 1, 1, 1, 1, 1, 6, 6, 6, 6, 6)
@@ -168,7 +242,7 @@ class AnalysisSessionTest {
         // ...and an ENABLED grandchild under that disabled gate, on yet another unique
         // channel. "Disabled" is a hard stop for the whole subtree in GatingEngine.walkNode,
         // not just for the one node, so neither PopulationStats.collect nor
-        // AnalysisSession.collectBranches may descend past it -- and those are two separate
+        // AnalysisSession.collectOptions may descend past it -- and those are two separate
         // implementations of the same rule, so both are asserted below. A `continue` that
         // skipped only the node's own branches and still recursed would leave CD19+/CD19-
         // offered as denominators with no row, and no gating pass behind them.
@@ -189,7 +263,7 @@ class AnalysisSessionTest {
                 tree, index, stats, tally, List.of(), null, "test-image"));
 
         List<String> denominatorNames =
-                session.denominatorChoices().stream().map(Branch::getName).toList();
+                session.denominatorOptions().stream().map(o -> o.branch().getName()).toList();
 
         List<String> rowBranchNames = session.stats(null).rows().stream()
                 .filter(r -> r.scope() == PopulationStats.Scope.WHOLE_SLIDE)

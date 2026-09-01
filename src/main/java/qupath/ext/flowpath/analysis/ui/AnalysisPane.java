@@ -21,7 +21,6 @@ import javafx.util.StringConverter;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.session.AnalysisState;
 import qupath.ext.flowpath.io.PopulationStatsExporter;
-import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.lib.gui.dialogs.Dialogs;
 
@@ -51,7 +50,7 @@ public final class AnalysisPane extends BorderPane {
     private final AnalysisSession session;
 
     private final ChoiceBox<PopulationStats.Scope> scopeChoice = new ChoiceBox<>();
-    private final ComboBox<Branch> denominatorCombo = new ComboBox<>();
+    private final ComboBox<DenominatorRef> denominatorCombo = new ComboBox<>();
     private final ComboBox<Integer> rootCombo = new ComboBox<>();
     private final ComboBox<PopulationRef> populationCombo = new ComboBox<>();
     private final Button exportButton = new Button("Export CSV...");
@@ -64,7 +63,7 @@ public final class AnalysisPane extends BorderPane {
     private final MarkerPositivityCanvas markerPositivityCanvas = new MarkerPositivityCanvas();
 
     private PopulationStats.Scope selectedScope;
-    private Branch selectedDenominator;
+    private DenominatorRef selectedDenominatorRef;
     private Integer selectedRoot;
     private PopulationRef selectedPopulation;
 
@@ -85,14 +84,25 @@ public final class AnalysisPane extends BorderPane {
                 return null;
             }
         });
+        // "(root N)" is appended only when more than one enabled root is currently on offer
+        // -- self-referencing denominatorCombo.getItems(), the same pattern rootCombo's own
+        // converter below uses, rather than cross-referencing rootCombo (whose items are not
+        // rebuilt until later in refresh()/updateTable(), so reading them here could render
+        // against a stale root count).
         denominatorCombo.setConverter(new StringConverter<>() {
             @Override
-            public String toString(Branch branch) {
-                return branch == null ? "(none)" : branch.getName();
+            public String toString(DenominatorRef ref) {
+                if (ref == null) return "(none)";
+                long distinctRoots = denominatorCombo.getItems().stream()
+                        .filter(Objects::nonNull)
+                        .map(DenominatorRef::rootIndex)
+                        .distinct()
+                        .count();
+                return ref.label(distinctRoots > 1);
             }
 
             @Override
-            public Branch fromString(String s) {
+            public DenominatorRef fromString(String s) {
                 return null;
             }
         });
@@ -133,7 +143,7 @@ public final class AnalysisPane extends BorderPane {
             updateTable();
         });
         denominatorCombo.valueProperty().addListener((obs, old, value) -> {
-            selectedDenominator = value;
+            selectedDenominatorRef = value;
             updateTable();
         });
         // The root/population pickers only forward the user's choice to the one canvas
@@ -202,12 +212,14 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Choose the denominator every row's {@code percentOfDenominator} is reported against.
-     * Package-private: exercised directly by the pane's own FX test, the same way
-     * {@code HistogramCanvas.isPositiveAt} is — see that method's comment.
+     * Choose the denominator every row's {@code percentOfDenominator} is reported against,
+     * by {@link DenominatorRef} rather than by {@link qupath.ext.flowpath.model.Branch} —
+     * see {@link DenominatorRef}'s javadoc for why a {@code Branch} cannot survive the next
+     * gating pass. Package-private: exercised directly by the pane's own FX test, the same
+     * way {@code HistogramCanvas.isPositiveAt} is — see that method's comment.
      */
-    void setDenominator(Branch denominator) {
-        selectedDenominator = denominator;
+    void setDenominator(DenominatorRef denominator) {
+        selectedDenominatorRef = denominator;
         denominatorCombo.setValue(denominator);
         updateTable();
     }
@@ -242,8 +254,24 @@ public final class AnalysisPane extends BorderPane {
      * The denominators currently offered by the picker, leading {@code null} ("all cells")
      * included — {@link List#copyOf} would reject that null, hence the plain copy.
      */
-    List<Branch> denominatorChoices() {
+    List<DenominatorRef> denominatorRefChoices() {
         return new ArrayList<>(denominatorCombo.getItems());
+    }
+
+    /**
+     * As {@link #denominatorRefChoices()}, but rendered — the exact strings the combo shows,
+     * via its own converter. Exists so a test can pin "two same-channel roots read
+     * distinguishably" against what a user actually sees rather than against the refs alone.
+     */
+    List<String> denominatorLabels() {
+        return denominatorCombo.getItems().stream()
+                .map(item -> denominatorCombo.getConverter().toString(item))
+                .toList();
+    }
+
+    /** The denominator currently chosen, or {@code null} for "(none)" — {@link #setDenominator}. */
+    DenominatorRef selectedDenominatorRef() {
+        return selectedDenominatorRef;
     }
 
     /** The raw {@code percentOfDenominator} behind {@link #formattedPercentOfDenominatorAt}. */
@@ -343,15 +371,28 @@ public final class AnalysisPane extends BorderPane {
         // population against the whole scope". Without it the converter's null branch was
         // unreachable and the choice was one-way: once a user picked a denominator there
         // was no item in the list that could take them back off it.
-        List<Branch> denominators = session.denominatorChoices();
-        List<Branch> items = new ArrayList<>();
+        List<AnalysisSession.DenominatorOption> options = session.denominatorOptions();
+        List<DenominatorRef> items = new ArrayList<>();
         items.add(null);
-        items.addAll(denominators);
-        denominatorCombo.getItems().setAll(items);
-        if (selectedDenominator != null && !denominators.contains(selectedDenominator)) {
-            selectedDenominator = null;
+        for (AnalysisSession.DenominatorOption option : options) {
+            items.add(option.ref());
         }
-        denominatorCombo.setValue(selectedDenominator);
+        denominatorCombo.getItems().setAll(items);
+        // THE FIX. FlowPathPane.buildAnalysisInput() deep-copies the gate tree on every
+        // push, so the tree behind session.denominatorOptions() above is never the one
+        // selectedDenominatorRef was chosen from -- but the ref is a VALUE
+        // ((rootIndex, path)), and session.resolveDenominator re-finds the live Branch that
+        // value still names in the new tree. Clearing the selection is therefore reserved
+        // for the one case that actually means "gone": resolveDenominator returns null only
+        // when no branch in the CURRENT tree carries that (rootIndex, path) any more --
+        // its gate was disabled, deleted, or renamed since the last accepted pass. A plain
+        // "was it deep-copied" test (the bug this replaces) cleared the selection on every
+        // single pass, since a deep copy always mints fresh Branch objects; this clears it
+        // only when the population itself is gone.
+        if (selectedDenominatorRef != null && session.resolveDenominator(selectedDenominatorRef) == null) {
+            selectedDenominatorRef = null;
+        }
+        denominatorCombo.setValue(selectedDenominatorRef);
 
         // The state guarantees emptyMessage() is non-null exactly when there is no data
         // (AnalysisState's compact constructor enforces it), so this is the only string
@@ -368,7 +409,7 @@ public final class AnalysisPane extends BorderPane {
             setAllPlotRows(List.of());
             return;
         }
-        PopulationStats stats = session.stats(selectedDenominator);
+        PopulationStats stats = session.stats(session.resolveDenominator(selectedDenominatorRef));
         table.getItems().setAll(stats.rows(selectedScope));
         // Every plot canvas is handed the full, unfiltered row set (every scope, every
         // region) and narrows to what it means on its own -- CompositionCanvas and
@@ -509,7 +550,7 @@ public final class AnalysisPane extends BorderPane {
                 "population_stats.csv", "CSV", ".csv");
         if (file == null) return;
         try {
-            PopulationStatsExporter.export(file, session.stats(selectedDenominator));
+            PopulationStatsExporter.export(file, session.stats(session.resolveDenominator(selectedDenominatorRef)));
             Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
         } catch (IOException | RuntimeException ex) {
             Dialogs.showErrorMessage("Export Error", ex.getMessage());

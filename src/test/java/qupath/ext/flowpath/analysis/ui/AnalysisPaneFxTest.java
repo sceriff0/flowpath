@@ -3,7 +3,6 @@ package qupath.ext.flowpath.analysis.ui;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
-import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.FxTestSupport;
@@ -45,7 +44,7 @@ class AnalysisPaneFxTest {
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
 
         int before = FxTestSupport.onFx(pane::rowCount);
-        FxTestSupport.onFxRun(() -> pane.setDenominator(session.denominatorChoices().get(0)));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(session.denominatorOptions().get(0).ref()));
         assertEquals(before, FxTestSupport.onFx(pane::rowCount));
     }
 
@@ -77,11 +76,12 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.emptyDenominatorInput()));
 
-        Branch emptyBranch = session.denominatorChoices().stream()
-                .filter(b -> "CD45+".equals(b.getName()))
+        DenominatorRef emptyRef = session.denominatorOptions().stream()
+                .filter(o -> "CD45+".equals(o.branch().getName()))
+                .map(AnalysisSession.DenominatorOption::ref)
                 .findFirst()
                 .orElseThrow();
-        FxTestSupport.onFxRun(() -> pane.setDenominator(emptyBranch));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(emptyRef));
 
         assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
         assertTrue(Double.isNaN(FxTestSupport.onFx(() -> pane.percentOfDenominatorAt(0))),
@@ -118,17 +118,95 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
 
-        List<Branch> offered = FxTestSupport.onFx(pane::denominatorChoices);
+        List<DenominatorRef> offered = FxTestSupport.onFx(pane::denominatorRefChoices);
         assertNull(offered.get(0), "the first offer is \"all cells\" -- rendered \"(none)\"");
-        assertEquals(session.denominatorChoices().size() + 1, offered.size(),
+        assertEquals(session.denominatorOptions().size() + 1, offered.size(),
                 "every branch, plus the null");
 
-        Branch positive = session.denominatorChoices().get(0);
+        DenominatorRef positive = session.denominatorOptions().get(0).ref();
         FxTestSupport.onFxRun(() -> pane.setDenominator(positive));
         assertEquals("100.0", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
         FxTestSupport.onFxRun(() -> pane.setDenominator(null));
         assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)),
                 "choosing \"(none)\" again clears the denominator column");
+    }
+
+    /**
+     * The regression this task fixes. {@code FlowPathPane.buildAnalysisInput()} deep-copies
+     * the gate tree on every push, and {@code GateNode.deepCopy()} mints fresh {@code Branch}
+     * objects every time -- so a selection keyed on a {@code Branch} (identity comparison)
+     * was never present in the next pass's list and silently went back to "(none)". Every
+     * pre-existing test in this file calls {@code accept()} exactly once, which is why none
+     * of them caught it; this is the same fixture accepted twice, with a selection made in
+     * between.
+     */
+    @Test
+    void aChosenDenominatorSurvivesTheNextGatingPass() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        DenominatorRef chosen = FxTestSupport.onFx(() -> pane.denominatorRefChoices().get(1));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(chosen));
+        String before = FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0));
+        assertNotEquals("", before, "precondition: a denominator produces a percentage");
+
+        // A second, structurally identical pass -- exactly what a live preview push delivers.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        assertEquals(chosen, FxTestSupport.onFx(pane::selectedDenominatorRef),
+                "the choice is keyed on a value, not on a Branch object that was just replaced");
+        assertEquals(before, FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)),
+                "and the column still reports against it");
+    }
+
+    /**
+     * The distinction the survival test above does not exercise: a chosen denominator must
+     * clear when the branch it names is genuinely gone (its gate disabled or removed between
+     * passes), not merely rebuilt by a deep copy. Conflating the two would mean either the
+     * survival fix regresses into "never clears", or this case regresses back into "always
+     * clears" -- both are the same defect from opposite directions.
+     */
+    @Test
+    void aChosenDenominatorClearsOnlyWhenItsGateIsActuallyDisabled() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        AnalysisSession.AnalysisInput simple = AnalysisFixtures.simpleInput();
+        FxTestSupport.onFxRun(() -> pane.accept(simple));
+
+        DenominatorRef chosen = session.denominatorOptions().get(0).ref();
+        FxTestSupport.onFxRun(() -> pane.setDenominator(chosen));
+        assertEquals(chosen, FxTestSupport.onFx(pane::selectedDenominatorRef));
+
+        // Same cells and stats, but an empty tree -- as if every root gate had been
+        // removed since the last accepted pass. No gate, no branch, no row: the ref chosen
+        // must clear, unlike a mere deep copy of the SAME tree above.
+        AnalysisSession.AnalysisInput noRoots = new AnalysisSession.AnalysisInput(
+                new qupath.ext.flowpath.model.GateTree(), simple.index(), simple.stats(),
+                new qupath.ext.flowpath.model.BranchTally(0), List.of(), null, "test-image");
+        FxTestSupport.onFxRun(() -> pane.accept(noRoots));
+
+        assertNull(FxTestSupport.onFx(pane::selectedDenominatorRef),
+                "the branch the ref named no longer has a gate at all -- this must clear, "
+                        + "unlike the deep-copy case above");
+    }
+
+    /**
+     * Closes the second, smaller defect the same fix carries: two roots on one channel used
+     * to render as two identical {@code "CD45+"}/{@code "CD45-"} entries in the denominator
+     * combo, indistinguishable to the user. {@code twoRootInput()} (used by the picker test
+     * below) cannot exercise this -- its two roots are on different channels and never
+     * collide; only {@code twoRootsSameChannelInput()} does.
+     */
+    @Test
+    void twoRootsOnOneChannelGiveDistinguishableDenominators() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        List<String> labels = FxTestSupport.onFx(() -> pane.denominatorLabels());
+        assertEquals(labels.size(), labels.stream().distinct().count(),
+                "no two entries read identically: " + labels);
+        assertTrue(labels.stream().filter(l -> !l.equals("(none)")).allMatch(l -> l.contains("root")),
+                "each names its root: " + labels);
     }
 
     /**
