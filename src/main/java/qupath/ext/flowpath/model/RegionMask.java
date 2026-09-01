@@ -257,7 +257,13 @@ public final class RegionMask {
      * unknown rather than guess one.
      */
     public List<ROI> regionRois() {
-        return Arrays.asList(regionRois);
+        // Not List.of(regionRois): that overload rejects a null element outright (throws
+        // eagerly, not merely on access), and this array's implicit-whole-image entry is
+        // deliberately null. Collections.unmodifiableList still closes the mutability hole
+        // (Arrays.asList(...).set(...) would otherwise corrupt this instance's own array)
+        // while tolerating that null the way regionCounts() below already does for its own
+        // wrapped array.
+        return Collections.unmodifiableList(Arrays.asList(regionRois));
     }
 
     /** Cell count per region, parallel to {@link #regionNames()}. */
