@@ -181,6 +181,17 @@ class GateTreeTest {
      * inverses, not two hand-kept implementations of "enabled roots, joined path" that merely
      * happen to agree today. Covers a nested branch and two roots, so the round trip is
      * exercised past depth 0 and past root 0.
+     * <p>
+     * <b>Also covers the case where {@code (rootIndex, path)} is NOT unique.</b> {@code root2}
+     * hosts two sibling {@code CD3} gates on one channel — the exact fixture the whole-branch
+     * review flagged {@code findBranchAmong} for dead-ending on (see
+     * {@code findBranchBacktracksPastALeafSiblingToADeeperOne}) — where the first is a leaf and
+     * the second carries a {@code CD8} child. The deep, unambiguous path round-trips through the
+     * same loop as every other case below. The shallow path the two siblings SHARE does not: it
+     * is asserted separately, past the loop, as the one place {@code (rootIndex, path)} is not a
+     * unique key and "exact inverses" does not hold unconditionally — see
+     * {@code GateTree.BranchLocation}'s own javadoc for why that is a property of path-based
+     * identity, not a defect.
      */
     @Test
     void findBranchAndLocateAreExactInverses() {
@@ -195,15 +206,26 @@ class GateTreeTest {
         var cd3 = new GateNode("CD3", 0.5);
         root0.getPositiveChildren().add(cd3);
         var root1 = new GateNode("CD19", 1.0);
+
+        var root2 = new GateNode("CD20", 1.0);
+        var leafCd3 = new GateNode("CD3", 0.5);           // sibling A: a leaf, added first
+        var deepCd3 = new GateNode("CD3", 0.5);           // sibling B: carries a CD8 child
+        var cd8 = new GateNode("CD8", 0.5);
+        deepCd3.getPositiveChildren().add(cd8);
+        root2.getPositiveChildren().add(leafCd3);
+        root2.getPositiveChildren().add(deepCd3);
+
         tree.addRoot(skipped);
         tree.addRoot(root0);
         tree.addRoot(root1);
+        tree.addRoot(root2);
 
         record Case(int rootIndex, String path) {}
         List<Case> cases = List.of(
                 new Case(0, "CD45+"), new Case(0, "CD45-"),
                 new Case(0, "CD45+/CD3+"), new Case(0, "CD45+/CD3-"),
-                new Case(1, "CD19+"), new Case(1, "CD19-"));
+                new Case(1, "CD19+"), new Case(1, "CD19-"),
+                new Case(2, "CD20+/CD3+/CD8+"), new Case(2, "CD20+/CD3+/CD8-"));
 
         for (Case c : cases) {
             Branch branch = tree.findBranch(c.rootIndex(), c.path());
@@ -217,6 +239,56 @@ class GateTreeTest {
             assertSame(branch, tree.findBranch(location.rootIndex(), location.path()),
                     "findBranch(locate(branch)) must return the SAME branch instance for " + c);
         }
+
+        // The shallow path both CD3 siblings share -- root2's own "CD20+/CD3+" -- is where
+        // (rootIndex, path) stops being a unique key. locate() on the SECOND sibling's own
+        // branch still finds its real path (an identity search, so it cannot be wrong about
+        // WHICH branch it started from), but that path is indistinguishable from the first
+        // sibling's, so feeding it back into findBranch() resolves to the FIRST sibling instead
+        // -- documented, first-match behaviour, not a round-trip failure of either method alone.
+        GateTree.BranchLocation deepSiblingLocation = tree.locate(deepCd3.getBranches().get(0));
+        assertNotNull(deepSiblingLocation);
+        assertEquals(new GateTree.BranchLocation(2, "CD20+/CD3+"), deepSiblingLocation,
+                "locate() reports the real path to the branch it was given");
+        assertSame(leafCd3.getBranches().get(0), tree.findBranch(2, "CD20+/CD3+"),
+                "the shared path resolves to the FIRST sibling, not necessarily the one "
+                        + "locate() was originally handed -- the documented ambiguity");
+    }
+
+    /**
+     * The bug the whole-branch review found: two sibling gates on the SAME channel hanging
+     * off one branch both contribute a branch named identically at that depth (mirroring
+     * {@code PopulationStats.collect}'s own traversal, which walks every sibling and would
+     * emit a row for a path either one produces). The first sibling here is a LEAF ("CD3", no
+     * children); the second carries a "CD8" child, so only it can resolve
+     * {@code "CD45+/CD3+/CD8+"}. Before {@code findBranchAmong} backtracked, matching the
+     * first sibling's "CD3+" and finding nothing beneath it (an empty child list) returned
+     * {@code null} outright instead of trying the second sibling — so a row the table was
+     * genuinely showing resolved to no branch at all.
+     */
+    @Test
+    void findBranchBacktracksPastALeafSiblingToADeeperOne() {
+        var tree = new GateTree();
+        var root = new GateNode("CD45", 1.0);
+        var leafCd3 = new GateNode("CD3", 0.5);          // sibling A: a leaf, added first
+        var deepCd3 = new GateNode("CD3", 0.5);          // sibling B: carries a CD8 child
+        var cd8 = new GateNode("CD8", 0.5);
+        deepCd3.getPositiveChildren().add(cd8);
+        root.getPositiveChildren().add(leafCd3);
+        root.getPositiveChildren().add(deepCd3);
+        tree.addRoot(root);
+
+        Branch branch = tree.findBranch(0, "CD45+/CD3+/CD8+");
+        assertNotNull(branch,
+                "the second CD3 sibling's CD8 child must be reachable even though the first "
+                        + "CD3 sibling matches the same segment and dead-ends");
+        assertSame(deepCd3.getPositiveChildren().get(0).getBranches().get(0), branch,
+                "must resolve to CD8's own positive branch, not something else entirely");
+
+        // The leaf sibling's own path is still reachable -- backtracking must not break the
+        // ordinary case where the first match IS the right (or an equally valid) answer.
+        assertNotNull(tree.findBranch(0, "CD45+/CD3+"),
+                "the plain, unqualified path must still resolve to a branch");
     }
 
     @Test

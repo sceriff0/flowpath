@@ -250,10 +250,10 @@ public class FlowPathPane extends BorderPane {
             + "Three nested scopes when annotations are in use: per region, all regions, "
             + "whole slide."));
         analysisButton.setOnAction(e -> openAnalysisWindow());
-        // Task 14's reverse direction: a population selected in the Analysis window's table (or
-        // clicked on a plot bar) lands the TreeView's selection on the gate that produced it.
-        // See onPopulationSelectedFromAnalysis(); the forward direction is wired the other way,
-        // inside onTreeSelectionChanged() below.
+        // The tree-selection link's reverse direction: a population selected in the Analysis
+        // window's table (or clicked on a plot bar) lands the TreeView's selection on the gate
+        // that produced it. See onPopulationSelectedFromAnalysis(); the forward direction is
+        // wired the other way, inside onTreeSelectionChanged() below.
         analysisWindow.setPopulationSelectionListener(this::onPopulationSelectedFromAnalysis);
 
         HBox toolbarSpacer = new HBox();
@@ -591,10 +591,11 @@ public class FlowPathPane extends BorderPane {
 
     // Set for the duration of onPopulationSelectedFromAnalysis()'s own tree selection, so
     // onTreeSelectionChanged does not treat that programmatic move as a user pick and push it
-    // straight back to analysisWindow.selectPopulation() -- the loop Task 14's brief calls out.
+    // straight back to analysisWindow.selectPopulation() -- the round-trip loop the
+    // tree-selection link exists to avoid.
     // Deliberately NOT suppressTreeSelection above: that flag also skips the editorPane/ancestor
     // mask update onTreeSelectionChanged performs, and "selecting a population should select its
-    // gate" (this task's whole point) needs that update to still happen.
+    // gate" needs that update to still happen.
     private boolean applyingPopulationSelection = false;
 
     private void replaceInTree(List<GateNode> nodes, GateNode oldNode, GateNode newNode) {
@@ -677,9 +678,11 @@ public class FlowPathPane extends BorderPane {
      * a one-line map from {@link GateTree#locate}'s {@code BranchLocation} (a {@code model}
      * value) onto {@link PopulationRef} (an {@code analysis.ui} value). The walk itself lives
      * exactly once, in {@code GateTree}, alongside {@link GateTree#findBranch} which it is the
-     * exact inverse of — see {@code GateTree.BranchLocation}'s own javadoc for why that walk
-     * cannot live here or on {@code GateTree} returning a {@code PopulationRef} directly without
-     * creating the {@code ui} ↔ {@code model} layering violation this method exists to avoid.
+     * inverse of, for every path {@code PopulationStats} can emit — see
+     * {@code GateTree.BranchLocation}'s own javadoc for the one case (same-named sibling gates)
+     * that qualifier exists for, and for why that walk cannot live here or on {@code GateTree}
+     * returning a {@code PopulationRef} directly without creating the {@code ui} ↔ {@code model}
+     * layering violation this method exists to avoid.
      */
     private PopulationRef populationRefFor(Branch target) {
         GateTree.BranchLocation location = gateTree.locate(target);
@@ -715,9 +718,9 @@ public class FlowPathPane extends BorderPane {
             // The forward direction: a branch selected in the TREE highlights its population in
             // the Analysis window's table, unless this selection is itself the RESULT of an
             // inbound population pick (see onPopulationSelectedFromAnalysis) -- echoing that
-            // back out is the loop Task 14's brief calls out. AnalysisWindow.selectPopulation is
-            // already a no-op while the window is closed, so there is no need to check
-            // isShowing() here too.
+            // back out is the round-trip loop the tree-selection link exists to avoid.
+            // AnalysisWindow.selectPopulation is already a no-op while the window is closed, so
+            // there is no need to check isShowing() here too.
             if (!applyingPopulationSelection) {
                 PopulationRef ref = populationRefFor(branch.branch);
                 if (ref != null) {
