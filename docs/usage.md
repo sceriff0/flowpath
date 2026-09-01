@@ -125,16 +125,33 @@ Press **Analysis** in the gating toolbar. The window opens on the gating pass yo
 already have — there is nothing to run — and re-reads every subsequent pass for as
 long as it stays open, so it tracks your gating live the way the viewer does.
 
-It shows a **population table** under a row of pickers, with four plots below it.
+It shows a summary line, then a **population table** under a row of pickers, then
+four plots below it, each with its own controls sitting right underneath it rather
+than in a shared strip above everything — a picker that visibly did nothing to the
+tab you were looking at was the single worst intuitiveness problem in the earlier
+layout.
+
+The window's own title bar, and the summary line above the table, both name the
+image the report is for, e.g. `slide_04.ome.tiff · 214,332 cells · 3 regions ·
+189,201 in scope · 31 populations` — useful the moment you have more than one
+Analysis window's screenshot to tell apart. While the **filter** box (below) is
+narrowing the table, the last number switches to `N of M populations` so you can
+tell at a glance that you are not looking at everything.
+
+Within one running session, closing and reopening the Analysis window puts you
+right back where you left it — same tab, scope, filter text and table selection.
+Across a restart it remembers window size and position, the active tab, the
+chosen scope, and every plot tab's own log/clip settings, not only whichever tab
+happened to be open when you closed it.
 
 ### The pickers
 
-| Picker | What it changes |
-|---|---|
-| **Scope** | Which cells the rows count — *Whole slide*, *All annotations*, or *Per annotation*. |
-| **Denominator** | The branch every row's **% of Denominator** is reported against. With *(none)* that column stays blank — **% Total** is already the share of the whole scope. |
-| **Root** | Which root gate the **Composition** plot breaks down. |
-| **Population** | Which population the **By Region** and **By Scope** plots compare. |
+| Picker | Lives | What it changes |
+|---|---|---|
+| **Scope** | Above the table | Which cells the rows count — *Whole slide*, *All annotations*, or *Per annotation*. |
+| **Denominator** | Above the table | The branch every row's **% of Denominator** is reported against. With *(none)* that column stays blank — **% Total** is already the share of the whole scope. |
+| **Root** | On the **Composition** tab | Which root gate that plot breaks down. |
+| **Population** | On the **By Region** and **By Scope** tabs | Which population each plot compares. |
 
 The three scopes nest — *Per annotation* ⊆ *All annotations* ⊆ *Whole slide* — and
 a slide with no annotations offers only *Whole slide*. The **Root** and
@@ -151,14 +168,29 @@ named** populations, and the number is the only thing that tells them apart.
 | **Region** | The annotated region — at *Per annotation* scope only; blank otherwise. |
 | **Count** | Every cell that landed in this population, quality-filtered cells included. |
 | **Clean** | Cells that were not excluded: not quality-filtered, not outlier-clipped, and inside the annotation filter when it is on. **This is the number the gate tree shows.** |
-| **% Parent** | Share of the parent branch. |
-| **% Total** | Share of every cell in the scope. |
+| **% Parent** | Share of the parent branch, over **Count**. |
+| **% Parent (clean)** | The same share computed over **Clean** on both sides — clean count over clean parent count — so an excluded cell drops out of the denominator as well as the numerator. |
+| **% Total** | Share of every cell in the scope, over **Count**. |
+| **% Total (clean)** | The clean counterpart of **% Total**, the same clean/raw split **% Parent (clean)** makes. |
 | **% of Denominator** | Share of the branch chosen in **Denominator**. |
 | **Density** | Cells per mm² — the row's **Count**, over the region's *effective* area. |
+| **Area (mm²)** | The region's own effective area, the denominator **Density** just divided by — so you never have to cross-reference the two by hand. |
 
-Click **Root**, **Count** or **Clean** to sort numerically. The percentage and
-density columns are formatted text and deliberately **do not** offer a sort rather
-than offering a lexicographic one that would put `100.0` above `20.0`.
+Click **Root**, **Count** or **Clean** to sort numerically, in either direction; a
+row with no value for the sorted column sorts to the bottom regardless of
+direction, rather than jumping to the top on a descending sort. The percentage
+and density columns are formatted text and deliberately **do not** offer a sort
+rather than offering a lexicographic one that would put `100.0` above `20.0`.
+
+A **filter** box above the table narrows it to populations whose gating route or
+region name contains what you type — clear it to see everything again. Select one
+or more rows and **right-click → Copy** (or ++ctrl+c++) to copy them as
+tab-separated text with a header row, ready to paste into a spreadsheet.
+
+**Selecting a row selects its gate.** Clicking a population in the table
+highlights the matching gate in the tree on the left, and the reverse: selecting a
+gate in the tree selects its row here, if the current scope and filter are showing
+it.
 
 !!! info "Count and Clean answer different questions — and the gap moves with the scope"
     **Count** is the raw total; **Clean** is what survived exclusion. At *Whole
@@ -207,11 +239,47 @@ bars to twice the true denominator. Use the **Root** picker to switch.
     them their own segment, so a partially quantified panel is visible at a glance
     instead of being silently smoothed into "negative".
 
+Hover a bar on any plot to read its underlying numbers in a tooltip. On
+**Composition**, **By Region** and **By Scope**, clicking a bar selects that
+population in the table and its gate in the tree, the same two-way link the
+table itself has. **Marker Positivity** is the exception: its bars are pooled
+across every gate node that used a marker, so no single population can name what
+was clicked — hovering still shows the numbers, but clicking selects nothing.
+
+#### Log scale and clipping outliers
+
+Underneath each plot, two independent controls fix the same complaint from
+opposite directions: a gated slide routinely has one enormous population next to
+several tiny ones, and a linear axis scaled to the biggest bar makes the small
+ones invisible.
+
+- **Log scale** — switches that plot's Y axis to a logarithmic one, so a
+  214,000-cell bar and a 3-cell bar are both readable at once.
+- **Clip outliers**, with a percentile spinner (50–100, default 95) — caps the
+  axis at that percentile of the plot's own bar values instead of the true
+  maximum, so the *typical* bars use the space a handful of extreme ones would
+  otherwise dominate. A bar taller than the cap is never silently cut off: it
+  draws to the top of the axis and carries a small axis-break mark, and a
+  "— top values clipped" note appears next to the toggle whenever the last draw
+  actually clipped something (a percentile that lands on the data's own maximum
+  changes nothing, and the note stays off for it).
+
+Both toggles are **per plot and independently combinable** — turn log scale on
+for Composition without it following you to Marker Positivity, or run log and
+clip together on the same plot when one population dwarfs the rest *and* a few
+outliers within it dwarf each other.
+
 ### Export
 
-**Export CSV…** writes `population_stats.csv`. It carries **every scope and every
-region** — not just the rows the table happens to be showing — against the
-denominator currently chosen.
+The **Export ▾** menu above the table covers both the table and whichever plot
+tab you currently have open:
+
+| Item | Writes |
+|---|---|
+| **Copy plot to clipboard** | A raster image of the **currently selected plot tab**, ready to paste. |
+| **Plot as image…** | One save dialog offering both **SVG** and **PNG** (at 2×) as extension choices for the **currently selected plot tab** — pick either and FlowPath writes that format from the same drawing routine that painted the screen. |
+| **Plot data as CSV…** | The numbers behind the **currently selected plot tab**. |
+| **Population table as CSV…** | `population_stats.csv` — **every scope and every region**, not just the rows the table happens to be showing, against the denominator currently chosen. |
 
 ## Coming next — explore in the UMAP { #explore-in-the-umap }
 
@@ -296,10 +364,10 @@ The Analysis window's export is a different shape — one row per **population p
 scope**, not one per cell:
 
 ```csv title="population_stats.csv"
-scope,region,region_index,path,branch,gate_channel,depth,root_index,count,clean_count,parent_count,clean_parent_count,denominator_count,percent_of_parent,percent_of_total,percent_of_denominator,area_mm2,density_per_mm2
-WHOLE_SLIDE,,-1,CD45+/CD8+,CD8+,CD8,1,0,4820,4611,10233,9902,0,47.1025,12.0418,,,
-ANNOTATION_K,Tumor,0,CD45+/CD8+,CD8+,CD8,1,0,2140,2140,4380,4380,0,48.8584,10.9903,,3.1420,681.0948
-ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,,1.7730,516.0744
+scope,region,region_index,path,branch,gate_channel,depth,root_index,count,clean_count,parent_count,clean_parent_count,denominator_count,percent_of_parent,percent_of_total,percent_of_denominator,percent_of_clean_parent,percent_of_clean_total,area_mm2,density_per_mm2
+WHOLE_SLIDE,,-1,CD45+/CD8+,CD8+,CD8,1,0,4820,4611,10233,9902,0,47.1025,12.0418,,46.5663,12.6941,,
+ANNOTATION_K,Tumor,0,CD45+/CD8+,CD8+,CD8,1,0,2140,2140,4380,4380,0,48.8584,10.9903,,48.8584,10.9903,3.1420,681.0948
+ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,,45.4998,8.2100,1.7730,516.0744
 ```
 
 !!! info "`root_index` and `region_index` are what disambiguate a repeated name"
@@ -313,9 +381,18 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
 
     `scope` is written as the stable enum name (`WHOLE_SLIDE`, `ANNOTATION_ALL`,
     `ANNOTATION_K`), not the label the picker shows. A value FlowPath does not have
-    is written as an **empty field**, not as `NaN` — hence the three trailing commas
-    on the whole-slide row above, which has no annotated area and no chosen
-    denominator.
+    is written as an **empty field**, not as `NaN` — the whole-slide row above has
+    no chosen denominator (`percent_of_denominator` is blank) and, being *Whole
+    slide*, no annotated area to divide by either (`area_mm2` and
+    `density_per_mm2` are the two trailing empty fields).
+
+!!! info "`percent_of_clean_parent` / `percent_of_clean_total` are the clean counterparts"
+    They divide `clean_count` by `clean_parent_count` / the scope's clean total,
+    so an excluded cell drops out of the denominator as well as the numerator —
+    unlike `percent_of_parent` / `percent_of_total`, which divide the raw `count`.
+    The two per-region rows above happen to equal their raw counterparts because
+    nothing was excluded in that example; the whole-slide row does not, because
+    `count` (4820) and `clean_count` (4611) differ there.
 
 !!! info "Units are in the names"
     `centroid_x` / `centroid_y` are **micrometres** — MIRAGE's `join_flowpath.py` inverts
@@ -376,14 +453,33 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   renders blank both when no denominator is chosen and when the chosen branch holds
   no cells — neither is a question with a numeric answer, and showing `0.0` for the
   second would state a share of nothing as though it had been measured.
-- **Root / Population pickers** — drive the **Composition** plot and the **By
-  Region** / **By Scope** plots respectively. Both spell out `(root N)` once the
-  tree has more than one root.
+- **Root / Population pickers** — sit under the **Composition** plot and the **By
+  Region** / **By Scope** plots respectively, driving only that plot. Both spell
+  out `(root N)` once the tree has more than one root.
+- **Table filter, sort and copy** — the filter box narrows the table to
+  populations whose route or region name matches what you type; **Root**,
+  **Count** and **Clean** sort numerically in either direction, blanks always
+  last; a row selection copies as tab-separated text (right-click → Copy, or
+  `Ctrl+C`).
+- **Table ↔ tree selection** — selecting a table row selects its gate in the
+  tree, and the reverse, so you can jump from a number to the threshold behind it.
 - **Plots** — Composition, By Region, By Scope, Marker Positivity; see
-  [Step 3](#the-plots).
-- **Export CSV…** — writes `population_stats.csv` with every scope and every
-  region, against the denominator currently chosen. Enabled once there is a gating
-  pass with at least one enabled root gate.
+  [Step 3](#the-plots). Each has its own **log scale** and **clip outliers**
+  toggles (independently combinable, per plot) and reacts to **hover** (a
+  tooltip of the underlying numbers); on Composition, By Region and By Scope,
+  **click** also selects that population in the table and its gate in the tree —
+  Marker Positivity's pooled bars have no single population to select.
+- **Export ▾** — one menu above the table, whose plot items (copy to clipboard,
+  save as SVG or PNG in one dialog at 2×, or save the plot's own numbers as CSV)
+  act on whichever plot tab is currently selected. **Population table as
+  CSV…**, in the same menu, writes `population_stats.csv` with every scope and
+  every region, against the denominator currently chosen — not just the rows the
+  table happens to be showing. Enabled once there is a gating pass with at least
+  one enabled root gate.
+- **Window memory** — a close/reopen within one session keeps the tab, scope,
+  filter and selection exactly as left; across a restart, window geometry, the
+  active tab, the chosen scope and all four plot tabs' log/clip settings are
+  restored from preferences.
 
 ### UMAP
 

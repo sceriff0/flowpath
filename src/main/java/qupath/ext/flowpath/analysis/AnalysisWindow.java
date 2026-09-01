@@ -17,7 +17,10 @@ import java.util.prefs.Preferences;
 /**
  * Owns the single floating Analysis stage and its lifecycle.
  * <p>
- * Mirrors {@code UmapWindow} exactly — see that class. The gating pane holds one of these
+ * Mirrors {@code UmapWindow}'s stage-ownership shape — one field for the stage, {@code
+ * open}/{@code push}/{@code close} — but not its pane lifetime: {@code UmapWindow} discards
+ * its {@code UmapPane} on every close, while this class deliberately keeps {@link #pane}
+ * alive across a close/reopen (see below). The gating pane holds one of these
  * for its whole life and calls {@link #open} when the user asks for the Analysis window,
  * then {@link #push} whenever the gating changes. Keeping the stage in one place means
  * "open Analysis" is idempotent — a second click focuses the window that is already open

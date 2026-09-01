@@ -5,7 +5,124 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.2] - 02/09/2026
+
+The Analysis window's overhaul: the population table, its exports and its four plots.
+Fifteen implementation tasks, reviewed one at a time against the diff behind them.
+
+### Fixed
+
+- **The chosen denominator reset on the next gate nudge.** `Branch` is deliberately
+  identity-compared — `BranchTally` relies on that, because two branches can share a
+  name — but `FlowPathPane` deep-copies the whole gate tree on every push
+  (`GateNode.deepCopy()` mints fresh `Branch` objects each time), so a denominator
+  remembered as a `Branch` pointer was comparing against branches that no longer
+  existed the moment a threshold moved. **No existing test caught it, because every
+  test that exercised the Analysis window performed a single `accept()`** — the bug
+  only shows up on a *second* pass. The picker now stores a `DenominatorRef`
+  (root index + gating path) and re-resolves it against the live tree on every
+  refresh, the same value-not-identity fix `PopulationRef` already used for plot
+  selection.
+- **The Marker Positivity plot's "Ungated" segment was nearly invisible.** It drew at
+  `rgb(80,80,90)` on a `rgb(30,30,30)` background — a contrast ratio low enough that
+  the one segment the plot exists to make visible (a marker nobody gated on, distinct
+  from a marker that came back negative) was the least visible thing on it. The new
+  theme-aware `PlotTheme` chooses every colour by WCAG 1.4.11 contrast (>= 3:1
+  against its background) rather than by eye, in both a light and a dark palette.
+- **The denominator picker could not tell two same-channel roots apart.** Because
+  `GateNode` names a branch from its channel alone, two un-renamed root gates on one
+  channel produced identically-labelled denominator choices with no way to pick the
+  right one. `DenominatorRef` carries the root index the same way `PopulationRef`
+  already does, and the picker appends `(root N)` once more than one root is on
+  offer.
+- **An empty population table gave no reason, in the two cases a valid gating pass
+  can still show nothing.** `AnalysisState.hasData()` is true the moment a pass has
+  been accepted with an enabled root gate — it says nothing about whether the
+  *current* scope or filter leaves any rows to show. A scope with zero populations
+  (e.g. *Per annotation* on a region nothing landed in) or a filter matching nothing
+  both used to leave a bare grid; each now explains itself in place ("No populations
+  at this scope." / "No populations match \"…\".") rather than looking identical to
+  a window that failed to load.
+
+### Added
+
+- **Log-scale and percentile-clip axis toggles, per plot, independently
+  combinable.** Each of the four plot tabs owns its own `ScaleOptions`, so turning
+  on "Log scale" for Composition has nowhere to leak into Marker Positivity, and a
+  user can run log and clip together or separately on the same plot. A clipped bar
+  is never silently truncated: it draws to the axis ceiling and is marked with its
+  own axis-break glyph, and a "— top values clipped" note appears beside the
+  toggle whenever the last paint actually cut a bar off (not merely whenever
+  clipping is turned on — a percentile that lands on zero or on the data's own
+  maximum changes nothing, and the note does not light up for it).
+- **Plot export**, from a new "Export ▾" menu whose plot items act on whichever
+  plot tab is currently selected: **Copy plot to clipboard**, **Plot as image…**
+  (one save dialog offering both SVG and PNG at 2x, rather than two separate menu
+  items — the chosen file's own extension picks the writer), **Plot data as
+  CSV…** (the same numbers the plot itself drew, never a second reduction of the
+  underlying rows), and **Population table as CSV…** (unchanged in shape, still
+  every scope and region rather than only the rows on screen). The SVG export
+  runs the exact same `draw(PlotSurface, PlotTheme)` routine the screen uses,
+  against an `SvgSurface` backend instead of a `CanvasSurface`, so what gets
+  saved is provably what was on screen.
+- **Clean percentages.** `% Parent (clean)` and `% Total (clean)` sit beside the
+  existing `% Parent`/`% Total` columns, both in the table and in
+  `population_stats.csv`: the clean count over the clean parent/total, so
+  quality-filtered, outlier-clipped and out-of-annotation cells drop out of both
+  the numerator and the denominator, not only the numerator.
+- **Region area as its own table column**, `Area (mm²)`, alongside `Density` — it
+  was already in the CSV; it is now also in the table, so the two never need to
+  be cross-referenced by hand.
+- **Hover values and click-to-select on every plot.** Hovering a bar shows a
+  tooltip of its underlying numbers. On Composition, By Region and By Scope,
+  clicking one also selects that population in the table and its gate in the
+  tree; Marker Positivity's bars are pooled across every gate node that used a
+  marker, so no single population exists to select there, and a click selects
+  nothing.
+- **Two-way selection between the population table and the gate tree.** Selecting
+  a table row highlights its gate; selecting a gate in the tree selects the
+  matching table row. Both directions resolve through `GateTree.findBranch` /
+  `GateTree.locate`, exact inverses sharing one enabled-roots-only rule, so
+  neither direction can find a branch the other would disagree exists.
+- **The table is sortable, filterable and copyable.** Numeric columns sort with
+  blanks (NaN) always last, in either sort direction; the percentage and density
+  columns are deliberately not sortable at all, rather than offering a
+  lexicographic sort that would put "100.0" above "20.0"; a filter box narrows
+  the table by population path or region name; and a row selection copies as
+  tab-separated text with a header row (right-click, or `Ctrl+C`).
+- **The summary line and the image's name.** A line above the table reads e.g.
+  "`slide_04.ome.tiff · 214,332 cells · 3 regions · 189,201 in scope · 31
+  populations`", switching to "`N of M populations`" while the filter narrows
+  what is shown; the window's own title bar carries the image name too, so a
+  screenshot or an alt-tab identifies which slide it is.
+- **The window remembers itself.** Within one running session, closing and
+  reopening the Analysis window keeps its tab, scope, filter text and table
+  selection exactly as left — the pane instance survives a close, only its
+  `Stage` is torn down. Across a restart, `AnalysisWindowPrefs` persists window
+  geometry, the active tab, the chosen scope, and **all four plot tabs' scale
+  settings** — not only whichever tab happened to be on screen when the window
+  closed, since a user can have log scale on for two different tabs at once and
+  partial restore would silently discard the other one.
+
+### Changed
+
+- **Every Analysis plot draws through one routine, two backends.** `draw(PlotSurface,
+  PlotTheme)` is now the single implementation of each canvas's rendering; both
+  `repaint()` (to the live `Canvas`) and `toSvg()` (to `SvgSurface`, for export) are
+  `final` and funnel through one private `render`, differing only in which surface
+  they hand to `draw`. This is what makes SVG export a second backend rather than a
+  second renderer walking the population data again — and it is also what makes the
+  plots unit-testable without a JavaFX toolkit for the first time, since `draw`
+  itself never touches a `Canvas`.
+- **One `PlotTheme` replaces every hardcoded colour in the Analysis canvases.** The
+  gating and UMAP canvases are deliberately unchanged this release — this only
+  touches the four Analysis plots.
+- **The Root and Population pickers moved onto the plot tab they actually drive.**
+  Root sits under Composition, Population under both By Region and By Scope, rather
+  than in a shared control row above the table where changing either one visibly did
+  nothing to whatever tab happened to be open.
+
+## [0.9.1] - 02/09/2026
 
 ### Added — Analysis window
 
