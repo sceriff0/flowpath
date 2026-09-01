@@ -131,16 +131,57 @@ class PopulationStatsTest {
                 .percentOfDenominator()), "not chosen is not the same as zero");
     }
 
-    /** A chosen denominator that legitimately holds zero cells reports a real zero, not NaN. */
+    /**
+     * A chosen denominator that holds zero cells gives a percentage with no defined value.
+     * <p>
+     * Zero is right for percent-of-parent and percent-of-total — an empty parent implies an
+     * empty part — but not here: the denominator branch is unrelated to the branch being
+     * reported, so "10 cells, denominator 0" rendered as {@code 0.0%} is a plausible false
+     * statement. {@code NaN} is already the value the field carries for "no denominator
+     * chosen" and already renders blank in {@code AnalysisPane}; the two remain
+     * distinguishable through {@link PopulationStats.Row#denominatorCount()}.
+     */
     @Test
-    void aChosenButEmptyDenominatorReportsZeroNotNaN() {
+    void aChosenButEmptyDenominatorReportsNaNNotAFalseZero() {
         GateTree tree = twoLevelTree();
-        Branch empty = tree.getRoots().get(0).getBranches().get(0)
-                .getChildren().get(0).getBranches().get(1);   // CD8-
+        // Push the CD8 gate above every value, so its positive branch really is empty
+        // rather than merely un-tallied.
+        GateNode cd8 = tree.getRoots().get(0).getBranches().get(0).getChildren().get(0);
+        cd8.setThreshold(100.0);
+        Branch empty = cd8.getBranches().get(0);   // CD8+
+
         PopulationStats s = PopulationStats.of(
-                tree, new BranchTally(0), List.of(), null, empty);
-        assertEquals(0.0, s.rows().get(0).percentOfDenominator(), 1e-9,
-                "chosen-and-empty is a real answer; not-chosen is NaN");
+                tree, tally(tree, null, 0), List.of(), null, empty);
+        PopulationStats.Row cd45pos = s.rows(PopulationStats.Scope.WHOLE_SLIDE).get(0);
+        assertEquals(5, cd45pos.count(), "a non-empty population...");
+        assertEquals(0, cd45pos.denominatorCount(), "...against an empty denominator");
+        assertTrue(Double.isNaN(cd45pos.percentOfDenominator()),
+                "no defined percentage, so not a zero that reads as an answer");
+        assertEquals(50.0, cd45pos.percentOfParent(), 1e-9,
+                "percent-of-parent still answers normally -- only the denominator column is NaN");
+    }
+
+    /**
+     * {@code regionNames} and the tally's region indices are two views of one region set.
+     * {@code AnalysisSession.AnalysisInput} rejects a mismatch, but this method is public and
+     * the batch/cohort callers reach it directly, so the guard must live here too — it
+     * replaced a {@code "Region N"} fallback that quietly invented names for regions the
+     * caller never described.
+     */
+    @Test
+    void regionNamesThatDoNotDescribeTheTallyThrow() {
+        GateTree tree = twoLevelTree();
+        int[] regionOf = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
+        BranchTally tally = tally(tree, regionOf, 2);
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> PopulationStats.of(tree, tally, List.of("Core"), null, null));
+        assertTrue(ex.getMessage().contains("1") && ex.getMessage().contains("2"),
+                "the message must name both counts: " + ex.getMessage());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> PopulationStats.of(tree, tally, List.of(), null, null),
+                "no names at all for a two-region tally is the same mismatch");
     }
 
     /** Spec 6: density from the region's real area. */

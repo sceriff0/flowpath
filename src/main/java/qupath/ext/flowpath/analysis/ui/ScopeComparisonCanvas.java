@@ -7,7 +7,6 @@ import qupath.ext.flowpath.model.PopulationStats;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -20,11 +19,18 @@ import java.util.Set;
  * {@link PopulationStats.Scope#ANNOTATION_K} may hold one row per region; its bar is their
  * sum, which by construction equals the {@code ANNOTATION_ALL} row for the same population
  * when the annotations cover every cell.
+ * <p>
+ * <b>A population is identified by {@link PopulationRef}, never by path alone.</b> Two
+ * un-renamed root gates on one channel emit byte-identical paths, so a path-keyed sum here
+ * added both roots' cells into one bar — 2x the true count, the same defect
+ * {@link CompositionCanvas} was fixed for — and the path-keyed
+ * {@link #availablePopulations()} hid the second root's populations from the picker
+ * entirely. See {@link PopulationRef}.
  */
 public final class ScopeComparisonCanvas extends PlotCanvas {
 
     private List<PopulationStats.Row> rows = List.of();
-    private String selectedPath;
+    private PopulationRef selected;
 
     public ScopeComparisonCanvas() {
         super(380, 220);
@@ -32,22 +38,22 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
 
     public void setRows(List<PopulationStats.Row> rows) {
         this.rows = rows == null ? List.of() : List.copyOf(rows);
-        if (selectedPath == null || this.rows.stream().noneMatch(r -> r.path().equals(selectedPath))) {
-            selectedPath = this.rows.stream().map(PopulationStats.Row::path).findFirst().orElse(null);
+        if (selected == null || this.rows.stream().noneMatch(selected::matches)) {
+            selected = this.rows.stream().map(PopulationRef::of).findFirst().orElse(null);
         }
         repaint();
     }
 
     /** Choose which population is compared across scopes. */
-    public void setSelectedPopulation(String path) {
-        this.selectedPath = path;
+    public void setSelectedPopulation(PopulationRef population) {
+        this.selected = population;
         repaint();
     }
 
-    /** Every distinct population path available to compare, in first-seen order. */
-    List<String> availablePopulations() {
-        Set<String> seen = new LinkedHashSet<>();
-        for (PopulationStats.Row row : rows) seen.add(row.path());
+    /** Every distinct population available to compare, in first-seen order. */
+    List<PopulationRef> availablePopulations() {
+        Set<PopulationRef> seen = new LinkedHashSet<>();
+        for (PopulationStats.Row row : rows) seen.add(PopulationRef.of(row));
         return List.copyOf(seen);
     }
 
@@ -58,7 +64,7 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
     List<PopulationStats.Scope> scopesPresent() {
         return Arrays.stream(PopulationStats.Scope.values())
                 .filter(scope -> rows.stream()
-                        .anyMatch(r -> r.scope() == scope && Objects.equals(r.path(), selectedPath)))
+                        .anyMatch(r -> r.scope() == scope && selected != null && selected.matches(r)))
                 .toList();
     }
 
@@ -68,8 +74,9 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
      * needs, the same total {@code ANNOTATION_ALL} already reports.
      */
     int valueForScope(PopulationStats.Scope scope) {
+        if (selected == null) return 0;
         return rows.stream()
-                .filter(r -> r.scope() == scope && Objects.equals(r.path(), selectedPath))
+                .filter(r -> r.scope() == scope && selected.matches(r))
                 .mapToInt(PopulationStats.Row::count)
                 .sum();
     }
@@ -98,8 +105,8 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
             gc.setFill(Color.rgb(87, 217, 163, 0.85));
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
-        drawAxes(gc, selectedPath == null ? "Scope" : selectedPath, "Count");
-        drawCategoryLabels(gc, scopes.stream().map(Enum::name).toList());
+        drawAxes(gc, selected == null ? "Scope" : selected.path(), "Count");
+        drawCategoryLabels(gc, scopes.stream().map(PopulationStats.Scope::displayName).toList());
         drawValueTicks(gc, 0, maxCount, 4);
     }
 }

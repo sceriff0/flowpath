@@ -165,6 +165,18 @@ class AnalysisSessionTest {
         disabledChild.setEnabled(false);
         root.getBranches().get(1).getChildren().add(disabledChild);
 
+        // ...and an ENABLED grandchild under that disabled gate, on yet another unique
+        // channel. "Disabled" is a hard stop for the whole subtree in GatingEngine.walkNode,
+        // not just for the one node, so neither PopulationStats.collect nor
+        // AnalysisSession.collectBranches may descend past it -- and those are two separate
+        // implementations of the same rule, so both are asserted below. A `continue` that
+        // skipped only the node's own branches and still recursed would leave CD19+/CD19-
+        // offered as denominators with no row, and no gating pass behind them.
+        GateNode enabledGrandchild = new GateNode("CD19", 3.5);
+        enabledGrandchild.setStatistic(Statistic.MEAN);
+        enabledGrandchild.setThresholdIsZScore(false);
+        disabledChild.getBranches().get(0).getChildren().add(enabledGrandchild);
+
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(root);
@@ -191,6 +203,11 @@ class AnalysisSessionTest {
         assertEquals(List.of("CD45+", "CD3+", "CD3-", "CD45-"), denominatorNames);
         assertFalse(denominatorNames.stream().anyMatch(n -> n.startsWith("CD8")),
                 "a disabled gate's branches must not be offered as a denominator");
+        assertFalse(denominatorNames.stream().anyMatch(n -> n.startsWith("CD19")),
+                "nor an enabled gate's, when it hangs below a disabled one -- disabled is a "
+                        + "hard stop for the whole subtree");
+        assertFalse(rowBranchNames.stream().anyMatch(n -> n.startsWith("CD19")),
+                "and PopulationStats must stop at the same place, or the two disagree");
     }
 
     private static AnalysisSession.AnalysisInput input(int[] regionOf, int regionCount) {

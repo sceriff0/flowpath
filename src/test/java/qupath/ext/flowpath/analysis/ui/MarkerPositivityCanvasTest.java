@@ -113,6 +113,53 @@ class MarkerPositivityCanvasTest {
         }
     }
 
+    /**
+     * Two independent root gates on the identical channel — "compare two thresholds side by
+     * side", an ordinary FlowJo-style workflow — is <b>not</b> the malformed sibling gate
+     * group above, and must not be reported as one.
+     * <p>
+     * With {@code MarkerKey} keyed on {@code (parentPath, channel)} alone, both roots' four
+     * rows collected under a single key; the "expected exactly 2" branch then logged a WARN
+     * and dropped every one of those cells, so the workflow rendered an empty bar plus a
+     * spurious warning. {@code rootIndex} in the key makes each root its own node group
+     * again, and each root gets its own bar rather than being summed into one that would
+     * claim more positives and negatives than the slide has cells.
+     */
+    @Test
+    void twoRootsOnOneChannelAreTwoBarsRatherThanAMalformedGroup() {
+        Logger logbackLogger = (Logger) LoggerFactory.getLogger(MarkerPositivityCanvas.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        try {
+            MarkerPositivityCanvas canvas = new MarkerPositivityCanvas();
+            canvas.setRows(AnalysisFixtures.twoRootsSameChannelRows());
+
+            assertEquals(List.of("CD45 (root 1)", "CD45 (root 2)"), canvas.markers(),
+                    "one bar per root gate, labelled so the two can be told apart");
+
+            // Root 0 cuts at 10.5 (10 of 20 positive); root 1 cuts at 15.5 (5 positive).
+            assertEquals(10, canvas.positiveCount("CD45 (root 1)"));
+            assertEquals(10, canvas.negativeCount("CD45 (root 1)"));
+            assertEquals(5, canvas.positiveCount("CD45 (root 2)"));
+            assertEquals(15, canvas.negativeCount("CD45 (root 2)"));
+
+            assertEquals(20, canvas.scopeTotal());
+            assertEquals(0, canvas.ungatedCount("CD45 (root 1)"),
+                    "every cell was tested against root 0's gate");
+            assertEquals(0, canvas.ungatedCount("CD45 (root 2)"),
+                    "every cell was tested against root 1's gate");
+            assertEquals(0, canvas.excludedCount("CD45 (root 1)"));
+            assertEquals(0, canvas.excludedCount("CD45 (root 2)"),
+                    "two legitimate roots are not a malformed gate group");
+
+            assertTrue(appender.list.stream().noneMatch(e -> e.getLevel() == Level.WARN),
+                    "no warning: nothing here is malformed");
+        } finally {
+            logbackLogger.detachAppender(appender);
+        }
+    }
+
     /** As {@link AnalysisFixtures#twoLevelRows()}, but {@code CD45+} carries two sibling CD3 gates. */
     private static List<PopulationStats.Row> malformedSiblingGateRows() {
         int n = 20;

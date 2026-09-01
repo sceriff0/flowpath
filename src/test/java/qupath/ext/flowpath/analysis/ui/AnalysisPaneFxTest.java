@@ -64,13 +64,15 @@ class AnalysisPaneFxTest {
     }
 
     /**
-     * A denominator the user actually chose, that happens to hold zero cells, is a real
-     * answer -- {@code 0.0} -- and must render differently from "no denominator chosen at
-     * all". These are different values of the same field and must not collapse to the same
-     * text.
+     * A denominator the user chose that happens to hold zero cells gives every row a
+     * percentage with no defined value, not a percentage of zero: 10 cells "out of 0" is not
+     * {@code 0.0%} of anything, and rendering it as a plausible zero states something false.
+     * The row carries {@link Double#NaN} and the cell renders blank -- the same rendering as
+     * "no denominator chosen", which is the honest answer in both cases; the two are
+     * distinguishable in the data through {@code Row.denominatorCount()}.
      */
     @Test
-    void percentOfDenominatorRendersZeroWhenTheChosenDenominatorHoldsNoCells() {
+    void percentOfDenominatorRendersBlankWhenTheChosenDenominatorHoldsNoCells() {
         AnalysisSession session = new AnalysisSession();
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.emptyDenominatorInput()));
@@ -81,7 +83,52 @@ class AnalysisPaneFxTest {
                 .orElseThrow();
         FxTestSupport.onFxRun(() -> pane.setDenominator(emptyBranch));
 
-        assertEquals("0.0", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
+        assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
+        assertTrue(Double.isNaN(FxTestSupport.onFx(() -> pane.percentOfDenominatorAt(0))),
+                "an empty denominator yields NaN, not a zero that reads as an answer");
+    }
+
+    /**
+     * {@code AnalysisState.canExport()} shipped as a derived field nothing consumed — there
+     * was no Export control in the pane at all, and {@code PopulationStatsExporter} had no
+     * production caller. The button is that consumer; this pins that the state actually
+     * reaches it in both directions rather than the button simply always being live.
+     */
+    @Test
+    void theExportButtonFollowsCanExport() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        assertFalse(FxTestSupport.onFx(pane::exportEnabled),
+                "nothing accepted yet -- there is nothing to write");
+
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+        assertTrue(FxTestSupport.onFx(pane::exportEnabled),
+                "a pass has been accepted, so canExport() is true and the button follows");
+    }
+
+    /**
+     * Spec §4 asks the denominator dropdown to also offer "all cells". The converter has
+     * always been able to render a {@code null} branch as {@code "(none)"}, but nothing ever
+     * put a {@code null} in the list -- so the choice was one-way: a user who picked a
+     * denominator had no item to pick to get back off it.
+     */
+    @Test
+    void theDenominatorPickerOffersAllCellsAsWellAsEveryBranch() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+
+        List<Branch> offered = FxTestSupport.onFx(pane::denominatorChoices);
+        assertNull(offered.get(0), "the first offer is \"all cells\" -- rendered \"(none)\"");
+        assertEquals(session.denominatorChoices().size() + 1, offered.size(),
+                "every branch, plus the null");
+
+        Branch positive = session.denominatorChoices().get(0);
+        FxTestSupport.onFxRun(() -> pane.setDenominator(positive));
+        assertEquals("100.0", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(null));
+        assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)),
+                "choosing \"(none)\" again clears the denominator column");
     }
 
     /**
@@ -104,9 +151,9 @@ class AnalysisPaneFxTest {
                 Set.copyOf(FxTestSupport.onFx(() -> pane.compositionCanvas().barLabels())),
                 "the root picker must reach CompositionCanvas, not just the pane's own bookkeeping");
 
-        List<String> populations = FxTestSupport.onFx(pane::populationChoices);
-        assertTrue(populations.contains("CD45+/CD3+"));
-        FxTestSupport.onFxRun(() -> pane.selectPopulation("CD45+/CD3+"));
+        List<PopulationRef> populations = FxTestSupport.onFx(pane::populationChoices);
+        assertTrue(populations.contains(new PopulationRef(0, "CD45+/CD3+")));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation(new PopulationRef(0, "CD45+/CD3+")));
         int valueForWholeSlide = FxTestSupport.onFx(() ->
                 pane.scopeComparisonCanvas().valueForScope(PopulationStats.Scope.WHOLE_SLIDE));
         assertEquals(5, valueForWholeSlide, "the population picker must reach ScopeComparisonCanvas");

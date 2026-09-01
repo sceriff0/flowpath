@@ -221,6 +221,46 @@ public final class AnalysisFixtures {
                 input.regionAreasMm2(), null).rows();
     }
 
+    /**
+     * {@link #twoRootsSameChannelRows()} over two annotated regions, so the per-region and
+     * per-scope plots have something to compare that the whole-slide rows cannot stand in for.
+     * <p>
+     * Cells alternate region by parity, as in {@link #twoLevelRows()}. Root 0 ({@code > 10.5},
+     * cells 10-19) puts 5 of its positives in "Region 1" and 5 in "Region 2"; root 1
+     * ({@code > 15.5}, cells 15-19) puts 2 in "Region 1" and 3 in "Region 2". The two roots'
+     * {@code CD45+} rows are byte-identical in {@code path} and {@code gateChannel} and differ
+     * in every count, which is what a canvas keyed on path alone gets wrong.
+     */
+    public static List<PopulationStats.Row> twoRootsSameChannelRegionRows() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode rootA = new GateNode("CD45", 10.5);
+        rootA.setStatistic(Statistic.MEAN);
+        rootA.setThresholdIsZScore(false);
+
+        GateNode rootB = new GateNode("CD45", 15.5);
+        rootB.setStatistic(Statistic.MEAN);
+        rootB.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(rootA);
+        tree.addRoot(rootB);
+
+        int[] regionOf = new int[n];
+        for (int i = 0; i < n; i++) regionOf[i] = i % 2;
+        List<String> regionNames = List.of("Region 1", "Region 2");
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, regionOf, regionNames.size())
+                .getTally();
+
+        return PopulationStats.of(tree, tally, regionNames, null, null).rows();
+    }
+
     /** The {@link AnalysisSession.AnalysisInput} {@link #twoRootsSameChannelRows()} is built from. */
     public static AnalysisSession.AnalysisInput twoRootsSameChannelInput() {
         int n = 20;

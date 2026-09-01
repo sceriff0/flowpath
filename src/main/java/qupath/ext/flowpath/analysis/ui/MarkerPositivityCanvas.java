@@ -26,6 +26,13 @@ import java.util.Map;
  * Always summarises {@link PopulationStats.Scope#WHOLE_SLIDE}, filtering it out of whatever
  * row list it is handed — see {@link CompositionCanvas} for why.
  * <p>
+ * <b>One bar per root gate, not per channel.</b> Two independent root gates on the same
+ * channel — "compare two thresholds side by side" — ask the same question of the same cells
+ * twice, so their answers are reported as two bars ({@code "CD45 (root 1)"},
+ * {@code "CD45 (root 2)"}) rather than added together, which would claim more positives and
+ * negatives than the slide has cells. Within one root a marker gated under several branches
+ * still pools, because those branches partition the cells rather than repeat them.
+ * <p>
  * <b>Deriving positive/negative without trusting branch names.</b> A user may rename a
  * gate's branches to anything, so this canvas does not match on {@code "+"}/{@code "-"}
  * suffixes. Instead it relies on an invariant of {@link PopulationStats}: every row for one
@@ -53,13 +60,22 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
     private static final Logger logger = LoggerFactory.getLogger(MarkerPositivityCanvas.class);
 
     /**
-     * The identity of one gate node, as far as this reduction can see it: the path of the
-     * branch it hangs off, and the channel it gates on. A record, not a string
-     * concatenation — string-joining two arbitrary paths risks collision (or, as this class
-     * once did, a control character used as a delimiter), where a compound key is
-     * collision-safe by construction and costs nothing.
+     * The identity of one gate node, as far as this reduction can see it: the root gate it
+     * descends from, the path of the branch it hangs off, and the channel it gates on. A
+     * record, not a string concatenation — string-joining arbitrary paths risks collision
+     * (or, as this class once did, a control character used as a delimiter), where a
+     * compound key is collision-safe by construction and costs nothing.
+     * <p>
+     * <b>{@code rootIndex} is part of it.</b> Two independent root gates on the identical
+     * channel — the classic "compare two thresholds side by side" workflow — emit
+     * byte-identical paths, so a {@code (parentPath, channel)} key collected all four of
+     * their rows into one group. This class then diagnosed that as a malformed sibling gate
+     * group, logged a WARN and dropped every one of those cells: the workflow rendered an
+     * empty bar plus a spurious warning. With the root in the key each root is its own
+     * node group again, and the malformed-group branch below is back to meaning what it
+     * says.
      */
-    private record MarkerKey(String parentPath, String channel) {}
+    private record MarkerKey(int rootIndex, String parentPath, String channel) {}
 
     private static final class Tally {
         int positive;
@@ -89,12 +105,28 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
                 .mapToInt(PopulationStats.Row::parentCount)
                 .findFirst()
                 .orElse(0);
+        // One bar per (root, marker), not per marker: two root gates on the same channel are
+        // two independent questions asked of the SAME cells, so pooling them would report
+        // more positives and negatives than the slide has cells. Within one root a marker
+        // gated in several places still pools, which is the "summed over every place it is
+        // gated" the accessors below describe.
+        boolean multiRoot = wholeSlideRows.stream()
+                .mapToInt(PopulationStats.Row::rootIndex).distinct().count() > 1;
         this.byMarker.clear();
-        this.byMarker.putAll(tallyMarkers(wholeSlideRows));
+        this.byMarker.putAll(tallyMarkers(wholeSlideRows, multiRoot));
         repaint();
     }
 
-    private static Map<String, Tally> tallyMarkers(List<PopulationStats.Row> rows) {
+    /**
+     * How a marker's bar is labelled: its channel, plus which root gate asked the question
+     * when the report holds more than one — otherwise two roots on one channel would draw
+     * two bars a reader cannot tell apart.
+     */
+    private static String markerLabel(MarkerKey key, boolean multiRoot) {
+        return multiRoot ? key.channel() + " (root " + (key.rootIndex() + 1) + ")" : key.channel();
+    }
+
+    private static Map<String, Tally> tallyMarkers(List<PopulationStats.Row> rows, boolean multiRoot) {
         // Group single-axis rows by the node they came from: (parent path, channel). Two
         // rows share a node iff they share both -- a node's own two rows keep their
         // relative emission order (positive first) even when interleaved with a subtree.
@@ -102,7 +134,7 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
         for (PopulationStats.Row row : rows) {
             String channel = row.gateChannel();
             if (channel == null || channel.isEmpty() || channel.contains(" / ")) continue; // 2-axis gate
-            MarkerKey key = new MarkerKey(parentPathOf(row), channel);
+            MarkerKey key = new MarkerKey(row.rootIndex(), parentPathOf(row), channel);
             byNode.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
         }
 
@@ -113,7 +145,7 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             // Always create the marker's entry, valid group or not, so a marker touched
             // only by a malformed group still appears (with zero measured) rather than
             // silently vanishing from the chart -- see the class javadoc.
-            Tally tally = out.computeIfAbsent(key.channel(), k -> new Tally());
+            Tally tally = out.computeIfAbsent(markerLabel(key, multiRoot), k -> new Tally());
             if (nodeRows.size() == 2) {
                 tally.positive += nodeRows.get(0).count();
                 tally.negative += nodeRows.get(1).count();

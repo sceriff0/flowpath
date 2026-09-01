@@ -15,9 +15,10 @@ import java.util.List;
  * reconstruct from a per-cell export, because it never sees the tree.
  * <p>
  * <b>Raw and clean side by side.</b> The clean count drops cells that were outlier-clipped,
- * quality-filtered, or that a gate could not measure. The difference between the two is the
- * data-quality cost of this panel, and it belongs in front of the reader rather than being a
- * choice made silently inside an exporter.
+ * quality-filtered, or that a gate could not measure — and, when the annotation ROI filter is
+ * on, cells outside the annotations being filtered by (see {@link Row#cleanCount()}). The
+ * difference between the two belongs in front of the reader rather than being a choice made
+ * silently inside an exporter.
  * <p>
  * <b>Three nested scopes</b> — {@code ANNOTATION_K ⊆ ANNOTATION_ALL ⊆ WHOLE_SLIDE}. The
  * difference between them is not noise; it is the effect of the annotation.
@@ -30,11 +31,27 @@ public final class PopulationStats {
     /** The three nested populations a quantity can be reported over. */
     public enum Scope {
         /** Every indexed cell; no polygon consulted. The only scope an unannotated slide has. */
-        WHOLE_SLIDE,
+        WHOLE_SLIDE("Whole slide"),
         /** Cells inside the union of the annotations in use. */
-        ANNOTATION_ALL,
+        ANNOTATION_ALL("All annotations"),
         /** Cells inside one annotated region; several values per image. */
-        ANNOTATION_K
+        ANNOTATION_K("Per annotation");
+
+        private final String displayName;
+
+        Scope(String displayName) {
+            this.displayName = displayName;
+        }
+
+        /**
+         * What to call this scope in the interface. {@link #name()} is the wire form — it is
+         * what {@code PopulationStatsExporter} writes into the CSV and what a saved report
+         * is read back by, so it must stay a stable enum constant; showing it to a user
+         * ("{@code ANNOTATION_ALL}") is a different question with a different answer.
+         */
+        public String displayName() {
+            return displayName;
+        }
     }
 
     /**
@@ -58,12 +75,28 @@ public final class PopulationStats {
      *                              worth of rows" (a composition chart, an exporter) must
      *                              partition on it, never on {@code path} or
      *                              {@code gateChannel}.
-     * @param count                 cells in this branch at this scope
-     * @param cleanCount            of those, the cleanly judged ones
+     * @param count                 cells in this branch at this scope, excluded ones included
+     * @param cleanCount            of those, the ones not excluded when they landed here:
+     *                              not rejected by the quality filter, not clipped as an
+     *                              outlier by this gate, and — when the annotation ROI
+     *                              filter is on — <b>inside the annotations being filtered
+     *                              by</b>. That last clause is not a data-quality property,
+     *                              but the ROI mask and the quality filter share one
+     *                              exclusion flag in {@code GatingEngine} and the tree view's
+     *                              own {@code Branch.getCount()} is judged by that same flag.
+     *                              Keeping them together is what makes
+     *                              {@code clean(branch) <= cellsClean()} hold structurally,
+     *                              which every percentage here depends on; the cost is that
+     *                              at {@link Scope#WHOLE_SLIDE} on an annotated slide part of
+     *                              the {@code count}/{@code cleanCount} gap is annotation
+     *                              coverage rather than data quality. Compare the scopes to
+     *                              separate the two.
      * @param parentCount           cells in the branch above, or the scope's population for a root
      * @param denominatorCount      cells in the user-chosen denominator branch; 0 when none chosen
-     * @param percentOfDenominator  {@code NaN} when no denominator was chosen — not zero, which
-     *                              would read as a real answer
+     * @param percentOfDenominator  {@code NaN} when no denominator was chosen, and equally
+     *                              {@code NaN} when the chosen denominator branch holds no
+     *                              cells — never zero, which would read as a real answer to a
+     *                              question that has none
      * @param areaMm2               the region's area, or {@code NaN} when unknown
      * @param densityPerMm2         {@code count / areaMm2}, or {@code NaN} without an area
      */
@@ -89,9 +122,25 @@ public final class PopulationStats {
      * @param regionAreasMm2 per-region area, or {@code null} when unknown
      * @param denominator    the branch to report every population against, or {@code null}
      *                       when the user has not chosen one
+     * @throws IllegalArgumentException when {@code regionNames} does not describe exactly the
+     *                                  region set {@code tally} counted — the two are views of
+     *                                  one region set, and labelling a report with invented
+     *                                  region names is worse than refusing to build it
      */
     public static PopulationStats of(GateTree tree, BranchTally tally, List<String> regionNames,
                                      double[] regionAreasMm2, Branch denominator) {
+        List<String> names = regionNames == null ? List.of() : regionNames;
+        if (names.size() != tally.regionCount()) {
+            // regionNames and the tally's region indices are two views of the SAME region
+            // set; a mismatch means the caller paired a tally from one image with region
+            // metadata from another. AnalysisSession.AnalysisInput rejects that on its own,
+            // but this method is public and the batch/cohort callers reach it directly, so
+            // the guard lives here too rather than only in one of its callers. It replaces a
+            // "Region N" fallback name, which papered the mismatch over.
+            throw new IllegalArgumentException(
+                    "regionNames describes a different region set than tally: "
+                            + names.size() + " vs " + tally.regionCount() + " regions");
+        }
         List<Row> out = new ArrayList<>();
         boolean hasDenominator = denominator != null;
 
@@ -114,7 +163,7 @@ public final class PopulationStats {
         }
 
         for (int r = 0; r < tally.regionCount(); r++) {
-            String name = r < regionNames.size() ? regionNames.get(r) : "Region " + (r + 1);
+            String name = names.get(r);
             double area = (regionAreasMm2 != null && r < regionAreasMm2.length)
                     ? regionAreasMm2[r] : Double.NaN;
             int regionTotal = tally.cellsInRegion(r);
@@ -173,7 +222,7 @@ public final class PopulationStats {
                         count, clean, parentCount, cleanParentCount, denominatorCount,
                         percent(count, parentCount),
                         percent(count, scopeTotal),
-                        !hasDenominator ? Double.NaN : percent(count, denominatorCount),
+                        !hasDenominator ? Double.NaN : percentOfDenominator(count, denominatorCount),
                         areaMm2,
                         Double.isNaN(areaMm2) || areaMm2 <= 0 ? Double.NaN : count / areaMm2));
                 collect(branch.getChildren(), scope, regionName, region, path, depth + 1, rootIndex,
@@ -207,9 +256,33 @@ public final class PopulationStats {
         return sum;
     }
 
-    /** Percentage, or 0 for an empty denominator — a report must not carry NaN from division. */
+    /**
+     * Percentage of parent or of the scope total, or {@code 0} for an empty whole.
+     * <p>
+     * Zero is the right answer for these two: a parent (or a scope) holding no cells can
+     * hold no cells of this branch either, so the part is necessarily zero too and
+     * "0.0%" states a fact.
+     */
     private static double percent(int part, int whole) {
         return whole <= 0 ? 0.0 : 100.0 * part / whole;
+    }
+
+    /**
+     * Percentage of the user-chosen denominator branch, or {@link Double#NaN} when that
+     * branch holds no cells.
+     * <p>
+     * Deliberately <em>not</em> {@link #percent}'s zero. The denominator branch is unrelated
+     * to the branch being reported, so 10 cells against a chosen denominator of 0 is not
+     * "0.0%" of anything — it is a quantity with no defined percentage, and rendering it as
+     * a plausible zero states something false. {@code NaN} is already the value a row
+     * carries when no denominator was chosen at all, and {@code AnalysisPane.formatPercent}
+     * already renders {@code NaN} as an empty cell, so this path is fully supported end to
+     * end. The two {@code NaN}s are distinguishable through
+     * {@link Row#denominatorCount()}: zero here, and a row whose {@link Row#denominatorCount()}
+     * is zero <em>with</em> no denominator chosen is the other case.
+     */
+    private static double percentOfDenominator(int part, int denominatorCount) {
+        return denominatorCount <= 0 ? Double.NaN : 100.0 * part / denominatorCount;
     }
 
     /** Every row, all scopes, in depth-first tree order within each scope. */

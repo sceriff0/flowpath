@@ -15,11 +15,16 @@ import java.util.Set;
  * Always reads {@link PopulationStats.Scope#ANNOTATION_K} — a caller may hand this canvas
  * the full, unfiltered {@link PopulationStats#rows()} and it filters to the per-region rows
  * itself, the same way {@link CompositionCanvas} filters to whole-slide.
+ * <p>
+ * <b>A population is identified by {@link PopulationRef}, never by path alone.</b> Two
+ * un-renamed root gates on one channel emit byte-identical paths, so a path-keyed
+ * {@link #regionLabels()} emitted every region twice and {@link #valueForRegion} then
+ * reported the first root's number under both labels. See {@link PopulationRef}.
  */
 public final class RegionComparisonCanvas extends PlotCanvas {
 
     private List<PopulationStats.Row> regionRows = List.of();
-    private String selectedPath;
+    private PopulationRef selected;
 
     public RegionComparisonCanvas() {
         super(380, 220);
@@ -29,37 +34,39 @@ public final class RegionComparisonCanvas extends PlotCanvas {
         this.regionRows = rows == null ? List.of() : rows.stream()
                 .filter(r -> r.scope() == PopulationStats.Scope.ANNOTATION_K)
                 .toList();
-        if (selectedPath == null || regionRows.stream().noneMatch(r -> r.path().equals(selectedPath))) {
-            selectedPath = regionRows.stream().map(PopulationStats.Row::path).findFirst().orElse(null);
+        if (selected == null || regionRows.stream().noneMatch(selected::matches)) {
+            selected = regionRows.stream().map(PopulationRef::of).findFirst().orElse(null);
         }
         repaint();
     }
 
     /** Choose which population's count is compared across regions. */
-    public void setSelectedPopulation(String path) {
-        this.selectedPath = path;
+    public void setSelectedPopulation(PopulationRef population) {
+        this.selected = population;
         repaint();
     }
 
-    /** Every distinct population path available to compare, in first-seen order. */
-    List<String> availablePopulations() {
-        Set<String> seen = new LinkedHashSet<>();
-        for (PopulationStats.Row row : regionRows) seen.add(row.path());
+    /** Every distinct population available to compare, in first-seen order. */
+    List<PopulationRef> availablePopulations() {
+        Set<PopulationRef> seen = new LinkedHashSet<>();
+        for (PopulationStats.Row row : regionRows) seen.add(PopulationRef.of(row));
         return List.copyOf(seen);
     }
 
     /** Region names the selected population has a row in — the categories on the X axis. */
     List<String> regionLabels() {
+        if (selected == null) return List.of();
         return regionRows.stream()
-                .filter(r -> Objects.equals(r.path(), selectedPath))
+                .filter(selected::matches)
                 .map(r -> r.regionName() == null ? "" : r.regionName())
                 .toList();
     }
 
     /** The selected population's count in one region; 0 when that region has no row for it. */
     int valueForRegion(String regionName) {
+        if (selected == null) return 0;
         return regionRows.stream()
-                .filter(r -> Objects.equals(r.path(), selectedPath))
+                .filter(selected::matches)
                 .filter(r -> Objects.equals(regionName, r.regionName()))
                 .mapToInt(PopulationStats.Row::count)
                 .findFirst()
@@ -91,7 +98,7 @@ public final class RegionComparisonCanvas extends PlotCanvas {
             gc.setFill(Color.rgb(76, 154, 255, 0.85));
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
-        drawAxes(gc, selectedPath == null ? "Region" : selectedPath, "Count");
+        drawAxes(gc, selected == null ? "Region" : selected.path(), "Count");
         drawCategoryLabels(gc, regions);
         drawValueTicks(gc, 0, maxCount, 4);
     }
