@@ -174,6 +174,14 @@ public record AxisScale(double min, double max, boolean log, boolean anyClipped)
         for (double decade = 1; decade <= max; decade *= 10) {
             decades.add(decade);
         }
+        // decades.isEmpty() cannot happen from anything of() builds: it floors a logarithmic
+        // max at 10, so the loop above always collects at least {1, 10}. It is reachable all
+        // the same, because this is a record — its canonical constructor is public, and nothing
+        // stops a caller from writing new AxisScale(1, 4, true, false) directly, which skips
+        // of()'s floor entirely and reaches this method with a log-mode max below 10. Without
+        // this guard that call returns an empty tick array instead of {4}; keep it so a
+        // directly-constructed scale still draws at least one tick, the same way of() guarantees
+        // one for every scale it builds itself.
         if (decades.isEmpty() || decades.get(decades.size() - 1) != max) {
             decades.add(max);
         }
@@ -186,10 +194,14 @@ public record AxisScale(double min, double max, boolean log, boolean anyClipped)
 
     /**
      * A tick label for {@code value}: thousands-grouped with no decimal for a whole number,
-     * one decimal place otherwise. Every value {@link #of} itself produces — the largest bar
-     * value, a percentile candidate, the {@code 1} fallback, the log floor of {@code 10} — is a
-     * whole count, so this method's own {@code max} is always whole. The one-decimal branch
-     * exists for {@link #ticks}' other source of tick values on a small linear range: {@link
+     * one decimal place otherwise. Nothing in this class requires {@code value} to be whole —
+     * that is a property of the caller's input domain (cell counts are always integers), not an
+     * invariant {@link #of} or this method enforces, so both branches are real and reachable
+     * rather than one being dead code for this codebase's current callers. In practice the
+     * whole-number branch is the one every count-derived tick takes ({@link #of}'s {@code max}
+     * — the largest bar value, a percentile candidate, the {@code 1} fallback, the log floor of
+     * {@code 10} — is always whole when its inputs are). The one-decimal branch exists for
+     * {@link #ticks}' other source of tick values on a small linear range: {@link
      * PlotCanvas#niceTicks}' 1-2-5 stepper picks a step from the range's own magnitude, and on a
      * range as small as {@code [0, 2]} that step is {@code 0.5}, not 1 — a fixed no-decimal
      * format would round {@code 0.5} and {@code 1.5} to the same label.

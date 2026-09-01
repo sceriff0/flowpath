@@ -110,4 +110,28 @@ class AxisScaleTest {
         assertDoesNotThrow(() -> new ScaleOptions(false, true, 50));
         assertDoesNotThrow(() -> new ScaleOptions(false, true, 100));
     }
+
+    /**
+     * Regression for a bug caught in review, never in the wild: {@code anyClipped} must be
+     * decided against the FINAL (possibly log-floored) {@code max}, not against the raw
+     * percentile candidate computed before the floor is applied. {1..9} at p50 lands the
+     * percentile on 5 (index = ceil(4.5) - 1 = 4, sorted[4] = 5) — a genuine, non-fallback clip,
+     * since 0 < 5 < 9. Log mode then floors max from 5 up to 10. An implementation that decides
+     * anyClipped inside the percentile branch, before that floor, would flag 6/7/8/9 as clipped
+     * against the unfloored top of 5, while isClipped (which reads the floored max of 10) would
+     * say none of them are — two methods on the same axis disagreeing about the same values.
+     * Computing anyClipped once, last, against the same final max isClipped reads is what rules
+     * that out. Do not "simplify" AxisScale.of by moving this scan back inside the percentile
+     * branch — that is exactly the regression this test exists to catch.
+     */
+    @Test
+    void clipAndLogAgreeAboutWhatWasClipped() {
+        double[] values = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+        AxisScale s = AxisScale.of(values, new ScaleOptions(true, true, 50));
+        assertEquals(10, s.max(), 1e-9, "log floor lifts the genuine percentile of 5 up to 10");
+        assertFalse(s.anyClipped(), "nothing in 1..9 exceeds the floored max of 10");
+        for (double v : values) {
+            assertFalse(s.isClipped(v), "isClipped and anyClipped must agree: " + v);
+        }
+    }
 }
