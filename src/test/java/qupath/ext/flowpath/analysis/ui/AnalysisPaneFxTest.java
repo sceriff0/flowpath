@@ -460,4 +460,82 @@ class AnalysisPaneFxTest {
         assertEquals(lines[0].split("\t", -1).length, lines[1].split("\t", -1).length,
                 "the header and the row must have the same number of fields");
     }
+
+    /**
+     * The summary line is what makes a statistics panel say what it is reporting on -- a
+     * user with two images open otherwise cannot tell which one the numbers describe.
+     */
+    @Test
+    void theSummaryLineNamesTheImageTheCellsAndThePopulations() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.isBlank(), "the panel must say what it is reporting on");
+        assertTrue(summary.contains("cells"), summary);
+        assertTrue(summary.contains("populations"), summary);
+    }
+
+    /**
+     * An unannotated slide has {@code regionCount == 0}; advertising "0 regions" would be
+     * noise rather than information, so the segment must be omitted entirely, not printed
+     * as a zero.
+     */
+    @Test
+    void theSummaryOmitsRegionsWhenThereAreNone() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.contains("regions"),
+                "an unannotated slide must not advertise zero regions: " + summary);
+    }
+
+    /**
+     * A blank image name is exactly as unknown as a {@code null} one -- {@code
+     * AnalysisFixtures} only ever hands out a real name, so this test builds its own input
+     * with the surrounding fixture's tree/index/tally to isolate the one field under test.
+     */
+    @Test
+    void theSummaryOmitsTheImageSegmentWhenTheNameIsBlank() {
+        AnalysisSession.AnalysisInput base = AnalysisFixtures.simpleInput();
+        AnalysisSession.AnalysisInput blankName = new AnalysisSession.AnalysisInput(
+                base.tree(), base.index(), base.stats(), base.tally(),
+                base.regionNames(), base.regionAreasMm2(), "   ");
+
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(blankName));
+
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.contains("   "), "a blank name must not appear in the summary: " + summary);
+        assertTrue(summary.startsWith("10 cells") || summary.contains("cells"), summary);
+    }
+
+    /**
+     * The summary's population count must track what the table is actually showing, not
+     * only what the last full push computed -- typing in the filter box changes
+     * {@code table.getItems()} without going through {@code updateTable()} at all, and a
+     * summary line wired only to the push path would silently drift from the table it sits
+     * above the moment a user starts typing.
+     */
+    @Test
+    void theSummaryPopulationCountFollowsTheFilter() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        int unfilteredRows = FxTestSupport.onFx(pane::rowCount);
+        String unfilteredSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(unfilteredSummary.contains(unfilteredRows + " populations"), unfilteredSummary);
+
+        // Narrow to a filter that cannot match every row, so the visible count actually
+        // changes rather than coincidentally staying the same.
+        FxTestSupport.onFxRun(() -> pane.setFilter("CD45+"));
+        int filteredRows = FxTestSupport.onFx(pane::rowCount);
+        assertTrue(filteredRows < unfilteredRows, "the filter must actually narrow the rows shown");
+
+        String filteredSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(filteredSummary.contains(filteredRows + " populations"), filteredSummary);
+    }
 }

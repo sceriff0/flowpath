@@ -23,11 +23,17 @@ import java.util.List;
  * @param regionCount    annotated regions, 0 when none
  * @param availableScopes which scopes have rows; empty when there is no data
  * @param emptyMessage   what to show instead of a table, or {@code null} when there is data
+ * @param imageName      the image the accepted pass describes, for the window's own display,
+ *                       or {@code null} when unknown. Deliberately outside the
+ *                       {@code hasData}/{@code emptyMessage} contradiction table below: a
+ *                       QuPath image can genuinely have no name, so a {@code null} here is an
+ *                       ordinary fact about the image, not a sign the derivation is broken the
+ *                       way a {@code null emptyMessage} on an empty panel would be.
  */
 public record AnalysisState(boolean hasData, boolean hasRegions, boolean canExport,
                             int cellCount, int regionCount,
                             List<PopulationStats.Scope> availableScopes,
-                            String emptyMessage) {
+                            String emptyMessage, String imageName) {
 
     public AnalysisState {
         availableScopes = List.copyOf(availableScopes);

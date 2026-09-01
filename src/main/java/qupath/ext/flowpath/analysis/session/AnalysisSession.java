@@ -115,7 +115,8 @@ public final class AnalysisSession {
     public AnalysisState state() {
         if (input == null) {
             return new AnalysisState(false, false, false, 0, 0, List.of(),
-                    "No gating pass to report on yet — gate some cells to see population statistics.");
+                    "No gating pass to report on yet — gate some cells to see population statistics.",
+                    null);
         }
         int regionCount = input.tally().regionCount();
         boolean hasRegions = regionCount > 0;
@@ -125,7 +126,7 @@ public final class AnalysisSession {
                         PopulationStats.Scope.ANNOTATION_K)
                 : List.of(PopulationStats.Scope.WHOLE_SLIDE);
         return new AnalysisState(true, hasRegions, true,
-                input.tally().cellsTotal(), regionCount, scopes, null);
+                input.tally().cellsTotal(), regionCount, scopes, null, input.imageName());
     }
 
     /**

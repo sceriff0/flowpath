@@ -82,6 +82,7 @@ public final class AnalysisPane extends BorderPane {
     private final Button exportButton = new Button("Export CSV...");
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
+    private final Label summaryLabel = new Label();
 
     // The table's items are this fixed FilteredList-over-SortedList pipeline, built once and
     // never replaced by updateTable() -- only backingRows' CONTENT changes on a push. Rebuilding
@@ -220,6 +221,8 @@ public final class AnalysisPane extends BorderPane {
         filterField.setPrefWidth(180);
         filterField.textProperty().addListener((obs, old, text) -> applyFilter(text));
 
+        summaryLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 11; -fx-padding: 4 8 4 8;");
+
         HBox controls = new HBox(10,
                 new Label("Scope:"), scopeChoice,
                 new Label("Denominator:"), denominatorCombo,
@@ -241,7 +244,11 @@ public final class AnalysisPane extends BorderPane {
         body.setOrientation(Orientation.VERTICAL);
         body.setDividerPositions(0.45);
 
-        setTop(controls);
+        BorderPane top = new BorderPane();
+        top.setTop(controls);
+        top.setCenter(summaryLabel);
+
+        setTop(top);
         setCenter(body);
 
         refresh();
@@ -376,6 +383,15 @@ public final class AnalysisPane extends BorderPane {
     /** The table's current placeholder text — non-null exactly when there is no data. */
     String placeholderText() {
         return placeholderLabel.getText();
+    }
+
+    /**
+     * The summary line's current text — what {@link #summaryLabel} shows above the table.
+     * Package-private, exercised directly by the pane's own FX test, the same way
+     * {@link #placeholderText()} is.
+     */
+    String summaryText() {
+        return summaryLabel.getText();
     }
 
     /** Rows currently shown, for the scope, denominator and filter in effect. */
@@ -613,6 +629,7 @@ public final class AnalysisPane extends BorderPane {
                 row.path().toLowerCase(Locale.US).contains(needle)
                         || (row.regionName() != null && row.regionName().toLowerCase(Locale.US).contains(needle)));
         updatePlaceholder();
+        updateSummary();
     }
 
     private void refresh() {
@@ -680,6 +697,7 @@ public final class AnalysisPane extends BorderPane {
             backingRows.clear();
             setAllPlotRows(List.of());
             updatePlaceholder();
+            updateSummary();
             return;
         }
         PopulationStats stats = session.stats(session.resolveDenominator(selectedDenominatorRef));
@@ -695,6 +713,62 @@ public final class AnalysisPane extends BorderPane {
         // See each canvas's own class javadoc.
         setAllPlotRows(stats.rows());
         updatePlaceholder();
+        updateSummary();
+    }
+
+    /**
+     * Redraw {@link #summaryLabel} from the session's current state and {@link #backingRows} —
+     * called from every place that can change what either holds: the end of
+     * {@link #updateTable()} (scope, denominator, or a freshly accepted pass) and the end of
+     * {@link #applyFilter} (the row count the line reports is the same
+     * filtered-and-sorted count {@link #rowCount()} exposes, so a search that hides rows must
+     * move the summary's "populations" number too). Deliberately not folded into
+     * {@link #refresh()} alone — {@code refresh()} only calls {@code updateTable()} once per
+     * push, but the filter box changes {@code table.getItems()} without going through
+     * {@code updateTable()} at all, and a summary line that only refreshed on the not-taken
+     * path would silently drift from the table it sits above.
+     */
+    private void updateSummary() {
+        summaryLabel.setText(summaryText(session.state(), backingRows, rowCount()));
+    }
+
+    /**
+     * Build the summary line's text from already-computed facts — never re-derives "is there
+     * data" or "what scope total applies", both of which {@link AnalysisSession} and
+     * {@link PopulationStats} already answer once.
+     * <p>
+     * {@code scopeTotal} is read off {@code scopedRows}' own depth-0 {@code parentCount}
+     * rather than {@link AnalysisState#cellCount()} — {@code cellCount} is the whole pass's
+     * total, fixed regardless of scope, and would silently overstate the denominator at
+     * {@link PopulationStats.Scope#ANNOTATION_K}, where the true total is one region's cells.
+     * Every depth-0 row of a given scope carries the same {@code parentCount} (root branches
+     * are all handed the same scope total in {@link PopulationStats#of}), so the first one
+     * found is exact, not a guess among roots.
+     *
+     * @param state       the session's current derived state
+     * @param scopedRows  the rows for the scope currently selected, i.e. {@link #backingRows}
+     * @param visibleRows how many of those rows the table is currently showing, i.e. after the
+     *                    user's filter — {@link #rowCount()}
+     */
+    private static String summaryText(AnalysisState state, List<PopulationStats.Row> scopedRows,
+                                      int visibleRows) {
+        if (!state.hasData()) return "";
+        List<String> parts = new ArrayList<>();
+        if (state.imageName() != null && !state.imageName().isBlank()) {
+            parts.add(state.imageName());
+        }
+        parts.add(String.format(Locale.US, "%,d cells", state.cellCount()));
+        if (state.regionCount() > 0) {
+            parts.add(String.format(Locale.US, "%,d regions", state.regionCount()));
+        }
+        scopedRows.stream()
+                .filter(r -> r.depth() == 0)
+                .mapToInt(PopulationStats.Row::parentCount)
+                .findFirst()
+                .ifPresent(scopeTotal ->
+                        parts.add(String.format(Locale.US, "%,d in scope", scopeTotal)));
+        parts.add(String.format(Locale.US, "%,d populations", visibleRows));
+        return String.join(" · ", parts);
     }
 
     /**

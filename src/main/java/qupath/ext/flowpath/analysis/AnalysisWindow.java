@@ -37,6 +37,7 @@ public final class AnalysisWindow {
     public void open(QuPathGUI qupath, AnalysisSession.AnalysisInput input, Window owner) {
         if (stage != null && stage.isShowing()) {
             pane.accept(input);
+            stage.setTitle(titleFor(input));
             stage.toFront();
             stage.requestFocus();
             return;
@@ -47,7 +48,7 @@ public final class AnalysisWindow {
 
         pane = new AnalysisPane(session);
         stage = new Stage();
-        stage.setTitle("FlowPath — Analysis");
+        stage.setTitle(titleFor(input));
         stage.initOwner(owner != null ? owner : qupath.getStage());
         stage.setScene(new Scene(pane, 960, 640));
         stage.setMinWidth(720);
@@ -64,11 +65,29 @@ public final class AnalysisWindow {
      * Deliberately does not open the window. The gating pane recomputes on every gate
      * edit, and an Analysis window that sprang open on its own the first time a gate moved
      * would be an ambush rather than a feature.
+     * <p>
+     * Also re-sets the title, not only the pane's content — a live-preview push can move a
+     * report from one image to another (the gating pane holds one {@code AnalysisWindow} for
+     * its whole life, across images), and a title set once at {@link #open} would keep
+     * naming the image the window was first opened on.
      */
     public void push(AnalysisSession.AnalysisInput input) {
         if (stage != null && stage.isShowing() && pane != null) {
             pane.accept(input);
+            stage.setTitle(titleFor(input));
         }
+    }
+
+    /**
+     * {@code "FlowPath — Analysis — " + imageName} when the pass names an image, the plain
+     * title otherwise — a QuPath image can genuinely have no name, so a blank/{@code null}
+     * name falls back rather than appending an empty suffix.
+     */
+    private static String titleFor(AnalysisSession.AnalysisInput input) {
+        String imageName = input == null ? null : input.imageName();
+        return imageName == null || imageName.isBlank()
+                ? "FlowPath — Analysis"
+                : "FlowPath — Analysis — " + imageName;
     }
 
     /** {@code true} when the Analysis window is currently on screen. */
