@@ -99,27 +99,31 @@ class LivePreviewServiceRegionTallyTest {
             assertEquals(1, result.getTally().regionCount(),
                     "the tally's region count must match what setRegions(regionOf, 1) gave the walk");
 
-            // Asserted at the cell-level denominator (cellsInRegion), not a branch's own
-            // inRegion(...): submitGatingWork() deep-copies the tree before walking it, so
-            // BranchTally's IdentityHashMap is keyed on that copy's Branch instances --
-            // GateTree.transferCounts (called right after the walk) copies only the raw
-            // Branch.getCount() int back onto the *original* tree's branches, never branch
-            // identity. There is therefore no Branch reference reachable from outside
-            // LivePreviewService that is == a key this tally actually holds, short of
-            // reflecting into a private field or adding a new accessor -- which would be
-            // restructuring the class for this test, not fixing the defect. cellsInRegion
-            // is recorded once per cell directly from the regionOf array
-            // (BranchTally.recordCell, called for every cell after the walk), independent
-            // of any Branch, so it pins exactly the same failure mode: if regionOf were
-            // silently dropped to null, every cell's region would fall through to -1 inside
-            // GatingEngine.assignAll regardless of what regionCount was still given, and
-            // this would read 0.
+            // cellsInRegion is recorded once per cell directly from the regionOf array
+            // (BranchTally.recordCell, called for every cell after the walk), independent of
+            // any Branch: if regionOf were silently dropped to null, every cell's region
+            // would fall through to -1 inside GatingEngine.assignAll regardless of what
+            // regionCount was still given, and this would read 0.
             assertEquals(5, result.getTally().cellsInRegion(0),
                     "all 5 CD45+ cells carry region 0 from regionOf -- if regionOf were "
                     + "silently dropped this would read 0 even with regionCount correct");
             assertEquals(10, result.getTally().cellsTotal(), "every cell was walked");
             assertEquals(5, result.getTally().cleanCellsInRegion(0),
                     "none of region 0's cells were excluded by the (default, empty) quality filter");
+
+            // The per-branch half of the same claim, looked up with a Branch reachable from
+            // the LIVE tree. An earlier version of this test asserted only the two
+            // branch-independent numbers above and explained in a comment that no live-tree
+            // Branch could ever be == a key the tally holds, because submitGatingWork()
+            // deep-copies the tree before walking it. That was true, and it was the
+            // production defect -- every count in the Analysis window read 0 -- not a
+            // property of the test. BranchTally.rebindTo now re-keys the tally onto the live
+            // tree before the pass is published; see LivePreviewServiceTallyIdentityTest,
+            // which pins that on its own.
+            assertEquals(5, result.getTally().inRegion(root.getBranches().get(0), 0),
+                    "all 5 CD45+ cells are in region 0");
+            assertEquals(0, result.getTally().inRegion(root.getBranches().get(1), 0),
+                    "no CD45- cell is in any region");
         } finally {
             service.shutdown();
         }

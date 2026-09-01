@@ -63,6 +63,20 @@ public final class GatingEngine {
         }
 
         /**
+         * This result with a different {@link #getTally()} and every other array shared.
+         * <p>
+         * The one intended caller is {@code LivePreviewService}, which walks a deep copy of
+         * the gate tree and must re-key the resulting tally onto the live tree's branches
+         * before publishing it — see {@link BranchTally#rebindTo}. Returning a new result
+         * rather than mutating this one keeps the "immutable in practice" contract
+         * {@code LivePreviewService.getLastResult()} advertises.
+         */
+        AssignmentResult withTally(BranchTally newTally) {
+            return new AssignmentResult(phenotypes, excluded, outOfAnnotation, outlier,
+                    unmeasured, colors, perRootColors, rootLabels, newTally);
+        }
+
+        /**
          * Phenotype label per cell. Always populated (never {@code null}) — excluded cells
          * still receive the phenotype they would have been assigned if not excluded.
          * Visual filtering in QuPath is driven by {@link #getExcluded()}.

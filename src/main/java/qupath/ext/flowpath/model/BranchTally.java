@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.model;
 
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,13 +32,24 @@ import java.util.Map;
  * {@link #clean(Branch)} is judged with the exact exclusion flag a cell had <em>at the
  * moment it landed in that branch</em> — the same flag {@code Branch.getCount()} was just
  * incremented under — so {@code clean(branch) == branch.getCount()} by construction; that
- * parity is the whole reason the tree view and the Analysis window can never disagree about
- * the same population. {@link #cellsClean()} is judged with a coarser flag: excluded by the
- * quality filter or ROI mask only, before any individual gate's own outlier clipping is
- * applied. A cell can only land in a branch at all if it passed that coarser exclusion, so
- * {@code clean(branch) <= cellsClean()} holds for every branch — the bound percentage
- * displays depend on — which would not hold if the two fields were judged by the same,
- * finer-grained flag.
+ * parity is the whole reason the tree view and the Analysis window's <em>Clean</em> column
+ * can never disagree about the same population. {@link #cellsClean()} is judged with a
+ * coarser flag: excluded by the quality filter or ROI mask only, before any individual
+ * gate's own outlier clipping is applied. A cell can only land in a branch at all if it
+ * passed that coarser exclusion, so {@code clean(branch) <= cellsClean()} holds for every
+ * branch — the bound percentage displays depend on — which would not hold if the two fields
+ * were judged by the same, finer-grained flag.
+ * <p>
+ * <b>"Clean" also means "inside the annotation", and the column says so.</b>
+ * {@code GatingEngine} folds the annotation ROI mask into the same exclusion flag as the
+ * quality filter, so a cell outside the annotations being filtered by is not clean here —
+ * even though annotation membership is not a data-quality property. That is deliberate and
+ * must stay: it is what makes {@code clean(branch) <= cellsClean()} hold structurally for
+ * every branch, the bound every percentage display depends on. The cost is that at whole-slide
+ * scope on an annotated slide, part of the raw/clean gap is annotation coverage rather than
+ * data quality — so the meaning is spelled out in {@code PopulationStats.Row.cleanCount()}
+ * and in the Analysis window's own column tooltip rather than left to be inferred from the
+ * word "clean".
  * <p>
  * <b>Unmeasured cells play no part in either clean field.</b> A cell a gate could not
  * measure never reaches {@code assignBranch} at all — the walk returns before recording
@@ -50,7 +62,7 @@ import java.util.Map;
  */
 public final class BranchTally {
 
-    /** Counts for one branch: [0] raw total, [1] clean total, then per-region pairs. */
+    /** One branch's counts: a raw and a clean total, plus a raw and a clean total per region. */
     private static final class Counts {
         int total;
         int clean;
@@ -60,6 +72,15 @@ public final class BranchTally {
         Counts(int regionCount) {
             perRegion = new int[regionCount];
             perRegionClean = new int[regionCount];
+        }
+
+        Counts copy() {
+            Counts c = new Counts(perRegion.length);
+            c.total = total;
+            c.clean = clean;
+            System.arraycopy(perRegion, 0, c.perRegion, 0, perRegion.length);
+            System.arraycopy(perRegionClean, 0, c.perRegionClean, 0, perRegionClean.length);
+            return c;
         }
     }
 
@@ -86,7 +107,9 @@ public final class BranchTally {
      * @param clean  {@code true} unless the cell was excluded at the moment it landed in
      *               this branch — pass the negation of the same flag
      *               {@code branch.getCount()} was just guarded by, so {@link #clean(Branch)}
-     *               tracks {@code Branch.getCount()} exactly
+     *               tracks {@code Branch.getCount()} exactly. That flag covers the quality
+     *               filter, this gate's own outlier clipping <em>and</em> the annotation ROI
+     *               mask; see the class javadoc for why the last of those belongs in it.
      */
     public void record(Branch branch, int region, boolean clean) {
         Counts c = counts.computeIfAbsent(branch, b -> new Counts(regionCount));
@@ -115,6 +138,53 @@ public final class BranchTally {
             cellsPerRegion[region]++;
             if (clean) cellsPerRegionClean[region]++;
         }
+    }
+
+    /**
+     * Re-key this tally from the branches the gating walk actually saw onto the corresponding
+     * branches of the live tree the caller holds.
+     * <p>
+     * <b>Why this is needed at all.</b> {@code LivePreviewService} deep-copies the gate tree
+     * before walking it on a background thread, and {@code GateNode.deepCopy()} constructs
+     * fresh {@link Branch} objects. Because this class is identity-keyed (see the class
+     * javadoc — deliberately, so two same-named branches stay separate), a tally filled
+     * during that walk is keyed on the copy's branches while every consumer holds the live
+     * tree's. {@code GateTree.transferCounts} reconciles only {@link Branch#getCount()}, so
+     * without this rebind every per-branch lookup missed and this class answered 0 by design:
+     * the whole Analysis window read zero.
+     * <p>
+     * <b>It throws rather than migrate half-way</b>, the same rule {@code
+     * PhenotypeSnapshot.rebindTo} follows: a tally re-keyed onto a tree that is not the one it
+     * was filled from would attribute one branch's cells to another, which is a wrong answer
+     * rather than a missing one. The cell-level denominators ({@link #cellsTotal()} and
+     * friends) carry over unchanged — they were never keyed on a branch.
+     * <p>
+     * A branch the walk never reached simply has no entry to move, and still answers 0
+     * afterwards; that is ordinary input, not a mismatch.
+     *
+     * @param walkedRoots roots of the tree the walk classified against — the tree whose
+     *                    branches are this tally's current keys
+     * @param liveRoots   roots of the tree the caller will look counts up in
+     * @return a tally with the same numbers, keyed on {@code liveRoots}' branches
+     * @throws IllegalArgumentException when the two trees are not structurally identical
+     */
+    public BranchTally rebindTo(List<GateNode> walkedRoots, List<GateNode> liveRoots) {
+        Map<Branch, Branch> walkedToLive = GateTree.pairBranches(liveRoots, walkedRoots);
+        BranchTally out = new BranchTally(regionCount);
+        out.cellsTotal = cellsTotal;
+        out.cellsClean = cellsClean;
+        System.arraycopy(cellsPerRegion, 0, out.cellsPerRegion, 0, regionCount);
+        System.arraycopy(cellsPerRegionClean, 0, out.cellsPerRegionClean, 0, regionCount);
+        for (Map.Entry<Branch, Counts> entry : counts.entrySet()) {
+            Branch live = walkedToLive.get(entry.getKey());
+            if (live == null) {
+                throw new IllegalArgumentException(
+                        "this tally counted cells for branch '" + entry.getKey().getName()
+                                + "', which has no counterpart in the tree it is being rebound onto");
+            }
+            out.counts.put(live, entry.getValue().copy());
+        }
+        return out;
     }
 
     public int total(Branch branch) {
@@ -148,7 +218,10 @@ public final class BranchTally {
         return cellsTotal;
     }
 
-    /** Cells that were cleanly judged — the clean denominator. */
+    /**
+     * Cells that were cleanly judged — the clean denominator. Excluded by the quality filter
+     * or the annotation ROI mask only; see the class javadoc.
+     */
     public int cellsClean() {
         return cellsClean;
     }

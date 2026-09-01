@@ -280,4 +280,79 @@ class BranchTallyTest {
         assertThrows(IllegalArgumentException.class, () ->
                 GatingEngine.assignAll(tree, index, stats, null, regionOf, 1));
     }
+
+    /**
+     * The identity keying that makes two same-named branches safe is also what makes a
+     * tally useless to anyone holding a different copy of the same tree — the exact
+     * situation {@code LivePreviewService} creates by deep-copying before it walks.
+     * {@link BranchTally#rebindTo} is the reconciliation; without it every lookup below
+     * would read 0.
+     */
+    @Test
+    void rebindMovesEveryCountOntoTheOtherTreesBranches() {
+        CellIndex index = population();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        // Two structurally identical trees with no Branch object in common -- what
+        // GateTree.deepCopy() produces on every live-preview pass, built here from the
+        // fixture twice so this test does not also depend on deepCopy's own behaviour.
+        GateTree live = tree();
+        GateTree walked = tree();
+        int[] regionOf = new int[10];
+        for (int i = 0; i < 10; i++) regionOf[i] = i >= 5 ? 0 : -1;
+
+        BranchTally walkedTally =
+                GatingEngine.assignAll(walked, index, stats, null, regionOf, 1).getTally();
+
+        Branch livePos = live.getRoots().get(0).getBranches().get(0);
+        Branch liveNeg = live.getRoots().get(0).getBranches().get(1);
+        assertEquals(0, walkedTally.total(livePos),
+                "the walked tally cannot answer for a branch it has never seen");
+
+        BranchTally rebound = walkedTally.rebindTo(walked.getRoots(), live.getRoots());
+        assertEquals(5, rebound.total(livePos));
+        assertEquals(5, rebound.clean(livePos));
+        assertEquals(5, rebound.total(liveNeg));
+        assertEquals(5, rebound.inRegion(livePos, 0), "all 5 CD45+ cells carry region 0");
+        assertEquals(0, rebound.inRegion(liveNeg, 0));
+        assertEquals(walkedTally.cellsTotal(), rebound.cellsTotal(),
+                "the cell-level denominators were never keyed on a branch");
+        assertEquals(walkedTally.cellsClean(), rebound.cellsClean());
+        assertEquals(walkedTally.cellsInRegion(0), rebound.cellsInRegion(0));
+        assertEquals(1, rebound.regionCount());
+
+        assertEquals(0, walkedTally.total(livePos),
+                "rebindTo returns a new tally rather than re-keying this one in place");
+    }
+
+    /**
+     * A tally re-keyed onto a tree that is not the one it was filled from would attribute
+     * one branch's cells to another — a wrong answer, not a missing one — so it throws,
+     * the same rule {@code PhenotypeSnapshot.rebindTo} follows.
+     */
+    @Test
+    void rebindOntoADifferentlyShapedTreeThrows() {
+        CellIndex index = population();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        GateTree walked = tree();
+        BranchTally tally = GatingEngine.assignAll(walked, index, stats, null, null, 0).getTally();
+
+        GateTree live = tree();
+        GateNode extra = new GateNode("CD45", 5.5);
+        extra.setStatistic(Statistic.MEAN);
+        extra.setThresholdIsZScore(false);
+        live.addRoot(extra);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> tally.rebindTo(walked.getRoots(), live.getRoots()));
+
+        GateTree deeper = tree();
+        GateNode child = new GateNode("CD45", 8.0);
+        child.setStatistic(Statistic.MEAN);
+        child.setThresholdIsZScore(false);
+        deeper.getRoots().get(0).setPositiveChildren(List.of(child));
+        assertThrows(IllegalArgumentException.class,
+                () -> tally.rebindTo(walked.getRoots(), deeper.getRoots()));
+    }
 }

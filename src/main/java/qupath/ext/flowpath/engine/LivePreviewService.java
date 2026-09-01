@@ -3,6 +3,8 @@ package qupath.ext.flowpath.engine;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.util.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
@@ -25,6 +27,8 @@ import java.util.concurrent.Executors;
  * JavaFX Application Thread so the QuPath viewer updates.
  */
 public class LivePreviewService {
+
+    private static final Logger logger = LoggerFactory.getLogger(LivePreviewService.class);
 
     private static final long DEBOUNCE_MS = 80;
 
@@ -206,14 +210,22 @@ public class LivePreviewService {
         }
         final QualityFilter qf = rawQf.deepCopy();
         executor.submit(() -> {
-            boolean[] qualityMask = GatingEngine.computeQualityMask(idx, qf);
-            boolean[] mask = roi != null ? GatingEngine.combineMasks(qualityMask, roi) : qualityMask;
-            MarkerStats recomputed = MarkerStats.compute(idx, mask);
-            this.markerStats = recomputed;
-            if (onStatsRecomputed != null) {
-                Platform.runLater(onStatsRecomputed);
+            // As in submitGatingWork: the Future is discarded, so a throw here would
+            // otherwise vanish -- combineMasks rejects a length mismatch, and silently
+            // never recomputing the statistics would surface only as stale sliders.
+            try {
+                boolean[] qualityMask = GatingEngine.computeQualityMask(idx, qf);
+                boolean[] mask = roi != null ? GatingEngine.combineMasks(qualityMask, roi) : qualityMask;
+                MarkerStats recomputed = MarkerStats.compute(idx, mask);
+                this.markerStats = recomputed;
+                if (onStatsRecomputed != null) {
+                    Platform.runLater(onStatsRecomputed);
+                }
+                requestUpdate();
+            } catch (RuntimeException | Error ex) {
+                logger.error("Marker statistics could not be recomputed; "
+                        + "the previous statistics are still in effect.", ex);
             }
-            requestUpdate();
         });
     }
 
@@ -255,16 +267,43 @@ public class LivePreviewService {
         }
 
         executor.submit(() -> {
-            GatingEngine.AssignmentResult result =
-                    GatingEngine.assignAll(tree, index, stats, roi, regionOf, regionCount);
+            // The Future this returns is discarded, so nothing else would ever observe a
+            // throw from the walk -- GatingEngine.assignAll's own regionOf length check, for
+            // one, would kill the pass with no log line and no UI symptom at all.
+            try {
+                GatingEngine.AssignmentResult result =
+                        GatingEngine.assignAll(tree, index, stats, roi, regionOf, regionCount);
 
-            Platform.runLater(() -> {
-                // Discard result if the live tree changed (e.g. undo/redo) while we were computing
-                if (this.gateTree != originalTree) return;
-                // Transfer counts from the snapshot back to the live tree for UI display
-                GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
-                applyResult(result, index, data, true);
-            });
+                Platform.runLater(() -> {
+                    // Discard result if the live tree changed (e.g. undo/redo) while we were computing
+                    if (this.gateTree != originalTree) return;
+                    // Transfer counts from the snapshot back to the live tree for UI display
+                    GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
+
+                    // ...and re-key the per-branch tally the same way. transferCounts moves
+                    // only Branch.getCount(); the tally is identity-keyed on the *copy's*
+                    // Branch objects, so without this every per-branch lookup a consumer
+                    // makes against the live tree misses and reads 0 -- which is exactly how
+                    // the Analysis window shipped reporting every population as empty.
+                    GatingEngine.AssignmentResult published;
+                    try {
+                        published = result.withTally(
+                                result.getTally().rebindTo(tree.getRoots(), originalTree.getRoots()));
+                    } catch (IllegalArgumentException ex) {
+                        // The live tree was edited in place while this pass walked its copy
+                        // (addRoot/addChildGate mutate the same GateTree instance, so the
+                        // identity check above cannot see it). Every such edit queues a fresh
+                        // pass, so drop this one rather than publish counts keyed to a
+                        // structure that no longer exists.
+                        logger.debug("Gate tree changed structurally while a preview pass ran; "
+                                + "discarding the pass and waiting for the queued one.", ex);
+                        return;
+                    }
+                    applyResult(published, index, data, true);
+                });
+            } catch (RuntimeException | Error ex) {
+                logger.error("Gating pass failed; the view still shows the previous pass.", ex);
+            }
         });
     }
 
