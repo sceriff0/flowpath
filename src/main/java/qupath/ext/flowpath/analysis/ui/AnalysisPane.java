@@ -179,14 +179,17 @@ public final class AnalysisPane extends BorderPane {
     // value) would then double-apply silently.
     private boolean updatingPopulationSelection;
 
-    // Set for the duration of a table-selection change THIS PANE is making programmatically --
-    // restoreSelection() preserving a selection across a push, and selectTableRow() applying an
-    // inbound PopulationRef (from either the public selectPopulation() or an in-pane pick via
-    // handlePopulationPicked()) -- so the listener configurePopulationSelection() installs on
-    // table.getSelectionModel() cannot mistake either for a fresh pick and notify
-    // onPopulationSelected for something that is not a new selection event. The same guard
-    // shape refreshing/updatingPopulationSelection already use above, applied to the
-    // table-selection-vs-host-notification problem Task 14 adds.
+    // Set for the duration of a table-selection change THIS PANE is making programmatically, OR
+    // that ITS OWN backingRows rebuild can trigger as a side effect -- restoreSelection()
+    // preserving a selection across a push, selectTableRow() applying an inbound PopulationRef
+    // (from either the public selectPopulation() or an in-pane pick via handlePopulationPicked()),
+    // AND updateTable()'s own backingRows.setAll()/clear() (see that method's own javadoc: the
+    // TableView's selection model can re-select whatever row now sits at the previously-selected
+    // index purely from the list mutation, with no select() call from this class at all) -- so
+    // the listener configurePopulationSelection() installs on table.getSelectionModel() cannot
+    // mistake any of these for a fresh pick and notify onPopulationSelected for something that is
+    // not a new selection event. The same guard shape refreshing/updatingPopulationSelection
+    // already use above, applied to the table-selection-vs-host-notification problem Task 14 adds.
     private boolean suppressSelectionNotification;
 
     // Task 14's forward direction: a table row selection, or a plot bar click (via
@@ -504,7 +507,13 @@ public final class AnalysisPane extends BorderPane {
      * why {@code MarkerPositivityCanvas} never does). Applies {@code ref} to the table and both
      * comparison canvases exactly the way {@link #selectPopulation} does, then reports it to
      * {@link #onPopulationSelected} exactly once — the notify step {@link #selectPopulation}
-     * deliberately skips, since that method is the reverse direction.
+     * deliberately skips, since that method is the reverse direction. A plot click applies the
+     * selection here rather than only notifying the host, because otherwise clicking a
+     * Composition bar would push the gate tree's own selection to it while leaving this pane's
+     * own table and comparison tabs pointed at whatever was selected before — three panels
+     * disagreeing about "the current population" after one click, which is the exact
+     * divergence {@link #applyPopulationSelection}'s own javadoc already rules out for the two
+     * Population combos.
      */
     private void handlePopulationPicked(PopulationRef ref) {
         selectTableRow(ref);
@@ -996,29 +1005,50 @@ public final class AnalysisPane extends BorderPane {
         restoreScrollPosition(scrollPosition);
     }
 
+    /**
+     * Rebuild {@link #backingRows} (and every plot canvas's rows) for the current scope and
+     * denominator.
+     * <p>
+     * Guarded by {@link #suppressSelectionNotification} around the whole body, not only around
+     * the explicit {@code select()} call in {@link #restoreSelection} — mutating
+     * {@link #backingRows} (via {@link ObservableList#setAll}/{@code clear}, both below) can by
+     * itself make the {@code TableView}'s OWN selection model re-select whatever row now sits at
+     * the previously-selected index, entirely independently of any {@code select()} call this
+     * class makes. That auto-reselection is not a guess: a suite run surfaced it directly — a
+     * test pushing two structurally identical passes with a host handler installed saw one
+     * notification even though {@link #restoreSelection}'s own {@code select()} call was already
+     * guarded, because the reselection this method's own {@link ObservableList#setAll} triggers
+     * happened first, before {@link #restoreSelection} ever ran. A push rebuilding the same rows
+     * is bookkeeping, not a new pick, regardless of which code path re-asserts the selection.
+     */
     private void updateTable() {
-        AnalysisState state = session.state();
-        if (!state.hasData() || selectedScope == null) {
-            backingRows.clear();
-            setAllPlotRows(List.of());
+        suppressSelectionNotification = true;
+        try {
+            AnalysisState state = session.state();
+            if (!state.hasData() || selectedScope == null) {
+                backingRows.clear();
+                setAllPlotRows(List.of());
+                updatePlaceholder();
+                updateSummary();
+                return;
+            }
+            PopulationStats stats = session.stats(session.resolveDenominator(selectedDenominatorRef));
+            // backingRows is mutated in place, never replaced -- table.setItems() is called
+            // exactly once, in configureTableItems(). Replacing the items list here would drop
+            // the TableView's sort comparator binding and reset its scroll position on every
+            // push, which is the instability this task exists to close.
+            backingRows.setAll(stats.rows(selectedScope));
+            // Every plot canvas is handed the full, unfiltered row set (every scope, every
+            // region) and narrows to what it means on its own -- CompositionCanvas and
+            // MarkerPositivityCanvas to WHOLE_SLIDE, RegionComparisonCanvas to ANNOTATION_K,
+            // ScopeComparisonCanvas to none of the above, since scope is the axis it compares.
+            // See each canvas's own class javadoc.
+            setAllPlotRows(stats.rows());
             updatePlaceholder();
             updateSummary();
-            return;
+        } finally {
+            suppressSelectionNotification = false;
         }
-        PopulationStats stats = session.stats(session.resolveDenominator(selectedDenominatorRef));
-        // backingRows is mutated in place, never replaced -- table.setItems() is called exactly
-        // once, in configureTableItems(). Replacing the items list here would drop the
-        // TableView's sort comparator binding and reset its scroll position on every push,
-        // which is the instability this task exists to close.
-        backingRows.setAll(stats.rows(selectedScope));
-        // Every plot canvas is handed the full, unfiltered row set (every scope, every
-        // region) and narrows to what it means on its own -- CompositionCanvas and
-        // MarkerPositivityCanvas to WHOLE_SLIDE, RegionComparisonCanvas to ANNOTATION_K,
-        // ScopeComparisonCanvas to none of the above, since scope is the axis it compares.
-        // See each canvas's own class javadoc.
-        setAllPlotRows(stats.rows());
-        updatePlaceholder();
-        updateSummary();
     }
 
     /**

@@ -453,6 +453,36 @@ class AnalysisPaneFxTest {
         assertTrue(seen.isEmpty(), "an inbound selection must not bounce back and loop");
     }
 
+    /**
+     * {@code restoreSelection} (called from {@code refresh()} on every {@code accept()}) has to
+     * re-select the row naming the previous selection to keep it visible across a live-preview
+     * push -- but that re-selection is bookkeeping, not a new pick, and must not renotify the
+     * host. Every other test in this file that drives a push calls {@code accept()} exactly
+     * once, so nothing else exercises a SECOND push with a handler already installed; this is
+     * the one that does.
+     */
+    @Test
+    void aSecondIdenticalPushDoesNotRenotifyTheHost() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        PopulationRef selected = FxTestSupport.onFx(pane::selectedRowRef);
+        assertNotNull(selected);
+
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+
+        // A structurally identical second pass -- the same shape a live-preview re-gate produces
+        // when nothing about the selected population actually changed.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        assertTrue(seen.isEmpty(),
+                "a push that only RESTORES the existing selection must not notify the host");
+        assertEquals(selected, FxTestSupport.onFx(pane::selectedRowRef),
+                "the selection itself must still survive the push");
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));

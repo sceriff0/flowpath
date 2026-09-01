@@ -175,4 +175,90 @@ class GateTreeTest {
         assertNull(tree.findBranch(9, "CD45+"), "an out-of-range root is absent, not an exception");
         assertNull(tree.findBranch(0, "no/such/path"));
     }
+
+    /**
+     * {@code findBranch} (path -> branch) and {@code locate} (branch -> path) must be exact
+     * inverses, not two hand-kept implementations of "enabled roots, joined path" that merely
+     * happen to agree today. Covers a nested branch and two roots, so the round trip is
+     * exercised past depth 0 and past root 0.
+     */
+    @Test
+    void findBranchAndLocateAreExactInverses() {
+        var tree = new GateTree();
+        // A disabled root ahead of the two enabled ones -- present so a mutation that made
+        // locate() count EVERY root (not just enabled ones) toward rootIndex would shift every
+        // case below by one and fail, rather than the fixture accidentally being unable to
+        // observe the bug because nothing disabled sat earlier in the list.
+        var skipped = new GateNode("PANCK", 1.0);
+        skipped.setEnabled(false);
+        var root0 = new GateNode("CD45", 1.0);
+        var cd3 = new GateNode("CD3", 0.5);
+        root0.getPositiveChildren().add(cd3);
+        var root1 = new GateNode("CD19", 1.0);
+        tree.addRoot(skipped);
+        tree.addRoot(root0);
+        tree.addRoot(root1);
+
+        record Case(int rootIndex, String path) {}
+        List<Case> cases = List.of(
+                new Case(0, "CD45+"), new Case(0, "CD45-"),
+                new Case(0, "CD45+/CD3+"), new Case(0, "CD45+/CD3-"),
+                new Case(1, "CD19+"), new Case(1, "CD19-"));
+
+        for (Case c : cases) {
+            Branch branch = tree.findBranch(c.rootIndex(), c.path());
+            assertNotNull(branch, "expected a branch at " + c);
+
+            GateTree.BranchLocation location = tree.locate(branch);
+            assertNotNull(location, "locate() must resolve a branch findBranch() itself just returned");
+            assertEquals(c.rootIndex(), location.rootIndex(), "rootIndex round-trip for " + c);
+            assertEquals(c.path(), location.path(), "path round-trip for " + c);
+
+            assertSame(branch, tree.findBranch(location.rootIndex(), location.path()),
+                    "findBranch(locate(branch)) must return the SAME branch instance for " + c);
+        }
+    }
+
+    @Test
+    void findBranchReturnsNullWhenTheGateWasDeleted() {
+        // "CD3" never existed under this root -- the segment is absent entirely, distinct from
+        // a renamed segment (present, but under a different name) or a disabled one.
+        var tree = new GateTree();
+        tree.addRoot(new GateNode("CD45", 1.0));
+        assertNull(tree.findBranch(0, "CD45+/CD3+"));
+    }
+
+    @Test
+    void findBranchReturnsNullWhenTheBranchWasRenamed() {
+        var tree = new GateTree();
+        var root = new GateNode("CD45", 1.0);
+        tree.addRoot(root);
+        assertNotNull(tree.findBranch(0, "CD45+"),
+                "precondition: the branch resolves under its original name");
+
+        root.setPositiveName("CD45_pos");
+        assertNull(tree.findBranch(0, "CD45+"),
+                "a path naming the OLD branch name no longer resolves after a rename");
+    }
+
+    /**
+     * {@code findBranchAmong}'s own {@code if (!node.isEnabled()) continue} for a node that is
+     * NOT the root -- distinct from a disabled root (already covered by
+     * {@code findBranchIndexesEnabledRootsOnlySoIndicesMatchTheReport}), and new code in the
+     * commit that added it, so it needs its own coverage rather than inheriting the root case's.
+     */
+    @Test
+    void findBranchReturnsNullWhenANestedGateIsDisabled() {
+        var tree = new GateTree();
+        var root = new GateNode("CD45", 1.0);
+        var cd3 = new GateNode("CD3", 0.5);
+        cd3.setEnabled(false);
+        root.getPositiveChildren().add(cd3);
+        tree.addRoot(root);
+
+        assertNotNull(tree.findBranch(0, "CD45+"), "the root branch itself is unaffected");
+        assertNull(tree.findBranch(0, "CD45+/CD3+"),
+                "a disabled NESTED gate makes its own branches unreachable, matching PopulationStats");
+        assertNull(tree.findBranch(0, "CD45+/CD3-"));
+    }
 }

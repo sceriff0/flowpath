@@ -134,6 +134,72 @@ public class GateTree {
     }
 
     /**
+     * A population's identity within a {@link GateTree} — the value {@link #findBranch} resolves
+     * <em>from</em> and {@link #locate} resolves <em>to</em>, so the two are exact inverses of
+     * each other rather than two hand-kept implementations of the same "enabled roots, joined
+     * path" rule. {@code GateTreeTest.findBranchAndLocateAreExactInverses} pins that they agree.
+     * <p>
+     * Deliberately not {@code qupath.ext.flowpath.analysis.ui.PopulationRef}, even though the
+     * two records carry identical fields: {@link #locate} is reached from
+     * {@code FlowPathPane} (the gating pane, in {@code ui}), which must not import anything from
+     * {@code analysis.ui} — the same {@code ui} ↔ {@code session} layering
+     * {@code DenominatorRef}'s own javadoc already keeps apart for the Analysis window's half of
+     * this codebase. {@code FlowPathPane} maps a {@code BranchLocation} to a {@code
+     * PopulationRef} itself, in one line, once it is back on the {@code ui} side of that
+     * boundary.
+     *
+     * @param rootIndex zero-based index among the tree's ENABLED roots only
+     * @param path      the branch-name route from that root, e.g. {@code "CD45+/CD3+"}
+     */
+    public record BranchLocation(int rootIndex, String path) {}
+
+    /**
+     * The exact inverse of {@link #findBranch}: given a live {@link Branch} that belongs to
+     * this tree, return the {@code (rootIndex, path)} that names it — or {@code null} when
+     * {@code target} is not reachable through this tree's enabled roots at all, which covers
+     * both "not in this tree" and "only reachable through a disabled gate" (a disabled node,
+     * root or nested, is a hard stop for its whole subtree — see {@link #findBranch}'s own
+     * javadoc for why {@code PopulationStats} agrees).
+     * <p>
+     * {@code rootIndex} is assigned by the identical enabled-roots-only rule {@link #findBranch}
+     * indexes by, so a {@code BranchLocation} this method returns can always be fed straight
+     * back into {@link #findBranch} to get {@code target} back — see
+     * {@code GateTreeTest.findBranchAndLocateAreExactInverses}, which pins the round trip in
+     * both directions rather than trusting the two methods to merely agree by inspection.
+     *
+     * @param target a branch belonging to this tree, or {@code null}
+     */
+    public BranchLocation locate(Branch target) {
+        if (target == null) return null;
+        int rootIndex = 0;
+        for (GateNode root : roots) {
+            if (!root.isEnabled()) continue;
+            String path = pathTo(root, "", target);
+            if (path != null) return new BranchLocation(rootIndex, path);
+            rootIndex++;
+        }
+        return null;
+    }
+
+    /**
+     * Depth-first search for {@code target} under {@code node}, building its path as it descends
+     * — the reverse traversal of {@link #findBranchAmong}, walked by identity rather than by
+     * name since the caller already holds the {@link Branch} object itself.
+     */
+    private static String pathTo(GateNode node, String prefix, Branch target) {
+        if (!node.isEnabled()) return null;
+        for (Branch branch : node.getBranches()) {
+            String path = prefix.isEmpty() ? branch.getName() : prefix + "/" + branch.getName();
+            if (branch == target) return path;
+            for (GateNode child : branch.getChildren()) {
+                String found = pathTo(child, path, target);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Transfer transient counts from a copy's nodes back to the originals.
      * Walks both trees in parallel; stops gracefully if structures differ.
      */

@@ -674,41 +674,16 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * The {@code (rootIndex, path)} that names {@code target} in the live {@link #gateTree} —
-     * the reverse of {@link GateTree#findBranch}, walked directly here rather than exposed on
-     * {@code GateTree} itself, since this is the only caller that ever needs to go from a
-     * {@link Branch} back to its ref (the Analysis table already gets {@code rootIndex}/{@code
-     * path} handed to it by {@code PopulationStats} directly).
-     * <p>
-     * Mirrors {@code PopulationStats.collectFromRoots}'s own {@code rootIndex} assignment
-     * (enabled roots only, in tree order) and {@code PopulationStats.collect}'s own path
-     * construction (branch names joined by {@code "/"}, skipping any disabled node along the
-     * way) exactly, so a ref this method returns names the same row the Analysis table itself
-     * would show for {@code target} — or {@code null} when {@code target} sits under a disabled
-     * root or a disabled nested gate, which {@code PopulationStats} gives no row to either.
+     * a one-line map from {@link GateTree#locate}'s {@code BranchLocation} (a {@code model}
+     * value) onto {@link PopulationRef} (an {@code analysis.ui} value). The walk itself lives
+     * exactly once, in {@code GateTree}, alongside {@link GateTree#findBranch} which it is the
+     * exact inverse of — see {@code GateTree.BranchLocation}'s own javadoc for why that walk
+     * cannot live here or on {@code GateTree} returning a {@code PopulationRef} directly without
+     * creating the {@code ui} ↔ {@code model} layering violation this method exists to avoid.
      */
     private PopulationRef populationRefFor(Branch target) {
-        int rootIndex = 0;
-        for (GateNode root : gateTree.getRoots()) {
-            if (!root.isEnabled()) continue;
-            String path = pathTo(root, "", target);
-            if (path != null) return new PopulationRef(rootIndex, path);
-            rootIndex++;
-        }
-        return null;
-    }
-
-    /** Depth-first search for {@code target} under {@code node}, building its path as it goes. */
-    private String pathTo(GateNode node, String prefix, Branch target) {
-        if (!node.isEnabled()) return null;
-        for (Branch branch : node.getBranches()) {
-            String path = prefix.isEmpty() ? branch.getName() : prefix + "/" + branch.getName();
-            if (branch == target) return path;
-            for (GateNode child : branch.getChildren()) {
-                String found = pathTo(child, path, target);
-                if (found != null) return found;
-            }
-        }
-        return null;
+        GateTree.BranchLocation location = gateTree.locate(target);
+        return location == null ? null : new PopulationRef(location.rootIndex(), location.path());
     }
 
     private boolean removeFromTree(List<GateNode> nodes, GateNode target) {
