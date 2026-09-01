@@ -199,6 +199,18 @@ public final class GatingEngine {
     public static AssignmentResult assignAll(GateTree tree, CellIndex index, MarkerStats stats,
                                               boolean[] roiMask, int[] regionOf, int regionCount) {
         int n = index.size();
+        // Both masks are positional against index.getObjects() and both arrive from the
+        // same RegionMask at the same moment, so both are equally exposed to being handed
+        // a mask built for a different population. Validating only regionOf left roiMask
+        // with the two failure modes combineMasks documents: a shorter one threw a bare
+        // ArrayIndexOutOfBoundsException that LivePreviewService swallows, and a longer
+        // one was silently truncated to n -- an annotation filter computed against a
+        // different cell set, applied to the first n cells, with no symptom at all.
+        if (roiMask != null && roiMask.length != n) {
+            throw new IllegalArgumentException(
+                    "roiMask describes a different population than the index: "
+                            + roiMask.length + " vs " + n + " cells");
+        }
         if (regionOf != null && regionOf.length != n) {
             throw new IllegalArgumentException(
                     "regionOf describes a different population than the index: "
@@ -653,6 +665,20 @@ public final class GatingEngine {
             outlier[cellIdx] = true;
             excluded[cellIdx] = true;
             branchIdx = rg.branchIgnoringClip(cellIdx);
+
+            // branchOf only reports CLIPPED once it has read every axis and found a real
+            // value on each, so the same cell cannot come back UNMEASURED here. Asserting
+            // it rather than trusting it: when this did happen -- branchOf used to return
+            // CLIPPED on an extreme X without ever reading Y -- the -2 landed in
+            // rg.branches[branchIdx] as "Index -2 out of bounds for length 4", which says
+            // nothing about which of the two predicates disagreed with the other.
+            if (branchIdx < 0) {
+                throw new IllegalStateException(
+                    "A clipped cell came back unmeasured from the same gate (branch index "
+                    + branchIdx + ", gate '" + rg.node.getChannel() + "', cell " + cellIdx
+                    + "). branchOf and branchIgnoringClip must agree that a clipped cell "
+                    + "has a real value on every axis.");
+            }
         }
         assignBranch(rg, branchIdx, cellIdx, ctx);
     }

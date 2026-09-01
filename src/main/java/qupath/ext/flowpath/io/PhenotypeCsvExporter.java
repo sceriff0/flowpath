@@ -325,6 +325,12 @@ public class PhenotypeCsvExporter {
 
     private static void collectColumnsRecursive(GateNode node, CellIndex index, MarkerStats stats,
                                                 Map<String, MeasuredColumn> byKey) {
+        // A disabled gate is a hard stop for its whole subtree in GatingEngine.walkNode, so
+        // it contributes no phenotype and no sign. Skipping it here keeps this traversal
+        // agreeing with collectThresholdsRecursive, which has always had this check: the
+        // two disagreeing meant a disabled gate still emitted _raw/_zscore/_sign columns,
+        // with _sign permanently blank because the threshold inventory had skipped it.
+        if (!node.isEnabled()) return;
         List<String> channels = node.getChannels();
         for (int k = 0; k < channels.size(); k++) {
             MeasuredColumn col = index.column(node, k, stats);

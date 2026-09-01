@@ -266,6 +266,60 @@ class BranchTallyTest {
     }
 
     /**
+     * The other arm of the exclusion flag {@code clean} is judged by. Every existing test of
+     * {@code clean(branch) == branch.getCount()} and {@code clean(branch) <= cellsClean()}
+     * reaches the exclusion through a {@link QualityFilter}; the annotation ROI mask is the
+     * arm deliberately folded into the <em>same</em> flag — the decision {@link BranchTally}'s
+     * javadoc calls load-bearing, because it is what makes the bound hold structurally
+     * rather than by arithmetic coincidence. Split the ROI mask back out into an exclusion
+     * of its own and both properties stay true under a quality filter, so the whole existing
+     * suite stays green while every percentage-of-clean display on an annotated slide starts
+     * exceeding 100%.
+     * <p>
+     * No quality filter is set here at all, so the ROI mask is the only thing that can make
+     * a cell unclean: {@code cellsClean()} and every {@code clean(branch)} are reading the
+     * ROI arm or nothing. The raw {@code total()} counts must still add up to all ten cells
+     * — an ROI-excluded cell is walked, classified and counted — which is exactly the
+     * Count-vs-Clean gap the Analysis window shows two columns for.
+     */
+    @Test
+    void theRoiMaskIsFoldedIntoCleanAndTheBoundStillHolds() {
+        CellIndex index = population();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+        GateTree tree = tree();
+
+        // Cells 0-3 (CD45 = 1..4, all negative) lie outside the annotation.
+        boolean[] roiMask = Cells.allTrue(10);
+        for (int i = 0; i < 4; i++) roiMask[i] = false;
+
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats, roiMask, null, 0);
+        BranchTally tally = result.getTally();
+        Branch pos = tree.getRoots().get(0).getBranches().get(0);
+        Branch neg = tree.getRoots().get(0).getBranches().get(1);
+
+        assertEquals(10, tally.cellsTotal(), "every indexed cell is walked, ROI or not");
+        assertEquals(6, tally.cellsClean(),
+                "the ROI mask alone must move the clean denominator — no quality filter is set");
+
+        for (Branch b : tree.getRoots().get(0).getBranches()) {
+            assertEquals(b.getCount(), tally.clean(b),
+                    "clean(" + b.getName() + ") must still mirror Branch.getCount() when the "
+                            + "exclusion came from the ROI mask rather than the quality filter");
+            assertTrue(tally.clean(b) <= tally.cellsClean(),
+                    "clean(" + b.getName() + ") must not exceed the clean denominator");
+        }
+
+        // The four ROI-excluded cells are all CD45-negative, so the two arms differ visibly:
+        // without the fold-in, clean(neg) would read 5 against a denominator of 6 here, and
+        // 5 against a denominator of 1 on a slide whose annotations cover less.
+        assertEquals(5, tally.clean(pos), "no positive cell is outside the annotation");
+        assertEquals(1, tally.clean(neg), "four of the five negatives are outside it");
+
+        assertEquals(10, tally.total(pos) + tally.total(neg),
+                "raw counts include ROI-excluded cells — that is the Count-vs-Clean gap");
+    }
+
+    /**
      * {@code regionOf} is positional against {@code CellIndex.getObjects()}, so a length
      * that does not match the index describes a different population -- see
      * {@code GatingEngine.combineMasks} for the same rule applied to masks.

@@ -9,8 +9,14 @@ FlowJo-style **single-cell analysis** for [QuPath](https://qupath.github.io/) on
 multiplexed imaging data (CODEX, MIBI, mIF).
 
 Build hierarchical marker gates (e.g. `CD45+ → CD3+ → CD8+ = "T cytotoxic"`), drag
-thresholds, draw 2D regions, and watch cells recolour in real time — then open a
-**UMAP of those same phenotypes** without leaving the extension.
+thresholds, draw 2D regions, and watch cells recolour in real time — then read the
+per-population counts and percentages in the **Analysis** window and export them
+as CSV.
+
+**In this release:** hierarchical gating with live preview, the Analysis window
+(population statistics and plots), and per-cell / per-population CSV export.
+**Coming in a future release:** a **UMAP of those same phenotypes**, opened
+without leaving the extension.
 
 Designed to work with the [MIRAGE](https://mirage-pipeline.readthedocs.io/)
 pipeline, and with any QuPath detections carrying per-marker measurements.
@@ -24,8 +30,8 @@ https://raw.githubusercontent.com/sceriff0/flowpath/main/catalog.json
 ```
 
 (Extensions → Manage extensions → Manage extension catalogs → Add.) Launch with
-**Extensions → FlowPath** (`Ctrl+G`); the UMAP opens from there with **Open UMAP**
-(`Ctrl+U`). Full install options — JAR drop, build from source — are in the
+**Extensions → FlowPath** (`Ctrl+G`) — the one menu item everything opens from.
+Full install options — JAR drop, build from source — are in the
 [docs](https://flowpath.readthedocs.io/installation/).
 
 > [!IMPORTANT]
@@ -38,7 +44,13 @@ https://raw.githubusercontent.com/sceriff0/flowpath/main/catalog.json
 
 ## How the two halves fit together
 
-Gating is the way in. The UMAP opens from it and inherits the phenotyping:
+> [!NOTE]
+> **Coming in a future release.** UMAP exploration is not available in this
+> version — the **Open UMAP** button is disabled and labelled *UMAP (coming
+> soon)*, and `Ctrl+U` does nothing. The section below describes how it will
+> work once it ships.
+
+Gating is the way in. The UMAP will open from it and inherit the phenotyping:
 
 - the **same cell index** — no rebuild, so it opens instantly on a slide already
   loaded;
@@ -50,8 +62,8 @@ Gating is the way in. The UMAP opens from it and inherits the phenotyping:
   of them. Below that the picker opens with everything ticked, because an
   embedding needs two markers and a selection of one could not be run.
 
-Editing a gate does not rebuild the index, so an open UMAP **recolours live** as
-you gate rather than needing a recompute.
+Editing a gate does not rebuild the index, so an open UMAP will **recolour live**
+as you gate rather than needing a recompute.
 
 ## Build from source
 

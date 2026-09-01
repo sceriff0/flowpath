@@ -126,6 +126,16 @@ public class HistogramCanvas extends Canvas {
         }
 
         for (double val : rawValues) {
+            // NaN first, and explicitly. MIRAGE omits an absent measurement entirely, so
+            // this column genuinely holds NaN for cells the marker was never measured on
+            // -- ordinary input, not corruption. Both comparisons below are false for NaN
+            // (every NaN comparison is), so the range guard waves it through, and
+            // `(int) NaN` is 0: every unmeasured cell used to pile into the leftmost bin,
+            // which sits below the threshold and is therefore painted in the negative
+            // colour. That is "unmeasured is not negative" violated in the display path --
+            // the same defect the engine's UNMEASURED sentinel exists to prevent, showing
+            // up as a histogram that disagreed with the counts beside it.
+            if (Double.isNaN(val)) continue;
             if (val < displayMin || val > displayMax) continue;
             int bin = (int) ((val - displayMin) / binWidth);
             if (bin >= NUM_BINS) bin = NUM_BINS - 1;
@@ -139,6 +149,31 @@ public class HistogramCanvas extends Canvas {
         }
 
         repaint();
+    }
+
+    /**
+     * How many cells the last {@link #setData} actually drew, summed over every bin.
+     * <p>
+     * Exists so a test can assert what the picture claims about the population size
+     * without rendering it. The number that matters is the one this excludes: a cell with
+     * no measurement is not drawn at all, so it can never be read off the plot as a
+     * low-valued — and therefore negative — cell.
+     */
+    int binnedTotal() {
+        if (binCounts == null) return 0;
+        double sum = 0;
+        for (double c : binCounts) sum += c;
+        return (int) sum;
+    }
+
+    /** The count in one bin, left to right. Package-private for the same reason. */
+    int binCount(int bin) {
+        return binCounts == null ? 0 : (int) binCounts[bin];
+    }
+
+    /** How many bins {@link #setData} builds. */
+    static int binCountTotal() {
+        return NUM_BINS;
     }
 
     /**

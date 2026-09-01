@@ -277,6 +277,35 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
+     * The table's column titles, left to right, as a user reads them. A column built by
+     * {@link #countColumn}/{@link #rootColumn} carries its title on a {@link Label} graphic
+     * (so the header can hold a tooltip) rather than in {@code getText()}, so both are
+     * checked here — a test asserting on {@code getText()} alone would silently see "".
+     */
+    List<String> columnTitles() {
+        return table.getColumns().stream()
+                .map(c -> {
+                    if (c.getText() != null && !c.getText().isEmpty()) return c.getText();
+                    return c.getGraphic() instanceof Label label ? label.getText() : "";
+                })
+                .toList();
+    }
+
+    /**
+     * What one row shows in the named column — the rendered text a user would read, taken
+     * from the column's own cell-value factory rather than recomputed here, so a test
+     * cannot pass while the table shows something else.
+     */
+    String cellTextAt(int rowIndex, String columnTitle) {
+        List<String> titles = columnTitles();
+        int col = titles.indexOf(columnTitle);
+        if (col < 0) throw new IllegalArgumentException(
+                "no column titled '" + columnTitle + "'; have " + titles);
+        Object value = table.getColumns().get(col).getCellObservableValue(rowIndex).getValue();
+        return value == null ? "" : value.toString();
+    }
+
+    /**
      * The "% of Denominator" column's rendered text for one currently-shown row —
      * the same string {@link #formatPercent} produced for the table cell, not a
      * second computation of it. Exists so the NaN-renders-blank /
@@ -367,11 +396,30 @@ public final class AnalysisPane extends BorderPane {
 
     private void buildColumns() {
         table.getColumns().setAll(List.of(
+                // Root, then Population. Two un-renamed roots on one channel emit
+                // byte-identical paths (GateNode names its branches from the channel
+                // alone), so a Population column on its own showed four rows all reading
+                // "CD45+"/"CD45-" with no way to tell which root each belonged to -- the
+                // same collision PopulationRef exists to resolve, and which the root and
+                // population *pickers* already spell out with a "(root N)" suffix. The
+                // one-based number matches those pickers exactly; root_index in the CSV is
+                // zero-based, as PopulationStatsExporter documents.
+                rootColumn(),
                 column("Population", PopulationStats.Row::path),
                 column("Region", row -> row.regionName() == null ? "" : row.regionName()),
+                // What Count includes depends on the scope, and saying otherwise was wrong
+                // rather than merely vague: at the two annotation scopes the number comes
+                // from BranchTally's per-region arrays, which are only incremented for a
+                // cell with a region, and RegionMask gives every ROI-excluded cell a region
+                // of -1. So ROI-excluded cells are in Count at WHOLE_SLIDE and absent from
+                // it per region -- which also changes what the Count/Clean gap means.
                 countColumn("Count", PopulationStats.Row::count,
-                        "Every cell that landed in this population, including cells the ROI "
-                                + "filter or the quality filter excluded from the view."),
+                        "Every cell that landed in this population, including cells the "
+                                + "quality filter excluded from the view.\n"
+                                + "At Whole slide this also includes cells outside the "
+                                + "annotation ROI filter; at the per-region scopes those "
+                                + "cells belong to no region and are not counted at all, so "
+                                + "there the gap to Clean is quality filtering alone."),
                 countColumn("Clean", PopulationStats.Row::cleanCount,
                         "Cells in this population that were not excluded: not quality-filtered, "
                                 + "not outlier-clipped and, when the annotation ROI filter is on, "
@@ -383,10 +431,39 @@ public final class AnalysisPane extends BorderPane {
                 column("Density", row -> formatDensity(row.densityPerMm2()))));
     }
 
+    /**
+     * A text column.
+     * <p>
+     * Explicitly <b>not sortable</b>. A JavaFX column sorts by its cell value type, so a
+     * String column of numbers orders them lexicographically — one click on "% Parent"
+     * used to put 100.0 above 20.0 above 9.5. {@link #countColumn} exists precisely to
+     * avoid that for the counts; the percentage and density columns are formatted strings
+     * and cannot be fixed the same way without carrying the raw double alongside, so they
+     * simply do not offer a sort rather than offering a wrong one.
+     */
     private static TableColumn<PopulationStats.Row, String> column(
             String title, Function<PopulationStats.Row, String> extractor) {
         TableColumn<PopulationStats.Row, String> col = new TableColumn<>(title);
         col.setCellValueFactory(data -> new SimpleStringProperty(extractor.apply(data.getValue())));
+        col.setSortable(false);
+        return col;
+    }
+
+    /**
+     * Which root gate the row descends from, one-based to match the root and population
+     * pickers. Typed {@link Number} so it sorts numerically and so it reads as an index
+     * rather than a label.
+     */
+    private static TableColumn<PopulationStats.Row, Number> rootColumn() {
+        TableColumn<PopulationStats.Row, Number> col = new TableColumn<>();
+        Label header = new Label("Root");
+        header.setTooltip(new Tooltip(
+                "Which enabled root gate this population descends from, numbered from 1 in "
+                + "tree order.\nTwo roots on the same channel produce identically named "
+                + "populations, and this is the only thing that tells them apart."));
+        col.setGraphic(header);
+        col.setCellValueFactory(data ->
+                new SimpleIntegerProperty(data.getValue().rootIndex() + 1));
         return col;
     }
 
@@ -432,10 +509,18 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * {@code NaN} (no denominator chosen) renders as an empty cell; a real zero — a chosen
-     * denominator that happens to hold no cells — renders as {@code "0.0"}. These are
-     * different answers ({@link PopulationStats.Row#percentOfDenominator()}) and must not
-     * collapse to the same text.
+     * {@code NaN} renders as an empty cell, every real value as a one-decimal percentage.
+     * <p>
+     * Note which questions that leaves indistinguishable in the {@code % of Denominator}
+     * column, because an earlier version of this comment claimed otherwise: <em>both</em>
+     * "no denominator was chosen" and "the chosen denominator holds no cells" are
+     * {@code NaN} by {@link PopulationStats.Row#percentOfDenominator()}'s own definition,
+     * and both therefore render blank here. That is deliberate — neither is a question with
+     * a numeric answer, and rendering the second as {@code 0.0} would state a share of
+     * nothing as though it were measured. A reader who needs to tell them apart reads
+     * {@link PopulationStats.Row#denominatorCount()}, which is 0 only in the second case.
+     * {@code % Parent} and {@code % Total} are different: {@link PopulationStats#percent}
+     * returns a real {@code 0} for an empty whole, so those columns show {@code 0.0}.
      */
     private static String formatPercent(double value) {
         return Double.isNaN(value) ? "" : String.format(Locale.US, "%.1f", value);

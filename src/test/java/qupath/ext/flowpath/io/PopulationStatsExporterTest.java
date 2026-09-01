@@ -83,8 +83,9 @@ class PopulationStatsExporterTest {
 
         // Both roots emit a byte-identical "CD45+" path; only the row's root_index column
         // tells them apart. Assert both rootIndex values (0 and 1) appear on a "CD45+" row.
+        // "WHOLE_SLIDE" scope, empty region name, region_index -1 (not a per-region scope).
         List<String> cd45PlusRows = lines.stream()
-                .filter(l -> l.startsWith("WHOLE_SLIDE,,CD45+,"))
+                .filter(l -> l.startsWith("WHOLE_SLIDE,,-1,CD45+,"))
                 .toList();
         assertEquals(2, cd45PlusRows.size(),
                 "expected one CD45+ row per root at WHOLE_SLIDE scope: " + lines);

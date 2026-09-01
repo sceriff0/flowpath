@@ -160,6 +160,70 @@ class MarkerPositivityCanvasTest {
         }
     }
 
+    /**
+     * A marker gated at the root <em>and again</em> beneath its own positive branch must not
+     * have the two measurements added together.
+     * <p>
+     * This canvas pools every group of rows for one marker within a root, on the stated
+     * grounds that "those branches partition the cells". That holds for <b>siblings</b> —
+     * CD3 under {@code CD45+} and CD3 under {@code CD45-} see disjoint cells — but not for
+     * <b>ancestor and descendant</b>: the nested gate re-measures a subset of the cells the
+     * root gate already judged. Pooling both counted those cells twice, so
+     * {@code positive + negative} exceeded the population. Nothing caught it, because
+     * {@code ungatedCount} clamps at 0 with {@code Math.max} and the bar segments clamp at
+     * full height in {@code PlotCanvas.valueToY} — the chart looked like a cleanly measured
+     * marker while its numbers summed past the slide's own cell count.
+     * <p>
+     * Unlike the sibling case there is no ambiguity to refuse here: the shallower gate saw
+     * every cell the deeper one saw, so it alone is the answer.
+     */
+    @Test
+    void aMarkerGatedAgainBelowItselfIsNotCountedTwice() {
+        MarkerPositivityCanvas canvas = new MarkerPositivityCanvas();
+        canvas.setRows(nestedSameMarkerRows());
+
+        assertEquals(10, canvas.positiveCount("CD45"), "the root gate's own positives");
+        assertEquals(10, canvas.negativeCount("CD45"), "the root gate's own negatives");
+
+        // The invariant the old pooling broke: a marker's three segments describe the
+        // population once, never more than once.
+        int measured = canvas.positiveCount("CD45") + canvas.negativeCount("CD45");
+        assertTrue(measured <= 20,
+                "positive + negative must not exceed the 20 cells on the slide, but was " + measured);
+        assertEquals(20, measured + canvas.ungatedCount("CD45"),
+                "the three segments account for the population exactly once");
+    }
+
+    /**
+     * {@code CD45} gated at the root, and gated a second time under its own {@code CD45+}
+     * branch. Both gates are well-formed; it is their nesting that makes pooling wrong.
+     * The nested gate's threshold (15.5) splits the root's 10 positives 5/5, so a pooled
+     * reduction reports 15 positive and 15 negative against a 20-cell slide.
+     */
+    private static List<PopulationStats.Row> nestedSameMarkerRows() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode nested = new GateNode("CD45", 15.5);
+        nested.setStatistic(Statistic.MEAN);
+        nested.setThresholdIsZScore(false);
+
+        GateNode root = new GateNode("CD45", 10.5);
+        root.setStatistic(Statistic.MEAN);
+        root.setThresholdIsZScore(false);
+        root.setPositiveChildren(List.of(nested));
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+        return PopulationStats.of(tree, tally, List.of(), null, null).rows();
+    }
+
     /** As {@link AnalysisFixtures#twoLevelRows()}, but {@code CD45+} carries two sibling CD3 gates. */
     private static List<PopulationStats.Row> malformedSiblingGateRows() {
         int n = 20;

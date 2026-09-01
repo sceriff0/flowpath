@@ -210,18 +210,36 @@ final class ResolvedGate {
 
     private int branchOf(int cellIdx, boolean honourClip) {
         if (!usable) return UNMEASURED;
-        double rawX = x.valueAt(cellIdx);
-        // NaN is checked before the clip: an unmeasured cell is not an extreme one, and
+
+        // Step 1: can this gate judge the cell at all? Both axes are asked before either
+        // is judged extreme, and that ordering is load-bearing in two separate ways.
+        //
+        // NaN must beat the clip test, because an unmeasured cell is not an extreme one.
         // clipsX(NaN) is false anyway (every NaN comparison is), so leaving it to the clip
         // check would let it fall through to branchFor -- where `NaN >= threshold` is false
         // and the cell silently becomes negative.
+        //
+        // And *both* axes must be asked before *either* clip test, not merely each axis
+        // before its own. Interleaving them (X's NaN, X's clip, Y's NaN, Y's clip) let a
+        // cell that was extreme on X and unmeasured on Y return CLIPPED here -- without Y
+        // ever being read -- whereupon the walk flagged it an outlier and re-asked via
+        // branchIgnoringClip, which skipped the clip test, reached Y, and returned
+        // UNMEASURED. The walk had already passed its one UNMEASURED check, so -2 went
+        // straight into branches[branchIdx] and killed the pass. Answering "measurable?"
+        // completely first makes that state unreachable rather than merely unlikely:
+        // whenever this returns CLIPPED, both axes are known to be non-NaN, so
+        // branchIgnoringClip on the same cell cannot return UNMEASURED.
+        double rawX = x.valueAt(cellIdx);
         if (Double.isNaN(rawX)) return UNMEASURED;
-        if (honourClip && clipsX(rawX)) return CLIPPED;
+        double rawY = twoAxis ? y.valueAt(cellIdx) : 0.0;
+        if (twoAxis && Double.isNaN(rawY)) return UNMEASURED;
+
+        // Step 2: the cell has a real value on every axis, so now it can be merely extreme.
+        if (honourClip && (clipsX(rawX) || (twoAxis && clipsY(rawY)))) return CLIPPED;
+
+        // Step 3: geometry, in the gate's own coordinate space.
         double vx = zScore ? x.toZScore(rawX) : rawX;
         if (!twoAxis) return node.branchFor(vx, 0.0);
-        double rawY = y.valueAt(cellIdx);
-        if (Double.isNaN(rawY)) return UNMEASURED;
-        if (honourClip && clipsY(rawY)) return CLIPPED;
         double vy = zScore ? y.toZScore(rawY) : rawY;
         return node.branchFor(vx, vy);
     }

@@ -2,10 +2,14 @@ package qupath.ext.flowpath.engine;
 
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine.AssignmentResult;
+import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.PopulationStats;
+import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
@@ -487,6 +491,118 @@ class GatingEngineTest {
         assertTrue(clipped > 0, "The 20/80 clip should exclude somebody");
     }
 
+    /**
+     * The two-axis version of the test above, which is where the CLIPPED/UNMEASURED
+     * distinction actually broke.
+     * <p>
+     * {@code branchOf} used to test the axes in order — X's NaN, then X's clip, then Y's
+     * NaN — and so returned {@code CLIPPED} for a cell whose X was extreme without ever
+     * looking at Y. The walk then re-asked with {@code branchIgnoringClip}, which skipped
+     * the clip test, fell through to Y, found no measurement there and returned
+     * {@code UNMEASURED (-2)}. The walk had already spent its one UNMEASURED check, so
+     * {@code -2} went straight into {@code rg.branches[branchIdx]}.
+     * <p>
+     * Two things were wrong at once, and this test pins both: the pass died with
+     * {@code ArrayIndexOutOfBoundsException: Index -2} (swallowed by
+     * {@link LivePreviewService} into a log line, so the whole view silently froze on the
+     * last good pass), and the cell was flagged as an <em>outlier</em> on the way — a cell
+     * with no data on an axis is not an extreme value on it, which is the exact
+     * conflation {@code UNMEASURED} was introduced to end.
+     */
+    @Test
+    void aClippedCellWithNoValueOnTheOtherAxisIsUnmeasuredNotACrash() {
+        // X spans 1..20 so a 10/90 clip has a real tail at both ends. Y is present
+        // everywhere except cell 0 -- which is also the most extreme X, so it is clipped
+        // on X and unmeasured on Y simultaneously. That is the combination that crashed.
+        CellIndex index = Cells.of(20)
+                .marker("X", i -> i + 1.0)
+                .marker("Y", i -> 10.0)
+                .absentOn(i -> i == 0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(20));
+
+        QuadrantGate gate = new QuadrantGate("X", "Y", 10.5, 5.0);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        gate.setExcludeOutliers(true);
+        gate.setClipPercentileLow(10.0);
+        gate.setClipPercentileHigh(90.0);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = assertDoesNotThrow(
+                () -> GatingEngine.assignAll(tree, index, stats),
+                "a cell clipped on X with no Y measurement must not index branches[-2]");
+
+        assertTrue(result.getUnmeasured()[0],
+                "Cell 0 has no Y value, so this gate cannot judge it at all");
+        assertFalse(result.getOutlier()[0],
+                "...and a cell with no data on an axis is not an extreme value on it");
+        assertEquals("Unclassified", result.getPhenotypes()[0],
+                "an unmeasured cell keeps its ancestors' phenotype and descends no further");
+
+        // The distinction the fix restores, stated as counts. Branch.getCount() skips every
+        // excluded cell, so it drops the clipped ones as well as the unmeasured one -- the
+        // point is *which* cells end up in which category, not the total.
+        int clipped = 0;
+        for (int i = 0; i < 20; i++) {
+            if (result.getOutlier()[i]) {
+                clipped++;
+                assertFalse(result.getUnmeasured()[i], "a clipped cell is not an unmeasured one");
+                assertNotEquals("Unclassified", result.getPhenotypes()[i],
+                        "a clipped cell has a real value on both axes, so it still has a branch");
+            }
+        }
+        assertTrue(clipped > 0, "the 10/90 clip should catch the tails of X");
+        assertFalse(result.getOutlier()[0], "...but never the cell that simply has no Y");
+
+        int counted = 0;
+        for (Branch b : gate.getBranches()) counted += b.getCount();
+        assertEquals(20 - 1 - clipped, counted,
+                "every cell is counted except the unmeasured one and the clipped ones");
+    }
+
+    /**
+     * The same shape as above but with the roles of the axes swapped, so the clip lands on
+     * Y and the absent measurement on X. Included because the original defect was purely
+     * an artefact of the order the axes were tested in — a fix that only reorders the two
+     * NaN checks without pulling both ahead of both clip checks passes one of these tests
+     * and fails the other.
+     */
+    @Test
+    void theSameHoldsWhenTheClipIsOnYAndTheGapIsOnX() {
+        CellIndex index = Cells.of(20)
+                .marker("Y", i -> i + 1.0)
+                .marker("X", i -> 10.0)
+                .absentOn(i -> i == 0)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(20));
+
+        QuadrantGate gate = new QuadrantGate("X", "Y", 5.0, 10.5);
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        gate.setExcludeOutliers(true);
+        gate.setClipPercentileLow(10.0);
+        gate.setClipPercentileHigh(90.0);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = assertDoesNotThrow(
+                () -> GatingEngine.assignAll(tree, index, stats));
+
+        assertTrue(result.getUnmeasured()[0], "Cell 0 has no X value");
+        assertFalse(result.getOutlier()[0], "no data on an axis is not an extreme value");
+        assertEquals("Unclassified", result.getPhenotypes()[0]);
+    }
+
     @Test
     void combineMasksRejectsDifferentPopulations() {
         // Every mask is positional against CellIndex.getObjects(), so different lengths
@@ -924,5 +1040,226 @@ class GatingEngineTest {
         // Cell 1 should have composite phenotype (not excluded)
         assertFalse(result.getExcluded()[1]);
         assertTrue(result.getPhenotypes()[1].contains(": "));
+    }
+
+    // ---- degenerate and multi-root edge populations ----
+
+    /**
+     * {@code walkRoots} gives every root a clean slate for {@code phenotypes}, {@code colors}
+     * and {@code excluded}, but deliberately <em>not</em> for {@code unmeasured}: that flag
+     * accumulates across roots, because it means "this cell's phenotype is incomplete —
+     * some gate could not judge it", which stays true no matter which root said it.
+     * <p>
+     * Nothing pinned that. {@code CLAUDE.md} names "{@code unmeasured[]} going stale between
+     * roots" as one of three multi-root defects this codebase has already shipped, and the
+     * union is exactly the property that makes the flag order-free: reset it per root and
+     * the answer becomes "did the <em>last</em> root happen to measure this cell?", so the
+     * same data reports a different set of unmeasured cells depending on the order the user
+     * added the two gates.
+     * <p>
+     * The other half of the contract is that an unmeasured cell is not a lost one. Root A
+     * measured it perfectly well, so it keeps root A's label — {@code Unclassified} would
+     * throw away a real classification because an unrelated root had no data.
+     */
+    @Test
+    void unmeasuredIsAUnionAcrossRootsAndDoesNotDependOnRootOrder() {
+        boolean[][] unmeasuredByOrder = new boolean[2][];
+        String[][] phenotypesByOrder = new String[2][];
+
+        for (int order = 0; order < 2; order++) {
+            // Four cells with an A value each; cell 1 has no B measurement at all, exactly
+            // as export_geojson.py emits a NaN (by omitting the key).
+            CellIndex index = Cells.of(4)
+                    .marker("A", i -> (i + 1) * 10.0)
+                    .marker("B", i -> (i + 1) * 10.0)
+                    .absentOn(i -> i == 1)
+                    .area(100.0)
+                    .build();
+            MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
+
+            GateNode rootA = new GateNode("A", 25.0);
+            rootA.setStatistic(Statistic.MEAN);
+            rootA.setThresholdIsZScore(false);
+
+            GateNode rootB = new GateNode("B", 25.0);
+            rootB.setStatistic(Statistic.MEAN);
+            rootB.setThresholdIsZScore(false);
+
+            GateTree tree = new GateTree();
+            tree.setQualityFilter(null);
+            if (order == 0) {
+                tree.addRoot(rootA);
+                tree.addRoot(rootB);
+            } else {
+                tree.addRoot(rootB);
+                tree.addRoot(rootA);
+            }
+
+            AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+            unmeasuredByOrder[order] = result.getUnmeasured();
+            phenotypesByOrder[order] = result.getPhenotypes();
+
+            // B never judges cell 1, so its negative branch counts one cell, not two --
+            // the same rule unmeasuredCellIsNotClassifiedNegative pins for a single root.
+            assertEquals(2, rootB.getBranches().get(0).getCount(), "B+ counts 30 and 40");
+            assertEquals(1, rootB.getBranches().get(1).getCount(),
+                    "B- counts only cell 0; cell 1 has no B value to be negative on");
+        }
+
+        assertArrayEquals(unmeasuredByOrder[0], unmeasuredByOrder[1],
+                "unmeasured[] is a union over every root, so it cannot depend on root order");
+
+        boolean[] unmeasured = unmeasuredByOrder[0];
+        assertTrue(unmeasured[1], "cell 1 has no B measurement, so some gate could not judge it");
+        for (int i : new int[] {0, 2, 3}) {
+            assertFalse(unmeasured[i], "cell " + i + " was measured by both roots");
+        }
+
+        // ...and being unmeasured by B did not cost it the classification A gave it. B
+        // contributes nothing for cell 1 either way, so its label is A's alone and is
+        // therefore identical in both orders -- unlike a fully measured cell's composite,
+        // which is joined in root order by design (asserted below).
+        assertEquals("A-", phenotypesByOrder[0][1],
+                "A measured cell 1 (value 20 < 25), so it keeps A's label rather than "
+                        + "becoming Unclassified because an unrelated root had no data");
+        assertEquals("A-", phenotypesByOrder[1][1],
+                "and the same label when B is walked first");
+        assertEquals("A+: B+", phenotypesByOrder[0][2],
+                "a fully measured cell still gets both roots' contributions");
+        assertEquals("B+: A+", phenotypesByOrder[1][2],
+                "in root order -- the composite string is ordered, the unmeasured flag is not");
+    }
+
+    /**
+     * An empty population is ordinary input — a slide whose detections were all filtered
+     * upstream, or a freshly opened image before segmentation — and every array, counter and
+     * percentage downstream has to survive it. The interesting half is the arithmetic:
+     * {@code PopulationStats.percent} divides by a whole that is zero here, and the
+     * documented answer is {@code 0.0} rather than {@code NaN}, because a parent holding no
+     * cells holds none of this branch either. A {@code NaN} would reach the Analysis table
+     * as an empty cell and the plots as a missing bar, which reads as "not computed" rather
+     * than "there is nothing here".
+     */
+    @Test
+    void aZeroCellIndexGatesToAnEmptyReportWithoutThrowing() {
+        CellIndex index = Cells.of(0).marker("CD45").area().build();
+        assertEquals(0, index.size());
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(0));
+
+        GateNode gate = new GateNode("CD45", 5.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = assertDoesNotThrow(
+                () -> GatingEngine.assignAll(tree, index, stats),
+                "an empty population is input, not an error");
+
+        assertEquals(0, result.getPhenotypes().length);
+        assertEquals(0, result.getExcluded().length);
+        assertEquals(0, result.getOutlier().length);
+        assertEquals(0, result.getUnmeasured().length);
+        assertEquals(0, result.getColors().length);
+
+        BranchTally tally = result.getTally();
+        assertEquals(0, tally.cellsTotal());
+        assertEquals(0, tally.cellsClean());
+        for (Branch b : gate.getBranches()) {
+            assertEquals(0, b.getCount());
+            assertEquals(0, tally.total(b));
+            assertEquals(0, tally.clean(b));
+        }
+
+        PopulationStats popStats = PopulationStats.of(tree, tally, List.of(), null, null);
+        List<PopulationStats.Row> rows = popStats.rows(PopulationStats.Scope.WHOLE_SLIDE);
+        assertEquals(gate.getBranches().size(), rows.size(),
+                "every branch still gets a row -- an empty population is reported, not hidden");
+        for (PopulationStats.Row row : rows) {
+            assertEquals(0, row.count());
+            assertEquals(0, row.cleanCount());
+            assertEquals(0.0, row.percentOfParent(),
+                    "percent of an empty whole is 0.0 by PopulationStats.percent, never NaN");
+            assertEquals(0.0, row.percentOfTotal(),
+                    "the same zero-whole branch answers percent-of-total");
+            assertFalse(Double.isNaN(row.percentOfParent()));
+            assertFalse(Double.isNaN(row.percentOfTotal()));
+        }
+    }
+
+    /**
+     * A one-cell population has a standard deviation of exactly zero, so a z-score gate is
+     * asked to divide by it. {@link qupath.ext.flowpath.model.MeasuredColumn#toZScore}
+     * answers {@code 0.0} for any column whose std is below {@code 1e-10} instead of
+     * returning {@code Infinity} or {@code NaN} — the cell is defined to sit exactly at the
+     * mean, which for a single cell it does.
+     * <p>
+     * That matters twice over. An {@code Infinity} would place the cell in the positive
+     * branch of every gate at once; a {@code NaN} is worse, because {@code branchOf} tests
+     * NaN <em>before</em> the geometry and would report the cell {@code UNMEASURED} — a cell
+     * with a perfectly good measurement filed under "no data", counted nowhere and flagged
+     * incomplete in the CSV. This pins the collapse-to-the-mean answer, and with it the
+     * {@code clean(branch) == branch.getCount()} parity that the tree view and the Analysis
+     * window's Clean column both depend on.
+     */
+    @Test
+    void aSinglecellPopulationGatesWithoutDividingByZero() {
+        CellIndex index = Cells.of(1).marker("A", 42.0).area(100.0).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
+        assertEquals(0.0, stats.getStd("A"), 1e-12, "one cell has no spread at all");
+
+        // Threshold 0.0 in z-score space: the degenerate column puts the cell exactly at
+        // the mean, and the cut is at-or-above, so it lands positive.
+        GateNode gate = new GateNode("A", 0.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(true);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+
+        AssignmentResult result = assertDoesNotThrow(
+                () -> GatingEngine.assignAll(tree, index, stats),
+                "a zero-variance column must not blow up the walk");
+
+        assertFalse(result.getUnmeasured()[0],
+                "the cell has a real value -- a degenerate column is not an absent one");
+        assertFalse(result.getOutlier()[0]);
+        assertFalse(result.getExcluded()[0]);
+        assertEquals("A+", result.getPhenotypes()[0],
+                "z == 0.0 at a z-threshold of 0.0 is at-or-above, so the cell is positive");
+        assertEquals(1, gate.getBranches().get(0).getCount());
+        assertEquals(0, gate.getBranches().get(1).getCount());
+
+        BranchTally tally = result.getTally();
+        assertEquals(1, tally.cellsTotal());
+        assertEquals(1, tally.cellsClean());
+        for (Branch b : gate.getBranches()) {
+            assertEquals(b.getCount(), tally.clean(b),
+                    "clean(branch) tracks Branch.getCount() by construction, degenerate "
+                            + "column or not");
+            assertTrue(tally.clean(b) <= tally.cellsClean(),
+                    "and stays within the denominator every percentage divides by");
+        }
+
+        // The other side of the same cut, to show the collapse really is to 0.0 and not to
+        // something that merely happens to be positive: at a z-threshold above 0 the same
+        // cell is negative.
+        GateNode strict = new GateNode("A", 0.5);
+        strict.setStatistic(Statistic.MEAN);
+        strict.setThresholdIsZScore(true);
+        GateTree strictTree = new GateTree();
+        strictTree.setQualityFilter(null);
+        strictTree.addRoot(strict);
+
+        AssignmentResult strictResult = GatingEngine.assignAll(strictTree, index, stats);
+        assertEquals("A-", strictResult.getPhenotypes()[0],
+                "z == 0.0 is below a threshold of 0.5 -- not Infinity, which would be above "
+                        + "every threshold");
+        assertFalse(strictResult.getUnmeasured()[0], "and not NaN, which would read as no data");
+        assertEquals(strict.getBranches().get(1).getCount(),
+                strictResult.getTally().clean(strict.getBranches().get(1)));
     }
 }

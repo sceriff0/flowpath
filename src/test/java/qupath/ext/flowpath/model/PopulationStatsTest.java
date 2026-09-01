@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
+import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.Cells;
 
 import java.util.List;
@@ -323,6 +324,183 @@ class PopulationStatsTest {
                 .map(PopulationStats.Row::rootIndex).sorted().toList();
         assertEquals(List.of(0, 1), rootIndexes,
                 "rootIndex, in tree order, is what actually distinguishes them");
+    }
+
+    /**
+     * {@code collectFromRoots} skips a disabled root <b>before</b> handing out a
+     * {@code rootIndex}, so the enabled roots are numbered {@code 0,1,...} contiguously
+     * however many disabled roots sit among them. That is documented in the method and was
+     * never tested, while three separate consumers key on the number being exactly this:
+     * {@code PopulationRef}, {@code CompositionCanvas.availableRoots()} and
+     * {@code AssignmentResult.getPerRootColors()} — the last of which is itself built over
+     * the enabled roots only. Numbering by position in {@code getRoots()} instead would
+     * leave every one of them pointing at a root the row does not belong to: a silent
+     * misalignment, not a failure.
+     */
+    @Test
+    void rootIndexStaysContiguousWhenADisabledRootSitsBetweenTwoEnabledOnes() {
+        GateNode first = threshold("CD45", 5.5);
+        GateNode middle = threshold("CD3", 5.5);
+        GateNode last = threshold("CD19", 5.5);
+        middle.setEnabled(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(first);
+        tree.addRoot(middle);
+        tree.addRoot(last);
+
+        CellIndex index = Cells.columns(List.of("CD45", "CD3", "CD19"), new double[][] {
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+        }).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+
+        List<PopulationStats.Row> rows =
+                PopulationStats.of(tree, tally, List.of(), null, null).rows();
+
+        List<Integer> indexes = rows.stream()
+                .map(PopulationStats.Row::rootIndex).distinct().sorted().toList();
+        assertEquals(List.of(0, 1), indexes,
+                "two enabled roots are numbered 0 and 1, not 0 and 2");
+
+        List<String> channelsAt0 = rows.stream().filter(r -> r.rootIndex() == 0)
+                .map(PopulationStats.Row::gateChannel).distinct().toList();
+        assertEquals(List.of("CD45"), channelsAt0);
+
+        List<String> channelsAt1 = rows.stream().filter(r -> r.rootIndex() == 1)
+                .map(PopulationStats.Row::gateChannel).distinct().toList();
+        assertEquals(List.of("CD19"), channelsAt1,
+                "rootIndex 1 is the THIRD root -- the disabled one never took a number");
+
+        assertTrue(rows.stream().noneMatch(r -> r.gateChannel().equals("CD3")),
+                "the disabled root contributes no rows at all");
+        assertTrue(rows.stream().noneMatch(r -> r.path().startsWith("CD3")),
+                "and none of its paths either");
+    }
+
+    /**
+     * {@code parentCount}/{@code cleanParentCount} chaining and {@code percentOfParent} at
+     * depth &gt;= 2 carry every displayed percentage below the first child, and nothing else
+     * in the suite reaches depth 2 at all: the recursion could pass a grandparent's count,
+     * or transpose the raw and clean pair, and every existing test would stay green.
+     * <p>
+     * The middle gate clips outliers so that its {@code count} and {@code cleanCount}
+     * genuinely differ — with the two equal, a transposition has no visible effect and the
+     * assertions below pin nothing. {@code percentOfParent} is against the <b>raw</b> parent
+     * count ({@code PopulationStats.percent(count, parentCount)}); against the clean one the
+     * last assertion would read 100%, not 60%.
+     */
+    @Test
+    void aThreeLevelTreeChainsParentCountsThroughEveryDepth() {
+        GateNode root = threshold("CD45", 10.5);
+        GateNode middle = threshold("CD3", 15.5);
+        GateNode grandchild = threshold("CD8", 17.5);
+
+        // The top decile of CD3 (values 1..20, so the 90th percentile is 18.1) is clipped:
+        // cells 18 and 19 land in the middle gate's branch and are counted there, but are
+        // not clean there.
+        middle.setExcludeOutliers(true);
+        middle.setClipPercentileLow(0.0);
+        middle.setClipPercentileHigh(90.0);
+
+        root.getBranches().get(0).getChildren().add(middle);
+        middle.getBranches().get(0).getChildren().add(grandchild);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+
+        int n = 20;
+        double[] values = new double[n];
+        for (int i = 0; i < n; i++) values[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45", "CD3", "CD8"),
+                new double[][] {values, values, values}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+
+        PopulationStats s = PopulationStats.of(tree, tally, List.of(), null, null);
+        PopulationStats.Row depth1 = pathRow(s, "CD45+/CD3+");
+        PopulationStats.Row depth2 = pathRow(s, "CD45+/CD3+/CD8+");
+
+        assertEquals(1, depth1.depth());
+        assertEquals(2, depth2.depth());
+
+        assertEquals(5, depth1.count(), "CD45+ is cells 10-19; of those, 15-19 are CD3+");
+        assertEquals(3, depth1.cleanCount(), "cells 18 and 19 were clipped as CD3 outliers");
+        assertNotEquals(depth1.count(), depth1.cleanCount(),
+                "the raw/clean pair must really differ, or transposing them below is invisible");
+
+        assertEquals(5, depth2.parentCount(),
+                "the grandchild's parent is the CD3+ branch, raw");
+        assertEquals(depth1.count(), depth2.parentCount());
+        assertEquals(3, depth2.cleanParentCount(),
+                "and its clean parent is that same branch, clean");
+        assertEquals(depth1.cleanCount(), depth2.cleanParentCount());
+
+        assertEquals(3, depth2.count(), "of the CD3+ cells 15-19, cells 17-19 clear 17.5");
+        assertEquals(1, depth2.cleanCount(), "cells 18 and 19 are still clipped here");
+        assertEquals(60.0, depth2.percentOfParent(), 1e-9,
+                "3 of the 5 RAW parent cells -- against the 3 clean ones this would be 100%");
+        assertEquals(15.0, depth2.percentOfTotal(), 1e-9, "3 of 20");
+    }
+
+    /**
+     * {@code RegionMask.nameOf} falls back to an annotation's classification when it has no
+     * name of its own, so two annotations both classified {@code Tumor} are two distinct
+     * regions sharing one name — the ordinary way a slide gets annotated, not a
+     * pathological input. {@code regionIndex} is the field that tells them apart; keying a
+     * per-region reduction on {@code regionName} instead collapses them, which is exactly
+     * the defect {@code RegionComparisonCanvas} shipped (a bar per name, resolved with
+     * {@code findFirst()}, so both bars showed the first region's count).
+     */
+    @Test
+    void regionIndexDistinguishesTwoRegionsThatShareAName() {
+        List<PopulationStats.Row> perRegion = AnalysisFixtures.twoRegionsSharingOneNameRows().stream()
+                .filter(r -> r.scope() == PopulationStats.Scope.ANNOTATION_K)
+                .filter(r -> r.path().equals("CD45-"))
+                .toList();
+
+        assertEquals(2, perRegion.size(), "two regions, so two rows for the one population");
+        assertEquals(List.of("Tumor", "Tumor"),
+                perRegion.stream().map(PopulationStats.Row::regionName).toList(),
+                "the name cannot distinguish them -- both annotations are classified Tumor");
+
+        assertEquals(List.of(0, 1),
+                perRegion.stream().map(PopulationStats.Row::regionIndex).sorted().toList(),
+                "regionIndex can");
+
+        PopulationStats.Row region0 = perRegion.stream()
+                .filter(r -> r.regionIndex() == 0).findFirst().orElseThrow();
+        PopulationStats.Row region1 = perRegion.stream()
+                .filter(r -> r.regionIndex() == 1).findFirst().orElseThrow();
+        assertEquals(10, region0.count(), "region 0 holds cells 0-14, of which 0-9 are CD45-");
+        assertEquals(0, region1.count(), "region 1 holds cells 15-19, every one of them CD45+");
+        assertNotEquals(region0.count(), region1.count(),
+                "distinct counts, so a name-keyed reduction reports region 0's number twice "
+                        + "rather than coincidentally agreeing with region 1's");
+
+        // What a name-keyed reduction actually does, spelled out: it can only ever see one
+        // of the two rows, and which one is an accident of stream order.
+        PopulationStats.Row byNameOnly = perRegion.stream()
+                .filter(r -> "Tumor".equals(r.regionName())).findFirst().orElseThrow();
+        assertEquals(region0.count(), byNameOnly.count(),
+                "region 1's cells are unreachable through the name alone");
+    }
+
+    /** A threshold gate on {@code channel}, cut at a raw (non-z-scored) mean. */
+    private static GateNode threshold(String channel, double at) {
+        GateNode node = new GateNode(channel, at);
+        node.setStatistic(Statistic.MEAN);
+        node.setThresholdIsZScore(false);
+        return node;
+    }
+
+    private static PopulationStats.Row pathRow(PopulationStats s, String path) {
+        return s.rows(PopulationStats.Scope.WHOLE_SLIDE).stream()
+                .filter(r -> r.path().equals(path)).findFirst().orElseThrow();
     }
 
     private static PopulationStats.Row rowFor(PopulationStats s, PopulationStats.Scope scope,

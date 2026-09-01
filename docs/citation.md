@@ -37,6 +37,13 @@ FlowPath runs on QuPath — please cite it:
 
 ## UMAP & SMILE (if you computed an embedding)
 
+!!! warning "UMAP is coming in a future release"
+    UMAP exploration is not available in this version — the **Open UMAP** button
+    is disabled and labelled *UMAP (coming soon)*. These references apply to work
+    that used an embedding computed with an earlier GatingTree / qUMAP release, or
+    with a future FlowPath release once the feature ships. A gating-only workflow
+    in this version does not need them.
+
 If you computed an embedding, also cite the UMAP algorithm and the SMILE library
 that implements it:
 
@@ -54,5 +61,5 @@ If you produced your inputs with MIRAGE, cite it as well — see MIRAGE's own
 
 !!! tip "Cite what you used"
     A pure import-and-gate workflow needs FlowPath and QuPath (+ AnnoMask if you
-    imported a mask); add the UMAP and SMILE references only if you computed an
-    embedding.
+    imported a mask) — which is every workflow in this version. Add the UMAP and
+    SMILE references only if you computed an embedding.

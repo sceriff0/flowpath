@@ -91,6 +91,20 @@ public final class PopulationStats {
      *                              the {@code count}/{@code cleanCount} gap is annotation
      *                              coverage rather than data quality. Compare the scopes to
      *                              separate the two.
+     * @param regionIndex           which annotated region this row counts, or {@code -1} at a
+     *                              scope that is not per-region. <b>This, not
+     *                              {@link #regionName}, is a region's identity.</b> Region
+     *                              names come from {@code RegionMask.nameOf}, which falls back
+     *                              to the annotation's <em>classification</em> when it has no
+     *                              name of its own — so every annotation classified
+     *                              {@code Tumor} is called {@code "Tumor"}, and drawing two
+     *                              tumour annotations on one slide is the ordinary case, not a
+     *                              pathological one. Keying anything on the name alone
+     *                              collapses them: {@code RegionComparisonCanvas} drew a bar
+     *                              per name and resolved each with {@code findFirst()}, so
+     *                              both bars showed the <em>first</em> Tumor region's count and
+     *                              the second region was invisible. This is exactly the defect
+     *                              {@link #rootIndex} exists to prevent one level up.
      * @param parentCount           cells in the branch above, or the scope's population for a root
      * @param denominatorCount      cells in the user-chosen denominator branch; 0 when none chosen
      * @param percentOfDenominator  {@code NaN} when no denominator was chosen, and equally
@@ -100,7 +114,7 @@ public final class PopulationStats {
      * @param areaMm2               the region's area, or {@code NaN} when unknown
      * @param densityPerMm2         {@code count / areaMm2}, or {@code NaN} without an area
      */
-    public record Row(Scope scope, String regionName, String path, String branchName,
+    public record Row(Scope scope, String regionName, int regionIndex, String path, String branchName,
                       String gateChannel, int depth, int rootIndex,
                       int count, int cleanCount, int parentCount, int cleanParentCount,
                       int denominatorCount,
@@ -218,7 +232,7 @@ public final class PopulationStats {
                                        : tally.inRegion(branch, region);
                 int clean = region < 0 ? scopeClean(scope, branch, tally)
                                        : tally.cleanInRegion(branch, region);
-                out.add(new Row(scope, regionName, path, branch.getName(), channel, depth, rootIndex,
+                out.add(new Row(scope, regionName, region, path, branch.getName(), channel, depth, rootIndex,
                         count, clean, parentCount, cleanParentCount, denominatorCount,
                         percent(count, parentCount),
                         percent(count, scopeTotal),

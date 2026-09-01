@@ -261,6 +261,51 @@ public final class AnalysisFixtures {
         return PopulationStats.of(tree, tally, regionNames, null, null).rows();
     }
 
+    /**
+     * One root over <b>two regions that share a name</b> — the region-axis twin of
+     * {@link #twoRootsSameChannelRows()}.
+     * <p>
+     * This is not a contrived input. {@code RegionMask.nameOf} falls back to an
+     * annotation's <em>classification</em> when it has no name of its own, so drawing two
+     * annotations and classifying both {@code Tumor} — the ordinary way a slide gets
+     * annotated — produces exactly this: two distinct regions, one name. A consumer keyed
+     * on the name collapses them.
+     * <p>
+     * Both regions are called {@code "Tumor"}. Cells alternate by parity, so region 0 holds
+     * the even indices and region 1 the odd ones; with {@code CD45 > 10.5} that is 5
+     * positives in region 0 and 5 in region 1, and the two regions' {@code CD45-} counts
+     * are 5 and 5 as well. To make a name-keyed reduction fail loudly rather than
+     * coincidentally agree, the split is made <b>asymmetric</b>: region 1 takes cells 15-19
+     * only, so its counts differ from region 0's.
+     */
+    public static List<PopulationStats.Row> twoRegionsSharingOneNameRows() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode root = new GateNode("CD45", 10.5);
+        root.setStatistic(Statistic.MEAN);
+        root.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+
+        // Region 0: cells 0-14 (5 positive, 10 negative). Region 1: cells 15-19 (all
+        // positive). Deliberately unequal, so a reduction that reads region 1's bar off
+        // region 0's row is off by 3 rather than accidentally right.
+        int[] regionOf = new int[n];
+        for (int i = 0; i < n; i++) regionOf[i] = i < 15 ? 0 : 1;
+        List<String> regionNames = List.of("Tumor", "Tumor");
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, regionOf, regionNames.size())
+                .getTally();
+
+        return PopulationStats.of(tree, tally, regionNames, null, null).rows();
+    }
+
     /** The {@link AnalysisSession.AnalysisInput} {@link #twoRootsSameChannelRows()} is built from. */
     public static AnalysisSession.AnalysisInput twoRootsSameChannelInput() {
         int n = 20;

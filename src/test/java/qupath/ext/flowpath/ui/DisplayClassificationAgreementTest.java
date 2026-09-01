@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -342,6 +343,64 @@ class DisplayClassificationAgreementTest {
                     "z-score rectangle: cell %d (z = %s, %s) classified into branch %d but drawn as branch %d",
                     idx, zx[idx], zy[idx], Integer.parseInt(phenotypes[idx].substring(1)), drawn[idx]));
         }
+    }
+
+    /**
+     * The agreement has to hold for cells the gate cannot measure, not only for the finite
+     * points every other case in this file feeds it.
+     * <p>
+     * {@code HistogramCanvas} guarded its range with {@code val < min || val > max}, and
+     * both comparisons are false for {@code NaN}, so an unmeasured cell passed the guard.
+     * {@code (int) NaN} is {@code 0}, so it landed in the leftmost bin — below the
+     * threshold, drawn in the negative colour. The engine meanwhile returned
+     * {@code UNMEASURED} for the same cell and counted it in neither branch, so the bar
+     * chart and the counts beside it described different populations. That is the
+     * "unmeasured is not negative" invariant, which was pinned in the engine and the CSV
+     * but never in the display path — the one place it was actually broken.
+     */
+    @Test
+    void anUnmeasuredCellIsDrawnInNoBinRatherThanTheLowestOne() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable");
+
+        // Cell 0 has no value for A; the other nine sit at 1..9.
+        CellIndex index = Cells.of(10)
+                .marker("A", i -> i == 0 ? Double.NaN : (double) i)
+                .area(100.0)
+                .build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        double[] values = columnOf(index, "A");
+
+        HistogramCanvas canvas = FxTestSupport.onFx(HistogramCanvas::new);
+        FxTestSupport.onFxRun(() -> canvas.setData(values, 1.0, 9.0));
+
+        assertEquals(9, FxTestSupport.onFx(canvas::binnedTotal),
+                "the nine measured cells are drawn; the unmeasured one is not drawn anywhere");
+
+        // Specifically not in bin 0, which is where (int) NaN sent it and where the gate
+        // paints the negative colour.
+        int inBinZero = FxTestSupport.onFx(() -> canvas.binCount(0));
+        int trulyInBinZero = 0;
+        double binWidth = (9.0 - 1.0) / HistogramCanvas.binCountTotal();
+        for (double v : values) {
+            if (!Double.isNaN(v) && v >= 1.0 && v < 1.0 + binWidth) trulyInBinZero++;
+        }
+        assertEquals(trulyInBinZero, inBinZero,
+                "bin 0 holds only the cells whose real value falls in it");
+
+        // And the engine agrees about the size of the population being described.
+        GateNode gate = new GateNode("A", 5.0);
+        gate.setStatistic(Statistic.MEAN);
+        gate.setThresholdIsZScore(false);
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(gate);
+        GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+
+        assertTrue(result.getUnmeasured()[0], "the engine calls cell 0 unmeasured");
+        int classified = gate.getBranches().get(0).getCount() + gate.getBranches().get(1).getCount();
+        assertEquals(FxTestSupport.onFx(canvas::binnedTotal), classified,
+                "the histogram draws exactly the cells the engine classified");
     }
 
     /** Guards against a future gate type quietly skipping the geometry contract. */

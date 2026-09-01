@@ -8,8 +8,10 @@ import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Per marker: how much of the whole-slide population is positive, how much negative, and —
@@ -31,7 +33,20 @@ import java.util.Map;
  * twice, so their answers are reported as two bars ({@code "CD45 (root 1)"},
  * {@code "CD45 (root 2)"}) rather than added together, which would claim more positives and
  * negatives than the slide has cells. Within one root a marker gated under several branches
- * still pools, because those branches partition the cells rather than repeat them.
+ * still pools, but only across branches that <em>partition</em> the cells rather than
+ * repeat them — see below.
+ * <p>
+ * <b>Sibling gates pool; nested ones do not.</b> The same marker gated under {@code CD45+}
+ * and under {@code CD45-} measures two disjoint sets of cells, so adding the two answers is
+ * exactly right. The same marker gated at the root <em>and again</em> beneath its own
+ * positive branch is a different shape entirely: the deeper gate re-measures a subset of
+ * the cells the shallower one already judged, so pooling counts them twice and
+ * {@code positive + negative} exceeds the population. Nothing caught that — {@code
+ * ungatedCount} clamps at 0 and the bar's segments clamp at full height, so the chart
+ * showed a fully measured marker with no hint that its numbers summed past the total.
+ * A group whose parent path is a strict descendant of another group's, for the same root
+ * and channel, is therefore dropped in favour of the shallower one, which already covers
+ * every cell the deeper one saw.
  * <p>
  * <b>Deriving positive/negative without trusting branch names.</b> A user may rename a
  * gate's branches to anything, so this canvas does not match on {@code "+"}/{@code "-"}
@@ -138,9 +153,38 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             byNode.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
         }
 
+        // Drop any group that sits below another group for the same root and channel. Those
+        // two measure overlapping cells rather than disjoint ones, and the shallower group
+        // already covers everything the deeper one saw -- see the class javadoc.
+        Set<MarkerKey> nested = new LinkedHashSet<>();
+        for (MarkerKey candidate : byNode.keySet()) {
+            for (MarkerKey other : byNode.keySet()) {
+                if (candidate.equals(other)) continue;
+                if (candidate.rootIndex() != other.rootIndex()) continue;
+                if (!candidate.channel().equals(other.channel())) continue;
+                if (isStrictDescendant(candidate.parentPath(), other.parentPath())) {
+                    logger.warn("MarkerPositivityCanvas: channel '{}' is gated at '{}' and again "
+                                    + "below it at '{}' within root {}. The deeper gate re-measures "
+                                    + "cells the shallower one already judged, so it is not added in "
+                                    + "-- pooling both would report more cells than the population "
+                                    + "holds.",
+                            candidate.channel(),
+                            other.parentPath().isEmpty() ? "(root)" : other.parentPath(),
+                            candidate.parentPath(), candidate.rootIndex() + 1);
+                    nested.add(candidate);
+                    break;
+                }
+            }
+        }
+
         Map<String, Tally> out = new LinkedHashMap<>();
         for (Map.Entry<MarkerKey, List<PopulationStats.Row>> entry : byNode.entrySet()) {
             MarkerKey key = entry.getKey();
+            if (nested.contains(key)) {
+                // Still make sure the marker has an entry, so it keeps its bar.
+                out.computeIfAbsent(markerLabel(key, multiRoot), k -> new Tally());
+                continue;
+            }
             List<PopulationStats.Row> nodeRows = entry.getValue();
             // Always create the marker's entry, valid group or not, so a marker touched
             // only by a malformed group still appears (with zero measured) rather than
@@ -167,6 +211,19 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             }
         }
         return out;
+    }
+
+    /**
+     * Is {@code candidate} a gating path strictly below {@code ancestor}?
+     * <p>
+     * The root's parent path is the empty string, so every non-empty path is strictly below
+     * it. Otherwise the boundary must fall on a {@code "/"} separator: {@code "CD4+"} is not
+     * below {@code "CD"} merely because the string starts with it.
+     */
+    private static boolean isStrictDescendant(String candidate, String ancestor) {
+        if (candidate.equals(ancestor)) return false;
+        if (ancestor.isEmpty()) return !candidate.isEmpty();
+        return candidate.startsWith(ancestor + "/");
     }
 
     /** Reverses {@code PopulationStats.collect}'s {@code prefix + "/" + branchName}. */

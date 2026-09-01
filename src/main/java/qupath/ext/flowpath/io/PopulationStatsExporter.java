@@ -51,7 +51,7 @@ public final class PopulationStatsExporter {
      */
     public static void writeHeader(Writer w, boolean withImage) throws IOException {
         if (withImage) w.write("image,");
-        w.write("scope,region,path,branch,gate_channel,depth,root_index,count,clean_count,"
+        w.write("scope,region,region_index,path,branch,gate_channel,depth,root_index,count,clean_count,"
                 + "parent_count,clean_parent_count,denominator_count,percent_of_parent,"
                 + "percent_of_total,percent_of_denominator,area_mm2,density_per_mm2\n");
     }
@@ -64,6 +64,11 @@ public final class PopulationStatsExporter {
      * PopulationStats.Row#path()} values ({@code GateNode} names branches
      * {@code channel + "+"}/{@code channel + "-"} purely from the channel), so without this
      * column a reader could not tell such rows apart at all.
+     * <p>
+     * {@code region_index} is there for the same reason one axis down, and is needed just
+     * as often: {@code RegionMask} names an unnamed annotation after its classification, so
+     * two annotations both classified {@code Tumor} both export as {@code region=Tumor}.
+     * {@code region_index} is {@code -1} at the scopes that are not per-region.
      *
      * @param imageName written into a leading {@code image} column when non-null, matching
      *                  a {@link #writeHeader} call with {@code withImage=true}; {@code null}
@@ -78,6 +83,8 @@ public final class PopulationStatsExporter {
             w.write(row.scope().name());
             w.write(',');
             w.write(CellTable.escape(row.regionName() != null ? row.regionName() : ""));
+            w.write(',');
+            w.write(String.valueOf(row.regionIndex()));
             w.write(',');
             w.write(CellTable.escape(row.path()));
             w.write(',');

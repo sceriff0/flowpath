@@ -53,21 +53,41 @@ public final class RegionComparisonCanvas extends PlotCanvas {
         return List.copyOf(seen);
     }
 
-    /** Region names the selected population has a row in — the categories on the X axis. */
-    List<String> regionLabels() {
+    /**
+     * The selected population's rows, one per region, in region order — the bars.
+     * <p>
+     * The row itself is the unit, not its name. Region names are not unique:
+     * {@code RegionMask} falls back to an annotation's classification when it has none of
+     * its own, so two annotations both classified {@code Tumor} are both called
+     * {@code "Tumor"}, which is the ordinary way a slide gets annotated rather than an
+     * edge case. Keying the bars on the name meant {@code valueForRegion} resolved it with
+     * {@code findFirst()} and both bars drew the first Tumor region's count, with the
+     * second region unreachable. {@link PopulationStats.Row#regionIndex()} is the identity.
+     */
+    List<PopulationStats.Row> regionBars() {
         if (selected == null) return List.of();
         return regionRows.stream()
                 .filter(selected::matches)
+                .sorted(java.util.Comparator.comparingInt(PopulationStats.Row::regionIndex))
+                .toList();
+    }
+
+    /** Region labels for the X axis, parallel to {@link #regionBars()}. May contain repeats. */
+    List<String> regionLabels() {
+        return regionBars().stream()
                 .map(r -> r.regionName() == null ? "" : r.regionName())
                 .toList();
     }
 
-    /** The selected population's count in one region; 0 when that region has no row for it. */
-    int valueForRegion(String regionName) {
+    /**
+     * The selected population's count in region {@code regionIndex}; 0 when that region has
+     * no row for it.
+     */
+    int valueForRegion(int regionIndex) {
         if (selected == null) return 0;
         return regionRows.stream()
                 .filter(selected::matches)
-                .filter(r -> Objects.equals(regionName, r.regionName()))
+                .filter(r -> r.regionIndex() == regionIndex)
                 .mapToInt(PopulationStats.Row::count)
                 .findFirst()
                 .orElse(0);
@@ -79,27 +99,27 @@ public final class RegionComparisonCanvas extends PlotCanvas {
         gc.setFill(Color.rgb(30, 30, 30));
         gc.fillRect(0, 0, getWidth(), getHeight());
 
-        List<String> regions = regionLabels();
-        if (regions.isEmpty()) {
+        // One bar per row, not one bar per distinct name -- two regions may share a name.
+        List<PopulationStats.Row> bars = regionBars();
+        if (bars.isEmpty()) {
             gc.setFill(Color.gray(0.5));
             gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
             return;
         }
 
-        int maxCount = regions.stream().mapToInt(this::valueForRegion).max().orElse(1);
-        int n = regions.size();
+        int maxCount = bars.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
+        int n = bars.size();
         double barW = categoryWidth(n) * 0.6;
         double baseY = valueToY(0, 0, maxCount);
 
         for (int i = 0; i < n; i++) {
-            String region = regions.get(i);
             double cx = categoryToX(i, n);
-            double topY = valueToY(valueForRegion(region), 0, maxCount);
+            double topY = valueToY(bars.get(i).count(), 0, maxCount);
             gc.setFill(Color.rgb(76, 154, 255, 0.85));
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
         drawAxes(gc, selected == null ? "Region" : selected.path(), "Count");
-        drawCategoryLabels(gc, regions);
+        drawCategoryLabels(gc, regionLabels());
         drawValueTicks(gc, 0, maxCount, 4);
     }
 }

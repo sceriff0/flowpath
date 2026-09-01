@@ -178,4 +178,107 @@ class RegionMaskTest {
         assertEquals("Islands", mask.regionNameOf(7));
         assertNull(mask.regionNameOf(4));
     }
+
+    // ---- effective areas ----
+
+    /** A plain axis-aligned rectangle, so an expected area is width x height and nothing else. */
+    private static ROI rect(double x, double y, double w, double h) {
+        return ROIs.createRectangleROI(x, y, w, h, PLANE);
+    }
+
+    /**
+     * The trivial case, pinned so the two adjustments below are visibly adjustments to
+     * something: with one plain annotation and nothing to subtract, a region's effective
+     * area is just its ROI's area, in level-0 pixels².
+     */
+    @Test
+    void effectiveAreaOfASinglePlainRegionIsItsRoiArea() {
+        CellIndex index = row();
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("Tumour", null, rect(0, 0, 40, 20))));
+
+        double[] areas = mask.effectiveAreasPixels();
+        assertEquals(1, areas.length, "one area per region name");
+        assertEquals(mask.regionNames().size(), areas.length);
+        assertEquals(800.0, areas[0], 1e-6, "40 x 20 pixels");
+    }
+
+    /**
+     * The defect this method exists for. An {@code Ignore*} annotation drops every cell
+     * inside it — {@link #ignoredClassAnnotationSubtracts} pins that — but the enclosing
+     * annotation's own ROI still reports the hole as part of its area. A density built from
+     * the raw ROI area therefore divides a hole-excluded numerator by an un-holed
+     * denominator and reads systematically low, worst exactly where a pathologist has been
+     * most careful about excluding necrosis or a tissue fold.
+     */
+    @Test
+    void effectiveAreaSubtractsAnIgnoredClassHole() {
+        CellIndex index = row();
+        ROI outer = rect(0, 0, 40, 20);      // 800
+        ROI hole = rect(10, 5, 10, 5);       // 50, wholly inside outer
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("Tumour", null, outer),
+                annotation("Necrosis", PathClass.fromString("Ignore*"), hole)));
+
+        assertEquals(1, mask.excludeRegionCount(), "the hole is a subtraction, not a region");
+        assertEquals(List.of("Tumour"), mask.regionNames());
+
+        double[] areas = mask.effectiveAreasPixels();
+        assertEquals(1, areas.length);
+        assertEquals(750.0, areas[0], 1e-6,
+                "800 minus the 50-pixel hole -- the cells inside it are not counted either");
+        assertNotEquals(outer.getArea(), areas[0],
+                "the raw ROI area is the wrong denominator, which is the whole point");
+    }
+
+    /**
+     * Include regions are first-match-wins for cells
+     * ({@link #overlappingRegionsResolveToTheFirstMatch}), so the geometry has to be resolved
+     * the same way: the earlier annotation claims the whole of its own ROI and the later one
+     * keeps only what is left. Charging the shared area to both would let two overlapping
+     * annotations report a combined area larger than the tissue they cover, and every cell in
+     * the overlap would already have been counted against the first region alone.
+     */
+    @Test
+    void overlappingIncludeRegionsPartitionTheirUnion() {
+        CellIndex index = row();
+        ROI first = rect(0, 0, 40, 20);      // 800
+        ROI second = rect(20, 0, 40, 20);    // 800, overlapping the first over x = 20..40
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("First", null, first),
+                annotation("Second", null, second)));
+
+        double[] areas = mask.effectiveAreasPixels();
+        assertEquals(2, areas.length);
+        assertEquals(800.0, areas[0], 1e-6, "the first region claims the whole of its own ROI");
+        assertEquals(400.0, areas[1], 1e-6,
+                "the second keeps only x = 40..60; x = 20..40 was already claimed");
+
+        // The two partition their union, so they can be summed without double-counting --
+        // the geometric statement of the same rule the cell counts obey.
+        double union = 60 * 20;              // x = 0..60, y = 0..20
+        assertEquals(union, areas[0] + areas[1], 1e-6);
+    }
+
+    /**
+     * The implicit "whole image, minus exclusions" region has no ROI describing it
+     * ({@link #regionRoisIsNullForTheImplicitWholeImageRegion}), and an unknown area must
+     * stay unknown. Zero would be the worst possible stand-in: {@code count / 0} is
+     * {@code Infinity}, which renders as a number and reads as an answer, whereas
+     * {@code NaN} is the value every density display already treats as "not available".
+     */
+    @Test
+    void effectiveAreaOfTheImplicitWholeImageRegionIsNaNNotZero() {
+        CellIndex index = row();
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("Fold", PathClass.fromString("Ignore*"), band(35, 55))));
+
+        assertEquals(List.of(RegionMask.WHOLE_IMAGE), mask.regionNames());
+
+        double[] areas = mask.effectiveAreasPixels();
+        assertEquals(1, areas.length);
+        assertTrue(Double.isNaN(areas[0]),
+                "no ROI describes the whole image minus its exclusions, so its area is unknown");
+        assertNotEquals(0.0, areas[0], "and an unknown area is never reported as a number");
+    }
 }

@@ -155,11 +155,20 @@ public class MarkerStats {
     public double getPercentileValue(String channel, double percentile) {
         double[] sorted = sortedValues.get(channel);
         if (sorted == null || sorted.length == 0) return Double.NaN;
-        double idx = (percentile / 100.0) * (sorted.length - 1);
+        // Clamp the *percentile*, not the two indices it produces. The old code clamped
+        // `lo` only from below and `hi` only from above, which covers the two ends that
+        // cannot go out of range and neither of the two that can: a percentile above 100
+        // leaves `lo` past the end of the array, and one below 0 leaves `hi` negative.
+        // The UI spinners are bounded, but FlowPathSerializer reads clipPercentileLow/High
+        // straight out of the JSON with no range check, so a hand-edited or third-party
+        // .flowpath file reached this with, say, 150 and threw inside ResolvedGate's
+        // compile step -- where LivePreviewService swallows it and the view just stops
+        // updating. Clamping once, up front, makes every downstream index in range by
+        // construction.
+        double p = Double.isNaN(percentile) ? 0.0 : Math.clamp(percentile, 0.0, 100.0);
+        double idx = (p / 100.0) * (sorted.length - 1);
         int lo = (int) Math.floor(idx);
         int hi = (int) Math.ceil(idx);
-        if (lo < 0) lo = 0;
-        if (hi >= sorted.length) hi = sorted.length - 1;
         double frac = idx - lo;
         return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
     }

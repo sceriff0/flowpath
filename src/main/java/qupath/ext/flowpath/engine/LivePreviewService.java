@@ -402,12 +402,20 @@ public class LivePreviewService {
      * cache invalidation.</p>
      */
     private void recolorCells() {
-        final GatingEngine.AssignmentResult result = this.lastResult;
-        final CellIndex index = this.lastIndex;
-        final ImageData<?> data = this.lastImageData;
-        if (result == null || index == null || data == null) return;
-
         Platform.runLater(() -> {
+            // Read the published state *inside* the runLater, not before it. Both this and
+            // applyResult run on the FX thread, so whatever is read here is the newest pass
+            // that has actually been published. Capturing the fields up front instead meant
+            // a pass whose applyResult was already queued would land first, update
+            // lastResult, and then this closure would repaint every cell from the older
+            // arrays it had captured -- and because changing the colour-by-root selection
+            // starts no new gating pass, the stale classification stayed on screen until
+            // the user happened to edit something else.
+            final GatingEngine.AssignmentResult result = this.lastResult;
+            final CellIndex index = this.lastIndex;
+            final ImageData<?> data = this.lastImageData;
+            if (result == null || index == null || data == null) return;
+
             String[] phenotypes = result.getPhenotypes();
             boolean[] excluded = result.getExcluded();
             int[] defaultColors = result.getColors();

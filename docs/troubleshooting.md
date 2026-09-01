@@ -30,15 +30,29 @@ your problem, open an issue on the
 
 ??? question "Where did GatingTree and qUMAP go?"
     They were fused into a single **FlowPath** extension. Gating is now the way
-    in, and the UMAP opens from it via **Open UMAP** (++ctrl+u++) — already
-    carrying your phenotypes, colours and gated markers. If you still have the old
-    two installed, remove them: see
+    in; the UMAP will open from it — already carrying your phenotypes, colours and
+    gated markers — once it ships, which is not in this version (see
+    [UMAP](#umap)). If you still have the old two installed, remove them: see
     [Upgrading](installation.md#upgrading-from-gatingtree-qumap).
 
-??? question "Do the gating tree and the UMAP share the same cells?"
-    Yes — and now literally the same in-memory index, not two copies that happen
-    to agree. That is why the UMAP opens instantly, and why a gate edit recolours
-    the embedding rather than invalidating it.
+??? question "Why is the Open UMAP button disabled?"
+    UMAP exploration is **coming in a future release**. The button is disabled and
+    labelled *UMAP (coming soon)* in this version, and ++ctrl+u++ does nothing.
+    Gating, the Analysis window and the CSV exports are unaffected. The UMAP
+    sections in these docs describe how it will work once it ships.
+
+??? question "Will the gating tree and the UMAP share the same cells?"
+    Yes — literally the same in-memory index, not two copies that happen to
+    agree. That is why the UMAP will open instantly, and why a gate edit will
+    recolour the embedding rather than invalidating it.
+
+??? question "What does the Analysis window give me that the gate tree doesn't?"
+    The tree shows one number per branch, for the whole slide. The Analysis window
+    reports every population at **three nested scopes** (whole slide, all
+    annotations, per annotation), against **either denominator** (parent, total, or
+    any branch you pick), with **area-normalised density** and four comparison
+    plots — and exports the lot as `population_stats.csv`. See
+    [Usage → Step 3](usage.md#step-3-read-the-numbers-in-the-analysis-window).
 
 ??? question "Can I reproduce or share a gating strategy?"
     Yes — FlowPath saves the full gate hierarchy to `flowpath.json`. Load it on
@@ -81,12 +95,15 @@ your problem, open an issue on the
     confirm the JAR landed in QuPath's extensions directory (Extensions → Manage
     extensions shows the path).
 
-??? failure "`NoClassDefFoundError` the moment I press Run UMAP"
+??? failure "`NoClassDefFoundError` from the UMAP engine"
     You installed a thin JAR. FlowPath bundles the SMILE library for its UMAP
     engine, so the correct artefact is **`FlowPath-<version>-all.jar`**. Installing
     through the catalog always picks the right one; this only bites manual
     installs. See
-    [drop in a JAR](installation.md#alternative-drop-in-a-jar).
+    [drop in a JAR](installation.md#alternative-drop-in-a-jar). Nothing in this
+    version reaches that engine — the UMAP is
+    [coming in a future release](#umap) — but take the `-all.jar` anyway, so the
+    install you have is the one that will run it.
 
 ## Gating { #gating }
 
@@ -104,12 +121,90 @@ your problem, open an issue on the
     Set the **quality filters** (area, eccentricity, solidity, perimeter, total
     intensity) before gating to drop segmentation artefacts.
 
-??? failure "Open UMAP says it's waiting for the first gating pass"
-    The button needs a completed gating run to have something to hand over. Load
-    an image with detections and give the first pass a moment; if the status bar
-    still reads 0 cells, the detections carry no measurements (see above).
+## Analysis { #analysis }
 
-## UMAP { #umap }
+??? failure "The Analysis button refuses to open the window"
+    Three separate reasons, and the notification says which. **"Load an image with
+    cell detections first"** — there is no cell index yet. **"Waiting for the first
+    gating pass to finish"** — the index is there but no pass has completed; give it
+    a moment. **"Add at least one gate to see population statistics"** — a tree with
+    no *enabled* root gate produces no rows at any scope, so the window would open
+    onto a blank table with nothing to explain it.
+
+??? failure "The table shows a message instead of rows"
+    *"No gating pass to report on yet — gate some cells to see population
+    statistics."* means exactly that: the window is open but has not been handed a
+    completed pass. The window never shows an unexplained blank table — if there is
+    no data, there is a message saying why.
+
+??? failure "Count doesn't match what the gate tree shows"
+    Read **Clean**, not **Count**. **Count** is the raw total including cells the
+    quality filter excluded from the view; **Clean** is what survived exclusion, and
+    is the number the tree shows — that agreement is structural, not a coincidence
+    of the two being computed the same way.
+
+    What the gap between them means depends on the **Scope**. At *Whole slide* it
+    folds in both quality filtering and, when the annotation ROI filter is on, cells
+    outside the annotations. At the two per-region scopes an ROI-excluded cell
+    belongs to no region and is not counted at all, so there the gap is quality
+    filtering alone. See [Usage → the table](usage.md#the-table).
+
+??? failure "Density is blank"
+    FlowPath has no usable area for that region. Density divides by **effective**
+    area — the annotation geometry with `Ignore*` regions subtracted and overlaps
+    resolved first-match-wins — and an unknown or zero effective area is reported as
+    blank rather than as `0`, because a zero denominator produces an infinite density
+    that reads like a real measurement. Density is also blank at *Whole slide*, which
+    has no annotated area to divide by.
+
+??? failure "% of Denominator is blank"
+    Either no denominator is chosen (the picker reads *(none)*), or the branch you
+    chose holds no cells. Both are deliberately blank: neither is a question with a
+    numeric answer, and rendering the second as `0.0` would state a share of nothing
+    as though it had been measured. To tell them apart, read the `denominator_count`
+    column in the exported CSV.
+
+??? failure "Two rows have the same population name"
+    Expected, and the **Root** column is the fix. `GateNode` names its branches from
+    the channel alone, so two root gates on the same channel that you have not
+    renamed produce byte-identical population paths. The **Root** column (one-based)
+    and the pickers' `(root N)` suffix are the only things that separate them; in the
+    CSV it is the `root_index` column, which is zero-based.
+
+    The same thing happens one axis down with regions: `RegionMask` falls back to an
+    annotation's *classification* for its name, so two annotations both classified
+    `Tumor` both appear as `Tumor`. `region_index` in the CSV separates those.
+
+??? failure "*Per annotation* isn't in the Scope picker"
+    The slide has no annotations to report per-region, so the only scope that exists
+    is *Whole slide*. Draw annotations (or select the ones you want) and the two
+    annotation scopes appear on the next gating pass.
+
+??? failure "I disabled a gate and the window stopped updating"
+    Deliberate. With no enabled root gate there are no rows at any scope, so FlowPath
+    **skips** the push rather than overwriting the window with an unexplained blank
+    table. Re-enable a gate and the next pass repopulates it.
+
+??? question "Does the exported CSV match what I'm looking at?"
+    It is a superset. The export carries **every scope and every region**, not just
+    the rows the table is showing — a report that silently dropped two of its three
+    scopes on the way to disk would be the more surprising behaviour. The one thing
+    it does follow is the **Denominator** picker, since that changes the numbers
+    themselves.
+
+## UMAP — coming in a future release { #umap }
+
+!!! warning "These entries describe a feature that has not shipped"
+    UMAP exploration is not available in this version — the **Open UMAP** button
+    is disabled and labelled *UMAP (coming soon)*, and ++ctrl+u++ does nothing.
+    Nothing below can happen to you yet; it is kept here because it will apply
+    once the feature ships.
+
+??? failure "Open UMAP says it's waiting for the first gating pass"
+    Once the feature ships, the button needs a completed gating run to have
+    something to hand over. Load an image with detections and give the first pass
+    a moment; if the status bar still reads 0 cells, the detections carry no
+    measurements (see [Gating](#gating)).
 
 ??? failure "Out-of-memory while computing"
     FlowPath estimates memory first and warns you. Switch subsampling to **Auto**

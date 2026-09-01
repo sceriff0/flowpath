@@ -11,9 +11,10 @@ hide:
 **FlowJo-style workflows for QuPath**
 
 A [QuPath](https://qupath.github.io/) 0.7.0 extension that turns multiplexed
-imaging into living, clickable biology — gate cells into named phenotypes, then
-explore those phenotypes in a UMAP you can lasso. FlowPath picks up where the
-[MIRAGE](https://mirage-pipeline.readthedocs.io/) pipeline leaves off.
+imaging into living, clickable biology — gate cells into named phenotypes, read
+the population statistics for every branch, and export them. FlowPath picks up
+where the [MIRAGE](https://mirage-pipeline.readthedocs.io/) pipeline leaves off.
+UMAP exploration of those same phenotypes is coming in a future release.
 
 <div class="flowpath-badges" markdown>
 [:material-rocket-launch: Install](installation.md){ .md-button .md-button--primary }
@@ -30,19 +31,26 @@ explore those phenotypes in a UMAP you can lasso. FlowPath picks up where the
 ## What FlowPath is
 
 FlowPath brings the muscle-memory of **flow cytometry** — gating populations,
-reducing dimensions, lassoing clusters — *inside* QuPath, on **multiplexed tissue
+counting them, comparing their shares — *inside* QuPath, on **multiplexed tissue
 imaging** (CODEX, MIBI, mIF). You segment and quantify cells once, then phenotype
-and explore them interactively without leaving the viewer.
+them interactively without leaving the viewer.
 
 It works on one shared object — **QuPath detections carrying per-marker
-measurements** — and gives you two views onto it:
+measurements** — and gives you these views onto it:
 
 | View | Role | One line |
 |---|---|---|
 | **Gating** | *phenotype* | Gate detections into named populations with a live hierarchical tree. |
-| **UMAP** | *explore* | Embed your gated markers in 2D, coloured by the phenotypes you just built, and lasso clusters. |
+| **[Analysis](usage.md#step-3-read-the-numbers-in-the-analysis-window)** | *quantify* | Counts, percentages and density per population, at three nested scopes, with plots and a CSV export. |
+| **UMAP** *(coming in a future release)* | *explore* | Embed your gated markers in 2D, coloured by the phenotypes you just built, and lasso clusters. |
 
-Gating is the way in. The UMAP opens from it and inherits the phenotyping —
+!!! warning "UMAP is coming in a future release"
+    UMAP exploration is not available in this version — the **Open UMAP** button
+    is disabled and labelled *UMAP (coming soon)*, and ++ctrl+u++ does nothing.
+    Where these docs describe the UMAP, they describe how it will work once it
+    ships.
+
+Gating is the way in. The UMAP will open from it and inherit the phenotyping —
 the same cells, the same colours, the same markers:
 
 ```mermaid
@@ -50,8 +58,10 @@ flowchart LR
     M[MIRAGE pipeline<br/>OME-TIFF · cells.geojson · masks] --> Q[QuPath 0.7.0]
     subgraph FP[FlowPath]
       GT[Gating<br/>interactive phenotyping]
-      UM[UMAP<br/>phenotype-coloured embedding]
-      GT -- "Open UMAP<br/>(phenotypes, colours, gated markers)" --> UM
+      AN[Analysis<br/>population statistics]
+      UM[UMAP · coming soon<br/>phenotype-coloured embedding]
+      GT --> AN
+      GT -.->|"Open UMAP<br/>(phenotypes, colours, gated markers)"| UM
     end
     Q --> GT
     CAT[(catalog.json)] -. installs .-> FP
@@ -94,8 +104,8 @@ keys line up exactly (see [Usage → the data model](usage.md#the-data-model)).
 
     ---
 
-    From cells in QuPath to gated phenotypes to a UMAP, end to end — plus the
-    per-tool options.
+    From cells in QuPath to gated phenotypes to population statistics, end to
+    end — plus the per-tool options.
 
     [:octicons-arrow-right-24: Usage](usage.md)
 

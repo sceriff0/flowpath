@@ -63,9 +63,15 @@ entry:
 |---|---|---|
 | Extensions → FlowPath | ++ctrl+g++ | The gating window |
 
-There is deliberately no separate UMAP menu item — the UMAP opens from the gating
-window's **Open UMAP** button (++ctrl+u++), so it can inherit your phenotyping.
-See the [walkthrough in Usage](usage.md).
+One menu item is all there is: the Analysis window and everything else open from
+buttons in the gating window's toolbar. See the
+[walkthrough in Usage](usage.md).
+
+!!! warning "UMAP is coming in a future release"
+    UMAP exploration is not available in this version — the **Open UMAP** button
+    is disabled and labelled *UMAP (coming soon)*, and ++ctrl+u++ does nothing.
+    There will still be no separate UMAP menu item when it ships: it opens from
+    the gating window so it can inherit your phenotyping.
 
 !!! warning "Catalog adds, but no extension appears?"
     Almost always a QuPath version below 0.7.0, or a typo in the catalog URL (it
@@ -104,7 +110,8 @@ extensions shows the path), then restart QuPath.
     FlowPath bundles the [SMILE](https://haifengl.github.io/) library for its UMAP
     engine, so the release ships a **fat JAR** named `FlowPath-<version>-all.jar`.
     Any thinner JAR on the releases page installs fine and then fails with
-    `NoClassDefFoundError` the moment you press **Run UMAP**.
+    `NoClassDefFoundError` as soon as anything reaches that engine — which is what
+    the UMAP will do once it ships. Always take the `-all.jar`.
 
 ## Alternative: build from source
 

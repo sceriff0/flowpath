@@ -158,4 +158,48 @@ class AnalysisPaneFxTest {
                 pane.scopeComparisonCanvas().valueForScope(PopulationStats.Scope.WHOLE_SLIDE));
         assertEquals(5, valueForWholeSlide, "the population picker must reach ScopeComparisonCanvas");
     }
+
+    /**
+     * The population <em>table</em> must tell two same-channel roots apart, not only the
+     * pickers.
+     * <p>
+     * Every plot and both pickers were fixed to key on {@code rootIndex}, and the CSV
+     * exports {@code root_index} — but the table itself rendered {@code Row::path} alone.
+     * Two un-renamed roots on one channel emit byte-identical paths, so the primary display
+     * showed four rows reading {@code CD45+}, {@code CD45-}, {@code CD45+}, {@code CD45-}
+     * with different numbers and nothing to say which was which. The existing picker test
+     * above uses {@code twoRootInput()}, whose two roots are on <em>different</em> channels
+     * and therefore cannot collide; only {@code twoRootsSameChannelInput()} reproduces it.
+     */
+    @Test
+    void theTableTellsTwoRootsOnOneChannelApart() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        assertTrue(FxTestSupport.onFx(pane::columnTitles).contains("Root"),
+                "without a Root column the four rows are indistinguishable; columns were "
+                        + FxTestSupport.onFx(pane::columnTitles));
+
+        List<String> paths = FxTestSupport.onFx(() -> rowsOf(pane, "Population"));
+        List<String> roots = FxTestSupport.onFx(() -> rowsOf(pane, "Root"));
+        List<String> counts = FxTestSupport.onFx(() -> rowsOf(pane, "Count"));
+
+        assertEquals(4, paths.size(), "two roots x two branches");
+        assertEquals(List.of("CD45+", "CD45-", "CD45+", "CD45-"), paths,
+                "the paths really are identical -- that is the whole problem");
+        assertEquals(List.of("1", "1", "2", "2"), roots,
+                "one-based, matching the root and population pickers");
+
+        // And the pairing is right, not merely present: root 1 splits 10/10, root 2 splits
+        // 5/15. If the Root column were derived from anything but the row's own rootIndex,
+        // these would not line up.
+        assertEquals(List.of("10", "10", "5", "15"), counts);
+    }
+
+    private static List<String> rowsOf(AnalysisPane pane, String column) {
+        List<String> out = new java.util.ArrayList<>();
+        for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));
+        return out;
+    }
 }

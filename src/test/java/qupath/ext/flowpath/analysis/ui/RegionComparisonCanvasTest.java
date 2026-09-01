@@ -22,8 +22,8 @@ class RegionComparisonCanvasTest {
 
         assertEquals(Set.of("Region 1", "Region 2"), Set.copyOf(canvas.regionLabels()),
                 "every region the tally covers, not just the ones where the population is non-empty");
-        assertEquals(2, canvas.valueForRegion("Region 1"));
-        assertEquals(3, canvas.valueForRegion("Region 2"));
+        assertEquals(2, canvas.valueForRegion(0));
+        assertEquals(3, canvas.valueForRegion(1));
     }
 
     @Test
@@ -33,13 +33,13 @@ class RegionComparisonCanvasTest {
 
         canvas.setSelectedPopulation(new PopulationRef(0, "CD45-"));
         List<String> regionsForCd45Neg = canvas.regionLabels();
-        int region1ForCd45Neg = canvas.valueForRegion("Region 1");
+        int region1ForCd45Neg = canvas.valueForRegion(0);
 
         canvas.setSelectedPopulation(new PopulationRef(0, "CD45+/CD3+"));
         assertEquals(Set.copyOf(regionsForCd45Neg), Set.copyOf(canvas.regionLabels()));
         // CD45- (5 in Region 1, cells 0,2,4,6,8) and CD45+/CD3+ (2 in Region 1) disagree.
         assertEquals(5, region1ForCd45Neg);
-        assertEquals(2, canvas.valueForRegion("Region 1"));
+        assertEquals(2, canvas.valueForRegion(0));
     }
 
     @Test
@@ -75,12 +75,47 @@ class RegionComparisonCanvasTest {
         canvas.setSelectedPopulation(new PopulationRef(0, "CD45+"));
         assertEquals(List.of("Region 1", "Region 2"), canvas.regionLabels(),
                 "one label per region, not one per matching row");
-        assertEquals(5, canvas.valueForRegion("Region 1"));
-        assertEquals(5, canvas.valueForRegion("Region 2"));
+        assertEquals(5, canvas.valueForRegion(0));
+        assertEquals(5, canvas.valueForRegion(1));
 
         canvas.setSelectedPopulation(new PopulationRef(1, "CD45+"));
         assertEquals(List.of("Region 1", "Region 2"), canvas.regionLabels());
-        assertEquals(2, canvas.valueForRegion("Region 1"), "root 1's own count, not root 0's 5");
-        assertEquals(3, canvas.valueForRegion("Region 2"), "root 1's own count, not root 0's 5");
+        assertEquals(2, canvas.valueForRegion(0), "root 1's own count, not root 0's 5");
+        assertEquals(3, canvas.valueForRegion(1), "root 1's own count, not root 0's 5");
+    }
+
+    /**
+     * The same identity collision one axis down, and just as reachable: two annotations
+     * both classified {@code Tumor} are both <em>named</em> {@code "Tumor"}, because
+     * {@code RegionMask} names an unnamed annotation after its classification.
+     * <p>
+     * This canvas used to draw one bar per distinct name and resolve each with
+     * {@code findFirst()}, so both Tumor bars showed the first Tumor region's count and the
+     * second region was invisible — not merely mislabelled, but unreadable. Keying on
+     * {@link qupath.ext.flowpath.model.PopulationStats.Row#regionIndex()} fixes it, and the
+     * fixture's counts are deliberately unequal (5 and 5 positives would have let the old
+     * code pass by coincidence).
+     */
+    @Test
+    void twoRegionsSharingOneNameStayApart() {
+        RegionComparisonCanvas canvas = new RegionComparisonCanvas();
+        canvas.setRows(AnalysisFixtures.twoRegionsSharingOneNameRows());
+        canvas.setSelectedPopulation(new PopulationRef(0, "CD45+"));
+
+        assertEquals(List.of("Tumor", "Tumor"), canvas.regionLabels(),
+                "two regions means two bars, even when they carry the same label");
+        assertEquals(2, canvas.regionBars().size(), "one bar per region, not per distinct name");
+
+        assertEquals(5, canvas.valueForRegion(0), "region 0 holds cells 0-14: 5 are CD45+");
+        assertEquals(5, canvas.valueForRegion(1), "region 1 holds cells 15-19: all 5 are CD45+");
+
+        // The negatives are where the two regions actually differ, so this is the assertion
+        // a name-keyed findFirst() cannot satisfy.
+        canvas.setSelectedPopulation(new PopulationRef(0, "CD45-"));
+        assertEquals(10, canvas.valueForRegion(0), "region 0's own 10 negatives");
+        assertEquals(0, canvas.valueForRegion(1), "region 1 has none, not region 0's 10");
+        assertEquals(List.of(10, 0),
+                canvas.regionBars().stream().map(r -> r.count()).toList(),
+                "the bars are drawn from each region's own row, in region order");
     }
 }

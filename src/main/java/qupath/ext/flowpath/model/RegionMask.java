@@ -57,18 +57,21 @@ public final class RegionMask {
     private final boolean[] included;
     private final int[] regionCounts;
     private final ROI[] regionRois;
+    /** The {@code Ignore*} annotations subtracted from every region. Needed for area. */
+    private final ROI[] excludeRois;
     private final int droppedNonArea;
     private final int excludeRegionCount;
     private final int excludedByRegion;
 
     private RegionMask(String[] regionNames, int[] regionOf, boolean[] included,
-                       int[] regionCounts, ROI[] regionRois, int droppedNonArea,
-                       int excludeRegionCount, int excludedByRegion) {
+                       int[] regionCounts, ROI[] regionRois, ROI[] excludeRois,
+                       int droppedNonArea, int excludeRegionCount, int excludedByRegion) {
         this.regionNames = regionNames;
         this.regionOf = regionOf;
         this.included = included;
         this.regionCounts = regionCounts;
         this.regionRois = regionRois;
+        this.excludeRois = excludeRois;
         this.droppedNonArea = droppedNonArea;
         this.excludeRegionCount = excludeRegionCount;
         this.excludedByRegion = excludedByRegion;
@@ -112,7 +115,7 @@ public final class RegionMask {
 
         if (includes.isEmpty() && excludes.isEmpty()) {
             return new RegionMask(new String[0], filled(n, -1), new boolean[n],
-                    new int[0], new ROI[0], dropped, 0, 0);
+                    new int[0], new ROI[0], new ROI[0], dropped, 0, 0);
         }
 
         // Parallel to names/includes as they stood before the implicit-whole-image name
@@ -160,7 +163,8 @@ public final class RegionMask {
         }
 
         return new RegionMask(names.toArray(new String[0]), regionOf, included, counts,
-                regionRoisList.toArray(new ROI[0]), dropped, excludes.size(), excludedByRegion);
+                regionRoisList.toArray(new ROI[0]), excludes.toArray(new ROI[0]),
+                dropped, excludes.size(), excludedByRegion);
     }
 
     /**
@@ -264,6 +268,76 @@ public final class RegionMask {
         // while tolerating that null the way regionCounts() below already does for its own
         // wrapped array.
         return Collections.unmodifiableList(Arrays.asList(regionRois));
+    }
+
+    /**
+     * Each region's area in level-0 <b>pixels²</b>, counting exactly the area whose cells
+     * this mask assigns to that region — parallel to {@link #regionNames()}.
+     * <p>
+     * <b>Why not just {@code regionRois().get(i).getArea()}.</b> That is the raw annotation
+     * area, and it does not match the cells being counted in it. Two of this class's own
+     * rules remove area from a region without removing it from the ROI:
+     * <ul>
+     *   <li>an {@code Ignore*} exclusion drops every cell inside it, so a tumour annotation
+     *       with a necrosis hole counts the cells outside the hole against an area that
+     *       still includes it;</li>
+     *   <li>include regions are first-match-wins, so where two annotations overlap the
+     *       later one's cells are all assigned to the earlier one, while both ROIs still
+     *       report the shared area.</li>
+     * </ul>
+     * Either way the numerator shrinks and the denominator does not, and a density built
+     * from the two reads systematically low — worst exactly where a pathologist has been
+     * most careful about excluding artefact. Here the same two rules are applied to the
+     * geometry: a region is its own ROI, minus every earlier include region, minus every
+     * exclusion. The areas therefore partition the annotated area, so they can be summed
+     * across regions without double-counting.
+     * <p>
+     * An entry is {@link Double#NaN} when the area is genuinely unknown — the implicit
+     * "whole image minus exclusions" region, which no single ROI describes — or when the
+     * geometry could not be resolved. Never {@code 0}: a zero area produces an infinite
+     * density, which reads as an answer.
+     */
+    public double[] effectiveAreasPixels() {
+        double[] areas = new double[regionRois.length];
+
+        org.locationtech.jts.geom.Geometry exclusions = null;
+        for (ROI roi : excludeRois) {
+            try {
+                org.locationtech.jts.geom.Geometry g = roi.getGeometry();
+                exclusions = exclusions == null ? g : exclusions.union(g);
+            } catch (RuntimeException invalidGeometry) {
+                // A self-intersecting annotation can make JTS throw. Losing one exclusion
+                // would silently inflate every area, so give up on areas entirely rather
+                // than report numbers that are quietly wrong.
+                Arrays.fill(areas, Double.NaN);
+                return areas;
+            }
+        }
+
+        // The union of the include regions already claimed, in test order. Accumulated from
+        // each region's *original* geometry, not its trimmed one: first-match-wins means an
+        // earlier region claims the whole of its own ROI.
+        org.locationtech.jts.geom.Geometry claimed = null;
+
+        for (int i = 0; i < regionRois.length; i++) {
+            ROI roi = regionRois[i];
+            if (roi == null) {
+                // The implicit whole-image region. Unknown, and it must stay unknown.
+                areas[i] = Double.NaN;
+                continue;
+            }
+            try {
+                org.locationtech.jts.geom.Geometry own = roi.getGeometry();
+                org.locationtech.jts.geom.Geometry effective = own;
+                if (claimed != null) effective = effective.difference(claimed);
+                if (exclusions != null) effective = effective.difference(exclusions);
+                areas[i] = effective.getArea();
+                claimed = claimed == null ? own : claimed.union(own);
+            } catch (RuntimeException invalidGeometry) {
+                areas[i] = Double.NaN;
+            }
+        }
+        return areas;
     }
 
     /** Cell count per region, parallel to {@link #regionNames()}. */

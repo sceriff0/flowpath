@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ui;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
+import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
@@ -10,6 +11,7 @@ import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
@@ -75,6 +77,20 @@ public class FlowPathPane extends BorderPane {
     private final ComboBox<String> colorByRootCombo;
     private final Button umapButton;
     private final Button analysisButton;
+
+    /**
+     * Whether the UMAP half of the extension is offered to users.
+     * <p>
+     * The code is complete, but the feature is being held back for a future release, so
+     * every entry point into it — the toolbar button, the {@code Ctrl+U} accelerator and
+     * the per-pass snapshot push — is gated on this one constant. Nothing under
+     * {@code qupath.ext.flowpath.umap} was deleted or stubbed: flipping this to
+     * {@code true} restores the feature in full, which is the point of having a single
+     * flag rather than commented-out call sites.
+     * <p>
+     * Package-private so {@code UmapFeatureFlagTest} can assert the shipped value.
+     */
+    static final boolean UMAP_ENABLED = false;
 
     /**
      * The UMAP view this pane opens and keeps fed. Created eagerly but does not build
@@ -219,17 +235,10 @@ public class FlowPathPane extends BorderPane {
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
 
-        // The bridge to the other half of the extension. Styled as the primary action on
-        // this toolbar because it is the one step that is not file I/O: everything else
-        // here saves or loads the gating, this one takes it somewhere new.
-        umapButton = new Button("Open UMAP");
-        umapButton.setStyle("-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;");
-        umapButton.setDisable(true);
-        umapButton.setTooltip(new Tooltip(
-            "Embed these cells in a UMAP, coloured by the phenotypes above (Ctrl+U).\n"
-            + "Opens pre-configured on the markers your gates use.\n"
-            + "Edits to the gate tree recolour the UMAP live — no recompute needed."));
-        umapButton.setOnAction(e -> openUmapWindow());
+        // The bridge to the other half of the extension. See createUmapControl.
+        UmapControl umap = createUmapControl(this::openUmapWindow);
+        umapButton = umap.button();
+        Node umapSlot = umap.slot();
 
         // Beside UMAP, not folded into it: this reports what the gate tree already found
         // (counts, percentages, density) rather than re-embedding the cells in a new space.
@@ -245,7 +254,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, toolbarSpacer, analysisButton, umapButton);
+            exportBtn, toolbarSpacer, analysisButton, umapSlot);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -266,7 +275,10 @@ public class FlowPathPane extends BorderPane {
                 loadTree(); e.consume();
             } else if (new KeyCodeCombination(KeyCode.E, KeyCombination.SHORTCUT_DOWN).match(e)) {
                 exportCsv(); e.consume();
-            } else if (new KeyCodeCombination(KeyCode.U, KeyCombination.SHORTCUT_DOWN).match(e)) {
+            } else if (UMAP_ENABLED
+                    && new KeyCodeCombination(KeyCode.U, KeyCombination.SHORTCUT_DOWN).match(e)) {
+                // Deliberately not consumed while the feature is off, so Ctrl+U falls
+                // through to QuPath rather than dying in a dead shortcut.
                 openUmapWindow(); e.consume();
             }
         });
@@ -866,14 +878,14 @@ public class FlowPathPane extends BorderPane {
         treeView.refresh();
         updateStatusBar();
         refreshColorByRootCombo();
-        umapButton.setDisable(cellIndex == null);
+        umapButton.setDisable(!UMAP_ENABLED || cellIndex == null);
         analysisButton.setDisable(cellIndex == null);
 
         // Push the new phenotyping to the UMAP if it is open. push() is a no-op when it
         // is not, so the common case costs one boolean check rather than the snapshot
         // build — which matters because this runs after every debounced gating pass,
         // i.e. continuously while a threshold slider is being dragged.
-        if (umapWindow.isShowing()) {
+        if (UMAP_ENABLED && umapWindow.isShowing()) {
             PhenotypeSnapshot snap = buildSnapshot();
             if (snap != null) {
                 umapWindow.push(snap);
@@ -897,6 +909,59 @@ public class FlowPathPane extends BorderPane {
     // --- UMAP handoff ---
 
     /**
+     * The UMAP toolbar button plus the node the toolbar should actually contain.
+     * <p>
+     * The two differ only while the feature is held back, when the button is wrapped so
+     * that its explanation stays reachable — see {@link #createUmapControl}.
+     *
+     * @param button the button itself, whose disabled state the pane keeps updating
+     * @param slot   what to add to the toolbar, which may be a wrapper around {@code button}
+     */
+    record UmapControl(Button button, Node slot) {}
+
+    /**
+     * Build the UMAP toolbar control for the current value of {@link #UMAP_ENABLED}.
+     * <p>
+     * Extracted from the constructor so it is reachable from a test: {@code FlowPathPane}
+     * itself needs a live {@link QuPathGUI} and cannot be instantiated in the suite, which
+     * is precisely how a "disabled" button could regain a handler unnoticed.
+     * <p>
+     * When the feature is off the button is disabled <em>and</em> carries no action
+     * handler. Either alone would do for the UI, but a disabled button with a live handler
+     * is one {@code setDisable(false)} away from opening a window this release does not
+     * ship, so both are removed. The label states the reason because a disabled JavaFX
+     * node is not hit-tested and therefore never shows its own tooltip; the fuller
+     * explanation is installed on an enabled wrapper, where hovering can still reach it.
+     *
+     * @param onOpen what pressing the button should do when the feature is enabled
+     */
+    static UmapControl createUmapControl(Runnable onOpen) {
+        Button button = new Button(UMAP_ENABLED ? "Open UMAP" : "UMAP (coming soon)");
+        // Disabled at construction either way: when the feature is on, onPreviewUpdated()
+        // enables it once there are cells to embed.
+        button.setDisable(true);
+
+        if (UMAP_ENABLED) {
+            // Styled as the primary action on this toolbar because it is the one step
+            // that is not file I/O: everything else here saves or loads the gating,
+            // this one takes it somewhere new.
+            button.setStyle("-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;");
+            button.setTooltip(new Tooltip(
+                "Embed these cells in a UMAP, coloured by the phenotypes above (Ctrl+U).\n"
+                + "Opens pre-configured on the markers your gates use.\n"
+                + "Edits to the gate tree recolour the UMAP live — no recompute needed."));
+            button.setOnAction(e -> onOpen.run());
+            return new UmapControl(button, button);
+        }
+
+        StackPane wrapper = new StackPane(button);
+        Tooltip.install(wrapper, new Tooltip(
+            "UMAP exploration of the gated phenotypes is not part of this release.\n"
+            + "It is planned for a future version."));
+        return new UmapControl(button, wrapper);
+    }
+
+    /**
      * Open (or focus) the UMAP window on the current phenotyping.
      * <p>
      * Requires a gating pass to have completed: the snapshot carries per-cell labels, and
@@ -904,6 +969,11 @@ public class FlowPathPane extends BorderPane {
      * says so and leaves the user where they are.
      */
     private void openUmapWindow() {
+        if (!UMAP_ENABLED) {
+            // Unreachable through the UI while the flag is false. Kept so that a future
+            // caller cannot open the window without also flipping the flag.
+            return;
+        }
         PhenotypeSnapshot snap = buildSnapshot();
         if (snap == null) {
             Dialogs.showWarningNotification("FlowPath",
@@ -1019,6 +1089,23 @@ public class FlowPathPane extends BorderPane {
      * come from {@link #cachedRegions}, the same {@link RegionMask} instance the walk's
      * region indices were assigned from, so the two can never describe different region
      * sets.
+     * <p>
+     * <b>The tree is deep-copied, and the tally rebound onto the copy.</b> The window does
+     * not merely read the input once: {@code AnalysisSession.stats()} re-walks
+     * {@code input.tree()} on every scope, denominator or population change. Handing it
+     * {@link #gateTree} itself therefore handed it a tree the user goes on editing, so
+     * disabling the last enabled root left the window holding a tree that yields no rows
+     * at all — and because {@code AnalysisState.hasData()} is derived from "a pass was
+     * accepted" rather than from the row count, {@code emptyMessage()} stayed {@code null}
+     * and the panel went blank with nothing to explain it, Export still enabled and
+     * writing a header-only file. The push is deliberately skipped in that situation
+     * (see {@link #onPreviewUpdated()}), which stops the window being *updated* into that
+     * state but not from *drifting* into it, because the reference was shared.
+     * <p>
+     * This is {@code BranchTally}'s rebind rule applied one layer out: a tally must be
+     * re-keyed whenever it crosses into a different copy of the tree, and
+     * {@link BranchTally#rebindTo} throws rather than migrate half-way, so a structural
+     * mismatch fails loudly here instead of silently reporting zeroes.
      */
     private AnalysisSession.AnalysisInput buildAnalysisInput() {
         if (cellIndex == null || markerStats == null) return null;
@@ -1037,7 +1124,25 @@ public class FlowPathPane extends BorderPane {
         double[] regionAreas = cachedRegions != null
                 ? regionAreasMm2(cachedRegions, qupath.getImageData()) : null;
 
-        return new AnalysisSession.AnalysisInput(gateTree, cellIndex, markerStats, tally,
+        // Freeze the tree this report describes, and move the tally's keys onto the frozen
+        // copy in the same breath -- the tally is identity-keyed on Branch objects, and
+        // deepCopy() builds fresh ones, so a copy without a rebind would answer 0 for every
+        // branch by design.
+        GateTree frozen = gateTree.deepCopy();
+        BranchTally reboundTally;
+        try {
+            reboundTally = tally.rebindTo(gateTree.getRoots(), frozen.getRoots());
+        } catch (IllegalArgumentException structureChanged) {
+            // The live tree was edited between the walk finishing and this call, so the
+            // tally and the copy describe different trees. Drop the pass and wait for the
+            // next one, exactly as the region-count guard above does -- never publish a
+            // half-migrated report.
+            logger.debug("Gate tree changed under the Analysis push; waiting for the next pass",
+                    structureChanged);
+            return null;
+        }
+
+        return new AnalysisSession.AnalysisInput(frozen, cellIndex, markerStats, reboundTally,
                 regionNames, regionAreas, currentImageName());
     }
 
@@ -1052,17 +1157,28 @@ public class FlowPathPane extends BorderPane {
      * or as a raw pixel count.
      */
     private double[] regionAreasMm2(RegionMask regions, ImageData<?> imageData) {
-        List<ROI> rois = regions.regionRois();
+        // The *effective* area, not the raw ROI area: RegionMask subtracts Ignore*
+        // exclusions and resolves overlaps first-match-wins, so a region's raw ROI can
+        // cover area whose cells this mask assigns elsewhere or drops entirely. Dividing a
+        // count that respects those rules by an area that does not is how density came to
+        // read low precisely on the slides where someone had carefully excluded artefact.
+        double[] pixels = regions.effectiveAreasPixels();
+
         PixelCalibration cal = DetectionIngest.calibration(imageData);
         boolean calibrated = cal != null && cal.hasPixelSizeMicrons();
         double pw = calibrated ? cal.getPixelWidthMicrons() : Double.NaN;
         double ph = calibrated ? cal.getPixelHeightMicrons() : Double.NaN;
         boolean usable = calibrated && pw > 0 && ph > 0;
 
-        double[] areas = new double[rois.size()];
-        for (int i = 0; i < rois.size(); i++) {
-            ROI roi = rois.get(i);
-            areas[i] = (roi == null || !usable) ? Double.NaN : roi.getArea() * pw * ph / 1e6;
+        double[] areas = new double[pixels.length];
+        for (int i = 0; i < pixels.length; i++) {
+            // An effective area of exactly 0 -- a region wholly covered by an earlier one,
+            // or wholly excluded -- is reported as unknown rather than zero: it would
+            // otherwise divide into an infinite density, and PopulationStats already treats
+            // `areaMm2 <= 0` as unknown for the same reason.
+            areas[i] = (!usable || Double.isNaN(pixels[i]) || pixels[i] <= 0)
+                    ? Double.NaN
+                    : pixels[i] * pw * ph / 1e6;
         }
         return areas;
     }
