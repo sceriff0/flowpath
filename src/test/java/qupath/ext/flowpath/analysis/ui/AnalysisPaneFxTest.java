@@ -276,6 +276,28 @@ class AnalysisPaneFxTest {
         assertEquals(List.of("10", "10", "5", "15"), counts);
     }
 
+    /**
+     * The brief's own {@code blankCellsSortToTheEndInEitherDirection} exercises "% of
+     * Denominator", a column that is entirely {@code NaN} for this fixture (no denominator is
+     * ever chosen), so it never actually checks that a real, non-{@code NaN} column reverses
+     * correctly under a descending sort -- only that an all-blank column stays all blank. This
+     * closes that gap directly against "% Parent", which never carries {@code NaN}.
+     */
+    @Test
+    void descendingSortOfRealNumbersIsCorrectlyReversed() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        List<Double> desc = FxTestSupport.onFx(() -> {
+            pane.sortBy("% Parent", false);
+            return pane.visiblePercentOfParent();
+        });
+        for (int i = 1; i < desc.size(); i++) {
+            assertTrue(desc.get(i - 1) >= desc.get(i) - 1e-9, "descending out of order at " + i + ": " + desc);
+        }
+        assertEquals(75.0, desc.get(0), 1e-9, desc.toString());
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));
