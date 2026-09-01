@@ -1574,11 +1574,17 @@ public class FlowPathPane extends BorderPane {
      * ({@code FlowPathExtension.showGateTreeWindow}), so a listener left attached
      * keeps a discarded pane — and its whole {@code CellIndex} — reachable, and
      * keeps recomputing ROI masks for a window that is gone.
+     * <p>
+     * {@code analysisWindow.dispose()}, not {@code close()}: THIS {@code FlowPathPane} — and
+     * the {@code AnalysisWindow} it owns — is what is going away here, a fresh pair is built
+     * the next time the window reopens, so there is no future {@code open()} on this instance
+     * left to benefit from {@code close()}'s pane-survival behaviour. Keeping the pane alive
+     * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
         detachHierarchyListener();
         umapWindow.close();
-        analysisWindow.close();
+        analysisWindow.dispose();
         previewService.shutdown();
     }
 }
