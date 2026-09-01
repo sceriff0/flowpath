@@ -744,6 +744,16 @@ public final class AnalysisPane extends BorderPane {
      * Every depth-0 row of a given scope carries the same {@code parentCount} (root branches
      * are all handed the same scope total in {@link PopulationStats#of}), so the first one
      * found is exact, not a guess among roots.
+     * <p>
+     * {@code scopeTotal} and the populations count are deliberately asymmetric under a
+     * filter, and that is not an inconsistency: {@code scopeTotal} describes the population
+     * the gating pass covered, which does not change while a user types, so it stays fixed
+     * at {@code scopedRows.size()}'s full set; the populations count describes what the
+     * table is showing right now, so it must move with the filter — reporting the
+     * unfiltered count there would have the panel claim more rows than the list beneath it
+     * actually holds. Rendering it as "{@code N of M}" rather than switching silently to
+     * {@code N} keeps both facts on screen: a user who has forgotten there is text in the
+     * filter box can see it in the summary, not only by noticing the box itself.
      *
      * @param state       the session's current derived state
      * @param scopedRows  the rows for the scope currently selected, i.e. {@link #backingRows}
@@ -767,7 +777,10 @@ public final class AnalysisPane extends BorderPane {
                 .findFirst()
                 .ifPresent(scopeTotal ->
                         parts.add(String.format(Locale.US, "%,d in scope", scopeTotal)));
-        parts.add(String.format(Locale.US, "%,d populations", visibleRows));
+        int scopedCount = scopedRows.size();
+        parts.add(visibleRows == scopedCount
+                ? String.format(Locale.US, "%,d populations", visibleRows)
+                : String.format(Locale.US, "%,d of %,d populations", visibleRows, scopedCount));
         return String.join(" · ", parts);
     }
 

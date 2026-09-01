@@ -525,17 +525,35 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
 
+        // No filter active: the plain count, with no "of" -- the summary must not claim a
+        // filter is narrowing anything when none is.
         int unfilteredRows = FxTestSupport.onFx(pane::rowCount);
         String unfilteredSummary = FxTestSupport.onFx(pane::summaryText);
         assertTrue(unfilteredSummary.contains(unfilteredRows + " populations"), unfilteredSummary);
+        assertFalse(unfilteredSummary.contains(" of "), unfilteredSummary);
 
         // Narrow to a filter that cannot match every row, so the visible count actually
-        // changes rather than coincidentally staying the same.
+        // changes rather than coincidentally staying the same. The summary must now read
+        // "{visible} of {total} populations": the total stays on screen (it is the true
+        // count the gating covered, not something a forgotten filter should hide), and the
+        // visible count matches what the table beneath it is actually showing.
         FxTestSupport.onFxRun(() -> pane.setFilter("CD45+"));
         int filteredRows = FxTestSupport.onFx(pane::rowCount);
         assertTrue(filteredRows < unfilteredRows, "the filter must actually narrow the rows shown");
 
         String filteredSummary = FxTestSupport.onFx(pane::summaryText);
-        assertTrue(filteredSummary.contains(filteredRows + " populations"), filteredSummary);
+        assertTrue(filteredSummary.contains(filteredRows + " of " + unfilteredRows + " populations"),
+                filteredSummary);
+
+        // Clearing the filter must restore the plain, un-annotated count -- the "of" segment
+        // is tied to whether a filter is actually narrowing the rows, not left behind once it
+        // has appeared once.
+        FxTestSupport.onFxRun(() -> pane.setFilter(""));
+        int clearedRows = FxTestSupport.onFx(pane::rowCount);
+        assertEquals(unfilteredRows, clearedRows, "clearing the filter must restore every row");
+
+        String clearedSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(clearedSummary.contains(clearedRows + " populations"), clearedSummary);
+        assertFalse(clearedSummary.contains(" of "), clearedSummary);
     }
 }
