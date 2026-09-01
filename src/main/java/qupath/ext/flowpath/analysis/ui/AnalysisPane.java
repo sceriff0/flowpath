@@ -93,11 +93,13 @@ public final class AnalysisPane extends BorderPane {
     private final FilteredList<PopulationStats.Row> filteredRows = new FilteredList<>(backingRows, r -> true);
     private final SortedList<PopulationStats.Row> sortedRows = new SortedList<>(filteredRows);
 
-    // Parallel to table.getColumns(): renderer(i) produces exactly the text column i shows for
-    // a given row, reused by copySelectionAsTsv() so a copied cell can never read something the
-    // screen does not -- a second "how does this cell render" would be the divergence this
-    // codebase already keeps a list of (see ResolvedGate.branchOf's javadoc for the general
-    // shape of that failure).
+    // Parallel to table.getColumns(): renderer(i) is what copySelectionAsTsv() calls for
+    // column i. Each renderer is produced by the SAME column-building call (column()/
+    // countColumn()/rootColumn()/numberColumn(), see ColumnSpec) that builds the column's own
+    // cell-value factory and cell factory, closed over the identical extractor/formatter
+    // arguments -- so a copied cell reading something the screen does not would require
+    // editing one of those factories without editing the call that builds both, not merely
+    // forgetting to update a second call site.
     private List<Function<PopulationStats.Row, String>> rowRenderers = List.of();
 
     private final CompositionCanvas compositionCanvas = new CompositionCanvas();
@@ -297,6 +299,18 @@ public final class AnalysisPane extends BorderPane {
         populationCombo.setValue(population);
     }
 
+    /**
+     * Choose which {@link PopulationStats.Scope} the table reports. Package-private, exercised
+     * directly by the pane's own FX test, the same way {@link #setDenominator} is — needed to
+     * reach {@link PopulationStats.Scope#ANNOTATION_K} without a real annotation selection in
+     * the viewer, since {@code scopeChoice} otherwise only ever offers what
+     * {@link AnalysisState#availableScopes()} lists and defaults to its first entry.
+     */
+    void selectScope(PopulationStats.Scope scope) {
+        selectedScope = scope;
+        scopeChoice.setValue(scope);
+    }
+
     /** The root gates currently offered by the picker — {@link CompositionCanvas#availableRoots()}. */
     List<Integer> rootChoices() {
         return List.copyOf(rootCombo.getItems());
@@ -388,6 +402,17 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
+     * {@code areaMm2} of every row currently shown, in table order. Unlike
+     * {@link #visiblePercentOfDenominator()}, this column can hold a genuine mix of real and
+     * {@code NaN} values within one scope — see
+     * {@code AnalysisFixtures.partiallyKnownRegionAreasInput()} — which is why it is what pins
+     * the NaN-sorts-last behaviour rather than a column that is all-or-nothing.
+     */
+    List<Double> visibleAreaMm2() {
+        return table.getItems().stream().map(PopulationStats.Row::areaMm2).toList();
+    }
+
+    /**
      * Case-insensitive filter on {@code path} and {@code regionName}, applied to a
      * {@link FilteredList} over the backing row list — never by asking
      * {@link AnalysisSession} for a narrower {@link PopulationStats}. Filtering which
@@ -440,8 +465,9 @@ public final class AnalysisPane extends BorderPane {
     /**
      * The selected rows as tab-separated text with a header line, in {@link Locale#US} — the
      * same locale every other export in this codebase uses for decimal formatting. Every cell
-     * comes from {@link #rowRenderers}, the exact functions the table's own cell factories
-     * render with, so a copied value can never read something the screen does not.
+     * comes from {@link #rowRenderers}, built alongside the table's own cell-value/cell
+     * factories by the same {@link ColumnSpec}-returning call (see {@link #numberColumn}) —
+     * that closure, not a separately-written one, is what a copied value reads.
      */
     String copySelectionAsTsv() {
         List<String> titles = columnTitles();
@@ -764,74 +790,70 @@ public final class AnalysisPane extends BorderPane {
                 // population *pickers* already spell out with a "(root N)" suffix. The
                 // one-based number matches those pickers exactly; root_index in the CSV is
                 // zero-based, as PopulationStatsExporter documents.
-                spec(rootColumn(), row -> String.valueOf(row.rootIndex() + 1)),
-                spec(column("Population", PopulationStats.Row::path), PopulationStats.Row::path),
-                spec(column("Region", row -> row.regionName() == null ? "" : row.regionName()),
-                        row -> row.regionName() == null ? "" : row.regionName()),
+                rootColumn(),
+                column("Population", PopulationStats.Row::path),
+                column("Region", row -> row.regionName() == null ? "" : row.regionName()),
                 // What Count includes depends on the scope, and saying otherwise was wrong
                 // rather than merely vague: at the two annotation scopes the number comes
                 // from BranchTally's per-region arrays, which are only incremented for a
                 // cell with a region, and RegionMask gives every ROI-excluded cell a region
                 // of -1. So ROI-excluded cells are in Count at WHOLE_SLIDE and absent from
                 // it per region -- which also changes what the Count/Clean gap means.
-                spec(countColumn("Count", PopulationStats.Row::count,
+                countColumn("Count", PopulationStats.Row::count,
                         "Every cell that landed in this population, including cells the "
                                 + "quality filter excluded from the view.\n"
                                 + "At Whole slide this also includes cells outside the "
                                 + "annotation ROI filter; at the per-region scopes those "
                                 + "cells belong to no region and are not counted at all, so "
                                 + "there the gap to Clean is quality filtering alone."),
-                        row -> String.valueOf(row.count())),
-                spec(countColumn("Clean", PopulationStats.Row::cleanCount,
+                countColumn("Clean", PopulationStats.Row::cleanCount,
                         "Cells in this population that were not excluded: not quality-filtered, "
                                 + "not outlier-clipped and, when the annotation ROI filter is on, "
                                 + "inside the annotations being filtered by. This is the number "
                                 + "the gate tree shows."),
-                        row -> String.valueOf(row.cleanCount())),
-                spec(numberColumn("% Parent", PopulationStats.Row::percentOfParent, AnalysisPane::formatPercent,
+                numberColumn("% Parent", PopulationStats.Row::percentOfParent, AnalysisPane::formatPercent,
                         "This branch's share of the branch directly above it (or, for a root "
                                 + "branch, of the scope's whole population)."),
-                        row -> formatPercent(row.percentOfParent())),
-                spec(numberColumn("% Parent (clean)", PopulationStats.Row::percentOfCleanParent, AnalysisPane::formatPercent,
+                numberColumn("% Parent (clean)", PopulationStats.Row::percentOfCleanParent, AnalysisPane::formatPercent,
                         "The clean counterpart of % Parent: the clean count over the clean "
                                 + "parent count, so quality-filtered, outlier-clipped and (when the "
                                 + "ROI filter is on) out-of-annotation cells are excluded from both "
                                 + "the numerator and the denominator, not just the numerator."),
-                        row -> formatPercent(row.percentOfCleanParent())),
-                spec(numberColumn("% Total", PopulationStats.Row::percentOfTotal, AnalysisPane::formatPercent,
+                numberColumn("% Total", PopulationStats.Row::percentOfTotal, AnalysisPane::formatPercent,
                         "This branch's share of every cell at the current scope."),
-                        row -> formatPercent(row.percentOfTotal())),
-                spec(numberColumn("% Total (clean)", PopulationStats.Row::percentOfCleanTotal, AnalysisPane::formatPercent,
+                numberColumn("% Total (clean)", PopulationStats.Row::percentOfCleanTotal, AnalysisPane::formatPercent,
                         "The clean counterpart of % Total: the clean count over the scope's "
                                 + "clean total, the same clean/raw split % Parent (clean) makes."),
-                        row -> formatPercent(row.percentOfCleanTotal())),
-                spec(numberColumn("% of Denominator", PopulationStats.Row::percentOfDenominator, AnalysisPane::formatPercent,
+                numberColumn("% of Denominator", PopulationStats.Row::percentOfDenominator, AnalysisPane::formatPercent,
                         "This branch's share of the denominator chosen in the picker above. "
                                 + "Blank when no denominator is chosen, and equally blank when the "
                                 + "chosen denominator holds no cells -- see AnalysisPane.formatPercent."),
-                        row -> formatPercent(row.percentOfDenominator())),
-                spec(numberColumn("Density", PopulationStats.Row::densityPerMm2, AnalysisPane::formatDensity,
+                numberColumn("Density", PopulationStats.Row::densityPerMm2, AnalysisPane::formatDensity,
                         "Cells per mm² of the region this row reports over. Blank without a "
                                 + "known area -- see the Area column."),
-                        row -> formatDensity(row.densityPerMm2())),
-                spec(numberColumn("Area (mm²)", PopulationStats.Row::areaMm2, AnalysisPane::formatDensity,
+                numberColumn("Area (mm²)", PopulationStats.Row::areaMm2, AnalysisPane::formatDensity,
                         "The annotated region's area. Blank when the image has no pixel "
                                 + "calibration, or for the implicit whole-image region, which no "
-                                + "single ROI describes."),
-                        row -> formatDensity(row.areaMm2())));
+                                + "single ROI describes."));
 
         table.getColumns().setAll(specs.stream().map(ColumnSpec::column).toList());
         rowRenderers = specs.stream().map(ColumnSpec::renderer).toList();
     }
 
-    /** One column and the function that renders one row's value for it, kept paired so they can never drift apart. */
+    /**
+     * One column and the function that renders one row's value for it, produced together by
+     * {@link #column}/{@link #countColumn}/{@link #rootColumn}/{@link #numberColumn} rather
+     * than assembled by a caller. Each of those factories closes {@code renderer} over the
+     * <em>same</em> {@code extractor}/{@code formatter} arguments it gives the column's own
+     * cell-value factory and cell factory, so there is exactly one place that says "how does
+     * this column's value become text" — not two hand-written copies a caller could edit out
+     * of step. An earlier version of {@link #buildColumns} paired each column with a
+     * separately-written lambda at the call site; the two happened to agree only because both
+     * literally re-typed the same logic, which is precisely the "second implementation kept in
+     * sync by a comment" shape {@code CLAUDE.md} catalogues.
+     */
     private record ColumnSpec(TableColumn<PopulationStats.Row, ?> column,
                                Function<PopulationStats.Row, String> renderer) {}
-
-    private static ColumnSpec spec(TableColumn<PopulationStats.Row, ?> column,
-                                    Function<PopulationStats.Row, String> renderer) {
-        return new ColumnSpec(column, renderer);
-    }
 
     /**
      * A text column, deliberately left unsortable — {@code Population} and {@code Region}
@@ -842,12 +864,11 @@ public final class AnalysisPane extends BorderPane {
      * formatted string, which a single {@code String}-typed column could never do — sorting
      * "100.0" against "20.0" lexicographically is exactly the bug this task fixes.
      */
-    private static TableColumn<PopulationStats.Row, String> column(
-            String title, Function<PopulationStats.Row, String> extractor) {
+    private static ColumnSpec column(String title, Function<PopulationStats.Row, String> extractor) {
         TableColumn<PopulationStats.Row, String> col = new TableColumn<>(title);
         col.setCellValueFactory(data -> new SimpleStringProperty(extractor.apply(data.getValue())));
         col.setSortable(false);
-        return col;
+        return new ColumnSpec(col, extractor);
     }
 
     /**
@@ -855,7 +876,7 @@ public final class AnalysisPane extends BorderPane {
      * pickers. Typed {@link Number} so it sorts numerically and so it reads as an index
      * rather than a label.
      */
-    private static TableColumn<PopulationStats.Row, Number> rootColumn() {
+    private static ColumnSpec rootColumn() {
         TableColumn<PopulationStats.Row, Number> col = new TableColumn<>();
         Label header = new Label("Root");
         header.setTooltip(new Tooltip(
@@ -863,9 +884,9 @@ public final class AnalysisPane extends BorderPane {
                 + "tree order.\nTwo roots on the same channel produce identically named "
                 + "populations, and this is the only thing that tells them apart."));
         col.setGraphic(header);
-        col.setCellValueFactory(data ->
-                new SimpleIntegerProperty(data.getValue().rootIndex() + 1));
-        return col;
+        ToIntFunction<PopulationStats.Row> extractor = row -> row.rootIndex() + 1;
+        col.setCellValueFactory(data -> new SimpleIntegerProperty(extractor.applyAsInt(data.getValue())));
+        return new ColumnSpec(col, row -> String.valueOf(extractor.applyAsInt(row)));
     }
 
     /**
@@ -876,7 +897,7 @@ public final class AnalysisPane extends BorderPane {
      * and the two differ by exactly that — see {@link PopulationStats.Row#cleanCount()},
      * whose definition also folds in annotation membership when the ROI filter is on.
      */
-    private static TableColumn<PopulationStats.Row, Number> countColumn(
+    private static ColumnSpec countColumn(
             String title, ToIntFunction<PopulationStats.Row> extractor, String tooltip) {
         TableColumn<PopulationStats.Row, Number> col = new TableColumn<>();
         Label header = new Label(title);
@@ -884,7 +905,7 @@ public final class AnalysisPane extends BorderPane {
         col.setGraphic(header);
         col.setCellValueFactory(data ->
                 new SimpleIntegerProperty(extractor.applyAsInt(data.getValue())));
-        return col;
+        return new ColumnSpec(col, row -> String.valueOf(extractor.applyAsInt(row)));
     }
 
     /**
@@ -900,8 +921,13 @@ public final class AnalysisPane extends BorderPane {
      * "NaN always last, in both directions" is handled once, centrally, by
      * {@link #effectiveComparator()}. This column only supplies the ordinary ascending
      * numeric comparator {@link #effectiveComparator()} falls back to for non-NaN pairs.
+     * <p>
+     * The returned {@link ColumnSpec#renderer} calls {@code formatter.apply(extractor.applyAsDouble(row))}
+     * — the exact two calls the cell factory below makes, in the exact same order, closed over
+     * the exact same {@code extractor}/{@code formatter} references — so a copied cell and a
+     * displayed cell cannot diverge without changing both at once.
      */
-    private static TableColumn<PopulationStats.Row, Number> numberColumn(
+    private static ColumnSpec numberColumn(
             String title, ToDoubleFunction<PopulationStats.Row> extractor,
             DoubleFunction<String> formatter, String tooltip) {
         TableColumn<PopulationStats.Row, Number> col = new TableColumn<>();
@@ -919,7 +945,7 @@ public final class AnalysisPane extends BorderPane {
                 setText(empty || value == null ? null : formatter.apply(value.doubleValue()));
             }
         });
-        return col;
+        return new ColumnSpec(col, row -> formatter.apply(extractor.applyAsDouble(row)));
     }
 
     /**

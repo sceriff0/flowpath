@@ -329,26 +329,51 @@ class AnalysisPaneFxTest {
         }
     }
 
-    /** A blank cell is "unanswered"; an unanswered row must not head the table in either sort direction. */
+    /**
+     * A blank cell is "unanswered"; an unanswered row must not head the table in either sort
+     * direction.
+     * <p>
+     * Deliberately uses {@code Area (mm²)} against
+     * {@code AnalysisFixtures.partiallyKnownRegionAreasInput()} at
+     * {@link PopulationStats.Scope#ANNOTATION_K}, not {@code % of Denominator} against a
+     * fixture with no denominator chosen. {@code % of Denominator} is all-or-nothing — every
+     * row is real once a denominator is picked, every row is {@code NaN} when none is — so a
+     * version of this test built on it (an earlier version of this test did exactly that)
+     * cannot distinguish a correct NaN-last comparator from a broken one: an implementation
+     * that put NaN <em>first</em> under a descending sort would still pass, because an
+     * all-{@code NaN} column has no "first" or "last" to get wrong. This fixture's region areas
+     * are two real values plus one {@code NaN}, so the assertions below actually exercise both
+     * "NaN goes after every real value" and "the real values are still in the right order".
+     */
     @Test
     void blankCellsSortToTheEndInEitherDirection() {
         AnalysisSession session = new AnalysisSession();
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
-        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.partiallyKnownRegionAreasInput()));
+        FxTestSupport.onFxRun(() -> pane.selectScope(PopulationStats.Scope.ANNOTATION_K));
         for (boolean ascending : new boolean[] { true, false }) {
             List<Double> values = FxTestSupport.onFx(() -> {
-                pane.sortBy("% of Denominator", ascending);
-                return pane.visiblePercentOfDenominator();
+                pane.sortBy("Area (mm²)", ascending);
+                return pane.visibleAreaMm2();
             });
+            assertTrue(values.stream().anyMatch(v -> !Double.isNaN(v)),
+                    "precondition: the fixture has real areas -- " + values);
+            assertTrue(values.stream().anyMatch(v -> Double.isNaN(v)),
+                    "precondition: the fixture has a blank area too -- " + values);
+
             int firstNaN = -1;
             for (int i = 0; i < values.size(); i++) {
                 if (Double.isNaN(values.get(i))) { firstNaN = i; break; }
             }
-            if (firstNaN >= 0) {
-                for (int i = firstNaN; i < values.size(); i++) {
-                    assertTrue(Double.isNaN(values.get(i)),
-                            "an unanswered row must never sort above an answered one");
-                }
+            assertTrue(firstNaN >= 0, "the precondition above guarantees a NaN exists");
+            for (int i = firstNaN; i < values.size(); i++) {
+                assertTrue(Double.isNaN(values.get(i)),
+                        "an unanswered row must never sort above an answered one: " + values);
+            }
+            for (int i = 1; i < firstNaN; i++) {
+                double a = values.get(i - 1), b = values.get(i);
+                boolean inOrder = ascending ? a <= b + 1e-9 : a >= b - 1e-9;
+                assertTrue(inOrder, "real values out of order at " + i + " (ascending=" + ascending + "): " + values);
             }
         }
     }
@@ -372,19 +397,34 @@ class AnalysisPaneFxTest {
                 "an empty grid must say why it is empty");
     }
 
-    /** Closes the case {@code AnalysisState}'s own invariant deliberately cannot express: data
-     * exists, but the current scope (or filter) has no rows for it. */
+    /**
+     * Closes the case {@code AnalysisState}'s own invariant deliberately cannot express: data
+     * exists, but the current scope has no rows for it.
+     * <p>
+     * An earlier version of this test wrapped its assertion in
+     * {@code if (pane.rowCount() == 0)} against a fixture that always has rows at its default
+     * scope -- so the body never ran, and the test reported green while asserting nothing. This
+     * version builds the empty case for real: an accepted pass with cells and statistics but an
+     * empty {@link qupath.ext.flowpath.model.GateTree} (no root gates at all), the same
+     * construction {@code aChosenDenominatorClearsOnlyWhenItsGateIsActuallyDisabled} above uses
+     * to simulate every root gate having been removed since the last pass.
+     * {@code AnalysisSession.state().hasData()} is true (a pass was accepted), but
+     * {@code PopulationStats.of} walks zero roots, so {@code Scope.WHOLE_SLIDE} — the only
+     * scope an unannotated pass offers — genuinely has zero rows.
+     */
     @Test
     void aTableWithDataButNoRowsAtThisScopeExplainsItself() {
         AnalysisSession session = new AnalysisSession();
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
-        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
-        FxTestSupport.onFxRun(() -> pane.setFilter(""));
-        // Force the empty case however the fixtures allow; the assertion is the contract.
-        if (FxTestSupport.onFx(pane::rowCount) == 0) {
-            assertFalse(FxTestSupport.onFx(pane::placeholderText).isBlank(),
-                    "never a blank grid with no explanation");
-        }
+        AnalysisSession.AnalysisInput simple = AnalysisFixtures.simpleInput();
+        AnalysisSession.AnalysisInput noRoots = new AnalysisSession.AnalysisInput(
+                new qupath.ext.flowpath.model.GateTree(), simple.index(), simple.stats(),
+                new qupath.ext.flowpath.model.BranchTally(0), List.of(), null, "test-image");
+
+        FxTestSupport.onFxRun(() -> pane.accept(noRoots));
+
+        assertEquals(0, FxTestSupport.onFx(pane::rowCount), "no root gates means no rows to report");
+        assertEquals("No populations at this scope.", FxTestSupport.onFx(pane::placeholderText));
     }
 
     /** A live preview push must not jump the table out from under a user reading it. */

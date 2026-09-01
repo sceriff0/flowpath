@@ -332,4 +332,51 @@ public final class AnalysisFixtures {
         return new AnalysisSession.AnalysisInput(
                 tree, index, stats, tally, List.of(), null, "test-image");
     }
+
+    /**
+     * One root gate over three annotated regions whose areas are only <b>partially</b> known:
+     * two real, one {@code NaN} — the way an uncalibrated image, or the implicit whole-image
+     * region no single ROI describes, actually reports an area. Exists because every other
+     * fixture in this file passes {@code regionAreasMm2} as {@code null}, so {@code Density}
+     * and {@code Area} are uniformly {@code NaN} or (at a scope with a real area) uniformly
+     * real within any one scope those fixtures can produce — nothing else here can build a
+     * numeric column that is a genuine mix of blank and real values, which is exactly what
+     * pinning "NaN sorts last, in both directions" needs: an implementation that put NaN
+     * <em>first</em> under a descending sort would pass every all-NaN or all-real fixture in
+     * this suite unnoticed, because neither kind can tell "first" from "last" among identical
+     * values.
+     * <p>
+     * 30 cells, {@code CD45} cut at {@code 15.5} (15 positive, 15 negative), split evenly
+     * across three regions by {@code i % 3}. Region areas are {@code 2.0}, {@code 5.0} and
+     * {@code NaN} mm² respectively, so at {@link PopulationStats.Scope#ANNOTATION_K} every
+     * branch has one row with a real density, a second row with a <em>different</em> real
+     * density, and a third that is blank — enough to check both that the two real values order
+     * correctly against each other and that the blank one never outranks either of them.
+     */
+    public static AnalysisSession.AnalysisInput partiallyKnownRegionAreasInput() {
+        int n = 30;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode root = new GateNode("CD45", 15.5);
+        root.setStatistic(Statistic.MEAN);
+        root.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+
+        int[] regionOf = new int[n];
+        for (int i = 0; i < n; i++) regionOf[i] = i % 3;
+        List<String> regionNames = List.of("R0", "R1", "R2");
+        double[] regionAreasMm2 = {2.0, 5.0, Double.NaN};
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, regionOf, regionNames.size())
+                .getTally();
+
+        return new AnalysisSession.AnalysisInput(
+                tree, index, stats, tally, regionNames, regionAreasMm2, "test-image");
+    }
 }
