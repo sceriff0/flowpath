@@ -28,6 +28,20 @@ import java.util.Locale;
  * {@code max > min} holds unconditionally and every fraction and tick computation below is safe
  * from a zero-width or zero-height division. See {@link #of} for exactly where that fallback is
  * applied.
+ * <p>
+ * <b>{@code min == max} cannot come out of {@link #of}, on either branch, for any input.</b>
+ * Linear: {@code min} is fixed at 0 and {@code top} (the eventual {@code max}) is floored at 1
+ * by the same degenerate-input fallback above, so {@code max >= 1 > 0 = min} always. Log:
+ * {@code min} is fixed at 1 and {@code max} is floored at 10 by {@code of}'s own log floor, so
+ * {@code max >= 10 > 1 = min} always. That is why {@link #toFraction}'s division by
+ * {@code (max - min)} needs no zero-guard for anything this record was built by {@code of} —
+ * every production call site in this package goes through {@code of} (see {@code PlotCanvas
+ * #scaleFor}), and none constructs this record directly. The canonical constructor itself is
+ * deliberately left unvalidated rather than guarded against {@code min >= max}: {@code
+ * PlotCanvasCoordinateTest} constructs a degenerate scale directly (bypassing {@code of}
+ * entirely) specifically to exercise {@link #toFraction}'s own clamping on a
+ * {@code max <= min} range, and a compact-constructor guard would reject that legitimate test
+ * input along with the production case it can never actually reach.
  *
  * @param min       the axis floor: 0 for a linear axis, 1 for a logarithmic one. Counts are the
  *                  only thing these axes carry, so there is nothing else {@code min} could mean.

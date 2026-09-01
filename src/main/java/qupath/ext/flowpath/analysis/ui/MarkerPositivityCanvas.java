@@ -341,7 +341,12 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             double cx = categoryToX(i, n);
             double x = cx - barW / 2;
 
-            double total = positiveCount(marker) + negativeCount(marker) + ungatedCount(marker);
+            // Read back from values[i] rather than recomputing -- that array is this bar's
+            // total already, computed once above to build the axis. A second
+            // positiveCount+negativeCount+ungatedCount here would be the same "two expressions
+            // computing one number" this task exists to remove one level up, at the value->Y
+            // mapping itself.
+            double total = values[i];
 
             // Cumulative tops, so each segment is drawn as the gap between two heights on the
             // one axis mapping -- a stack built from per-segment heights instead would drift
