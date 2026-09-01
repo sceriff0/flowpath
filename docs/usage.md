@@ -176,11 +176,13 @@ named** populations, and the number is the only thing that tells them apart.
 | **Density** | Cells per mm² — the row's **Count**, over the region's *effective* area. |
 | **Area (mm²)** | The region's own effective area, the denominator **Density** just divided by — so you never have to cross-reference the two by hand. |
 
-Click **Root**, **Count** or **Clean** to sort numerically, in either direction; a
-row with no value for the sorted column sorts to the bottom regardless of
-direction, rather than jumping to the top on a descending sort. The percentage
-and density columns are formatted text and deliberately **do not** offer a sort
-rather than offering a lexicographic one that would put `100.0` above `20.0`.
+Click any numeric column header — **Root**, **Count**, **Clean**, every
+percentage column, **Density** and **Area (mm²)** — to sort numerically, in
+either direction; a row with no value for the sorted column sorts to the bottom
+regardless of direction, rather than jumping to the top on a descending sort.
+The percentage, density and area columns used to be formatted text sorted
+lexicographically, which put `100.0` above `20.0`; they now sort as the numbers
+they display.
 
 A **filter** box above the table narrows it to populations whose gating route or
 region name contains what you type — clear it to see everything again. Select one
@@ -190,7 +192,10 @@ tab-separated text with a header row, ready to paste into a spreadsheet.
 **Selecting a row selects its gate.** Clicking a population in the table
 highlights the matching gate in the tree on the left, and the reverse: selecting a
 gate in the tree selects its row here, if the current scope and filter are showing
-it.
+it. Selecting a gate in the tree also moves the **By Region** and **By Scope**
+plots' own population picker to match, not only the table row — so switching to
+either comparison tab after picking a gate shows that same population already
+selected, rather than whatever it last had chosen.
 
 !!! info "Count and Clean answer different questions — and the gap moves with the scope"
     **Count** is the raw total; **Clean** is what survived exclusion. At *Whole
@@ -245,6 +250,12 @@ population in the table and its gate in the tree, the same two-way link the
 table itself has. **Marker Positivity** is the exception: its bars are pooled
 across every gate node that used a marker, so no single population can name what
 was clicked — hovering still shows the numbers, but clicking selects nothing.
+
+The plots follow QuPath's own light/dark theme automatically. That theme is only
+re-read when a plot is re-parented into a fresh window, so if you switch QuPath's
+theme while the Analysis window is open, its plots keep the colours they were
+drawn with until you close and reopen the window — nothing repaints them in
+place.
 
 #### Log scale and clipping outliers
 
@@ -457,8 +468,9 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   Region** / **By Scope** plots respectively, driving only that plot. Both spell
   out `(root N)` once the tree has more than one root.
 - **Table filter, sort and copy** — the filter box narrows the table to
-  populations whose route or region name matches what you type; **Root**,
-  **Count** and **Clean** sort numerically in either direction, blanks always
+  populations whose route or region name matches what you type; every numeric
+  column — **Root**, **Count**, **Clean**, every percentage column, **Density**
+  and **Area (mm²)** — sorts numerically in either direction, blanks always
   last; a row selection copies as tab-separated text (right-click → Copy, or
   `Ctrl+C`).
 - **Table ↔ tree selection** — selecting a table row selects its gate in the

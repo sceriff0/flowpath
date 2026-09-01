@@ -84,12 +84,13 @@ Fifteen implementation tasks, reviewed one at a time against the diff behind the
   matching table row. Both directions resolve through `GateTree.findBranch` /
   `GateTree.locate`, exact inverses sharing one enabled-roots-only rule, so
   neither direction can find a branch the other would disagree exists.
-- **The table is sortable, filterable and copyable.** Numeric columns sort with
-  blanks (NaN) always last, in either sort direction; the percentage and density
-  columns are deliberately not sortable at all, rather than offering a
-  lexicographic sort that would put "100.0" above "20.0"; a filter box narrows
-  the table by population path or region name; and a row selection copies as
-  tab-separated text with a header row (right-click, or `Ctrl+C`).
+- **The table is sortable, filterable and copyable.** Every numeric column —
+  including the percentage, density and area columns, which used to be
+  `String`-typed and explicitly unsortable — now sorts as a number, with blanks
+  (NaN) always last regardless of sort direction, rather than the lexicographic
+  ordering a `String` column gave, which put "100.0" above "20.0"; a filter box
+  narrows the table by population path or region name; and a row selection
+  copies as tab-separated text with a header row (right-click, or `Ctrl+C`).
 - **The summary line and the image's name.** A line above the table reads e.g.
   "`slide_04.ome.tiff · 214,332 cells · 3 regions · 189,201 in scope · 31
   populations`", switching to "`N of M populations`" while the filter narrows
