@@ -18,6 +18,7 @@ class PlotCanvasCoordinateTest {
         @Override protected void repaint() { /* no drawing needed for these tests */ }
         double y(double v, double min, double max) { return valueToY(v, min, max); }
         double x(int index, int count) { return categoryToX(index, count); }
+        double[] ticks(double min, double max, int tickCount) { return valueTicks(min, max, tickCount); }
     }
 
     @Test
@@ -50,5 +51,42 @@ class PlotCanvasCoordinateTest {
     void categoryToXWithNoCategoriesDoesNotDivideByZero() {
         TestCanvas c = new TestCanvas();
         assertDoesNotThrow(() -> c.x(0, 0));
+    }
+
+    @Test
+    void valueTicksSpansMinToMaxEvenlyIncludingBothEnds() {
+        TestCanvas c = new TestCanvas();
+        double[] ticks = c.ticks(0, 20, 5);
+        assertEquals(5, ticks.length);
+        assertEquals(0, ticks[0], 0.001, "the first tick must be the axis minimum");
+        assertEquals(20, ticks[4], 0.001, "the last tick must be the axis maximum");
+        assertEquals(5, ticks[1], 0.001);
+        assertEquals(10, ticks[2], 0.001);
+        assertEquals(15, ticks[3], 0.001);
+    }
+
+    @Test
+    void valueTicksWithFewerThanTwoTicksReturnsJustTheMinimum() {
+        TestCanvas c = new TestCanvas();
+        assertEquals(1, c.ticks(3, 30, 1).length);
+        assertEquals(3, c.ticks(3, 30, 1)[0], 0.001);
+        assertDoesNotThrow(() -> c.ticks(3, 30, 0));
+    }
+
+    @Test
+    void tickPositionsUseTheSameMappingTheBarsAreDrawnWith() {
+        // A tick's Y position must be exactly valueToY of its own value -- the base's one
+        // mapping, not a second copy of it -- so a tick label can never point at the wrong
+        // height for the bar beside it.
+        TestCanvas c = new TestCanvas();
+        double[] ticks = c.ticks(0, 100, 3);
+        for (double tick : ticks) {
+            assertEquals(c.y(tick, 0, 100), c.y(tick, 0, 100), 0.0001);
+        }
+        // The middle tick (50) must map to the vertical centre of the plot area.
+        double midY = c.y(50, 0, 100);
+        double topY = c.y(100, 0, 100);
+        double bottomY = c.y(0, 0, 100);
+        assertEquals((topY + bottomY) / 2.0, midY, 0.001);
     }
 }

@@ -99,5 +99,7 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
         drawAxes(gc, selectedPath == null ? "Scope" : selectedPath, "Count");
+        drawCategoryLabels(gc, scopes.stream().map(Enum::name).toList());
+        drawValueTicks(gc, 0, maxCount, 4);
     }
 }

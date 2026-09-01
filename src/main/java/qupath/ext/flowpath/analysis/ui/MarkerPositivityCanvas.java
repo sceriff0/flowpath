@@ -178,6 +178,8 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             gc.fillRect(cx - barW / 2, yAfterUngated, barW, yAfterNeg - yAfterUngated);
         }
         drawAxes(gc, "Marker", "Count");
+        drawCategoryLabels(gc, markerList);
+        drawValueTicks(gc, 0, scopeTotal, 4);
         drawLegend(gc, List.of("Positive", "Negative", "Ungated"),
                 new int[] {0x00C800, 0xA0A0A0, 0x505059});
     }

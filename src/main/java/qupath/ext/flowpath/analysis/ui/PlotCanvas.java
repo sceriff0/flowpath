@@ -6,6 +6,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Shared drawing base for the Analysis window's four plots: axes, tick labels, a legend,
@@ -110,6 +111,60 @@ public abstract class PlotCanvas extends Canvas {
             gc.fillText(yLabel, 0, 0);
             gc.restore();
         }
+    }
+
+    /**
+     * One label centred beneath each of {@code labels.size()} equal category slots — which
+     * bar is which. Plot-agnostic: the canvas hands in whatever category names it already
+     * computed (population paths, region names, scope names, marker names); this method
+     * only knows where a slot's centre is, via {@link #categoryToX}.
+     */
+    protected void drawCategoryLabels(GraphicsContext gc, List<String> labels) {
+        if (labels == null || labels.isEmpty()) return;
+        int n = labels.size();
+        double y = getHeight() - PADDING_BOTTOM + 10;
+        gc.setFill(Color.gray(0.75));
+        gc.setFont(Font.font(8));
+        for (int i = 0; i < n; i++) {
+            String label = labels.get(i);
+            double cx = categoryToX(i, n);
+            double textWidth = label.length() * 4.2;
+            gc.fillText(label, cx - textWidth / 2, y);
+        }
+    }
+
+    /**
+     * {@code tickCount} evenly spaced values from {@code min} to {@code max} inclusive —
+     * what a Y-axis tick label reads, independent of where it draws. {@code tickCount < 2}
+     * returns just {@code [min]} rather than dividing by zero.
+     */
+    protected double[] valueTicks(double min, double max, int tickCount) {
+        if (tickCount < 2) return new double[] { min };
+        double[] ticks = new double[tickCount];
+        for (int i = 0; i < tickCount; i++) {
+            ticks[i] = min + (max - min) * i / (double) (tickCount - 1);
+        }
+        return ticks;
+    }
+
+    /**
+     * Draw {@code tickCount} evenly spaced Y-axis value labels between {@code min} and
+     * {@code max}, each positioned by {@link #valueToY} — the same mapping the bars
+     * themselves are drawn with, so a tick label can never disagree with the bar beside it.
+     */
+    protected void drawValueTicks(GraphicsContext gc, double min, double max, int tickCount) {
+        gc.setFill(Color.gray(0.7));
+        gc.setFont(Font.font(8));
+        for (double tick : valueTicks(min, max, tickCount)) {
+            double y = valueToY(tick, min, max);
+            gc.fillText(formatTick(tick), 2, y + 3);
+        }
+    }
+
+    private static String formatTick(double v) {
+        return v == Math.rint(v)
+                ? String.format(Locale.US, "%.0f", v)
+                : String.format(Locale.US, "%.1f", v);
     }
 
     /**

@@ -115,5 +115,7 @@ public final class CompositionCanvas extends PlotCanvas {
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
         drawAxes(gc, "Population", "Count");
+        drawCategoryLabels(gc, barLabels());
+        drawValueTicks(gc, 0, maxCount, 4);
     }
 }

@@ -92,5 +92,7 @@ public final class RegionComparisonCanvas extends PlotCanvas {
             gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
         drawAxes(gc, selectedPath == null ? "Region" : selectedPath, "Count");
+        drawCategoryLabels(gc, regions);
+        drawValueTicks(gc, 0, maxCount, 4);
     }
 }
