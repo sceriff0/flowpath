@@ -57,6 +57,12 @@ dependencies {
     testImplementation("org.openjfx:javafx-base:25.0.2")
     testImplementation("org.openjfx:javafx-graphics:25.0.2")
     testImplementation("org.openjfx:javafx-controls:25.0.2")
+    // logback-classic is already on the runtime classpath transitively (via
+    // libs.bundles.logging on the shadow configuration); this makes its ListAppender
+    // available at *test compile time* too, for tests that assert a warning was logged
+    // (e.g. MarkerPositivityCanvasTest's malformed-gate-group case) rather than only
+    // asserting on the resulting numbers.
+    testImplementation("ch.qos.logback:logback-classic:1.5.23")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

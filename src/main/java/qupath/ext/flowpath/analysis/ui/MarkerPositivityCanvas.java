@@ -2,6 +2,8 @@ package qupath.ext.flowpath.analysis.ui;
 
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.ArrayList;
@@ -35,8 +37,20 @@ import java.util.Map;
  * branch's subtree is interleaved between them in the flattened list. Multi-axis gates
  * (a quadrant or region gate, whose {@code gateChannel} joins two markers with {@code " / "})
  * have no single positive/negative axis and are excluded from this reduction entirely.
+ * <p>
+ * <b>A malformed gate group fails visibly, not silently.</b> {@code Branch.setChildren}
+ * accepts any list with no dedup check, so two sibling gates on the identical channel under
+ * one parent branch is constructible (however unintended). That groups four rows under one
+ * {@code (parent path, channel)} key instead of the expected two, and this class cannot
+ * decide which pair is "the" positive/negative branch. The cells behind that group really
+ * were gated — ambiguously, by two independent thresholds — so they must not be reported as
+ * ungated (unmeasured is not the same claim as ambiguously measured); they are excluded from
+ * both the measured count and the marker's effective denominator, and the exclusion is
+ * logged at WARN so the condition is visible rather than a chart that simply looks fine.
  */
 public final class MarkerPositivityCanvas extends PlotCanvas {
+
+    private static final Logger logger = LoggerFactory.getLogger(MarkerPositivityCanvas.class);
 
     /**
      * The identity of one gate node, as far as this reduction can see it: the path of the
@@ -50,6 +64,12 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
     private static final class Tally {
         int positive;
         int negative;
+        /**
+         * Cells caught by a malformed group for this marker (not exactly two rows sharing
+         * a node) — removed from both "measured" and the effective denominator, so they
+         * never show up as ungated either. See the class javadoc.
+         */
+        int excluded;
     }
 
     private List<PopulationStats.Row> wholeSlideRows = List.of();
@@ -87,12 +107,32 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
         }
 
         Map<String, Tally> out = new LinkedHashMap<>();
-        for (List<PopulationStats.Row> nodeRows : byNode.values()) {
-            if (nodeRows.size() != 2) continue; // not a plain two-branch threshold gate
-            String channel = nodeRows.get(0).gateChannel();
-            Tally tally = out.computeIfAbsent(channel, k -> new Tally());
-            tally.positive += nodeRows.get(0).count();
-            tally.negative += nodeRows.get(1).count();
+        for (Map.Entry<MarkerKey, List<PopulationStats.Row>> entry : byNode.entrySet()) {
+            MarkerKey key = entry.getKey();
+            List<PopulationStats.Row> nodeRows = entry.getValue();
+            // Always create the marker's entry, valid group or not, so a marker touched
+            // only by a malformed group still appears (with zero measured) rather than
+            // silently vanishing from the chart -- see the class javadoc.
+            Tally tally = out.computeIfAbsent(key.channel(), k -> new Tally());
+            if (nodeRows.size() == 2) {
+                tally.positive += nodeRows.get(0).count();
+                tally.negative += nodeRows.get(1).count();
+            } else {
+                // Every row sharing this (parent path, channel) key stems from the SAME
+                // parent branch, so they all carry that branch's own parentCount -- the
+                // number of distinct cells actually exposed to this ambiguous gate group,
+                // as opposed to summing the rows' own counts, which double- (or N-)counts
+                // a cell once per sibling gate that independently classified it.
+                int excludedCells = nodeRows.get(0).parentCount();
+                tally.excluded += excludedCells;
+                logger.warn("MarkerPositivityCanvas: {} rows found for channel '{}' under parent "
+                                + "branch '{}', expected exactly 2 (one gate's positive/negative "
+                                + "branches) -- likely two sibling gates on the same channel. "
+                                + "Excluding these {} cells from both measured and ungated rather "
+                                + "than guessing which rows are the positive/negative pair.",
+                        nodeRows.size(), key.channel(), key.parentPath().isEmpty() ? "(root)" : key.parentPath(),
+                        excludedCells);
+            }
         }
         return out;
     }
@@ -123,13 +163,29 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
     }
 
     /**
-     * Cells never evaluated against {@code marker} at all — the whole-slide total minus
-     * every cell this canvas found in a positive or negative branch for it.
+     * Cells never evaluated against {@code marker} at all — the marker's effective
+     * denominator (whole-slide total, minus any cells a malformed gate group excluded)
+     * minus every cell this canvas found in a positive or negative branch for it. A
+     * malformed group's cells are excluded from the denominator too, so they are never
+     * reported as ungated — they were gated, just ambiguously.
      */
     int ungatedCount(String marker) {
         Tally t = byMarker.get(marker);
-        int measured = t == null ? 0 : t.positive + t.negative;
-        return Math.max(0, scopeTotal - measured);
+        if (t == null) return scopeTotal;
+        int measured = t.positive + t.negative;
+        int denominator = scopeTotal - t.excluded;
+        return Math.max(0, denominator - measured);
+    }
+
+    /**
+     * Cells this canvas excluded from {@code marker}'s measured/ungated split entirely,
+     * because they came from a malformed gate group (see the class javadoc). Package-private
+     * so a test can pin the exclusion directly rather than only inferring it from
+     * {@link #ungatedCount}.
+     */
+    int excludedCount(String marker) {
+        Tally t = byMarker.get(marker);
+        return t == null ? 0 : t.excluded;
     }
 
     /** The whole-slide cell count every marker's three segments must sum to. */
