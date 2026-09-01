@@ -53,7 +53,8 @@ public final class PopulationStatsExporter {
         if (withImage) w.write("image,");
         w.write("scope,region,region_index,path,branch,gate_channel,depth,root_index,count,clean_count,"
                 + "parent_count,clean_parent_count,denominator_count,percent_of_parent,"
-                + "percent_of_total,percent_of_denominator,area_mm2,density_per_mm2\n");
+                + "percent_of_total,percent_of_denominator,percent_of_clean_parent,percent_of_clean_total,"
+                + "area_mm2,density_per_mm2\n");
     }
 
     /**
@@ -111,6 +112,10 @@ public final class PopulationStatsExporter {
             w.write(CellTable.fmt(row.percentOfTotal()));
             w.write(',');
             w.write(CellTable.fmt(row.percentOfDenominator()));
+            w.write(',');
+            w.write(CellTable.fmt(row.percentOfCleanParent()));
+            w.write(',');
+            w.write(CellTable.fmt(row.percentOfCleanTotal()));
             w.write(',');
             w.write(CellTable.fmt(row.areaMm2()));
             w.write(',');

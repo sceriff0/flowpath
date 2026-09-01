@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.model;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.Cells;
@@ -10,6 +11,63 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PopulationStatsTest {
+
+    /**
+     * Built through the model's own entry point rather than through {@code AnalysisSession},
+     * so a model-layer test does not reach up into the analysis layer for its fixture.
+     */
+    private static PopulationStats twoRootStats() {
+        AnalysisSession.AnalysisInput in = AnalysisFixtures.twoRootsSameChannelInput();
+        return PopulationStats.of(in.tree(), in.tally(), in.regionNames(), in.regionAreasMm2(), null);
+    }
+
+    @Test
+    void cleanPercentagesUseCleanNumeratorsAndCleanDenominators() {
+        PopulationStats stats = twoRootStats();
+        for (PopulationStats.Row row : stats.rows(PopulationStats.Scope.WHOLE_SLIDE)) {
+            if (row.cleanParentCount() > 0) {
+                assertEquals(100.0 * row.cleanCount() / row.cleanParentCount(),
+                        row.percentOfCleanParent(), 1e-9,
+                        "clean over clean, never clean over raw: " + row.path());
+            }
+            assertTrue(row.cleanCount() <= row.count(),
+                    "the clean count is a subset of the raw count by construction");
+            if (!Double.isNaN(row.percentOfCleanTotal())) {
+                assertTrue(row.percentOfCleanTotal() >= 0 && row.percentOfCleanTotal() <= 100.0001,
+                        row.path() + " reports " + row.percentOfCleanTotal() + "% of the clean scope");
+            }
+        }
+    }
+
+    @Test
+    void aPopulationWithNoCleanCellsHoldsNoCleanShare() {
+        // The guard against the tempting shortcut of dividing the clean count by the RAW
+        // total: a population whose cells were all excluded must report 0 (or NaN when no
+        // clean total exists), never a positive share of anything.
+        for (PopulationStats.Row row : twoRootStats().rows()) {
+            if (row.cleanCount() == 0) {
+                assertTrue(Double.isNaN(row.percentOfCleanTotal()) || row.percentOfCleanTotal() == 0.0,
+                        row.path() + " has no clean cells but claims "
+                                + row.percentOfCleanTotal() + "% of the clean scope");
+                assertTrue(Double.isNaN(row.percentOfCleanParent()) || row.percentOfCleanParent() == 0.0,
+                        row.path() + " has no clean cells but claims "
+                                + row.percentOfCleanParent() + "% of its clean parent");
+            }
+        }
+    }
+
+    @Test
+    void everyExistingPercentageIsUnchanged() {
+        // Task 8 adds columns; it must not move a number that already shipped.
+        for (PopulationStats.Row row : twoRootStats().rows()) {
+            if (row.parentCount() > 0) {
+                assertEquals(100.0 * row.count() / row.parentCount(), row.percentOfParent(), 1e-9,
+                        "percentOfParent stays raw-over-raw: " + row.path());
+            }
+            assertTrue(Double.isNaN(row.percentOfDenominator()),
+                    "no denominator was chosen, so this stays NaN: " + row.path());
+        }
+    }
 
     /** CD45 root over 10 cells (values 1..10) split at 5.5, CD8 child under the positives. */
     private static GateTree twoLevelTree() {
@@ -445,6 +503,21 @@ class PopulationStatsTest {
         assertEquals(60.0, depth2.percentOfParent(), 1e-9,
                 "3 of the 5 RAW parent cells -- against the 3 clean ones this would be 100%");
         assertEquals(15.0, depth2.percentOfTotal(), 1e-9, "3 of 20");
+
+        // Neither gate clips at the root, so the root's own branch is fully clean (10 of 10),
+        // which makes depth1's clean parent (10) differ from its clean count (3) -- a genuine
+        // clean-over-clean division, not one where the two pairs happen to collapse.
+        assertEquals(10, depth1.cleanParentCount(), "the CD45+ root branch clips nothing");
+        assertEquals(30.0, depth1.percentOfCleanParent(), 1e-9,
+                "3 clean CD3+ cells of 10 clean CD45+ cells -- against the raw parent (5) this reads 60%");
+        assertEquals(15.0, depth1.percentOfCleanTotal(), 1e-9,
+                "3 of the 20 cells that are clean at whole-slide scope (no quality filter or ROI here)");
+
+        // depth2's clean parent is depth1's clean count (3, asserted above), not depth1's
+        // raw count (5): dividing by the raw parent here would silently read 33.33% as 20%.
+        assertEquals(1.0 / 3.0 * 100.0, depth2.percentOfCleanParent(), 1e-9,
+                "1 clean CD8+ cell of the 3 cells that were clean at its clean parent, CD3+");
+        assertEquals(5.0, depth2.percentOfCleanTotal(), 1e-9, "1 of the 20 cells clean at whole-slide scope");
     }
 
     /**
