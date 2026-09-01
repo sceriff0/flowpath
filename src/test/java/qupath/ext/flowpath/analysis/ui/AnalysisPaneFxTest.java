@@ -429,6 +429,30 @@ class AnalysisPaneFxTest {
         assertEquals(second, FxTestSupport.onFx(() -> pane.scopeComparisonCanvas().selectedPopulation()));
     }
 
+    @Test
+    void selectingARowNotifiesTheHostOnceWithThatPopulation() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        assertEquals(1, seen.size(), "one selection, one notification");
+        assertEquals(FxTestSupport.onFx(pane::selectedRowRef), seen.get(0));
+    }
+
+    @Test
+    void aSelectionArrivingFromOutsideIsNotEchoedBack() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+        PopulationRef ref = FxTestSupport.onFx(() -> pane.populationChoices().get(0));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation(ref));
+        assertTrue(seen.isEmpty(), "an inbound selection must not bounce back and loop");
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));

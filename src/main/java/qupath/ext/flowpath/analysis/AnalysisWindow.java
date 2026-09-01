@@ -5,7 +5,10 @@ import javafx.stage.Stage;
 import javafx.stage.Window;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.AnalysisPane;
+import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.lib.gui.QuPathGUI;
+
+import java.util.function.Consumer;
 
 /**
  * Owns the single floating Analysis stage and its lifecycle.
@@ -24,6 +27,16 @@ public final class AnalysisWindow {
 
     private Stage stage;
     private AnalysisPane pane;
+
+    /**
+     * The host's callback for Task 14's forward direction — a population picked inside the
+     * Analysis pane (a table row, or a plot bar click). Held here, not only handed to
+     * {@link AnalysisPane}, because the pane itself is rebuilt by every {@link #open} call
+     * after a close (see {@link #disposeStage}); a handler installed only on the pane that
+     * happened to exist when {@code setPopulationSelectionListener} was called would silently
+     * stop firing the moment the window was closed and reopened.
+     */
+    private Consumer<PopulationRef> populationSelectionListener;
 
     /**
      * Show the Analysis view for a gating pass, creating the window on first use and
@@ -47,6 +60,7 @@ public final class AnalysisWindow {
         disposeStage();
 
         pane = new AnalysisPane(session);
+        pane.setOnPopulationSelected(populationSelectionListener);
         stage = new Stage();
         stage.setTitle(titleFor(input));
         stage.initOwner(owner != null ? owner : qupath.getStage());
@@ -88,6 +102,38 @@ public final class AnalysisWindow {
         return imageName == null || imageName.isBlank()
                 ? "FlowPath — Analysis"
                 : "FlowPath — Analysis — " + imageName;
+    }
+
+    /**
+     * Install the host's callback for Task 14's forward direction: a population picked inside
+     * the Analysis pane (a table row selection, or a plot bar click) is reported here. Wired
+     * onto the pane immediately if one already exists (the window is open), and onto every
+     * pane {@link #open} goes on to build afterward — see {@link #populationSelectionListener}'s
+     * own javadoc for why the field, not just the pane, is what this method sets.
+     *
+     * @param handler called with the population's {@code (rootIndex, path)}; {@code
+     *                 FlowPathPane} is the one production caller, resolving it against the
+     *                 live gate tree via {@code GateTree.findBranch} and selecting the
+     *                 matching tree item
+     */
+    public void setPopulationSelectionListener(Consumer<PopulationRef> handler) {
+        this.populationSelectionListener = handler;
+        if (pane != null) {
+            pane.setOnPopulationSelected(handler);
+        }
+    }
+
+    /**
+     * Land the Analysis pane's own selection (table row plus both comparison plots) on {@code
+     * ref} — Task 14's reverse direction, driven by the gate tree's own selection changing. A
+     * no-op while the window is closed: there is no pane to apply it to, and re-opening later
+     * does not replay a selection that arrived while nothing was open, the same way {@link
+     * #push} does not open the window on its own.
+     */
+    public void selectPopulation(PopulationRef ref) {
+        if (stage != null && stage.isShowing() && pane != null) {
+            pane.selectPopulation(ref);
+        }
     }
 
     /** {@code true} when the Analysis window is currently on screen. */

@@ -55,6 +55,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.DoubleFunction;
 import java.util.function.Function;
 import java.util.function.ToDoubleFunction;
@@ -178,6 +179,22 @@ public final class AnalysisPane extends BorderPane {
     // value) would then double-apply silently.
     private boolean updatingPopulationSelection;
 
+    // Set for the duration of a table-selection change THIS PANE is making programmatically --
+    // restoreSelection() preserving a selection across a push, and selectTableRow() applying an
+    // inbound PopulationRef (from either the public selectPopulation() or an in-pane pick via
+    // handlePopulationPicked()) -- so the listener configurePopulationSelection() installs on
+    // table.getSelectionModel() cannot mistake either for a fresh pick and notify
+    // onPopulationSelected for something that is not a new selection event. The same guard
+    // shape refreshing/updatingPopulationSelection already use above, applied to the
+    // table-selection-vs-host-notification problem Task 14 adds.
+    private boolean suppressSelectionNotification;
+
+    // Task 14's forward direction: a table row selection, or a plot bar click (via
+    // PlotCanvas.setOnPopulationPicked), both end at handlePopulationPicked(), which reports the
+    // population here. null until setOnPopulationSelected() is called -- AnalysisWindow is the
+    // one production caller; a test that never installs a handler simply gets no notifications.
+    private Consumer<PopulationRef> onPopulationSelected;
+
     public AnalysisPane(AnalysisSession session) {
         this.session = Objects.requireNonNull(session, "session");
 
@@ -185,6 +202,7 @@ public final class AnalysisPane extends BorderPane {
         buildColumns();
         configureTableItems();
         configureSelectionAndCopy();
+        configurePopulationSelection();
 
         scopeChoice.setConverter(new StringConverter<>() {
             @Override
@@ -437,13 +455,103 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Choose which population {@link #regionComparisonCanvas()} and {@link #scopeComparisonCanvas()}
-     * compare. Goes through {@link #applyPopulationSelection}, the same path either combo's own
-     * listener uses, so a test driving this method and a user driving a combo directly are
-     * exercising identical behaviour.
+     * Land the table selection and both comparison canvases on {@code ref} — Task 14's reverse
+     * direction, reached from OUTSIDE this pane ({@code AnalysisWindow}, in turn driven by the
+     * gate tree's own selection changing; see {@code FlowPathPane}'s population-selection
+     * listener). Applies exactly what an in-pane pick applies —
+     * {@link #selectTableRow}/{@link #applyPopulationSelection}, the same pair
+     * {@link #handlePopulationPicked} uses — but deliberately never reports back to
+     * {@link #onPopulationSelected}: an inbound selection that echoed back out would round-trip
+     * forever between this pane and the gate tree the moment both directions are wired, which is
+     * exactly the loop Task 14's brief calls out.
+     * <p>
+     * A {@code ref} that names no row currently shown — the population sits at a scope the
+     * table is not currently displaying, or (the case that matters most: a stale report) the
+     * gate that produced it was disabled, deleted or renamed since the report was pushed —
+     * leaves the table's selection exactly as it was; see {@link #selectTableRow}. Public,
+     * unlike every other {@code select*}/{@code setDenominator} sibling in this class, because
+     * {@code AnalysisWindow} is a cross-package caller — the one case this task's brief calls
+     * out as crossing from the Analysis window back into the main gating pane.
      */
-    void selectPopulation(PopulationRef population) {
-        applyPopulationSelection(population);
+    public void selectPopulation(PopulationRef ref) {
+        selectTableRow(ref);
+        applyPopulationSelection(ref);
+    }
+
+    /**
+     * Wire Task 14's forward direction: a table row selection, or a click on a plot bar (via
+     * {@link PlotCanvas#setOnPopulationPicked}), both end up at
+     * {@link #handlePopulationPicked} — the one place a population picked FROM INSIDE this pane
+     * is both applied and reported to {@link #onPopulationSelected}. {@link #selectPopulation}
+     * is the reverse direction and deliberately does not go through this listener at all (see
+     * its own javadoc), which is what keeps an inbound selection from bouncing back out.
+     */
+    private void configurePopulationSelection() {
+        table.getSelectionModel().selectedItemProperty().addListener((obs, old, row) -> {
+            if (suppressSelectionNotification || row == null) return;
+            handlePopulationPicked(PopulationRef.of(row));
+        });
+        for (PlotCanvas canvas : plotCanvases) {
+            canvas.setOnPopulationPicked(this::handlePopulationPicked);
+        }
+    }
+
+    /**
+     * The one path every in-pane pick travels — a table row selection (through the listener
+     * {@link #configurePopulationSelection} installs) and a plot bar click (through
+     * {@link PlotCanvas#setOnPopulationPicked}, which never calls this at all when a hit does
+     * not name one unambiguous population — see {@link PlotHit#population()}'s own javadoc for
+     * why {@code MarkerPositivityCanvas} never does). Applies {@code ref} to the table and both
+     * comparison canvases exactly the way {@link #selectPopulation} does, then reports it to
+     * {@link #onPopulationSelected} exactly once — the notify step {@link #selectPopulation}
+     * deliberately skips, since that method is the reverse direction.
+     */
+    private void handlePopulationPicked(PopulationRef ref) {
+        selectTableRow(ref);
+        applyPopulationSelection(ref);
+        if (onPopulationSelected != null) {
+            onPopulationSelected.accept(ref);
+        }
+    }
+
+    /**
+     * Select the row naming {@code ref} in the table's CURRENT (scope-filtered, sorted) row
+     * set, quietly — guarded by {@link #suppressSelectionNotification} so the listener
+     * {@link #configurePopulationSelection} installs on the table's own selection model cannot
+     * treat this programmatic move as a fresh pick and notify {@link #onPopulationSelected} a
+     * second time for what is really one selection event (or, from {@link #selectPopulation},
+     * notify it at all). {@code null} clears the selection; a {@code ref} that names no row
+     * currently shown leaves whatever was selected alone rather than guessing or clearing a
+     * selection that may still be perfectly valid — the same policy {@link #restoreSelection}
+     * follows for a push that could not find the previous selection either.
+     */
+    private void selectTableRow(PopulationRef ref) {
+        suppressSelectionNotification = true;
+        try {
+            if (ref == null) {
+                table.getSelectionModel().clearSelection();
+                return;
+            }
+            for (PopulationStats.Row row : table.getItems()) {
+                if (ref.matches(row)) {
+                    table.getSelectionModel().select(row);
+                    return;
+                }
+            }
+        } finally {
+            suppressSelectionNotification = false;
+        }
+    }
+
+    /**
+     * Install the host's callback for Task 14's forward direction: a population picked from
+     * inside this pane (a table row selection, or a plot bar click) is reported here exactly
+     * once per pick, via {@link #handlePopulationPicked}. {@code AnalysisWindow} is the one
+     * production caller, wiring it straight to the gate tree; a test that never calls this
+     * simply receives no notifications.
+     */
+    public void setOnPopulationSelected(Consumer<PopulationRef> handler) {
+        this.onPopulationSelected = handler;
     }
 
     /**
@@ -1052,14 +1160,25 @@ public final class AnalysisPane extends BorderPane {
      * old selected object is never {@code .equals} to anything in the new list; matching on
      * {@link PopulationRef} (root + path, not row identity) is what lets the selection survive
      * a push the way the denominator choice already does (see {@link #refresh}'s own comment).
+     * <p>
+     * Guarded by {@link #suppressSelectionNotification} for the same reason
+     * {@link #selectTableRow} is: re-selecting the SAME population across a push is bookkeeping,
+     * not a new pick, and must not notify {@link #onPopulationSelected} — a live-preview push
+     * fires on every gate edit, and a table that renotified the host each time would send the
+     * gate tree chasing a selection it never actually left.
      */
     private void restoreSelection(PopulationRef ref) {
         if (ref == null) return;
-        for (PopulationStats.Row row : table.getItems()) {
-            if (ref.matches(row)) {
-                table.getSelectionModel().select(row);
-                return;
+        suppressSelectionNotification = true;
+        try {
+            for (PopulationStats.Row row : table.getItems()) {
+                if (ref.matches(row)) {
+                    table.getSelectionModel().select(row);
+                    return;
+                }
             }
+        } finally {
+            suppressSelectionNotification = false;
         }
     }
 

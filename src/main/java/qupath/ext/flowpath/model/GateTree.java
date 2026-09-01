@@ -64,6 +64,76 @@ public class GateTree {
     }
 
     /**
+     * Resolve a population's identity — {@code (rootIndex, path)} — to the live {@link Branch}
+     * it names, walking this tree's <b>enabled</b> roots only, indexed exactly the way
+     * {@code PopulationStats.collectFromRoots} numbers them (contiguous among enabled roots; a
+     * disabled root contributes no index at all), then following {@code path}'s branch names
+     * down from there.
+     * <p>
+     * <b>Value-keyed, deliberately, so this survives a {@link #deepCopy()}.</b> The Analysis
+     * window's population table is built from a deep copy of the live tree
+     * ({@code FlowPathPane.buildAnalysisInput()}), so a {@link Branch} minted while that report
+     * was built is never the SAME object as anything in the tree the user goes on editing — an
+     * identity-keyed lookup would need the caller to hold a copy that never goes stale, which is
+     * exactly what live gate editing rules out. {@code (rootIndex, path)} names the same
+     * population in either tree, which is what lets a click on a report built from a copy select
+     * something in the live tree it was copied from.
+     * <p>
+     * <b>Absence, never an exception.</b> Returns {@code null} whenever the path does not
+     * resolve — an out-of-range {@code rootIndex}, a segment naming no branch, or a segment that
+     * would have to pass through a disabled gate (a disabled gate is a hard stop for its whole
+     * subtree in {@code GatingEngine.walkNode}, so {@code PopulationStats} never emits a row for
+     * anything beneath one, and this method must agree, or a stale ref would resolve to a branch
+     * the table never showed). The user may simply have disabled, deleted or renamed the gate
+     * since the report naming it was pushed; that is an ordinary consequence of live editing, not
+     * an error for a caller to handle — see {@code AnalysisPane.selectPopulation} and
+     * {@code FlowPathPane}'s own population-selection listener, both of which treat a {@code
+     * null} return as "ignore silently".
+     *
+     * @param rootIndex zero-based index among this tree's ENABLED roots only — the same
+     *                   indexing {@link PopulationStats.Row#rootIndex()} carries
+     * @param path       the branch-name route from that root, e.g. {@code "CD45+/CD3+"} —
+     *                   {@link PopulationStats.Row#path()}
+     */
+    public Branch findBranch(int rootIndex, String path) {
+        if (path == null || path.isEmpty() || rootIndex < 0) return null;
+        GateNode root = enabledRoot(rootIndex);
+        if (root == null) return null;
+        return findBranchAmong(List.of(root), path);
+    }
+
+    /** The {@code rootIndex}-th ENABLED root, in tree order, or {@code null} when out of range. */
+    private GateNode enabledRoot(int rootIndex) {
+        int index = 0;
+        for (GateNode root : roots) {
+            if (!root.isEnabled()) continue;
+            if (index == rootIndex) return root;
+            index++;
+        }
+        return null;
+    }
+
+    /**
+     * Follow {@code remainingPath}'s leading segment against every branch of every node in
+     * {@code nodes} — mirroring {@code PopulationStats.collect}'s own traversal, where a
+     * branch's children are a LIST of sibling gates rather than a single one, so more than one
+     * node can contribute a branch at the same path depth.
+     */
+    private static Branch findBranchAmong(List<GateNode> nodes, String remainingPath) {
+        int slash = remainingPath.indexOf('/');
+        String segment = slash < 0 ? remainingPath : remainingPath.substring(0, slash);
+        String rest = slash < 0 ? null : remainingPath.substring(slash + 1);
+        for (GateNode node : nodes) {
+            if (!node.isEnabled()) continue;
+            for (Branch branch : node.getBranches()) {
+                if (!branch.getName().equals(segment)) continue;
+                return rest == null ? branch : findBranchAmong(branch.getChildren(), rest);
+            }
+        }
+        return null;
+    }
+
+    /**
      * Transfer transient counts from a copy's nodes back to the originals.
      * Walks both trees in parallel; stops gracefully if structures differ.
      */

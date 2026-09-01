@@ -139,4 +139,40 @@ class GateTreeTest {
         assertEquals(List.of(0, 1), dupes.get("SAME"),
                 "root 0 contributes once even though it holds the name twice");
     }
+
+    @Test
+    void findBranchResolvesAcrossADeepCopy() {
+        var tree = new GateTree();
+        var first = new GateNode("CD45", 1.0);
+        var second = new GateNode("CD45", 2.0);          // the same channel, deliberately
+        second.getPositiveChildren().add(new GateNode("CD3", 0.5));
+        tree.addRoot(first);
+        tree.addRoot(second);
+
+        Branch original = tree.findBranch(1, "CD45+/CD3+");
+        assertNotNull(original, "the second root's child branch is reachable by path");
+
+        var copy = tree.deepCopy();
+        Branch inCopy = copy.findBranch(1, "CD45+/CD3+");
+        assertNotNull(inCopy, "the path is the identity, not the object");
+        assertNotSame(original, inCopy, "precondition: deepCopy really did mint new branches");
+        assertEquals(original.getName(), inCopy.getName());
+    }
+
+    @Test
+    void findBranchIndexesEnabledRootsOnlySoIndicesMatchTheReport() {
+        // rootIndex is an index among ENABLED roots — PopulationStats.collectFromRoots assigns
+        // it that way — so a lookup that counted disabled roots too would resolve the wrong gate.
+        var tree = new GateTree();
+        var skipped = new GateNode("PANCK", 1.0);
+        skipped.setEnabled(false);
+        tree.addRoot(skipped);
+        tree.addRoot(new GateNode("CD45", 1.0));
+
+        assertNotNull(tree.findBranch(0, "CD45+"),
+                "the first ENABLED root is index 0, not the first root in the list");
+        assertNull(tree.findBranch(0, "PANCK+"), "a disabled root contributes no branches");
+        assertNull(tree.findBranch(9, "CD45+"), "an out-of-range root is absent, not an exception");
+        assertNull(tree.findBranch(0, "no/such/path"));
+    }
 }
