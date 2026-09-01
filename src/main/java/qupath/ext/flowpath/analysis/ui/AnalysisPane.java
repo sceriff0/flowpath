@@ -2,10 +2,14 @@ package qupath.ext.flowpath.analysis.ui;
 
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.layout.BorderPane;
@@ -41,6 +45,11 @@ public final class AnalysisPane extends BorderPane {
     private final ComboBox<Branch> denominatorCombo = new ComboBox<>();
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
+
+    private final CompositionCanvas compositionCanvas = new CompositionCanvas();
+    private final RegionComparisonCanvas regionComparisonCanvas = new RegionComparisonCanvas();
+    private final ScopeComparisonCanvas scopeComparisonCanvas = new ScopeComparisonCanvas();
+    private final MarkerPositivityCanvas markerPositivityCanvas = new MarkerPositivityCanvas();
 
     private PopulationStats.Scope selectedScope;
     private Branch selectedDenominator;
@@ -89,10 +98,27 @@ public final class AnalysisPane extends BorderPane {
         controls.setPadding(new Insets(8));
         controls.setAlignment(Pos.CENTER_LEFT);
 
+        TabPane plotTabs = new TabPane(
+                plotTab("Composition", compositionCanvas),
+                plotTab("By Region", regionComparisonCanvas),
+                plotTab("By Scope", scopeComparisonCanvas),
+                plotTab("Marker Positivity", markerPositivityCanvas));
+        plotTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        SplitPane body = new SplitPane(table, plotTabs);
+        body.setOrientation(Orientation.VERTICAL);
+        body.setDividerPositions(0.45);
+
         setTop(controls);
-        setCenter(table);
+        setCenter(body);
 
         refresh();
+    }
+
+    private static Tab plotTab(String title, PlotCanvas canvas) {
+        Tab tab = new Tab(title, canvas);
+        tab.setClosable(false);
+        return tab;
     }
 
     /**
@@ -125,6 +151,17 @@ public final class AnalysisPane extends BorderPane {
         return table.getItems().size();
     }
 
+    /**
+     * The "% of Denominator" column's rendered text for one currently-shown row —
+     * the same string {@link #formatPercent} produced for the table cell, not a
+     * second computation of it. Exists so the NaN-renders-blank /
+     * zero-renders-"0.0" distinction (see {@link #formatPercent}) is pinned by a
+     * test rather than only ever eyeballed.
+     */
+    String formattedPercentOfDenominatorAt(int rowIndex) {
+        return formatPercent(table.getItems().get(rowIndex).percentOfDenominator());
+    }
+
     private void refresh() {
         AnalysisState state = session.state();
 
@@ -154,10 +191,24 @@ public final class AnalysisPane extends BorderPane {
         AnalysisState state = session.state();
         if (!state.hasData() || selectedScope == null) {
             table.getItems().clear();
+            setAllPlotRows(List.of());
             return;
         }
         PopulationStats stats = session.stats(selectedDenominator);
         table.getItems().setAll(stats.rows(selectedScope));
+        // Every plot canvas is handed the full, unfiltered row set (every scope, every
+        // region) and narrows to what it means on its own -- CompositionCanvas and
+        // MarkerPositivityCanvas to WHOLE_SLIDE, RegionComparisonCanvas to ANNOTATION_K,
+        // ScopeComparisonCanvas to none of the above, since scope is the axis it compares.
+        // See each canvas's own class javadoc.
+        setAllPlotRows(stats.rows());
+    }
+
+    private void setAllPlotRows(List<PopulationStats.Row> rows) {
+        compositionCanvas.setRows(rows);
+        regionComparisonCanvas.setRows(rows);
+        scopeComparisonCanvas.setRows(rows);
+        markerPositivityCanvas.setRows(rows);
     }
 
     private void buildColumns() {

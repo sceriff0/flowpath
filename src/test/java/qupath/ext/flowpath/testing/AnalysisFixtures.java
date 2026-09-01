@@ -51,6 +51,33 @@ public final class AnalysisFixtures {
                 tree, index, stats, tally, List.of(), null, "test-image");
     }
 
+    /**
+     * A {@code CD45} threshold gate set so far above every value that its positive branch
+     * is always empty — the fixture {@code AnalysisPane}'s "a chosen-but-empty denominator
+     * renders {@code 0.0}, not blank" test needs. Choosing {@code CD45+} as the denominator
+     * gives every row a {@code parentCount} of zero, hitting {@link
+     * PopulationStats}'s {@code percent(part, whole)} zero-denominator branch rather than
+     * its no-denominator-chosen {@code NaN} branch.
+     */
+    public static AnalysisSession.AnalysisInput emptyDenominatorInput() {
+        CellIndex index = Cells.columns(List.of("CD45"),
+                new double[][] {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
+
+        GateNode root = new GateNode("CD45", 100.0);
+        root.setStatistic(Statistic.MEAN);
+        root.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(root);
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+
+        return new AnalysisSession.AnalysisInput(
+                tree, index, stats, tally, List.of(), null, "test-image");
+    }
+
     /** {@link PopulationStats} built from {@link #simpleInput()}, with no denominator chosen. */
     public static PopulationStats stats() {
         AnalysisSession.AnalysisInput input = simpleInput();
