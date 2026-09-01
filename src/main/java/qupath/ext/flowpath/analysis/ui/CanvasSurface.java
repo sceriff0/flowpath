@@ -19,6 +19,13 @@ public final class CanvasSurface implements PlotSurface {
     private final double height;
     private final TextMeasurer measurer;
 
+    // Tracked independently of gc's own font so textWidth() and fontSize() have something to
+    // report before the first setFont() call — but that means they can answer for a font the
+    // GraphicsContext is not actually drawing in until setFont() is called at least once. A
+    // caller must call setFont() before fillText/fillTextRotated/textWidth for the two to
+    // agree; PlotCanvas's own draw methods already do this today via gc.setFont(...) before
+    // every fillText, so this is a caveat for whatever new caller wires this up next (Task 3),
+    // not a bug reachable through the plots that exist now.
     private double fontSize = 10;
     private boolean bold = false;
 

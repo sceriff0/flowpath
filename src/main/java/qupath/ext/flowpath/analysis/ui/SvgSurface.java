@@ -158,21 +158,28 @@ public final class SvgSurface implements PlotSurface {
     /**
      * {@code value} under {@link Locale#US}, with a trailing {@code .0} trimmed so an integral
      * coordinate reads {@code 10} rather than {@code 10.0} — cosmetic, but it keeps the
-     * document's numbers readable to a human diffing two exports.
+     * document's numbers readable to a human diffing two exports. Negative zero is normalised
+     * to {@code "0"} rather than {@code "-0"} — {@code String.format("%.0f", -0.0)} and a
+     * negative value that rounds away to nothing at 4dp (e.g. {@code -0.00001}) both produce a
+     * leading minus sign with no non-zero digit behind it, which is valid SVG but reads as a
+     * formatting bug to anyone diffing the document.
      */
     private static String num(double value) {
+        String s;
         if (value == Math.rint(value) && !Double.isInfinite(value)) {
-            return String.format(Locale.US, "%.0f", value);
+            s = String.format(Locale.US, "%.0f", value);
+        } else {
+            s = String.format(Locale.US, "%.4f", value);
+            int end = s.length();
+            while (s.charAt(end - 1) == '0') {
+                end--;
+            }
+            if (s.charAt(end - 1) == '.') {
+                end--;
+            }
+            s = s.substring(0, end);
         }
-        String s = String.format(Locale.US, "%.4f", value);
-        int end = s.length();
-        while (s.charAt(end - 1) == '0') {
-            end--;
-        }
-        if (s.charAt(end - 1) == '.') {
-            end--;
-        }
-        return s.substring(0, end);
+        return "-0".equals(s) ? "0" : s;
     }
 
     /** Lowercase {@code #rrggbb} — alpha is carried separately, see {@link #appendOpacity}. */

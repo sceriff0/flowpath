@@ -61,13 +61,17 @@ class SvgSurfaceTest {
 
     @Test
     void rotatedTextCarriesATransformAnchoredAtItsOrigin() {
+        // Bound to the full transform and to the individual x/y attributes, not to bare
+        // substring hits on "12"/"50" — those would also pass coincidentally against a
+        // font-size or colour-channel digit, and are unambiguous today only because the
+        // default font size happens to be 10.
         SvgSurface s = surface();
         s.setFill(Color.BLACK);
         s.fillTextRotated("Count", 12, 50, -90);
         String svg = s.toSvg();
-        assertTrue(svg.contains("rotate(-90"), svg);
-        assertTrue(svg.contains("12"), svg);
-        assertTrue(svg.contains("50"), svg);
+        assertTrue(svg.contains("transform=\"rotate(-90 12 50)\""), svg);
+        assertTrue(svg.contains("x=\"12\""), svg);
+        assertTrue(svg.contains("y=\"50\""), svg);
     }
 
     @Test
@@ -84,6 +88,19 @@ class SvgSurfaceTest {
         } finally {
             java.util.Locale.setDefault(previous);
         }
+    }
+
+    @Test
+    void negativeZeroNormalisesToPlainZero() {
+        // -0.0 (and a negative value that rounds away to nothing at 4dp) is valid SVG as
+        // "-0", but reads as a formatting bug to anyone diffing the document.
+        SvgSurface s = surface();
+        s.setFill(Color.BLACK);
+        s.fillRect(-0.0, -0.00001, 1, 1);
+        String svg = s.toSvg();
+        assertTrue(svg.contains("x=\"0\""), svg);
+        assertTrue(svg.contains("y=\"0\""), svg);
+        assertFalse(svg.contains("-0"), svg);
     }
 
     @Test
