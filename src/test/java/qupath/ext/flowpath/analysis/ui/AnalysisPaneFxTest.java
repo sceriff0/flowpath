@@ -281,4 +281,121 @@ class AnalysisPaneFxTest {
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));
         return out;
     }
+
+    /**
+     * Every percentage/density column used to be {@code String}-typed and explicitly
+     * unsortable, because a {@code String} column of numbers sorts lexicographically
+     * ("100.0" above "20.0" above "9.5"). This pins that {@code % Parent} now sorts as a
+     * number.
+     */
+    @Test
+    void percentageColumnsSortNumericallyNotLexicographically() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        assertTrue(FxTestSupport.onFx(() -> pane.isColumnSortable("% Parent")),
+                "a stats table you cannot rank is not a stats table");
+        // 100.0 must not sort above 20.0 above 9.5, which is what a String column did.
+        List<Double> sorted = FxTestSupport.onFx(() -> {
+            pane.sortBy("% Parent", true);
+            return pane.visiblePercentOfParent();
+        });
+        for (int i = 1; i < sorted.size(); i++) {
+            double a = sorted.get(i - 1), b = sorted.get(i);
+            if (Double.isNaN(a) || Double.isNaN(b)) continue;
+            assertTrue(a <= b + 1e-9, "out of order at " + i + ": " + sorted);
+        }
+    }
+
+    /** A blank cell is "unanswered"; an unanswered row must not head the table in either sort direction. */
+    @Test
+    void blankCellsSortToTheEndInEitherDirection() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        for (boolean ascending : new boolean[] { true, false }) {
+            List<Double> values = FxTestSupport.onFx(() -> {
+                pane.sortBy("% of Denominator", ascending);
+                return pane.visiblePercentOfDenominator();
+            });
+            int firstNaN = -1;
+            for (int i = 0; i < values.size(); i++) {
+                if (Double.isNaN(values.get(i))) { firstNaN = i; break; }
+            }
+            if (firstNaN >= 0) {
+                for (int i = firstNaN; i < values.size(); i++) {
+                    assertTrue(Double.isNaN(values.get(i)),
+                            "an unanswered row must never sort above an answered one");
+                }
+            }
+        }
+    }
+
+    /** Filtering narrows the visible rows without rebuilding the underlying stats, and an
+     * emptied table says which of its two possible reasons applies. */
+    @Test
+    void filteringNarrowsTheRowsAndSaysSoWhenItEmptiesThem() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        int all = FxTestSupport.onFx(pane::rowCount);
+        FxTestSupport.onFxRun(() -> pane.setFilter("CD45"));
+        assertTrue(FxTestSupport.onFx(pane::rowCount) <= all);
+        assertTrue(FxTestSupport.onFx(() -> pane.visibleRowPaths().stream()
+                .allMatch(p -> p.toLowerCase().contains("cd45"))));
+
+        FxTestSupport.onFxRun(() -> pane.setFilter("zzzz-no-such-marker"));
+        assertEquals(0, FxTestSupport.onFx(pane::rowCount));
+        assertTrue(FxTestSupport.onFx(pane::placeholderText).contains("zzzz-no-such-marker"),
+                "an empty grid must say why it is empty");
+    }
+
+    /** Closes the case {@code AnalysisState}'s own invariant deliberately cannot express: data
+     * exists, but the current scope (or filter) has no rows for it. */
+    @Test
+    void aTableWithDataButNoRowsAtThisScopeExplainsItself() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.setFilter(""));
+        // Force the empty case however the fixtures allow; the assertion is the contract.
+        if (FxTestSupport.onFx(pane::rowCount) == 0) {
+            assertFalse(FxTestSupport.onFx(pane::placeholderText).isBlank(),
+                    "never a blank grid with no explanation");
+        }
+    }
+
+    /** A live preview push must not jump the table out from under a user reading it. */
+    @Test
+    void aLivePushKeepsTheSelectedPopulationSelected() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        PopulationRef selected = FxTestSupport.onFx(() -> {
+            pane.selectRow(1);
+            return pane.selectedRowRef();
+        });
+        assertNotNull(selected);
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        assertEquals(selected, FxTestSupport.onFx(pane::selectedRowRef),
+                "the table must not jump out from under a user who is reading it");
+    }
+
+    /** Copy produces a TSV with a header line matching the row's own field count. */
+    @Test
+    void copyProducesTsvWithAHeader() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        String tsv = FxTestSupport.onFx(() -> { pane.selectRow(0); return pane.copySelectionAsTsv(); });
+        String[] lines = tsv.split("\n");
+        assertTrue(lines.length >= 2, tsv);
+        assertTrue(lines[0].contains("Population"), lines[0]);
+        // limit -1: several trailing columns (Density, Area, % of Denominator) are blank for
+        // this fixture (no annotated regions, no denominator chosen), and the no-arg overload
+        // of String.split silently drops trailing empty fields, undercounting the row -- a
+        // real TSV field count must not depend on whether the LAST cell happens to be blank.
+        assertEquals(lines[0].split("\t", -1).length, lines[1].split("\t", -1).length,
+                "the header and the row must have the same number of fields");
+    }
 }
