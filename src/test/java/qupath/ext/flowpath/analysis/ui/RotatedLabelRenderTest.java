@@ -80,6 +80,26 @@ class RotatedLabelRenderTest {
         assertInsideTheCanvas(canvas.toSvg(), 180, 200);
     }
 
+    /**
+     * The claim the exact-fit round was actually about, asserted on the three constants rather
+     * than through a fixture: the deepest a rotated label can reach below the axis is the
+     * anchor gap plus the elision cap's vertical component, and that must fit the band reserved
+     * for it. Checking it only through a rendered document leaves the check depending on some
+     * fixture label happening to measure within a pixel or two of the cap under whatever text
+     * metrics the JVM supplies — true today, luck tomorrow. Here it cannot fail to bite:
+     * widening {@code ROTATED_LABEL_ANCHOR_GAP}, raising {@code ROTATED_LABEL_MAX_WIDTH} or
+     * narrowing {@code PADDING_BOTTOM_ROTATED} fails this line immediately, with no fixture
+     * involved. At 6px of gap — which shipped briefly — the sum is 65.4 against a band of 64.
+     */
+    @Test
+    void theRotatedLabelBandIsWideEnoughForALabelAtTheElisionCap() {
+        double deepestReach = PlotCanvas.ROTATED_LABEL_ANCHOR_GAP
+                + PlotCanvas.ROTATED_LABEL_MAX_WIDTH * PlotCanvas.ROTATED_LABEL_DIAGONAL;
+        assertTrue(deepestReach <= PlotCanvas.PADDING_BOTTOM_ROTATED,
+                "a label elided to the cap reaches " + deepestReach + "px below the axis, past "
+                        + "the " + PlotCanvas.PADDING_BOTTOM_ROTATED + "px band reserved for it");
+    }
+
     private static void assertInsideTheCanvas(String svg, double width, double height) {
         List<TextElement> texts = parse(svg);
         assertTrue(texts.stream().anyMatch(TextElement::rotated),
@@ -91,11 +111,6 @@ class RotatedLabelRenderTest {
         ruler.setFont(8, false);
         double diagonal = Math.cos(Math.toRadians(45));
 
-        // For a rotated layout the bottom padding IS PlotCanvas.PADDING_BOTTOM_ROTATED, so the
-        // axis sits exactly that far above the canvas bottom, and the band below it is the
-        // room the labels have to fit inside.
-        double axisBottom = height - PlotCanvas.PADDING_BOTTOM_ROTATED;
-
         for (TextElement text : texts) {
             assertTrue(text.x() >= 0 && text.x() <= width,
                     "a text origin starts off the canvas: " + text);
@@ -104,16 +119,6 @@ class RotatedLabelRenderTest {
             if (!text.rotated()) {
                 continue;
             }
-            // No tolerance, deliberately. The deepest a label may reach is the anchor gap plus
-            // the elision cap's vertical component (4 + 84 * sin45 = 63.4), and the band is 64:
-            // it fits by arithmetic, not by luck. Widening the gap, raising the cap or
-            // narrowing the band must fail here rather than clip a label on somebody's panel
-            // with long marker names -- which is what an earlier 6px gap did, by 1.4px, on
-            // exactly the labels that reach the cap.
-            assertTrue(text.y() - axisBottom <= PlotCanvas.PADDING_BOTTOM_ROTATED,
-                    "a rotated label reaches " + (text.y() - axisBottom) + "px below the axis, "
-                            + "past the " + PlotCanvas.PADDING_BOTTOM_ROTATED
-                            + "px band reserved for it: " + text);
             // A −45° label advances up and to the right from its origin; its far end is the
             // character nearest the bar it names, and must be on the canvas as well, since a
             // label whose name is clipped away names nothing.

@@ -93,7 +93,7 @@ public abstract class PlotCanvas extends Canvas {
      * fails a test rather than producing a label clipped against the canvas edge on somebody's
      * panel with long marker names.
      */
-    private static final double ROTATED_LABEL_MAX_WIDTH = 84;
+    static final double ROTATED_LABEL_MAX_WIDTH = 84;
 
     /**
      * How far below the axis a rotated label's <em>end</em> — the last character, the one
@@ -103,12 +103,18 @@ public abstract class PlotCanvas extends Canvas {
      * #PADDING_BOTTOM_ROTATED}. At 4 the two just fit; at 6 a label elided to the full cap
      * reached 1.4px past the canvas edge.
      */
-    private static final double ROTATED_LABEL_ANCHOR_GAP = 4;
+    static final double ROTATED_LABEL_ANCHOR_GAP = 4;
 
-    /** The angle rotated category labels are drawn at, and its cosine (= its sine). */
+    /**
+     * The angle rotated category labels are drawn at, and its cosine (= its sine). The three
+     * band constants are package-private rather than private so {@code RotatedLabelRenderTest}
+     * can assert the band arithmetic — {@code gap + cap × sin45 <= PADDING_BOTTOM_ROTATED} — on
+     * the constants themselves. Asserting it only through a rendered fixture makes the check
+     * depend on a label happening to measure close to the cap, which is not something a test
+     * should be left to luck about.
+     */
     private static final double ROTATED_LABEL_DEGREES = -45;
-    private static final double ROTATED_LABEL_DIAGONAL =
-            Math.cos(Math.toRadians(ROTATED_LABEL_DEGREES));
+    static final double ROTATED_LABEL_DIAGONAL = Math.cos(Math.toRadians(ROTATED_LABEL_DEGREES));
 
     private PlotTheme theme = PlotTheme.LIGHT;
 
@@ -197,6 +203,18 @@ public abstract class PlotCanvas extends Canvas {
      * The remembered geometry is cleared first, so a pass that drew an empty state — no axes,
      * no plot rectangle — leaves {@link #paintedLayout()} {@code null} rather than the stale
      * rectangle of whatever was on screen before it.
+     * <p>
+     * <b>Invariant: a surface handed to {@link #draw} is always the same size as the canvas.</b>
+     * Every layout method here — {@link #plotWidth}, {@link #plotHeight}, {@link #categoryToX},
+     * {@link #drawEmptyState}, {@link #drawBackground} — measures the <em>canvas</em>, never
+     * {@code s.width()}/{@code s.height()}, and both callers construct their surface at exactly
+     * {@code getWidth()} × {@code getHeight()}. That is what makes publishing {@code painted}
+     * from an export pass harmless: the geometry an export lays out is identical to the
+     * geometry on screen, so a hit-test cannot be handed a rectangle from a differently-sized
+     * pass. Task 12 gets a higher-resolution PNG by scaling the rendered <em>snapshot</em>,
+     * never by laying out at another size; a future caller who genuinely wants a
+     * differently-sized export must first make the layout read the surface, not quietly pass a
+     * surface whose dimensions disagree with the canvas.
      */
     private void render(PlotSurface surface) {
         painted = null;
@@ -227,6 +245,13 @@ public abstract class PlotCanvas extends Canvas {
      * screen if anything changed in between. Reading back what was drawn cannot disagree — the
      * same reason {@link #draw} is the single routine behind both {@link #repaint()} and
      * {@link #toSvg()}. Hit-testing is simply a third reader of one layout.
+     * <p>
+     * <b>Hit-testing is slot-based by design, so no bar extent is published here.</b> A pointer
+     * resolves to a whole category slot via {@link #categoryToX} / {@link #categoryWidth}, not
+     * to the drawn bar rectangle: the {@code 0.7} and {@code 0.6} bar-width factors the four
+     * canvases apply are cosmetic, and a click just beside a thin bar should still select it.
+     * Do not go looking for a bar extent in this record — its absence is the decision, not an
+     * omission.
      */
     protected PaintedLayout paintedLayout() {
         return painted;
@@ -367,13 +392,17 @@ public abstract class PlotCanvas extends Canvas {
     }
 
     /**
-     * Fill the whole surface with the theme's background. Called by {@link #repaint()} and
+     * Fill the whole plot with the theme's background. Called by {@link #repaint()} and
      * {@link #toSvg()} rather than by a subclass, so an SVG export can never come out with a
      * transparent page just because one plot forgot to paint one.
+     * <p>
+     * Sized from the canvas, not from {@code s.width()}/{@code s.height()}, so that every
+     * dimension in this class comes from one place — see {@link #render} for the invariant that
+     * makes the two interchangeable and for why relying on it silently would not be.
      */
     protected void drawBackground(PlotSurface s, PlotTheme t) {
         s.setFill(t.background());
-        s.fillRect(0, 0, s.width(), s.height());
+        s.fillRect(0, 0, getWidth(), getHeight());
     }
 
     /**
@@ -382,9 +411,11 @@ public abstract class PlotCanvas extends Canvas {
      * centred rather than drifting the way {@code xLabel.length() * 2.5} made it drift.
      * <p>
      * <b>Rotated category labels take the X title's place, and it is dropped rather than drawn
-     * over them.</b> A −45° label is anchored 4px above the canvas bottom (see
-     * {@link #drawCategoryLabels}), which is exactly where an X title would sit, so on a plot
-     * with rotated labels the two would overlap in the middle of the axis. Dropping the title
+     * over them.</b> A −45° label is anchored {@link #ROTATED_LABEL_ANCHOR_GAP} below the
+     * <em>axis</em> and descends left from there, so its far end reaches within a couple of
+     * pixels of the canvas bottom (see {@link #drawCategoryLabels}) — which is exactly where an
+     * X title sits, so on a plot with rotated labels the two would overlap across the middle of
+     * the axis. Dropping the title
      * is the cheaper loss of the two: rotation only happens when the labels are long, and a
      * label long enough to need rotating — {@code CD45+/CD3+/CD8+} — already says what the axis
      * is far better than the word "Population" does.
@@ -427,14 +458,23 @@ public abstract class PlotCanvas extends Canvas {
      * names, scope names, marker names) via {@link #layoutLabels}, and this method only knows
      * where a slot's centre is, through {@link #categoryToX}.
      * <p>
-     * <b>The anchor is the label's END, at {@code (cx, axisBottom + 6)}.</b> Horizontal labels
-     * are centred on their measured width; rotated ones hang their <em>last</em> character
-     * just under the tick and run down and to the left, so the text reads bottom-left to
-     * top-right and arrives at the bar it names. Since {@link PlotSurface#fillText} places the
-     * origin where the text <em>starts</em>, and the −45° advance direction is
-     * {@code (cos45, −sin45)} in screen coordinates, the origin handed to {@link
-     * PlotSurface#fillTextRotated} is that anchor stepped back along the advance by the
-     * label's measured width: {@code (cx − 0.707w, axisBottom + 6 + 0.707w)}.
+     * <b>The anchor is the label's END, at {@code (cx, axisBottom + ROTATED_LABEL_ANCHOR_GAP)}.</b>
+     * Horizontal labels are centred on their measured width; rotated ones hang their
+     * <em>last</em> character just under the tick and run down and to the left, so the text
+     * reads bottom-left to top-right and arrives at the bar it names. Since {@link
+     * PlotSurface#fillText} places the origin where the text <em>starts</em>, and the −45°
+     * advance direction is {@code (cos45, −sin45)} in screen coordinates, the origin handed to
+     * {@link PlotSurface#fillTextRotated} is that anchor stepped back along the advance by the
+     * label's measured width:
+     * <pre>
+     *   originX = cx − ROTATED_LABEL_DIAGONAL · w
+     *   originY = axisBottom + ROTATED_LABEL_ANCHOR_GAP + ROTATED_LABEL_DIAGONAL · w
+     * </pre>
+     * Both offsets are written as the constants rather than as the numbers they currently hold
+     * ({@link #ROTATED_LABEL_ANCHOR_GAP} and {@link #ROTATED_LABEL_DIAGONAL}), because this
+     * prose has already gone stale against the code once: the gap moved 6 → 4 and two
+     * sentences here kept saying 6, which is a 2px error for anyone implementing the inverse
+     * from the description rather than from the fields.
      * <p>
      * Anchoring the <em>start</em> at the slot centre instead — the obvious reading, and the
      * one this class shipped first — mirrors the whole band rightwards, so the final slot's
@@ -444,9 +484,11 @@ public abstract class PlotCanvas extends Canvas {
      * rendered document, not only in arithmetic.
      * <p>
      * <b>Task 13 inverts this.</b> A hit-test that asks "which label is under the pointer"
-     * must undo the same step-back, from the same {@code axisBottom} — which is the plot
-     * rectangle's own bottom ({@code plotTop + plotHeight}), never the canvas's — and read the
-     * layout back from {@link #paintedLayout()} rather than measuring text again.
+     * must undo the same step-back, reading {@link #ROTATED_LABEL_ANCHOR_GAP} and {@link
+     * #ROTATED_LABEL_DIAGONAL} from here rather than copying their present values, and working
+     * from the same {@code axisBottom} — which is the plot rectangle's own bottom ({@code
+     * plotTop + plotHeight}), never the canvas's — with the layout read back from {@link
+     * #paintedLayout()} rather than measured again.
      * <p>
      * <b>The band fits exactly.</b> The deepest a label can reach below the axis is {@link
      * #ROTATED_LABEL_ANCHOR_GAP} plus {@link #ROTATED_LABEL_MAX_WIDTH} × sin45° = 63.4px,
@@ -506,15 +548,37 @@ public abstract class PlotCanvas extends Canvas {
 
     /**
      * A colour-swatch legend, one row per label, inside the strip {@link #legendHeight}
-     * reserved above the plot. The caller must pass the same row count to {@link #plotTop} and
-     * {@link #plotHeight}, which is what makes the strip real rather than notional.
+     * reserved above the plot.
+     * <p>
+     * <b>{@code legendRows} must equal {@code labels.size()}, and this throws when it does
+     * not.</b> It is the same number the caller passed to {@link #plotTop} and {@link
+     * #plotHeight} to buy the strip; a legend that draws more rows than were reserved spills
+     * over the plot frame — the exact defect the strip exists to make impossible — and one that
+     * draws fewer leaves a band of dead space above every chart. Requiring the caller to state
+     * the count it reserved, and rejecting a mismatch, is what makes the strip structural
+     * rather than a convention the base class merely describes; the same reasoning as {@code
+     * AnalysisState}'s compact constructor rejecting contradictory combinations and {@code
+     * BranchTally.rebindTo} throwing rather than migrating half-way.
      * <p>
      * {@code colors} is parallel to {@code labels}; a short list falls back to the theme's
-     * muted text colour rather than throwing, since a legend is an annotation on a chart and
-     * should never be the thing that stops it drawing.
+     * muted text colour rather than throwing, because an under-coloured swatch is a cosmetic
+     * fault confined to the legend, where a miscounted row is a layout fault that reaches the
+     * data.
+     *
+     * @throws IllegalArgumentException if {@code legendRows} does not match the number of labels
      */
-    protected void drawLegend(PlotSurface s, PlotTheme t, List<String> labels, List<Color> colors) {
-        if (labels == null || labels.isEmpty()) return;
+    protected void drawLegend(PlotSurface s, PlotTheme t, int legendRows,
+                              List<String> labels, List<Color> colors) {
+        int rows = labels == null ? 0 : labels.size();
+        if (rows != legendRows) {
+            throw new IllegalArgumentException(
+                    "legend has " + rows + " labels but " + legendRows + " rows were reserved: "
+                            + "plotTop/plotHeight sized the strip for " + legendRows
+                            + ", so drawing " + rows + " would "
+                            + (rows > legendRows ? "spill over the plot frame" : "leave dead space")
+                            + ". Pass the same row count to both.");
+        }
+        if (rows == 0) return;
         s.setFont(LEGEND_FONT_SIZE, false);
         for (int i = 0; i < labels.size(); i++) {
             double rowY = PADDING_TOP + i * LEGEND_ROW_HEIGHT;

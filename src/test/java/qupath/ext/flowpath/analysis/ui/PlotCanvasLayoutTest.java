@@ -19,6 +19,9 @@ class PlotCanvasLayoutTest {
         LabelLayout layout(PlotSurface s, List<String> labels) { return layoutLabels(s, labels); }
         double top(int rows) { return plotTop(rows); }
         double height(LabelLayout l, int rows) { return plotHeight(l, rows); }
+        void legend(PlotSurface s, int rows, List<String> labels) {
+            drawLegend(s, PlotTheme.LIGHT, rows, labels, List.of());
+        }
     }
 
     @Test
@@ -86,6 +89,51 @@ class PlotCanvasLayoutTest {
         PlotCanvas.LabelLayout flat = new PlotCanvas.LabelLayout(false, 30, List.of("a"));
         PlotCanvas.LabelLayout tilted = new PlotCanvas.LabelLayout(true, 64, List.of("a"));
         assertEquals(34, probe.height(flat, 0) - probe.height(tilted, 0), 1e-9);
+    }
+
+    /**
+     * Added after review: the tick target became a number a user can set (Task 6 exposes it),
+     * and this is the end of its range that returns nothing at all. {@code niceTicks(3, 30, 1)}
+     * asks for one tick across a span of 27, which rounds the step up to 50, whose first
+     * multiple at or above 3 is 50 — past the range. Empty is the honest answer: there is no
+     * round number inside {@code [3, 30]} on a step of 50. The superseded {@code valueTicks}
+     * returned {@code {3}} here, a tick at a value the ladder never offers, which is the
+     * behaviour change this pins rather than the coverage gap it was mistaken for.
+     */
+    @Test
+    void aTickTargetTooLowToLandOnTheRangeYieldsNoTicksRatherThanAWrongOne() {
+        assertArrayEquals(new double[0], PlotCanvas.niceTicks(3, 30, 1), 1e-9);
+    }
+
+    /**
+     * The other end of the same user-settable input. {@code range / targetCount} divides by
+     * zero at 0 and yields a negative step below it, so a non-positive target is guarded and
+     * answers with the range's own minimum — the same answer a degenerate range gives, for the
+     * same reason: there is no ladder to climb.
+     */
+    @Test
+    void aNonPositiveTickTargetIsGuardedRatherThanDividedBy() {
+        assertArrayEquals(new double[] { 3 }, PlotCanvas.niceTicks(3, 30, 0), 1e-9);
+        assertArrayEquals(new double[] { 3 }, PlotCanvas.niceTicks(3, 30, -4), 1e-9);
+    }
+
+    /**
+     * The legend strip is only real if the row count that bought it and the row count that
+     * fills it are the same number. Drawing more rows than were reserved spills over the plot
+     * frame — the very overlap the strip exists to prevent — so the mismatch is rejected rather
+     * than drawn, and rejected in both directions, since a legend short of its strip leaves a
+     * band of dead space above every chart.
+     */
+    @Test
+    void aLegendCannotDrawMoreRowsThanTheStripItWasGiven() {
+        PlotSurface s = new SvgSurface(400, 200, new ApproxTextMeasurer());
+        Probe probe = new Probe();
+        assertThrows(IllegalArgumentException.class,
+                () -> probe.legend(s, 2, List.of("Positive", "Negative", "Ungated")));
+        assertThrows(IllegalArgumentException.class,
+                () -> probe.legend(s, 3, List.of("Positive", "Negative")));
+        assertDoesNotThrow(() -> probe.legend(s, 3, List.of("Positive", "Negative", "Ungated")));
+        assertDoesNotThrow(() -> probe.legend(s, 0, List.of()));
     }
 
     @Test

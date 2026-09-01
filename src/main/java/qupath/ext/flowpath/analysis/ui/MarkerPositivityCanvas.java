@@ -349,6 +349,6 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
         }
         drawAxes(s, theme, labels, LEGEND_ROWS, "Marker", "Count");
         drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
-        drawLegend(s, theme, SEGMENTS, segmentColors);
+        drawLegend(s, theme, LEGEND_ROWS, SEGMENTS, segmentColors);
     }
 }
