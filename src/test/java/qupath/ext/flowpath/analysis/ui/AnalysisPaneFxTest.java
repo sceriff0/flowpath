@@ -483,6 +483,41 @@ class AnalysisPaneFxTest {
                 "the selection itself must still survive the push");
     }
 
+    /**
+     * The whole-branch review's item 5: {@code updateTable()} brackets its entire body under
+     * {@code suppressSelectionNotification} because mutating {@link #backingRows} makes {@code
+     * TableView} re-select at the previously-selected INDEX on its own, independently of any
+     * {@code select()} call ({@code updateTable}'s own javadoc records that discovery).
+     * {@code applyFilter} mutates {@code filteredRows}' predicate instead of the row list, which
+     * fires the same class of {@code FilteredList -> SortedList -> TableView} change event, and
+     * had no guard at all. Nobody had verified whether a predicate change triggers the same
+     * auto-reselection a list mutation does -- this settles it empirically: filter the selected
+     * row OUT and check whether the host is notified as though a NEW population had been picked.
+     * <p>
+     * It does not fire. Kept as a regression guard either way, per the review's own instruction,
+     * and {@code applyFilter}'s own javadoc records why it stays unguarded.
+     */
+    @Test
+    void filteringOutTheSelectedRowDoesNotNotifyTheHost() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        PopulationRef selected = FxTestSupport.onFx(pane::selectedRowRef);
+        assertNotNull(selected, "precondition: a row is actually selected");
+
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+
+        // Guaranteed to exclude every row, the selected one included, regardless of fixture.
+        FxTestSupport.onFxRun(() -> pane.setFilter("no-such-population-xyz"));
+
+        assertTrue(seen.isEmpty(),
+                "typing a filter that excludes the selected row must not notify the host as "
+                        + "though a different population had been picked, which would move the "
+                        + "gate tree's own selection out from under the user");
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));
@@ -612,12 +647,23 @@ class AnalysisPaneFxTest {
         assertEquals("No populations at this scope.", FxTestSupport.onFx(pane::placeholderText));
     }
 
-    /** A live preview push must not jump the table out from under a user reading it. */
+    /**
+     * A live preview push must not jump the table out from under a user reading it -- in a
+     * SORTED table, not only the insertion-order one a plain {@code accept()} produces. Without
+     * the {@code sortBy} call below, {@code restoreSelection} could satisfy this test by
+     * re-selecting whatever landed at the previously-selected ROW INDEX rather than genuinely
+     * searching for the selected row's own {@code (rootIndex, path)} -- the two are
+     * indistinguishable when the table has never been reordered, since insertion order and
+     * table order are the same thing. Sorting first (descending by {@code Count}, which reorders
+     * this fixture's rows away from insertion order) is what makes "index" and "identity" two
+     * different claims a passing test could actually be telling apart.
+     */
     @Test
     void aLivePushKeepsTheSelectedPopulationSelected() {
         AnalysisSession session = new AnalysisSession();
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.sortBy("Count", false));
         PopulationRef selected = FxTestSupport.onFx(() -> {
             pane.selectRow(1);
             return pane.selectedRowRef();
@@ -625,7 +671,7 @@ class AnalysisPaneFxTest {
         assertNotNull(selected);
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
         assertEquals(selected, FxTestSupport.onFx(pane::selectedRowRef),
-                "the table must not jump out from under a user who is reading it");
+                "the table must not jump out from under a user who is reading it, sorted or not");
     }
 
     /** Copy produces a TSV with a header line matching the row's own field count. */
@@ -694,7 +740,12 @@ class AnalysisPaneFxTest {
 
         String summary = FxTestSupport.onFx(pane::summaryText);
         assertFalse(summary.contains("   "), "a blank name must not appear in the summary: " + summary);
-        assertTrue(summary.startsWith("10 cells") || summary.contains("cells"), summary);
+        // startsWith("10 cells") is the actual claim: with the image name omitted, the summary
+        // must lead with the cell count rather than an empty "· " left over from a skipped
+        // name segment. `startsWith(...) || contains("cells")` used to sit here instead --
+        // toothless, since "10 cells" itself contains "cells", so the `contains` half made the
+        // `startsWith` half unreachable as a discriminator.
+        assertTrue(summary.startsWith("10 cells"), summary);
     }
 
     /**

@@ -88,7 +88,6 @@ class PlotHitTestTest {
         assertTrue(canvas.paintedLayout().labels().rotated(),
                 "precondition: the long channel name must force rotation, or this test proves nothing");
 
-        double top = 10; // PADDING_TOP
         double rotatedBottom = canvas.getHeight() - 64;   // PADDING_BOTTOM_ROTATED
         double horizontalBottom = canvas.getHeight() - 30; // PADDING_BOTTOM
         assertTrue(rotatedBottom < horizontalBottom, "sanity: the rotated band must be the shorter one");

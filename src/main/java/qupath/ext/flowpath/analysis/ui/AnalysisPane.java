@@ -92,14 +92,14 @@ public final class AnalysisPane extends BorderPane {
     private final ComboBox<DenominatorRef> denominatorCombo = new ComboBox<>();
     private final ComboBox<Integer> rootCombo = new ComboBox<>();
     // Two ComboBox INSTANCES, one selection. The By Region and By Scope tabs each need their
-    // own picker -- Task 11 moves Population off the table's control row and onto the tabs it
-    // actually drives, and a shared row above two tabs is not an option once each tab has its
-    // own bottom FlowPane -- but "which population" is one fact, not two: see
+    // own picker -- Population lives on the tabs it actually drives rather than on the
+    // table's shared control row, and a shared row above two tabs is not an option once each
+    // tab has its own bottom FlowPane -- but "which population" is one fact, not two: see
     // applyPopulationSelection() for how the pair stays in lockstep without looping.
     private final ComboBox<PopulationRef> populationCombo = new ComboBox<>();
     private final ComboBox<PopulationRef> scopePopulationCombo = new ComboBox<>();
     private final TextField filterField = new TextField();
-    // The "Export ▾" control (Task 12), replacing the old plain "Export CSV..." button.
+    // The "Export ▾" control, replacing the old plain "Export CSV..." button.
     // Items 1-3 act on the plot in the tab plotTabs currently has selected; item 5 is the
     // pre-existing full-table export, unchanged in behaviour -- see exportCsv() below. A
     // CustomMenuItem carries item 5 rather than a plain MenuItem because MenuItem itself has
@@ -113,8 +113,8 @@ public final class AnalysisPane extends BorderPane {
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
     private final Label summaryLabel = new Label();
-    // The table's own control row -- Scope, Denominator, the filter field, and (Task 12) the
-    // export control. Kept as a field, not a local built once, so tableControlLabels() can read
+    // The table's own control row -- Scope, Denominator, the filter field, and the export
+    // control. Kept as a field, not a local built once, so tableControlLabels() can read
     // it back; a FlowPane rather than the old HBox so it wraps instead of clipping at the 720px
     // minimum stage width.
     private final FlowPane tableControls = new FlowPane();
@@ -189,10 +189,11 @@ public final class AnalysisPane extends BorderPane {
     // the listener configurePopulationSelection() installs on table.getSelectionModel() cannot
     // mistake any of these for a fresh pick and notify onPopulationSelected for something that is
     // not a new selection event. The same guard shape refreshing/updatingPopulationSelection
-    // already use above, applied to the table-selection-vs-host-notification problem Task 14 adds.
+    // already use above, applied to the table-selection-vs-host-notification problem the
+    // tree-selection link adds.
     private boolean suppressSelectionNotification;
 
-    // Task 14's forward direction: a table row selection, or a plot bar click (via
+    // The tree-selection link's forward direction: a table row selection, or a plot bar click (via
     // PlotCanvas.setOnPopulationPicked), both end at handlePopulationPicked(), which reports the
     // population here. null until setOnPopulationSelected() is called -- AnalysisWindow is the
     // one production caller; a test that never installs a handler simply gets no notifications.
@@ -419,7 +420,7 @@ public final class AnalysisPane extends BorderPane {
     /**
      * One tab: its canvas centred, and at the bottom a wrapping {@code FlowPane} holding this
      * plot's own picker(s) — {@code leadingControls}, shown before everything else — followed
-     * by the Task 6 {@link PlotControls} every tab still carries. Marker Positivity passes a
+     * by the log/clip {@link PlotControls} every tab still carries. Marker Positivity passes a
      * bare {@link Label} instead of a picker: it obeys no picker at all, and saying so in the
      * tab itself is what stops it reading as unresponsive the way Root and Population used to
      * on the tabs they did not drive.
@@ -519,15 +520,15 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Land the table selection and both comparison canvases on {@code ref} — Task 14's reverse
-     * direction, reached from OUTSIDE this pane ({@code AnalysisWindow}, in turn driven by the
-     * gate tree's own selection changing; see {@code FlowPathPane}'s population-selection
-     * listener). Applies exactly what an in-pane pick applies —
+     * Land the table selection and both comparison canvases on {@code ref} — the tree-selection
+     * link's reverse direction, reached from OUTSIDE this pane ({@code AnalysisWindow}, in turn
+     * driven by the gate tree's own selection changing; see {@code FlowPathPane}'s
+     * population-selection listener). Applies exactly what an in-pane pick applies —
      * {@link #selectTableRow}/{@link #applyPopulationSelection}, the same pair
      * {@link #handlePopulationPicked} uses — but deliberately never reports back to
      * {@link #onPopulationSelected}: an inbound selection that echoed back out would round-trip
      * forever between this pane and the gate tree the moment both directions are wired, which is
-     * exactly the loop Task 14's brief calls out.
+     * exactly the loop the tree-selection link exists to avoid.
      * <p>
      * A {@code ref} that names no row currently shown — the population sits at a scope the
      * table is not currently displaying, or (the case that matters most: a stale report) the
@@ -543,7 +544,7 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Wire Task 14's forward direction: a table row selection, or a click on a plot bar (via
+     * Wire the tree-selection link's forward direction: a table row selection, or a click on a plot bar (via
      * {@link PlotCanvas#setOnPopulationPicked}), both end up at
      * {@link #handlePopulationPicked} — the one place a population picked FROM INSIDE this pane
      * is both applied and reported to {@link #onPopulationSelected}. {@link #selectPopulation}
@@ -614,7 +615,7 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Install the host's callback for Task 14's forward direction: a population picked from
+     * Install the host's callback for the tree-selection link's forward direction: a population picked from
      * inside this pane (a table row selection, or a plot bar click) is reported here exactly
      * once per pick, via {@link #handlePopulationPicked}. {@code AnalysisWindow} is the one
      * production caller, wiring it straight to the gate tree; a test that never calls this
@@ -648,7 +649,8 @@ public final class AnalysisPane extends BorderPane {
 
     /**
      * The {@link Label#getText()} of every {@link Label} in the table's own control row, in
-     * row order — what pins Task 11's fix: "Scope:" and "Denominator:" (and the filter field,
+     * row order — what pins the Population-picker-onto-the-tabs fix: "Scope:" and
+     * "Denominator:" (and the filter field,
      * which carries no label) belong here because they drive the table; "Root:" and
      * "Population:" must never appear here, because each drives exactly one plot tab and lives
      * on that tab's own {@link FlowPane} instead (see {@link #plotTab}).
@@ -661,8 +663,8 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * The Export menu's item labels, in order — {@code ""} for the separator. Pins Task 12's
-     * exact menu order and wording: "Copy plot to clipboard", "Plot as image…", "Plot data as
+     * The Export menu's item labels, in order — {@code ""} for the separator. Pins the export
+     * menu's exact order and wording: "Copy plot to clipboard", "Plot as image…", "Plot data as
      * CSV…", the separator, "Population table as CSV…".
      */
     List<String> exportMenuLabels() {
@@ -879,7 +881,7 @@ public final class AnalysisPane extends BorderPane {
 
     /**
      * Whether the named column offers a numeric sort. {@code Population} and {@code Region}
-     * never do; every percentage, density and area column does, as of this task.
+     * never do; every percentage, density and area column does.
      */
     boolean isColumnSortable(String title) {
         return columnAt(title).isSortable();
@@ -1060,6 +1062,23 @@ public final class AnalysisPane extends BorderPane {
         Clipboard.getSystemClipboard().setContent(content);
     }
 
+    /**
+     * Narrow {@link #filteredRows} to whatever {@code text} matches, by mutating its predicate.
+     * <p>
+     * <b>Deliberately NOT guarded by {@link #suppressSelectionNotification}, unlike {@link
+     * #updateTable}.</b> That method needs the guard because replacing {@link #backingRows}'
+     * CONTENTS ({@code setAll}/{@code clear}) can make {@code TableView} re-select whatever row
+     * now sits at the previously-selected INDEX, entirely independently of any {@code select()}
+     * call. A predicate change on the {@link FilteredList} in front of it is a different kind of
+     * mutation — this was not assumed, it was checked: {@code
+     * AnalysisPaneFxTest.filteringOutTheSelectedRowDoesNotNotifyTheHost} selects a row, installs
+     * a host handler, then types a filter guaranteed to exclude that row, and asserts the
+     * handler is never called. A row filtered out of view is deselected outright rather than
+     * having some other row re-selected at its old index, so there is nothing here for a guard
+     * to suppress. If JavaFX's behaviour here ever changes, that test starts failing loudly
+     * rather than this pane silently pushing the gate tree's selection around while someone
+     * types in the filter box.
+     */
     private void applyFilter(String text) {
         String needle = text == null ? "" : text.trim().toLowerCase(Locale.US);
         filteredRows.setPredicate(needle.isEmpty() ? row -> true : row ->
@@ -1582,8 +1601,21 @@ public final class AnalysisPane extends BorderPane {
         try {
             PlotImageExporter.copyToClipboard(currentPlotCanvas(), EXPORT_SCALE);
         } catch (RuntimeException ex) {
-            Dialogs.showErrorMessage("Copy Error", ex.getMessage());
+            Dialogs.showErrorMessage("Copy Error", errorMessage(ex));
         }
+    }
+
+    /**
+     * {@code ex.getMessage()}, or {@code ex.toString()} when that is {@code null} or blank —
+     * the exact case a bare {@code NullPointerException} hits, since most JDK throw sites
+     * leave its message unset. Every {@code Dialogs.showErrorMessage} call below used to pass
+     * {@code ex.getMessage()} straight through, which put the literal word "null" in front of
+     * the user for exactly the exception class most likely to be a genuine bug worth reporting
+     * precisely.
+     */
+    private static String errorMessage(Throwable ex) {
+        String message = ex.getMessage();
+        return message == null || message.isBlank() ? ex.toString() : message;
     }
 
     /**
@@ -1608,7 +1640,7 @@ public final class AnalysisPane extends BorderPane {
             }
             Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
         } catch (IOException | RuntimeException ex) {
-            Dialogs.showErrorMessage("Export Error", ex.getMessage());
+            Dialogs.showErrorMessage("Export Error", errorMessage(ex));
         }
     }
 
@@ -1621,7 +1653,7 @@ public final class AnalysisPane extends BorderPane {
             PlotDataCsvExporter.export(file, currentPlotTitle(), currentPlotCanvas().plotData());
             Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
         } catch (IOException | RuntimeException ex) {
-            Dialogs.showErrorMessage("Export Error", ex.getMessage());
+            Dialogs.showErrorMessage("Export Error", errorMessage(ex));
         }
     }
 
@@ -1659,7 +1691,7 @@ public final class AnalysisPane extends BorderPane {
             PopulationStatsExporter.export(file, session.stats(session.resolveDenominator(selectedDenominatorRef)));
             Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
         } catch (IOException | RuntimeException ex) {
-            Dialogs.showErrorMessage("Export Error", ex.getMessage());
+            Dialogs.showErrorMessage("Export Error", errorMessage(ex));
         }
     }
 
