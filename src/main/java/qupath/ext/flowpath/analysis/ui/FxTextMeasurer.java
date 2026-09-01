@@ -8,9 +8,9 @@ import java.util.function.Supplier;
 
 /**
  * Exact text metrics from JavaFX's own layout, via one reused off-scene {@link Text} node —
- * the figure {@link CanvasSurface} hands to a live plot, and the figure Task 12's export hands
- * to {@link SvgSurface} so an exported figure lays out identically to what was on screen,
- * rather than to {@link ApproxTextMeasurer}'s per-character guess.
+ * the figure {@link CanvasSurface} hands to a live plot, and the figure the SVG export path
+ * hands to {@link SvgSurface} so an exported figure lays out identically to what was on
+ * screen, rather than to {@link ApproxTextMeasurer}'s per-character guess.
  * <p>
  * <b>Must be constructed on the JavaFX application thread.</b> {@link Text}, like every {@code
  * javafx.scene.*} node, asserts this internally and throws off it. If that construction throws

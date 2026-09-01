@@ -62,7 +62,7 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
     /**
      * The population this canvas is currently comparing. Package-private, exercised directly
      * by {@code AnalysisPaneFxTest} to pin that the By Region and By Scope tabs' own combos
-     * (Task 11) drive one shared selection rather than two independent ones.
+     * drive one shared selection rather than two independent ones.
      */
     PopulationRef selectedPopulation() {
         return selected;

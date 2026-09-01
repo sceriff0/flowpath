@@ -13,8 +13,8 @@ package qupath.ext.flowpath.analysis.ui;
  *                   the exact wording
  * @param detail     the second tooltip line: the count (and, where the canvas has one, a
  *                   percentage) behind {@code title}
- * @param population which population a click on this hit should select in the gate tree
- *                   (Task 14 wires the consumer; this task only exposes the hook), or
+ * @param population which population a click on this hit should select in the gate tree, via
+ *                   {@link PlotCanvas#setOnPopulationPicked}, or
  *                   {@code null} when the hit does not name one unambiguous population — every
  *                   hit {@link MarkerPositivityCanvas} reports, because a pooled marker segment
  *                   can span more than one gate node

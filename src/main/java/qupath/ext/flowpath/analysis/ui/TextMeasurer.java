@@ -7,8 +7,8 @@ package qupath.ext.flowpath.analysis.ui;
  * live JavaFX {@code Canvas}, so it can ask the toolkit for an exact answer ({@link
  * FxTextMeasurer}); {@link SvgSurface} is built and tested with no toolkit at all, so it is
  * handed a {@link TextMeasurer} rather than reaching for one — {@link ApproxTextMeasurer} in
- * the common case, or the same {@link FxTextMeasurer} an on-screen canvas used, when Task 12's
- * export wants the SVG to lay out exactly as what was on screen.
+ * the common case, or the same {@link FxTextMeasurer} an on-screen canvas used, when the SVG
+ * export path wants the exported figure to lay out exactly as what was on screen.
  */
 public interface TextMeasurer {
 

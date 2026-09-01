@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * Exports one Analysis plot's own numbers — {@code PlotCanvas.plotData()} — as a CSV, for
- * {@code AnalysisPane}'s "Plot data as CSV…" menu item (Task 12).
+ * {@code AnalysisPane}'s "Plot data as CSV…" menu item.
  * <p>
  * {@code plotName} is repeated on every row rather than written once, which is what lets
  * several plots' exports be concatenated into one file behind a single header line — the same

@@ -162,9 +162,10 @@ public abstract class PlotCanvas extends Canvas {
     private Tooltip tooltip;
 
     /**
-     * Where a click's population goes once Task 14 wires a consumer in. {@code null} until
-     * {@link #setOnPopulationPicked} is called, which is every canvas's state today — {@link
-     * #pick} is written to do nothing rather than throw against that default.
+     * Where a click's population goes. {@code null} until {@link #setOnPopulationPicked} is
+     * called — {@code AnalysisPane} installs a handler on all four canvases at construction,
+     * but {@link #pick} is still written to do nothing rather than throw against an
+     * uninstalled handler, since a canvas can exist without a pane around it in a test.
      */
     private Consumer<PopulationRef> onPopulationPicked;
 
@@ -303,8 +304,8 @@ public abstract class PlotCanvas extends Canvas {
      * {@code getWidth()} × {@code getHeight()}. That is what makes publishing {@code painted}
      * from an export pass harmless: the geometry an export lays out is identical to the
      * geometry on screen, so a hit-test cannot be handed a rectangle from a differently-sized
-     * pass. Task 12 gets a higher-resolution PNG by scaling the rendered <em>snapshot</em>,
-     * never by laying out at another size; a future caller who genuinely wants a
+     * pass. The "Plot as image…" export gets a higher-resolution PNG by scaling the rendered
+     * <em>snapshot</em>, never by laying out at another size; a future caller who genuinely wants a
      * differently-sized export must first make the layout read the surface, not quietly pass a
      * surface whose dimensions disagree with the canvas.
      */
@@ -446,8 +447,8 @@ public abstract class PlotCanvas extends Canvas {
     }
 
     /**
-     * Notify {@code handler} of the population a click should select. Nothing calls this yet
-     * — Task 14 wires the tree selection — so a canvas with no handler installed does nothing
+     * Notify {@code handler} of the population a click should select — this is how a plot
+     * click reaches the tree-selection link. A canvas with no handler installed does nothing
      * on click beyond running {@link #hitAt}; see {@link #pick}.
      */
     public void setOnPopulationPicked(Consumer<PopulationRef> handler) {
@@ -503,8 +504,8 @@ public abstract class PlotCanvas extends Canvas {
 
     /**
      * Exactly the numbers this plot is currently drawing — what {@code AnalysisPane}'s
-     * "Copy plot to clipboard", "Plot as image…" and "Plot data as CSV…" menu items act on
-     * (Task 12), and what they disable against when it comes back empty.
+     * "Copy plot to clipboard", "Plot as image…" and "Plot data as CSV…" menu items act on,
+     * and what they disable against when it comes back empty.
      * <p>
      * <b>This must read back the same reduced state {@link #draw(PlotSurface, PlotTheme)}
      * reads, never re-derive it from the rows a subclass was handed in its own
@@ -746,7 +747,7 @@ public abstract class PlotCanvas extends Canvas {
      * PADDING_LEFT} margin, which is empty below the axis. Both ends were checked in a
      * rendered document, not only in arithmetic.
      * <p>
-     * <b>Task 13 inverts this.</b> A hit-test that asks "which label is under the pointer"
+     * <b>The click-to-select hit-test inverts this.</b> Asking "which label is under the pointer"
      * must undo the same step-back, reading {@link #ROTATED_LABEL_ANCHOR_GAP} and {@link
      * #ROTATED_LABEL_DIAGONAL} from here rather than copying their present values, and working
      * from the same {@code axisBottom} — which is the plot rectangle's own bottom ({@code

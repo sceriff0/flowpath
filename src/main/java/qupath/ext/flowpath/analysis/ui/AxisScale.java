@@ -20,8 +20,9 @@ import java.util.Locale;
  * <p>
  * <b>Pure arithmetic, deliberately.</b> This class touches no {@code PathObject}, no gate, no
  * row and no JavaFX toolkit — it is constructed from a {@code double[]} and an options record,
- * and is table-tested without a {@code Stage}. Task 6 is the only place that reads a canvas's
- * rows, builds the {@code double[]} of bar values, and hands both here.
+ * and is table-tested without a {@code Stage}. The log/clip {@link PlotControls} wiring is the
+ * only place that reads a canvas's rows, builds the {@code double[]} of bar values, and hands
+ * both here.
  * <p>
  * <b>Degenerate inputs still produce a drawable axis.</b> An empty array, an all-zero array and
  * a single value each fall back to a {@code max} of 1 (or, in log mode, 10) rather than 0, so

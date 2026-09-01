@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Writes an Analysis plot's own {@link Canvas} out as an image — to an SVG or PNG file, or
- * straight to the system clipboard — for {@code AnalysisPane}'s "Export ▾" menu (Task 12).
+ * straight to the system clipboard — for {@code AnalysisPane}'s "Export ▾" menu.
  * <p>
  * <b>SVG is not rendered here.</b> {@code PlotCanvas.toSvg()} already produces a complete
  * document through the same {@code draw(PlotSurface, PlotTheme)} routine that paints the

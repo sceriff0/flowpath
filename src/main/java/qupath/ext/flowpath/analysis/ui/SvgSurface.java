@@ -7,15 +7,14 @@ import java.util.Locale;
 /**
  * The exportable {@link PlotSurface} backend: accumulates a fixed-size SVG document instead of
  * painting pixels, so the same drawing calls {@link CanvasSurface} sends to a live {@code
- * Canvas} can also produce a vector file Task 12 hands to a caller. Hand-written rather than
- * built on a library — there is no SVG dependency in this project and none is being added for
- * one export path (see the task brief: "the SVG is hand-written; there is no SVG library here
- * and you are not to add one").
+ * Canvas} can also produce a vector file the SVG export path hands to a caller. Hand-written
+ * rather than built on a library — there is no SVG dependency in this project and none is
+ * being added for one export path.
  * <p>
  * <b>Text measurement comes from whichever {@link TextMeasurer} this surface is constructed
  * with, never from a hardcoded approximation.</b> A caller with no toolkit (this class's own
- * unit test, most obviously) hands it {@link ApproxTextMeasurer}; Task 12's export hands it the
- * live canvas's {@link FxTextMeasurer} instead, so an exported figure's text lays out exactly
+ * unit test, most obviously) hands it {@link ApproxTextMeasurer}; the SVG export path hands it
+ * the live canvas's {@link FxTextMeasurer} instead, so an exported figure's text lays out exactly
  * as it did on screen rather than merely approximately. If {@link #textWidth} ever called
  * {@code new ApproxTextMeasurer()} directly instead of delegating to the field, that seam would
  * be gone and the export could silently stop matching the screen — nothing here should do that.
