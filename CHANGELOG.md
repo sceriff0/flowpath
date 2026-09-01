@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Analysis window
+
+- **A floating Analysis window** reports what the tissue is made of, live, while you gate.
+  Population table plus composition, per-region, scope-comparison and marker-positivity
+  plots, all hand-drawn to match the existing canvases. Opened with the new **Analysis**
+  button beside **Open UMAP**; it refuses to open before the first gating pass finishes or
+  before any gate exists, the same way **Open UMAP** already refuses when there is nothing
+  to show yet.
+- **Three nested scopes** — per region, union of regions, whole slide — stated rather than
+  inferred, since `RegionMask` already assigns each cell its region.
+- **Any branch can be the denominator**, so a population can be read as a share of the
+  immune compartment or of the tumour rather than only of its parent and the slide.
+- **Raw and clean counts side by side.** The clean count drops outlier-clipped,
+  quality-filtered and unmeasured cells, so the data-quality cost is visible rather than a
+  choice buried in an exporter.
+- **Counts are tallied inside the gating walk** (`model/BranchTally`), not recomputed. The
+  one-gate-predicate invariant forbids a second implementation of "which branch is this cell
+  in", and counting outside the walk would have been one. The live-preview gating pass now
+  carries the same per-region breakdown the Analysis window reads, rather than a second
+  walk computing it separately.
+- **`io/PopulationStatsExporter`** writes the population table to CSV, with `writeHeader`
+  and `writeRows` split apart so a batch-gating run can write one header followed by many
+  images' rows into a single combined file. `root_index` is exported as its own column:
+  two un-renamed root gates on the same channel emit byte-identical `path` values, so it is
+  the only column that can tell such rows apart.
+- **Region area, in mm², from the annotation's own ROI.** `RegionMask` now exposes
+  `regionRois()` alongside `regionNames()`, so the gating pane can convert `ROI.getArea()`
+  (pixels²) through the image's pixel calibration without a second annotation scan. An
+  uncalibrated image, or the implicit "whole image minus exclusions" region (no single ROI
+  describes that shape), reports the area as unknown (`NaN`) rather than a number in the
+  wrong unit or a fabricated one.
+
 ### Fixed — correctness
 
 - **A cell with no measurement is no longer reported as negative.** MIRAGE's
