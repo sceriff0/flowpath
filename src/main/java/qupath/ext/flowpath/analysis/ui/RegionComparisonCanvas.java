@@ -129,6 +129,6 @@ public final class RegionComparisonCanvas extends PlotCanvas {
         }
         drawAxes(s, theme, labels, LEGEND_ROWS,
                 selected == null ? "Region" : selected.path(), "Count");
-        drawCategoryLabels(s, theme, labels);
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }

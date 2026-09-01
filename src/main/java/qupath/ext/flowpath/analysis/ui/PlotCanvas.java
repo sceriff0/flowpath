@@ -82,15 +82,30 @@ public abstract class PlotCanvas extends Canvas {
     private static final double LABEL_SLOT_MARGIN = 4;
 
     /**
-     * How wide a rotated label may be. Anchored 4px above the canvas bottom and rising at
-     * −45°, a run of text this long climbs {@code 84 × sin45° ≈ 59px} back towards the plot,
-     * finishing just under the frame that {@link #PADDING_BOTTOM_ROTATED} leaves 64px of room
-     * below. The two numbers are one decision: raising this cap without raising that padding
-     * puts labels back over the plot frame, which is what rotating them was meant to stop.
+     * How wide a rotated label may be. Its far end sits {@link #ROTATED_LABEL_ANCHOR_GAP}
+     * below the axis and it descends left at −45°, so a run of text this long reaches {@code
+     * 6 + 84 × sin45° ≈ 65px} below the axis — against the {@link #PADDING_BOTTOM_ROTATED}
+     * band of 64. The three numbers are one decision, and at the extreme they are ~1px short;
+     * see {@link #drawCategoryLabels} for what that costs and why neither the cap nor the band
+     * was quietly adjusted to hide it.
      */
     private static final double ROTATED_LABEL_MAX_WIDTH = 84;
 
+    /**
+     * How far below the axis a rotated label's <em>end</em> — the last character, the one
+     * nearest its own bar — is anchored. Small on purpose: the label has to read as belonging
+     * to the tick above it rather than floating between two of them.
+     */
+    private static final double ROTATED_LABEL_ANCHOR_GAP = 6;
+
+    /** The angle rotated category labels are drawn at, and its cosine (= its sine). */
+    private static final double ROTATED_LABEL_DEGREES = -45;
+    private static final double ROTATED_LABEL_DIAGONAL =
+            Math.cos(Math.toRadians(ROTATED_LABEL_DEGREES));
+
     private PlotTheme theme = PlotTheme.LIGHT;
+
+    private PaintedLayout painted;
 
     /**
      * Real metrics where a toolkit exists, {@link ApproxTextMeasurer} where it does not —
@@ -169,10 +184,45 @@ public abstract class PlotCanvas extends Canvas {
         return svg.toSvg();
     }
 
-    /** The single rendering path. Both public entry points differ only in what they pass here. */
+    /**
+     * The single rendering path. Both public entry points differ only in what they pass here.
+     * <p>
+     * The remembered geometry is cleared first, so a pass that drew an empty state — no axes,
+     * no plot rectangle — leaves {@link #paintedLayout()} {@code null} rather than the stale
+     * rectangle of whatever was on screen before it.
+     */
     private void render(PlotSurface surface) {
+        painted = null;
         drawBackground(surface, theme);
         draw(surface, theme);
+    }
+
+    /**
+     * The geometry one paint actually used: the {@link LabelLayout} it laid its category
+     * labels out with, and the number of legend rows it reserved a strip for. Together they
+     * are the only two arguments {@link #plotTop}, {@link #plotHeight} and {@link #valueToY}
+     * take, so holding this pair is holding the whole plot rectangle.
+     *
+     * @param labels     the layout that pass drew with
+     * @param legendRows the legend row count that pass reserved a strip for
+     */
+    public record PaintedLayout(LabelLayout labels, int legendRows) {}
+
+    /**
+     * The geometry the last paint actually used, or {@code null} when the last paint drew no
+     * plot at all — before the first render, and after any pass that drew an empty state.
+     * <b>A caller must handle {@code null}</b>: a click can arrive before the first paint, and
+     * a hit-test that assumed otherwise would throw on it rather than report no hit.
+     * <p>
+     * Read this rather than recomputing. {@link #layoutLabels} needs a {@link PlotSurface} to
+     * measure text with, which a mouse handler does not have; building a throwaway one would
+     * both measure on every pointer move and be free to disagree with what is actually on
+     * screen if anything changed in between. Reading back what was drawn cannot disagree — the
+     * same reason {@link #draw} is the single routine behind both {@link #repaint()} and
+     * {@link #toSvg()}. Hit-testing is simply a third reader of one layout.
+     */
+    protected PaintedLayout paintedLayout() {
+        return painted;
     }
 
     /**
@@ -334,6 +384,11 @@ public abstract class PlotCanvas extends Canvas {
      */
     protected void drawAxes(PlotSurface s, PlotTheme t, LabelLayout layout, int legendRows,
                             String xLabel, String yLabel) {
+        // Drawing the frame is what publishes the plot rectangle to paintedLayout(): this is
+        // the one call that every plot makes exactly once per non-empty pass, and the frame it
+        // strokes IS the rectangle a hit-test has to invert. Recording it anywhere else would
+        // let the remembered geometry and the drawn geometry come from two different calls.
+        this.painted = new PaintedLayout(layout, legendRows);
         double top = plotTop(legendRows);
         double plotW = plotWidth();
         double plotH = plotHeight(layout, legendRows);
@@ -361,34 +416,54 @@ public abstract class PlotCanvas extends Canvas {
      * names, scope names, marker names) via {@link #layoutLabels}, and this method only knows
      * where a slot's centre is, through {@link #categoryToX}.
      * <p>
-     * Horizontal labels are centred on their measured width. Rotated ones are anchored at the
-     * slot centre, 4px above the canvas bottom, and run up and to the right at −45°, which is
-     * why {@link #PADDING_BOTTOM_ROTATED} has to cover {@link #ROTATED_LABEL_MAX_WIDTH} × sin45°
-     * — the label climbs back towards the plot frame as it lengthens, and the elision in
-     * {@code layoutLabels} is what stops it reaching the frame at all.
+     * <b>The anchor is the label's END, at {@code (cx, axisBottom + 6)}.</b> Horizontal labels
+     * are centred on their measured width; rotated ones hang their <em>last</em> character
+     * just under the tick and run down and to the left, so the text reads bottom-left to
+     * top-right and arrives at the bar it names. Since {@link PlotSurface#fillText} places the
+     * origin where the text <em>starts</em>, and the −45° advance direction is
+     * {@code (cos45, −sin45)} in screen coordinates, the origin handed to {@link
+     * PlotSurface#fillTextRotated} is that anchor stepped back along the advance by the
+     * label's measured width: {@code (cx − 0.707w, axisBottom + 6 + 0.707w)}.
      * <p>
-     * <b>Known limitation:</b> because the anchor is the label's start rather than its end, a
-     * label in the last slot also runs right, by up to {@code ROTATED_LABEL_MAX_WIDTH ×
-     * cos45° ≈ 59px}, and the canvas clips whatever passes its right edge. Anchoring the
-     * label's <em>end</em> at the slot centre instead would mirror the whole band leftwards
-     * into the Y-axis margin, which is wide enough to absorb it, and occupy the same 64px of
-     * vertical room. That is a one-line change here; it is not made unilaterally because the
-     * anchor is specified, and moving it also moves what a hit-test must invert.
+     * Anchoring the <em>start</em> at the slot centre instead — the obvious reading, and the
+     * one this class shipped first — mirrors the whole band rightwards, so the final slot's
+     * label runs up to {@code 84 × cos45° ≈ 59px} past the right edge of the canvas and is
+     * clipped. End-anchoring spends that overhang leftwards instead, into the {@code
+     * PADDING_LEFT} margin, which is empty below the axis. Both ends were checked in a
+     * rendered document, not only in arithmetic.
+     * <p>
+     * <b>Task 13 inverts this.</b> A hit-test that asks "which label is under the pointer"
+     * must undo the same step-back, from the same {@code axisBottom} — which is the plot
+     * rectangle's own bottom ({@code plotTop + plotHeight}), never the canvas's — and read the
+     * layout back from {@link #paintedLayout()} rather than measuring text again.
+     * <p>
+     * <b>Residual, deliberately not papered over:</b> a label elided to the full {@link
+     * #ROTATED_LABEL_MAX_WIDTH} needs {@code 6 + 84 × sin45° ≈ 65.4px} below the axis, against
+     * the 64px {@link #PADDING_BOTTOM_ROTATED} reserves — about 1.4px, roughly the descender of
+     * the first character. Shrinking the cap or growing the band would each hide it by
+     * contradicting a figure fixed elsewhere in the spec, so the overshoot is left visible and
+     * documented instead. Real elided labels measure a little under the cap and clear the
+     * canvas; {@code rotatedLabelsAreDrawnEntirelyInsideTheCanvas} pins that they do.
      */
-    protected void drawCategoryLabels(PlotSurface s, PlotTheme t, LabelLayout layout) {
+    protected void drawCategoryLabels(PlotSurface s, PlotTheme t, LabelLayout layout,
+                                      int legendRows) {
         List<String> labels = layout.text();
         if (labels.isEmpty()) return;
         int n = labels.size();
+        double axisBottom = plotTop(legendRows) + plotHeight(layout, legendRows);
         s.setFont(LABEL_FONT_SIZE, false);
         s.setFill(t.mutedText());
         for (int i = 0; i < n; i++) {
             String label = labels.get(i);
             double cx = categoryToX(i, n);
+            double w = s.textWidth(label);
             if (layout.rotated()) {
-                s.fillTextRotated(label, cx, getHeight() - 4, -45);
+                s.fillTextRotated(label,
+                        cx - ROTATED_LABEL_DIAGONAL * w,
+                        axisBottom + ROTATED_LABEL_ANCHOR_GAP + ROTATED_LABEL_DIAGONAL * w,
+                        ROTATED_LABEL_DEGREES);
             } else {
-                s.fillText(label, cx - s.textWidth(label) / 2,
-                        getHeight() - layout.bottomPadding() + 10);
+                s.fillText(label, cx - w / 2, axisBottom + 10);
             }
         }
     }

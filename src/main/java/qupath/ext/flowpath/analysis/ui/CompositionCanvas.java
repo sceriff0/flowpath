@@ -186,6 +186,6 @@ public final class CompositionCanvas extends PlotCanvas {
             s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
         drawAxes(s, theme, labels, LEGEND_ROWS, "Population", "Count");
-        drawCategoryLabels(s, theme, labels);
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }

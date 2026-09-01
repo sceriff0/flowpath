@@ -122,6 +122,6 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
         }
         drawAxes(s, theme, labels, LEGEND_ROWS,
                 selected == null ? "Scope" : selected.path(), "Count");
-        drawCategoryLabels(s, theme, labels);
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }
