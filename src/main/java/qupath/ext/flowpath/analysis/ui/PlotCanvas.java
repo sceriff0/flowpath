@@ -82,9 +82,11 @@ public abstract class PlotCanvas extends Canvas {
     private static final double LABEL_SLOT_MARGIN = 4;
 
     /**
-     * How wide a rotated label may be. At −45° a run of text this long reaches {@code 84 ×
-     * sin45° ≈ 59px} down the canvas, which is what {@link #PADDING_BOTTOM_ROTATED} is sized
-     * to hold; raising one without the other puts labels back over the plot frame.
+     * How wide a rotated label may be. Anchored 4px above the canvas bottom and rising at
+     * −45°, a run of text this long climbs {@code 84 × sin45° ≈ 59px} back towards the plot,
+     * finishing just under the frame that {@link #PADDING_BOTTOM_ROTATED} leaves 64px of room
+     * below. The two numbers are one decision: raising this cap without raising that padding
+     * puts labels back over the plot frame, which is what rotating them was meant to stop.
      */
     private static final double ROTATED_LABEL_MAX_WIDTH = 84;
 
@@ -206,8 +208,8 @@ public abstract class PlotCanvas extends Canvas {
      * to spare; the widest governs, not the average, because one long phenotype path among
      * short ones still collides with its neighbours. When they do not fit, every label is
      * elided to {@link #ROTATED_LABEL_MAX_WIDTH} — rotation alone is not enough, since a
-     * 40-character path at −45° simply runs off the bottom of the canvas instead of into the
-     * label beside it.
+     * 40-character path rising at −45° from the bottom of the canvas climbs straight back
+     * through the plot frame it was rotated to stay clear of.
      * <p>
      * Sets the surface font before measuring, which {@link CanvasSurface} requires: it tracks
      * font size independently of the live {@code GraphicsContext} until the first {@code
@@ -360,10 +362,18 @@ public abstract class PlotCanvas extends Canvas {
      * where a slot's centre is, through {@link #categoryToX}.
      * <p>
      * Horizontal labels are centred on their measured width. Rotated ones are anchored at the
-     * slot centre near the bottom of the canvas and run up and to the right at −45°, which is
+     * slot centre, 4px above the canvas bottom, and run up and to the right at −45°, which is
      * why {@link #PADDING_BOTTOM_ROTATED} has to cover {@link #ROTATED_LABEL_MAX_WIDTH} × sin45°
      * — the label climbs back towards the plot frame as it lengthens, and the elision in
      * {@code layoutLabels} is what stops it reaching the frame at all.
+     * <p>
+     * <b>Known limitation:</b> because the anchor is the label's start rather than its end, a
+     * label in the last slot also runs right, by up to {@code ROTATED_LABEL_MAX_WIDTH ×
+     * cos45° ≈ 59px}, and the canvas clips whatever passes its right edge. Anchoring the
+     * label's <em>end</em> at the slot centre instead would mirror the whole band leftwards
+     * into the Y-axis margin, which is wide enough to absorb it, and occupy the same 64px of
+     * vertical room. That is a one-line change here; it is not made unilaterally because the
+     * anchor is specified, and moving it also moves what a hit-test must invert.
      */
     protected void drawCategoryLabels(PlotSurface s, PlotTheme t, LabelLayout layout) {
         List<String> labels = layout.text();
