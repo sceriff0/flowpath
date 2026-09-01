@@ -1,7 +1,5 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.LinkedHashSet;
@@ -22,6 +20,9 @@ import java.util.Set;
  * reported the first root's number under both labels. See {@link PopulationRef}.
  */
 public final class RegionComparisonCanvas extends PlotCanvas {
+
+    /** No legend: one series, already named by the X-axis title. See {@code CompositionCanvas}. */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> regionRows = List.of();
     private PopulationRef selected;
@@ -93,33 +94,41 @@ public final class RegionComparisonCanvas extends PlotCanvas {
                 .orElse(0);
     }
 
+    /**
+     * One series, so one colour — {@code theme.series(0)}, at full opacity. The 0.85 alpha the
+     * bars used to carry was there to soften a hardcoded blue against a hardcoded dark
+     * background; the palette is now contrast-checked against its own background (see {@code
+     * PlotTheme}), and thinning a checked colour with alpha would put it back below the floor
+     * that check exists to hold.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
-
+    protected void draw(PlotSurface s, PlotTheme theme) {
+        if (regionRows.isEmpty()) {
+            drawEmptyState(s, theme, "No annotated regions to compare");
+            return;
+        }
         // One bar per row, not one bar per distinct name -- two regions may share a name.
         List<PopulationStats.Row> bars = regionBars();
         if (bars.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "Select a population to compare");
             return;
         }
 
         int maxCount = bars.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = bars.size();
+        LabelLayout labels = layoutLabels(s, regionLabels());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
+        s.setFill(theme.series(0));
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(bars.get(i).count(), 0, maxCount);
-            gc.setFill(Color.rgb(76, 154, 255, 0.85));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double topY = valueToY(bars.get(i).count(), 0, maxCount, labels, LEGEND_ROWS);
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
-        drawAxes(gc, selected == null ? "Region" : selected.path(), "Count");
-        drawCategoryLabels(gc, regionLabels());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS,
+                selected == null ? "Region" : selected.path(), "Count");
+        drawCategoryLabels(s, theme, labels);
     }
 }

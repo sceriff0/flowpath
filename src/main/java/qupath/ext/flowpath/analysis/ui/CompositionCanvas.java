@@ -1,7 +1,5 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.ArrayList;
@@ -45,9 +43,15 @@ import java.util.List;
  */
 public final class CompositionCanvas extends PlotCanvas {
 
-    private static final int[] PALETTE = {
-            0x4C9AFF, 0x57D9A3, 0xFFAB00, 0xFF5C5C, 0xB380FF, 0x00C7E6, 0xFFD666, 0x8590A2
-    };
+    /**
+     * No legend: a bar's colour carries no meaning here beyond telling it from its neighbour,
+     * and every bar is already named on the X axis. Named rather than written as a literal
+     * {@code 0} at each call site, because every method that positions something vertically
+     * takes it and they must all be given the same answer — a plot whose ticks were placed
+     * against one legend height and whose bars were placed against another would be off by
+     * exactly the strip.
+     */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> wholeSlideRows = List.of();
     private List<PopulationStats.Row> selectedRootRows = List.of();
@@ -154,33 +158,34 @@ public final class CompositionCanvas extends PlotCanvas {
                 .orElse(0);
     }
 
+    /**
+     * Bar {@code i} takes {@code theme.series(i)}, which wraps rather than running out — the
+     * private palette this class used to carry was a byte-for-byte copy of the dark theme's
+     * series list, so a light-theme plot drew dark-theme colours on a white ground.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
-
+    protected void draw(PlotSurface s, PlotTheme theme) {
         if (leafRows.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "No gated populations yet");
             return;
         }
 
         int maxCount = leafRows.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = leafRows.size();
+        // One layout, reused by every method that needs to know how tall the plot is. Calling
+        // layoutLabels twice would be a second answer to the same question.
+        LabelLayout labels = layoutLabels(s, barLabels());
         double barW = categoryWidth(n) * 0.7;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
-            PopulationStats.Row row = leafRows.get(i);
             double cx = categoryToX(i, n);
-            double topY = valueToY(row.count(), 0, maxCount);
-            gc.setFill(Color.rgb((PALETTE[i % PALETTE.length] >> 16) & 0xFF,
-                    (PALETTE[i % PALETTE.length] >> 8) & 0xFF, PALETTE[i % PALETTE.length] & 0xFF));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double topY = valueToY(leafRows.get(i).count(), 0, maxCount, labels, LEGEND_ROWS);
+            s.setFill(theme.series(i));
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
-        drawAxes(gc, "Population", "Count");
-        drawCategoryLabels(gc, barLabels());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS, "Population", "Count");
+        drawCategoryLabels(s, theme, labels);
     }
 }

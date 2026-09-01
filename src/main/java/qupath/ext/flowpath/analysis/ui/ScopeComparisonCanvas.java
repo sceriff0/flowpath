@@ -1,7 +1,5 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.Arrays;
@@ -28,6 +26,9 @@ import java.util.Set;
  * entirely. See {@link PopulationRef}.
  */
 public final class ScopeComparisonCanvas extends PlotCanvas {
+
+    /** No legend: one series, already named by the X-axis title. See {@code CompositionCanvas}. */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> rows = List.of();
     private PopulationRef selected;
@@ -81,32 +82,46 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
                 .sum();
     }
 
+    /**
+     * {@code theme.series(1)} for every bar — deliberately the <em>second</em> palette entry,
+     * not the first, so this plot and {@code RegionComparisonCanvas} do not read as the same
+     * chart when a user flips between their two tabs.
+     * <p>
+     * The two empty states are different facts and say so. No rows at all means nothing has
+     * been gated yet; rows with nothing selected means the user has a choice to make. The
+     * single "No data" both used to show answered neither question.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
-
+    protected void draw(PlotSurface s, PlotTheme theme) {
+        if (rows.isEmpty()) {
+            drawEmptyState(s, theme, "No gated populations yet");
+            return;
+        }
+        // Empty exactly when no population is selected -- scopesPresent() filters on the
+        // selection, so a selection that matches nothing lands here too, which is the same
+        // "pick something" state from the reader's point of view.
         List<PopulationStats.Scope> scopes = scopesPresent();
         if (scopes.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "Select a population to compare");
             return;
         }
 
         int maxCount = scopes.stream().mapToInt(this::valueForScope).max().orElse(1);
         int n = scopes.size();
+        LabelLayout labels = layoutLabels(s,
+                scopes.stream().map(PopulationStats.Scope::displayName).toList());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
+        s.setFill(theme.series(1));
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(valueForScope(scopes.get(i)), 0, maxCount);
-            gc.setFill(Color.rgb(87, 217, 163, 0.85));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double topY = valueToY(valueForScope(scopes.get(i)), 0, maxCount, labels, LEGEND_ROWS);
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
         }
-        drawAxes(gc, selected == null ? "Scope" : selected.path(), "Count");
-        drawCategoryLabels(gc, scopes.stream().map(PopulationStats.Scope::displayName).toList());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS,
+                selected == null ? "Scope" : selected.path(), "Count");
+        drawCategoryLabels(s, theme, labels);
     }
 }
