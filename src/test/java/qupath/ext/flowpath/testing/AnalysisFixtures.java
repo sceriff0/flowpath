@@ -57,4 +57,61 @@ public final class AnalysisFixtures {
         return PopulationStats.of(input.tree(), input.tally(), input.regionNames(),
                 input.regionAreasMm2(), null);
     }
+
+    /**
+     * Every row (every scope, every region) of a two-level, two-region population: a
+     * {@code CD45} threshold gate at the root, with a {@code CD3} threshold gate hanging off
+     * its positive branch only.
+     * <p>
+     * 20 cells, {@code CD45} values {@code 1..20} cut at {@code 10.5}: cells 0-9 (values
+     * 1-10) are {@code CD45-}; cells 10-19 (values 11-20) are {@code CD45+}. {@code CD3} is
+     * measured on every cell but only ever gated on the {@code CD45+} ten, with values
+     * {@code 1..10} cut at {@code 5.5}: cells 10-14 are {@code CD3-}, cells 15-19 are
+     * {@code CD3+}. The ten {@code CD45-} cells never reach the {@code CD3} gate at all —
+     * they are the deliberately "ungated" cells {@code MarkerPositivityCanvas} exists to
+     * surface, distinct from a real {@code CD3-} call.
+     * <p>
+     * Cells alternate region by parity ({@code i % 2}), so every branch splits across both
+     * regions rather than one region holding a whole branch — {@code CD45+/CD3+} (cells
+     * 15-19) lands 2 cells in "Region 1" and 3 in "Region 2", giving
+     * {@code RegionComparisonCanvas} and {@code ScopeComparisonCanvas} a population that
+     * genuinely differs by scope and by region rather than trivially matching everywhere.
+     * <p>
+     * Leaf populations at {@link PopulationStats.Scope#WHOLE_SLIDE}: {@code CD45-} (10),
+     * {@code CD45+/CD3+} (5), {@code CD45+/CD3-} (5) — {@code CD45+} itself is an internal
+     * branch, present in the rows but not a leaf.
+     */
+    public static List<PopulationStats.Row> twoLevelRows() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        double[] cd3 = new double[n];
+        for (int i = 0; i < n; i++) {
+            cd45[i] = i + 1;           // 1..20
+            cd3[i] = (i % 10) + 1;     // 1..10, repeating -- only cells 10-19 are ever gated on it
+        }
+        CellIndex index = Cells.columns(List.of("CD45", "CD3"), new double[][] {cd45, cd3}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode cd3Gate = new GateNode("CD3", 5.5);
+        cd3Gate.setStatistic(Statistic.MEAN);
+        cd3Gate.setThresholdIsZScore(false);
+
+        GateNode cd45Gate = new GateNode("CD45", 10.5);
+        cd45Gate.setStatistic(Statistic.MEAN);
+        cd45Gate.setThresholdIsZScore(false);
+        cd45Gate.setPositiveChildren(List.of(cd3Gate));
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(cd45Gate);
+
+        int[] regionOf = new int[n];
+        for (int i = 0; i < n; i++) regionOf[i] = i % 2;
+        List<String> regionNames = List.of("Region 1", "Region 2");
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, regionOf, regionNames.size())
+                .getTally();
+
+        return PopulationStats.of(tree, tally, regionNames, null, null).rows();
+    }
 }
