@@ -83,20 +83,27 @@ public abstract class PlotCanvas extends Canvas {
 
     /**
      * How wide a rotated label may be. Its far end sits {@link #ROTATED_LABEL_ANCHOR_GAP}
-     * below the axis and it descends left at −45°, so a run of text this long reaches {@code
-     * 6 + 84 × sin45° ≈ 65px} below the axis — against the {@link #PADDING_BOTTOM_ROTATED}
-     * band of 64. The three numbers are one decision, and at the extreme they are ~1px short;
-     * see {@link #drawCategoryLabels} for what that costs and why neither the cap nor the band
-     * was quietly adjusted to hide it.
+     * below the axis and it descends left at −45°, so a run of text this long reaches
+     * {@code 4 + 84 × sin45° = 63.4px} below the axis, inside the {@link
+     * #PADDING_BOTTOM_ROTATED} band of 64 with 0.6px to spare.
+     * <p>
+     * The three numbers are one decision and the fit is exact by arithmetic, not by luck:
+     * {@code rotatedLabelsAreDrawnEntirelyInsideTheCanvas} asserts the reach against the band
+     * with <b>zero</b> tolerance, so raising this cap, widening the gap or narrowing the band
+     * fails a test rather than producing a label clipped against the canvas edge on somebody's
+     * panel with long marker names.
      */
     private static final double ROTATED_LABEL_MAX_WIDTH = 84;
 
     /**
      * How far below the axis a rotated label's <em>end</em> — the last character, the one
-     * nearest its own bar — is anchored. Small on purpose: the label has to read as belonging
-     * to the tick above it rather than floating between two of them.
+     * nearest its own bar — is anchored. Small on purpose, and twice over: the label has to
+     * read as belonging to the tick above it rather than floating between two of them, and
+     * every pixel here is a pixel the longest label cannot use inside {@link
+     * #PADDING_BOTTOM_ROTATED}. At 4 the two just fit; at 6 a label elided to the full cap
+     * reached 1.4px past the canvas edge.
      */
-    private static final double ROTATED_LABEL_ANCHOR_GAP = 6;
+    private static final double ROTATED_LABEL_ANCHOR_GAP = 4;
 
     /** The angle rotated category labels are drawn at, and its cosine (= its sine). */
     private static final double ROTATED_LABEL_DEGREES = -45;
@@ -388,6 +395,10 @@ public abstract class PlotCanvas extends Canvas {
         // the one call that every plot makes exactly once per non-empty pass, and the frame it
         // strokes IS the rectangle a hit-test has to invert. Recording it anywhere else would
         // let the remembered geometry and the drawn geometry come from two different calls.
+        // What makes publishing from here safe rather than merely convenient is that render()
+        // clears the field before calling draw(): a pass that takes an empty-state branch never
+        // reaches this line, so it publishes nothing instead of leaving the previous pass's
+        // rectangle standing over a plot that is no longer on screen.
         this.painted = new PaintedLayout(layout, legendRows);
         double top = plotTop(legendRows);
         double plotW = plotWidth();
@@ -437,13 +448,12 @@ public abstract class PlotCanvas extends Canvas {
      * rectangle's own bottom ({@code plotTop + plotHeight}), never the canvas's — and read the
      * layout back from {@link #paintedLayout()} rather than measuring text again.
      * <p>
-     * <b>Residual, deliberately not papered over:</b> a label elided to the full {@link
-     * #ROTATED_LABEL_MAX_WIDTH} needs {@code 6 + 84 × sin45° ≈ 65.4px} below the axis, against
-     * the 64px {@link #PADDING_BOTTOM_ROTATED} reserves — about 1.4px, roughly the descender of
-     * the first character. Shrinking the cap or growing the band would each hide it by
-     * contradicting a figure fixed elsewhere in the spec, so the overshoot is left visible and
-     * documented instead. Real elided labels measure a little under the cap and clear the
-     * canvas; {@code rotatedLabelsAreDrawnEntirelyInsideTheCanvas} pins that they do.
+     * <b>The band fits exactly.</b> The deepest a label can reach below the axis is {@link
+     * #ROTATED_LABEL_ANCHOR_GAP} plus {@link #ROTATED_LABEL_MAX_WIDTH} × sin45° = 63.4px,
+     * inside the 64px {@link #PADDING_BOTTOM_ROTATED} band. That is asserted with no tolerance
+     * at all, because "over by about a pixel, and only at the full elision cap" is the kind of
+     * almost-right geometry that reads fine on the fixtures and then clips a label on a panel
+     * with long marker names.
      */
     protected void drawCategoryLabels(PlotSurface s, PlotTheme t, LabelLayout layout,
                                       int legendRows) {

@@ -22,6 +22,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * of them could see where the ink went. Asserting on positions in the document is the only
  * assertion that could have caught it, which is why this file is positional and the others
  * are not.
+ * <p>
+ * Verified by falsification rather than assumed: reverting {@code drawCategoryLabels} to the
+ * start-anchored line makes both tests here fail, while every assertion in {@code
+ * PlotCanvasLayoutTest} still passes. That is the evidence this file earns its place — it
+ * catches something the layout assertions structurally cannot see.
+ * <p>
+ * Every bound below is asserted with <b>no tolerance at all</b>, vertical as well as
+ * horizontal. An earlier 6px anchor gap left a label elided to the full 84px cap reaching
+ * 1.4px past the canvas edge, which passed on the fixtures and would have surfaced as a
+ * clipped label on a panel with long marker names.
  */
 class RotatedLabelRenderTest {
 
@@ -30,18 +40,6 @@ class RotatedLabelRenderTest {
 
     private static final Pattern TEXT = Pattern.compile(
             "<text x=\"([-0-9.]+)\" y=\"([-0-9.]+)\"[^>]*?>(.*?)</text>");
-
-    /**
-     * The one place a rotated label may still pass the canvas edge, and by how much: its far
-     * end sits 6px below the axis and the text descends {@code 84 × sin45° ≈ 59.4px} from
-     * there, against the 64px {@code PADDING_BOTTOM_ROTATED} band — about 1.4px over, roughly
-     * the descender of the first character. It is left visible rather than hidden by shrinking
-     * the 84px elision cap or growing the 64px band, each of which is a figure fixed elsewhere
-     * in the layout. Asserted as a hard ceiling so that if any of those three numbers moves,
-     * this test fails rather than quietly tolerating a larger overhang. The <em>horizontal</em>
-     * bound below carries no allowance at all — that is the defect this file exists for.
-     */
-    private static final double DOCUMENTED_VERTICAL_OVERSHOOT = 1.5;
 
     /** Eight phenotype paths: long enough to rotate, long enough to be elided at the cap. */
     private static final List<String> LONG_PATHS = List.of(
@@ -93,14 +91,29 @@ class RotatedLabelRenderTest {
         ruler.setFont(8, false);
         double diagonal = Math.cos(Math.toRadians(45));
 
+        // For a rotated layout the bottom padding IS PlotCanvas.PADDING_BOTTOM_ROTATED, so the
+        // axis sits exactly that far above the canvas bottom, and the band below it is the
+        // room the labels have to fit inside.
+        double axisBottom = height - PlotCanvas.PADDING_BOTTOM_ROTATED;
+
         for (TextElement text : texts) {
             assertTrue(text.x() >= 0 && text.x() <= width,
                     "a text origin starts off the canvas: " + text);
-            assertTrue(text.y() >= 0 && text.y() <= height + DOCUMENTED_VERTICAL_OVERSHOOT,
+            assertTrue(text.y() >= 0 && text.y() <= height,
                     "a text origin starts off the canvas vertically: " + text);
             if (!text.rotated()) {
                 continue;
             }
+            // No tolerance, deliberately. The deepest a label may reach is the anchor gap plus
+            // the elision cap's vertical component (4 + 84 * sin45 = 63.4), and the band is 64:
+            // it fits by arithmetic, not by luck. Widening the gap, raising the cap or
+            // narrowing the band must fail here rather than clip a label on somebody's panel
+            // with long marker names -- which is what an earlier 6px gap did, by 1.4px, on
+            // exactly the labels that reach the cap.
+            assertTrue(text.y() - axisBottom <= PlotCanvas.PADDING_BOTTOM_ROTATED,
+                    "a rotated label reaches " + (text.y() - axisBottom) + "px below the axis, "
+                            + "past the " + PlotCanvas.PADDING_BOTTOM_ROTATED
+                            + "px band reserved for it: " + text);
             // A −45° label advances up and to the right from its origin; its far end is the
             // character nearest the bar it names, and must be on the canvas as well, since a
             // label whose name is clipped away names nothing.
