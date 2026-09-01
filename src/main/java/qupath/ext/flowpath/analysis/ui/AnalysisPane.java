@@ -43,6 +43,8 @@ public final class AnalysisPane extends BorderPane {
 
     private final ChoiceBox<PopulationStats.Scope> scopeChoice = new ChoiceBox<>();
     private final ComboBox<Branch> denominatorCombo = new ComboBox<>();
+    private final ComboBox<String> rootCombo = new ComboBox<>();
+    private final ComboBox<String> populationCombo = new ComboBox<>();
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
 
@@ -53,6 +55,8 @@ public final class AnalysisPane extends BorderPane {
 
     private PopulationStats.Scope selectedScope;
     private Branch selectedDenominator;
+    private String selectedRoot;
+    private String selectedPopulation;
 
     public AnalysisPane(AnalysisSession session) {
         this.session = Objects.requireNonNull(session, "session");
@@ -91,10 +95,25 @@ public final class AnalysisPane extends BorderPane {
             selectedDenominator = value;
             updateTable();
         });
+        // The root/population pickers only forward the user's choice to the one canvas
+        // each drives -- deciding which root or population is "interesting" is not this
+        // pane's job, so it never re-derives a default here beyond the same "fall back to
+        // the first item" a ChoiceBox already does for scope/denominator above.
+        rootCombo.valueProperty().addListener((obs, old, value) -> {
+            selectedRoot = value;
+            compositionCanvas.setSelectedRoot(value);
+        });
+        populationCombo.valueProperty().addListener((obs, old, value) -> {
+            selectedPopulation = value;
+            regionComparisonCanvas.setSelectedPopulation(value);
+            scopeComparisonCanvas.setSelectedPopulation(value);
+        });
 
         HBox controls = new HBox(10,
                 new Label("Scope:"), scopeChoice,
-                new Label("Denominator:"), denominatorCombo);
+                new Label("Denominator:"), denominatorCombo,
+                new Label("Root:"), rootCombo,
+                new Label("Population:"), populationCombo);
         controls.setPadding(new Insets(8));
         controls.setAlignment(Pos.CENTER_LEFT);
 
@@ -139,6 +158,50 @@ public final class AnalysisPane extends BorderPane {
         selectedDenominator = denominator;
         denominatorCombo.setValue(denominator);
         updateTable();
+    }
+
+    /**
+     * Choose which root gate's leaves {@link #compositionCanvas()} shows. Package-private,
+     * exercised directly by the pane's own FX test, the same way {@link #setDenominator}
+     * is.
+     */
+    void selectRoot(String rootName) {
+        selectedRoot = rootName;
+        rootCombo.setValue(rootName);
+    }
+
+    /** Choose which population {@link #regionComparisonCanvas()} and {@link #scopeComparisonCanvas()} compare. */
+    void selectPopulation(String path) {
+        selectedPopulation = path;
+        populationCombo.setValue(path);
+    }
+
+    /** The root gates currently offered by the picker — {@link CompositionCanvas#availableRoots()}. */
+    List<String> rootChoices() {
+        return List.copyOf(rootCombo.getItems());
+    }
+
+    /** The populations currently offered by the picker. */
+    List<String> populationChoices() {
+        return List.copyOf(populationCombo.getItems());
+    }
+
+    /**
+     * The embedded composition plot, for the pane's own FX test to confirm the root picker
+     * actually reaches it rather than only updating this pane's bookkeeping.
+     */
+    CompositionCanvas compositionCanvas() {
+        return compositionCanvas;
+    }
+
+    /** As {@link #compositionCanvas()}, for the region comparison plot. */
+    RegionComparisonCanvas regionComparisonCanvas() {
+        return regionComparisonCanvas;
+    }
+
+    /** As {@link #compositionCanvas()}, for the scope comparison plot. */
+    ScopeComparisonCanvas scopeComparisonCanvas() {
+        return scopeComparisonCanvas;
     }
 
     /** The table's current placeholder text — non-null exactly when there is no data. */
@@ -209,6 +272,23 @@ public final class AnalysisPane extends BorderPane {
         regionComparisonCanvas.setRows(rows);
         scopeComparisonCanvas.setRows(rows);
         markerPositivityCanvas.setRows(rows);
+
+        // Each canvas already fell back to its own first-available choice inside setRows
+        // above when the previous selection no longer applies; this pane mirrors that same
+        // choice into the pickers rather than computing a different one of its own.
+        List<String> roots = compositionCanvas.availableRoots();
+        rootCombo.getItems().setAll(roots);
+        if (selectedRoot == null || !roots.contains(selectedRoot)) {
+            selectedRoot = roots.isEmpty() ? null : roots.get(0);
+        }
+        rootCombo.setValue(selectedRoot);
+
+        List<String> populations = scopeComparisonCanvas.availablePopulations();
+        populationCombo.getItems().setAll(populations);
+        if (selectedPopulation == null || !populations.contains(selectedPopulation)) {
+            selectedPopulation = populations.isEmpty() ? null : populations.get(0);
+        }
+        populationCombo.setValue(selectedPopulation);
     }
 
     private void buildColumns() {

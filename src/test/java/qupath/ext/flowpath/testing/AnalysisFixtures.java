@@ -158,6 +158,13 @@ public final class AnalysisFixtures {
      * own partition of the identical 20 cells.
      */
     public static List<PopulationStats.Row> twoRootRows() {
+        AnalysisSession.AnalysisInput input = twoRootInput();
+        return PopulationStats.of(input.tree(), input.tally(), input.regionNames(),
+                input.regionAreasMm2(), null).rows();
+    }
+
+    /** The {@link AnalysisSession.AnalysisInput} {@link #twoRootRows()} is built from. */
+    public static AnalysisSession.AnalysisInput twoRootInput() {
         int n = 20;
         double[] cd45 = new double[n];
         double[] cd3 = new double[n];
@@ -191,6 +198,7 @@ public final class AnalysisFixtures {
 
         BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
 
-        return PopulationStats.of(tree, tally, List.of(), null, null).rows();
+        return new AnalysisSession.AnalysisInput(
+                tree, index, stats, tally, List.of(), null, "test-image");
     }
 }

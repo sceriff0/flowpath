@@ -4,8 +4,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.model.PopulationStats;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.FxTestSupport;
+
+import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -78,5 +82,33 @@ class AnalysisPaneFxTest {
         FxTestSupport.onFxRun(() -> pane.setDenominator(emptyBranch));
 
         assertEquals("0.0", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
+    }
+
+    /**
+     * Before this test, neither {@code RegionComparisonCanvas} nor
+     * {@code ScopeComparisonCanvas} was reachable from the pane: both default their
+     * selected population to whichever row the tree walk emits first and nothing in
+     * {@code AnalysisPane} ever called their {@code setSelectedPopulation}, so those two
+     * tabs were locked to an arbitrary population. Likewise {@code CompositionCanvas}'s
+     * {@code setSelectedRoot} was never driven by anything in the pane.
+     */
+    @Test
+    void theRootAndPopulationPickersDriveTheComparisonPlots() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootInput()));
+
+        assertEquals(List.of("CD45", "CD19"), FxTestSupport.onFx(pane::rootChoices));
+        FxTestSupport.onFxRun(() -> pane.selectRoot("CD19"));
+        assertEquals(Set.of("CD19+", "CD19-"),
+                Set.copyOf(FxTestSupport.onFx(() -> pane.compositionCanvas().barLabels())),
+                "the root picker must reach CompositionCanvas, not just the pane's own bookkeeping");
+
+        List<String> populations = FxTestSupport.onFx(pane::populationChoices);
+        assertTrue(populations.contains("CD45+/CD3+"));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation("CD45+/CD3+"));
+        int valueForWholeSlide = FxTestSupport.onFx(() ->
+                pane.scopeComparisonCanvas().valueForScope(PopulationStats.Scope.WHOLE_SLIDE));
+        assertEquals(5, valueForWholeSlide, "the population picker must reach ScopeComparisonCanvas");
     }
 }
