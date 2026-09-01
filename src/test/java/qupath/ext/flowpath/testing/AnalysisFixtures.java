@@ -201,4 +201,50 @@ public final class AnalysisFixtures {
         return new AnalysisSession.AnalysisInput(
                 tree, index, stats, tally, List.of(), null, "test-image");
     }
+
+    /**
+     * Two independent root gates on the <em>identical</em>, un-renamed channel — the case
+     * {@link #twoRootRows()} (CD45/CD19, different channels) does not exercise. Both roots
+     * emit byte-identical {@code path} values ({@code "CD45+"}/{@code "CD45-"}), since
+     * {@code GateNode}'s default branch names are a pure function of the channel alone — a
+     * consumer that partitions on {@code path} or {@code gateChannel} instead of
+     * {@code rootIndex} would merge these two roots into one, exactly the residual the
+     * 2026-09-01 re-review found.
+     * <p>
+     * Root 0 is cut at {@code 10.5} (10 positive, 10 negative); root 1 is cut at
+     * {@code 15.5} (5 positive, 15 negative) — deliberately different splits, so a test can
+     * tell "root 1's own data" apart from "root 0's data leaking through a name collision".
+     */
+    public static List<PopulationStats.Row> twoRootsSameChannelRows() {
+        AnalysisSession.AnalysisInput input = twoRootsSameChannelInput();
+        return PopulationStats.of(input.tree(), input.tally(), input.regionNames(),
+                input.regionAreasMm2(), null).rows();
+    }
+
+    /** The {@link AnalysisSession.AnalysisInput} {@link #twoRootsSameChannelRows()} is built from. */
+    public static AnalysisSession.AnalysisInput twoRootsSameChannelInput() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode rootA = new GateNode("CD45", 10.5);
+        rootA.setStatistic(Statistic.MEAN);
+        rootA.setThresholdIsZScore(false);
+
+        GateNode rootB = new GateNode("CD45", 15.5);
+        rootB.setStatistic(Statistic.MEAN);
+        rootB.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(rootA);
+        tree.addRoot(rootB);
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+
+        return new AnalysisSession.AnalysisInput(
+                tree, index, stats, tally, List.of(), null, "test-image");
+    }
 }

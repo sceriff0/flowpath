@@ -98,8 +98,8 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootInput()));
 
-        assertEquals(List.of("CD45", "CD19"), FxTestSupport.onFx(pane::rootChoices));
-        FxTestSupport.onFxRun(() -> pane.selectRoot("CD19"));
+        assertEquals(List.of(0, 1), FxTestSupport.onFx(pane::rootChoices));
+        FxTestSupport.onFxRun(() -> pane.selectRoot(1));
         assertEquals(Set.of("CD19+", "CD19-"),
                 Set.copyOf(FxTestSupport.onFx(() -> pane.compositionCanvas().barLabels())),
                 "the root picker must reach CompositionCanvas, not just the pane's own bookkeeping");

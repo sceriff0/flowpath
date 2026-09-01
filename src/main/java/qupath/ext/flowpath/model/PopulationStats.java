@@ -46,6 +46,18 @@ public final class PopulationStats {
      *                              {@code " / "} — one marker for a threshold gate, two for a
      *                              quadrant or region gate; never just the first axis
      * @param depth                 0 for a root branch
+     * @param rootIndex             the zero-based index, in tree order among this tree's
+     *                              <em>enabled</em> roots only, of the root gate this row
+     *                              descends from. Two independent root gates on the
+     *                              identical channel (a user has not renamed either) emit
+     *                              byte-identical {@code path} values — {@code GateNode}'s
+     *                              default branch names are a pure function of the channel
+     *                              — so {@code path} cannot tell two such roots apart, and
+     *                              neither can {@code gateChannel}. {@code rootIndex} is the
+     *                              one field that can: a consumer that needs "one root's
+     *                              worth of rows" (a composition chart, an exporter) must
+     *                              partition on it, never on {@code path} or
+     *                              {@code gateChannel}.
      * @param count                 cells in this branch at this scope
      * @param cleanCount            of those, the cleanly judged ones
      * @param parentCount           cells in the branch above, or the scope's population for a root
@@ -56,7 +68,7 @@ public final class PopulationStats {
      * @param densityPerMm2         {@code count / areaMm2}, or {@code NaN} without an area
      */
     public record Row(Scope scope, String regionName, String path, String branchName,
-                      String gateChannel, int depth,
+                      String gateChannel, int depth, int rootIndex,
                       int count, int cleanCount, int parentCount, int cleanParentCount,
                       int denominatorCount,
                       double percentOfParent, double percentOfTotal, double percentOfDenominator,
@@ -83,7 +95,7 @@ public final class PopulationStats {
         List<Row> out = new ArrayList<>();
         boolean hasDenominator = denominator != null;
 
-        collect(tree.getRoots(), Scope.WHOLE_SLIDE, null, -1, "", 0,
+        collectFromRoots(tree.getRoots(), Scope.WHOLE_SLIDE, null, -1,
                 tally.cellsTotal(), tally.cellsTotal(), tally.cellsClean(),
                 hasDenominator, hasDenominator ? tally.total(denominator) : 0,
                 Double.NaN, tally, out);
@@ -95,7 +107,7 @@ public final class PopulationStats {
                 unionClean += tally.cleanCellsInRegion(r);
                 if (hasDenominator) unionDenominator += tally.inRegion(denominator, r);
             }
-            collect(tree.getRoots(), Scope.ANNOTATION_ALL, null, -1, "", 0,
+            collectFromRoots(tree.getRoots(), Scope.ANNOTATION_ALL, null, -1,
                     unionTotal, unionTotal, unionClean,
                     hasDenominator, unionDenominator,
                     sumAreas(regionAreasMm2), tally, out);
@@ -106,7 +118,7 @@ public final class PopulationStats {
             double area = (regionAreasMm2 != null && r < regionAreasMm2.length)
                     ? regionAreasMm2[r] : Double.NaN;
             int regionTotal = tally.cellsInRegion(r);
-            collect(tree.getRoots(), Scope.ANNOTATION_K, name, r, "", 0,
+            collectFromRoots(tree.getRoots(), Scope.ANNOTATION_K, name, r,
                     regionTotal, regionTotal, tally.cleanCellsInRegion(r),
                     hasDenominator, hasDenominator ? tally.inRegion(denominator, r) : 0,
                     area, tally, out);
@@ -115,16 +127,40 @@ public final class PopulationStats {
         return new PopulationStats(out);
     }
 
+    /**
+     * Assigns each enabled root gate its {@link Row#rootIndex}, in tree order, then collects
+     * its whole subtree before moving to the next root — the one place {@code rootIndex} is
+     * decided, so every descendant row below simply carries the value its root was given
+     * here rather than re-deriving it.
+     */
+    private static void collectFromRoots(List<GateNode> roots, Scope scope, String regionName, int region,
+                                         int parentCount, int scopeTotal, int cleanParentCount,
+                                         boolean hasDenominator, int denominatorCount,
+                                         double areaMm2, BranchTally tally, List<Row> out) {
+        int rootIndex = 0;
+        for (GateNode root : roots) {
+            // A disabled gate is a hard stop for its whole subtree in GatingEngine.walkNode,
+            // so reporting its stale counts would show populations the phenotype column
+            // never mentions. Skipped here, before a rootIndex is assigned, so enabled
+            // roots are numbered contiguously regardless of how many disabled roots sit
+            // among them.
+            if (!root.isEnabled()) continue;
+            collect(List.of(root), scope, regionName, region, "", 0, rootIndex,
+                    parentCount, scopeTotal, cleanParentCount, hasDenominator, denominatorCount,
+                    areaMm2, tally, out);
+            rootIndex++;
+        }
+    }
+
     private static void collect(List<GateNode> nodes, Scope scope, String regionName, int region,
-                                String prefix, int depth,
+                                String prefix, int depth, int rootIndex,
                                 int parentCount, int scopeTotal, int cleanParentCount,
                                 boolean hasDenominator, int denominatorCount,
                                 double areaMm2, BranchTally tally, List<Row> out) {
         if (nodes == null) return;
         for (GateNode node : nodes) {
-            // A disabled gate is a hard stop for its whole subtree in GatingEngine.walkNode,
-            // so reporting its stale counts would show populations the phenotype column
-            // never mentions.
+            // Mirrors collectFromRoots's own check, for a nested gate disabled below a root
+            // that is itself enabled.
             if (!node.isEnabled()) continue;
             String channel = String.join(" / ", node.getChannels());
             for (Branch branch : node.getBranches()) {
@@ -133,14 +169,14 @@ public final class PopulationStats {
                                        : tally.inRegion(branch, region);
                 int clean = region < 0 ? scopeClean(scope, branch, tally)
                                        : tally.cleanInRegion(branch, region);
-                out.add(new Row(scope, regionName, path, branch.getName(), channel, depth,
+                out.add(new Row(scope, regionName, path, branch.getName(), channel, depth, rootIndex,
                         count, clean, parentCount, cleanParentCount, denominatorCount,
                         percent(count, parentCount),
                         percent(count, scopeTotal),
                         !hasDenominator ? Double.NaN : percent(count, denominatorCount),
                         areaMm2,
                         Double.isNaN(areaMm2) || areaMm2 <= 0 ? Double.NaN : count / areaMm2));
-                collect(branch.getChildren(), scope, regionName, region, path, depth + 1,
+                collect(branch.getChildren(), scope, regionName, region, path, depth + 1, rootIndex,
                         count, scopeTotal, clean, hasDenominator, denominatorCount,
                         areaMm2, tally, out);
             }

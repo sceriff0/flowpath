@@ -43,7 +43,7 @@ public final class AnalysisPane extends BorderPane {
 
     private final ChoiceBox<PopulationStats.Scope> scopeChoice = new ChoiceBox<>();
     private final ComboBox<Branch> denominatorCombo = new ComboBox<>();
-    private final ComboBox<String> rootCombo = new ComboBox<>();
+    private final ComboBox<Integer> rootCombo = new ComboBox<>();
     private final ComboBox<String> populationCombo = new ComboBox<>();
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
@@ -55,7 +55,7 @@ public final class AnalysisPane extends BorderPane {
 
     private PopulationStats.Scope selectedScope;
     private Branch selectedDenominator;
-    private String selectedRoot;
+    private Integer selectedRoot;
     private String selectedPopulation;
 
     public AnalysisPane(AnalysisSession session) {
@@ -83,6 +83,20 @@ public final class AnalysisPane extends BorderPane {
 
             @Override
             public Branch fromString(String s) {
+                return null;
+            }
+        });
+        // A display label only -- two roots can share the identical channel (that is
+        // exactly the case this picker exists to make selectable), so the label is not
+        // unique and is never what setSelectedRoot matches on; rootIndex is.
+        rootCombo.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Integer rootIndex) {
+                return rootIndex == null ? "" : compositionCanvas.rootLabel(rootIndex);
+            }
+
+            @Override
+            public Integer fromString(String s) {
                 return null;
             }
         });
@@ -161,13 +175,13 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
-     * Choose which root gate's leaves {@link #compositionCanvas()} shows. Package-private,
-     * exercised directly by the pane's own FX test, the same way {@link #setDenominator}
-     * is.
+     * Choose which root gate's leaves {@link #compositionCanvas()} shows, by
+     * {@link PopulationStats.Row#rootIndex()}. Package-private, exercised directly by the
+     * pane's own FX test, the same way {@link #setDenominator} is.
      */
-    void selectRoot(String rootName) {
-        selectedRoot = rootName;
-        rootCombo.setValue(rootName);
+    void selectRoot(Integer rootIndex) {
+        selectedRoot = rootIndex;
+        rootCombo.setValue(rootIndex);
     }
 
     /** Choose which population {@link #regionComparisonCanvas()} and {@link #scopeComparisonCanvas()} compare. */
@@ -177,7 +191,7 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /** The root gates currently offered by the picker — {@link CompositionCanvas#availableRoots()}. */
-    List<String> rootChoices() {
+    List<Integer> rootChoices() {
         return List.copyOf(rootCombo.getItems());
     }
 
@@ -276,7 +290,7 @@ public final class AnalysisPane extends BorderPane {
         // Each canvas already fell back to its own first-available choice inside setRows
         // above when the previous selection no longer applies; this pane mirrors that same
         // choice into the pickers rather than computing a different one of its own.
-        List<String> roots = compositionCanvas.availableRoots();
+        List<Integer> roots = compositionCanvas.availableRoots();
         rootCombo.getItems().setAll(roots);
         if (selectedRoot == null || !roots.contains(selectedRoot)) {
             selectedRoot = roots.isEmpty() ? null : roots.get(0);

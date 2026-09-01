@@ -244,6 +244,46 @@ class PopulationStatsTest {
         assertEquals("CD8", cd8pos.gateChannel());
     }
 
+    /**
+     * Two independent root gates on the identical channel (neither renamed) emit
+     * byte-identical {@code path} values -- {@code GateNode}'s default branch names are a
+     * pure function of the channel. {@code rootIndex} is the one field that tells them
+     * apart; a consumer that partitions on {@code path} or {@code gateChannel} instead
+     * would merge the two roots into one.
+     */
+    @Test
+    void twoRootsOnTheSameChannelAreDistinguishedByRootIndexNotPath() {
+        GateNode rootA = new GateNode("CD45", 5.5);
+        rootA.setStatistic(Statistic.MEAN);
+        rootA.setThresholdIsZScore(false);
+
+        GateNode rootB = new GateNode("CD45", 5.5);
+        rootB.setStatistic(Statistic.MEAN);
+        rootB.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(rootA);
+        tree.addRoot(rootB);
+
+        PopulationStats s = PopulationStats.of(tree, tally(tree, null, 0), List.of(), null, null);
+        List<PopulationStats.Row> rows = s.rows(PopulationStats.Scope.WHOLE_SLIDE);
+
+        assertEquals(4, rows.size(), "two threshold gates, two branches each");
+
+        List<PopulationStats.Row> cd45PosRows = rows.stream()
+                .filter(r -> r.path().equals("CD45+")).toList();
+        assertEquals(2, cd45PosRows.size(),
+                "both roots' positive branch share the identical, un-renamed path");
+        assertEquals(cd45PosRows.get(0).path(), cd45PosRows.get(1).path(),
+                "path cannot distinguish the two roots");
+
+        List<Integer> rootIndexes = cd45PosRows.stream()
+                .map(PopulationStats.Row::rootIndex).sorted().toList();
+        assertEquals(List.of(0, 1), rootIndexes,
+                "rootIndex, in tree order, is what actually distinguishes them");
+    }
+
     private static PopulationStats.Row rowFor(PopulationStats s, PopulationStats.Scope scope,
                                               String region, String branch) {
         return s.rows(scope).stream()

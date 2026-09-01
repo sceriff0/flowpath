@@ -7,7 +7,6 @@ import qupath.ext.flowpath.model.PopulationStats;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * A composition bar chart: how the whole-slide population splits across its leaf
@@ -23,25 +22,26 @@ import java.util.Objects;
  * parallel gating strategies from one starting population are ordinary FlowJo-style usage.
  * Each root's own leaves already sum to the whole population on their own; pooling leaves
  * across two roots would sum the bars to 2x the true denominator. This canvas therefore
- * scopes itself to one root — {@link #setSelectedRoot(String)}, defaulting to the first root
- * found.
+ * scopes itself to one root — {@link #setSelectedRoot(Integer)}, defaulting to the first
+ * root found.
  * <p>
- * <b>Identifying "one root" from rows alone.</b> {@link PopulationStats.Row} carries no root
- * index, so a root gate's block of rows is reconstructed from what the row order and
- * {@code gateChannel} already guarantee: {@code PopulationStats.collect} fully emits one
- * root's own branches <em>and</em> their entire subtrees before moving to the next root, so
- * every row belonging to one root is contiguous in the flattened list; and every branch of
- * one gate node shares that node's {@code gateChannel} identically. A new root block
- * therefore starts exactly where a depth-0 row's {@code gateChannel} differs from the block
- * currently open — two independent root gates on the identical channel, back to back, would
- * be indistinguishable by name and merge into one displayed root, which is a known
- * limitation of identifying a root by name rather than by object identity.
+ * <b>Identifying "one root": {@link PopulationStats.Row#rootIndex()}, never a name.</b> An
+ * earlier version of this class tried to reconstruct root boundaries from row order and
+ * {@code gateChannel} adjacency, because {@code Row} carried no root identity of its own.
+ * That failed exactly where it mattered: two independent root gates on the identical
+ * channel, back to back, were never split into two blocks at all — the second root's rows
+ * were appended into the first's still-open block — and the leaf/prefix matching then
+ * cross-matched between them, corrupting the composition. {@code Row} now carries
+ * {@code rootIndex} for precisely this reason: it is assigned once, by
+ * {@code PopulationStats.collectFromRoots}, from the tree structure itself, so partitioning
+ * on it is identity-based and cannot collide the way a name (channel or path) can.
  * <p>
  * <b>Leaves only.</b> A branch with children would otherwise be counted once for itself and
  * again for everything under it, inflating the total past the true denominator. "Leaf" is
  * derived from the row set itself — no other row's path continues past this one — rather
- * than from the {@code GateTree}, so the reduction stays within {@link PopulationStats.Row}'s
- * contract: nothing here re-derives a decision the tree already made.
+ * than from the {@code GateTree}. Because that matching now runs only over one root's own
+ * rows ({@link #selectedRootRows}), a leaf of one root can never be mistaken for an internal
+ * branch of another root that happens to share a path prefix.
  */
 public final class CompositionCanvas extends PlotCanvas {
 
@@ -52,7 +52,7 @@ public final class CompositionCanvas extends PlotCanvas {
     private List<PopulationStats.Row> wholeSlideRows = List.of();
     private List<PopulationStats.Row> selectedRootRows = List.of();
     private List<PopulationStats.Row> leafRows = List.of();
-    private String selectedRoot;
+    private Integer selectedRoot;
 
     public CompositionCanvas() {
         super(380, 220);
@@ -69,7 +69,7 @@ public final class CompositionCanvas extends PlotCanvas {
         this.wholeSlideRows = rows == null ? List.of() : rows.stream()
                 .filter(r -> r.scope() == PopulationStats.Scope.WHOLE_SLIDE)
                 .toList();
-        List<String> roots = availableRoots();
+        List<Integer> roots = availableRoots();
         if (selectedRoot == null || !roots.contains(selectedRoot)) {
             selectedRoot = roots.isEmpty() ? null : roots.get(0);
         }
@@ -77,58 +77,41 @@ public final class CompositionCanvas extends PlotCanvas {
         repaint();
     }
 
-    /** Choose which root gate's leaves this canvas shows. */
-    public void setSelectedRoot(String rootName) {
-        this.selectedRoot = rootName;
+    /** Choose which root gate's leaves this canvas shows, by {@link PopulationStats.Row#rootIndex()}. */
+    public void setSelectedRoot(Integer rootIndex) {
+        this.selectedRoot = rootIndex;
         recompute();
         repaint();
     }
 
     private void recompute() {
-        List<List<PopulationStats.Row>> blocks = rootBlocksOf(wholeSlideRows);
-        List<String> names = blockNames(blocks);
-        int index = names.indexOf(selectedRoot);
-        this.selectedRootRows = index < 0 ? List.of() : blocks.get(index);
+        this.selectedRootRows = selectedRoot == null ? List.of() : wholeSlideRows.stream()
+                .filter(r -> r.rootIndex() == selectedRoot)
+                .toList();
         this.leafRows = leavesOf(selectedRootRows);
     }
 
-    /** Every root gate's display name, in tree order — the choices for {@link #setSelectedRoot}. */
-    List<String> availableRoots() {
-        return blockNames(rootBlocksOf(wholeSlideRows));
+    /** Every enabled root's index, in tree order — the choices for {@link #setSelectedRoot}. */
+    List<Integer> availableRoots() {
+        return wholeSlideRows.stream()
+                .map(PopulationStats.Row::rootIndex)
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     /**
-     * Partition {@code rows} into contiguous per-root blocks. A new block starts at a
-     * depth-0 row whose {@code gateChannel} differs from the block currently open; every
-     * row after that (depth 0 or deeper) belongs to that block until the next such
-     * transition — see the class javadoc for why this reconstructs root boundaries
-     * correctly without a dedicated root index.
+     * A human-readable label for one root — its gate's channel (e.g. {@code "CD45"}). Two
+     * roots on the identical channel share this label; that is a display-only ambiguity,
+     * not a data one — {@link #setSelectedRoot} still selects unambiguously by
+     * {@code rootIndex}, never by this string.
      */
-    private static List<List<PopulationStats.Row>> rootBlocksOf(List<PopulationStats.Row> rows) {
-        List<List<PopulationStats.Row>> blocks = new ArrayList<>();
-        String openChannel = null;
-        List<PopulationStats.Row> current = null;
-        for (PopulationStats.Row row : rows) {
-            if (row.depth() == 0 && (current == null || !Objects.equals(row.gateChannel(), openChannel))) {
-                current = new ArrayList<>();
-                blocks.add(current);
-                openChannel = row.gateChannel();
-            }
-            if (current != null) current.add(row);
-        }
-        return blocks;
-    }
-
-    /** One display name per block, its root gate's channel, disambiguated on a repeat. */
-    private static List<String> blockNames(List<List<PopulationStats.Row>> blocks) {
-        List<String> names = new ArrayList<>();
-        for (List<PopulationStats.Row> block : blocks) {
-            String channel = block.isEmpty() ? "" : block.get(0).gateChannel();
-            long priorSameName = names.stream().filter(n -> n.equals(channel)
-                    || n.startsWith(channel + " (")).count();
-            names.add(priorSameName == 0 ? channel : channel + " (" + (priorSameName + 1) + ")");
-        }
-        return names;
+    String rootLabel(int rootIndex) {
+        return wholeSlideRows.stream()
+                .filter(r -> r.rootIndex() == rootIndex && r.depth() == 0)
+                .map(PopulationStats.Row::gateChannel)
+                .findFirst()
+                .orElse("");
     }
 
     private static List<PopulationStats.Row> leavesOf(List<PopulationStats.Row> rows) {
