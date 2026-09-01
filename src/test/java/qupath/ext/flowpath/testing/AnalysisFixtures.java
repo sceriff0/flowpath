@@ -141,4 +141,56 @@ public final class AnalysisFixtures {
 
         return PopulationStats.of(tree, tally, regionNames, null, null).rows();
     }
+
+    /**
+     * Two independent root gates over the same 20 cells, no annotated regions:
+     * {@code twoLevelRows()}'s {@code CD45}/{@code CD3} tree as the first root, plus an
+     * unrelated {@code CD19} threshold gate as a second, sibling root.
+     * <p>
+     * {@code FlowPathPane} exposes "+ Add Root Gate" as a repeatable user action, and
+     * parallel independent gating strategies from one starting population are an ordinary
+     * FlowJo-style pattern -- a consumer of {@link PopulationStats#rows()} that assumes one
+     * root (as {@code CompositionCanvas} once did) silently sums leaves from <em>both</em>
+     * roots, double-counting the population.
+     * <p>
+     * {@code CD19} values {@code 1..20} cut at {@code 10.5}: cells 0-9 are {@code CD19-},
+     * cells 10-19 are {@code CD19+} -- 10 and 10, independently of {@code CD45}/{@code CD3}'s
+     * own partition of the identical 20 cells.
+     */
+    public static List<PopulationStats.Row> twoRootRows() {
+        int n = 20;
+        double[] cd45 = new double[n];
+        double[] cd3 = new double[n];
+        double[] cd19 = new double[n];
+        for (int i = 0; i < n; i++) {
+            cd45[i] = i + 1;
+            cd3[i] = (i % 10) + 1;
+            cd19[i] = i + 1;
+        }
+        CellIndex index = Cells.columns(List.of("CD45", "CD3", "CD19"),
+                new double[][] {cd45, cd3, cd19}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode cd3Gate = new GateNode("CD3", 5.5);
+        cd3Gate.setStatistic(Statistic.MEAN);
+        cd3Gate.setThresholdIsZScore(false);
+
+        GateNode cd45Gate = new GateNode("CD45", 10.5);
+        cd45Gate.setStatistic(Statistic.MEAN);
+        cd45Gate.setThresholdIsZScore(false);
+        cd45Gate.setPositiveChildren(List.of(cd3Gate));
+
+        GateNode cd19Gate = new GateNode("CD19", 10.5);
+        cd19Gate.setStatistic(Statistic.MEAN);
+        cd19Gate.setThresholdIsZScore(false);
+
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(cd45Gate);
+        tree.addRoot(cd19Gate);
+
+        BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
+
+        return PopulationStats.of(tree, tally, List.of(), null, null).rows();
+    }
 }
