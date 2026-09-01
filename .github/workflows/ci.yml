@@ -2,11 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    # dev is tested exactly as main is. With triggers on main alone, work on dev
+    # reached CI only at merge time -- which is the moment an integration branch
+    # exists to happen *before*.
+    branches: [ main, dev ]
     tags-ignore:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
+
+# A second push to the same branch supersedes the first: an in-flight run of an
+# older commit tells you nothing you still need, and the xvfb suite is the long
+# pole here. Never cancels on main, where every commit's result is a record.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
