@@ -52,6 +52,34 @@ class RegionMaskTest {
     }
 
     @Test
+    void regionRoisAreParallelToRegionNamesAndAreaBearing() {
+        CellIndex index = row();
+        ROI core = band(-5, 25);
+        ROI margin = band(55, 95);
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("Core", null, core),
+                annotation("Margin", null, margin)));
+
+        assertEquals(List.of(core, margin), mask.regionRois());
+        assertEquals(mask.regionNames().size(), mask.regionRois().size());
+    }
+
+    /**
+     * The implicit "whole image, minus exclusions" region has no single ROI describing its
+     * shape, so a caller after an area (density = count / area) must see {@code null} here
+     * rather than be handed some other region's ROI or a fabricated one.
+     */
+    @Test
+    void regionRoisIsNullForTheImplicitWholeImageRegion() {
+        CellIndex index = row();
+        RegionMask mask = RegionMask.compute(index, List.of(
+                annotation("Fold", PathClass.fromString("Ignore*"), band(35, 55))));
+
+        assertEquals(1, mask.regionRois().size());
+        assertNull(mask.regionRois().get(0));
+    }
+
+    @Test
     void includedMatchesTheBooleanMaskConsumersAlreadyUse() {
         CellIndex index = row();
         RegionMask mask = RegionMask.compute(index, List.of(

@@ -56,17 +56,19 @@ public final class RegionMask {
     private final int[] regionOf;
     private final boolean[] included;
     private final int[] regionCounts;
+    private final ROI[] regionRois;
     private final int droppedNonArea;
     private final int excludeRegionCount;
     private final int excludedByRegion;
 
     private RegionMask(String[] regionNames, int[] regionOf, boolean[] included,
-                       int[] regionCounts, int droppedNonArea, int excludeRegionCount,
-                       int excludedByRegion) {
+                       int[] regionCounts, ROI[] regionRois, int droppedNonArea,
+                       int excludeRegionCount, int excludedByRegion) {
         this.regionNames = regionNames;
         this.regionOf = regionOf;
         this.included = included;
         this.regionCounts = regionCounts;
+        this.regionRois = regionRois;
         this.droppedNonArea = droppedNonArea;
         this.excludeRegionCount = excludeRegionCount;
         this.excludedByRegion = excludedByRegion;
@@ -110,13 +112,21 @@ public final class RegionMask {
 
         if (includes.isEmpty() && excludes.isEmpty()) {
             return new RegionMask(new String[0], filled(n, -1), new boolean[n],
-                    new int[0], dropped, 0, 0);
+                    new int[0], new ROI[0], dropped, 0, 0);
         }
+
+        // Parallel to names/includes as they stood before the implicit-whole-image name
+        // (if any) is appended below, so this is exactly the include ROI each region name
+        // came from -- until the one case with no such ROI, handled next.
+        List<ROI> regionRoisList = new ArrayList<>(includes);
 
         // Exclusions with nothing to subtract from mean "the whole image, minus these".
         boolean implicitWhole = includes.isEmpty();
         if (implicitWhole) {
             names.add(WHOLE_IMAGE);
+            // No single ROI represents "the whole image, minus the exclusions" -- an area
+            // caller must treat this the same as an unknown area, never guess a number.
+            regionRoisList.add(null);
         }
 
         Bounds includeBounds = Bounds.of(includes);
@@ -150,7 +160,7 @@ public final class RegionMask {
         }
 
         return new RegionMask(names.toArray(new String[0]), regionOf, included, counts,
-                dropped, excludes.size(), excludedByRegion);
+                regionRoisList.toArray(new ROI[0]), dropped, excludes.size(), excludedByRegion);
     }
 
     /**
@@ -235,6 +245,19 @@ public final class RegionMask {
     /** Include-region names, in the order annotations were tested. */
     public List<String> regionNames() {
         return List.of(regionNames);
+    }
+
+    /**
+     * The ROI each named region was built from, parallel to {@link #regionNames()} — for a
+     * caller that needs a region's area (e.g. {@code roi.getArea()} in pixels²) without
+     * re-deriving which annotations fed this mask.
+     * <p>
+     * An entry is {@code null} exactly for the implicit "whole image, minus exclusions"
+     * region: no single ROI represents that shape, so a caller must treat its area as
+     * unknown rather than guess one.
+     */
+    public List<ROI> regionRois() {
+        return Arrays.asList(regionRois);
     }
 
     /** Cell count per region, parallel to {@link #regionNames()}. */
