@@ -47,6 +47,22 @@ class AnalysisWindowPrefsTest {
         }
     }
 
+    /**
+     * The null-repair used to be a ternary duplicated at both of this record's construction
+     * sites ({@code AnalysisWindow.saveWindowPrefs()} and this class's own {@link
+     * AnalysisWindowPrefs#save}), each trusting the other guard already existed. It now lives
+     * once, in the compact constructor, so a {@code null} passed to ANY constructor call —
+     * present or future — comes out as {@link AnalysisWindowPrefs#defaults()}'s own scope
+     * rather than propagating and failing whatever eventually calls {@code .toUpperCase()} or
+     * {@code Enum.valueOf} on it.
+     */
+    @Test
+    void aNullScopeIsRepairedToTheDefaultByConstruction() {
+        AnalysisWindowPrefs prefs = new AnalysisWindowPrefs(0, 0, 960, 640, 0, null, uniform(ScaleOptions.LINEAR));
+        assertEquals(AnalysisWindowPrefs.defaults().scope(), prefs.scope());
+        assertNotNull(prefs.scope());
+    }
+
     @Test
     void anEmptyNodeYieldsTheDefaultsRatherThanZeroes() {
         AnalysisWindowPrefs read = AnalysisWindowPrefs.load(scratch());

@@ -72,12 +72,14 @@ public final class AnalysisWindow {
     }
 
     /**
-     * The host's callback for Task 14's forward direction — a population picked inside the
-     * Analysis pane (a table row, or a plot bar click). Held here, not only handed to
-     * {@link AnalysisPane}, because the pane itself is rebuilt by every {@link #open} call
-     * after a close (see {@link #disposeStage}); a handler installed only on the pane that
-     * happened to exist when {@code setPopulationSelectionListener} was called would silently
-     * stop firing the moment the window was closed and reopened.
+     * The host's callback for the tree-selection link's forward direction — a population
+     * picked inside the Analysis pane (a table row, or a plot bar click). Held here, not only
+     * handed to {@link AnalysisPane}, because {@code FlowPathPane} calls {@link
+     * #setPopulationSelectionListener} at construction time, before the user has ever clicked
+     * "Analysis" — {@link #pane} does not exist yet, so there is nothing to install the
+     * handler on until the first {@link #open} builds one (see the {@code if (pane == null)}
+     * branch there). A handler stored only as a local to that call would be lost the moment
+     * {@code setPopulationSelectionListener} returned.
      */
     private Consumer<PopulationRef> populationSelectionListener;
 
@@ -175,8 +177,9 @@ public final class AnalysisWindow {
     }
 
     /**
-     * Install the host's callback for Task 14's forward direction: a population picked inside
-     * the Analysis pane (a table row selection, or a plot bar click) is reported here. Wired
+     * Install the host's callback for the tree-selection link's forward direction: a
+     * population picked inside the Analysis pane (a table row selection, or a plot bar click)
+     * is reported here. Wired
      * onto the pane immediately if one already exists (the window is open), and onto every
      * pane {@link #open} goes on to build afterward — see {@link #populationSelectionListener}'s
      * own javadoc for why the field, not just the pane, is what this method sets.
@@ -206,7 +209,8 @@ public final class AnalysisWindow {
 
     /**
      * Land the Analysis pane's own selection (table row plus both comparison plots) on {@code
-     * ref} — Task 14's reverse direction, driven by the gate tree's own selection changing. A
+     * ref} — the tree-selection link's reverse direction, driven by the gate tree's own
+     * selection changing. A
      * no-op while the window is closed: there is no pane to apply it to, and re-opening later
      * does not replay a selection that arrived while nothing was open, the same way {@link
      * #push} does not open the window on its own.
@@ -301,11 +305,12 @@ public final class AnalysisWindow {
      */
     private void saveWindowPrefs() {
         if (stage == null || pane == null) return;
-        String scope = pane.selectedScopeName();
+        // pane.selectedScopeName() may be null (no scope selected yet); AnalysisWindowPrefs's
+        // own compact constructor repairs that to its default -- see that record's own javadoc
+        // for why the repair lives there now rather than duplicated at every construction site.
         new AnalysisWindowPrefs(
                 stage.getX(), stage.getY(), stage.getWidth(), stage.getHeight(),
-                pane.selectedTabIndex(),
-                scope == null ? AnalysisWindowPrefs.defaults().scope() : scope,
+                pane.selectedTabIndex(), pane.selectedScopeName(),
                 pane.scaleOptionsByTab())
                 .save(prefsNode);
     }

@@ -74,7 +74,10 @@ import java.util.prefs.Preferences;
  * @param selectedTab       which plot tab was active (Composition=0 .. Marker Positivity=3)
  * @param scope             {@link qupath.ext.flowpath.model.PopulationStats.Scope#name()} of the
  *                          scope that was chosen — a plain string, not the enum itself, so this
- *                          class never has to import the model package
+ *                          class never has to import the model package. A {@code null} passed in
+ *                          is repaired to {@link #DEFAULT_SCOPE} by the compact constructor, so
+ *                          every getter of this field is guaranteed non-null once construction
+ *                          has succeeded
  * @param scaleOptionsByTab the Y-axis remedy of every plot tab, in tab order — exactly {@link
  *                          #TAB_COUNT} entries, each already guaranteed to hold a percentile in
  *                          {@code [50, 100]} once it has passed through {@link #load}
@@ -90,6 +93,8 @@ public record AnalysisWindowPrefs(double x, double y, double width, double heigh
     private static final double DEFAULT_HEIGHT = 640;
     private static final double MIN_PERCENTILE = 50;
     private static final double MAX_PERCENTILE = 100;
+    /** {@link qupath.ext.flowpath.model.PopulationStats.Scope#WHOLE_SLIDE}'s {@code name()}. */
+    private static final String DEFAULT_SCOPE = "WHOLE_SLIDE";
 
     /**
      * Defends the "exactly one entry per tab" invariant every reader of {@link
@@ -102,6 +107,13 @@ public record AnalysisWindowPrefs(double x, double y, double width, double heigh
      * fires against a hand-built record — almost always a test's own mistake, worth failing loud
      * for. {@link List#copyOf} on the way in also closes off a caller mutating the list this
      * record hands back out from under a later reader.
+     * <p>
+     * Also the one place {@code scope == null} is repaired to {@link #DEFAULT_SCOPE}. This used
+     * to be a ternary duplicated at both of this record's two constructors — {@link #save} and
+     * {@link AnalysisWindow#saveWindowPrefs()} — one guard apiece, each trusting the other one
+     * did not already exist. Folding it in here means every caller that ever constructs this
+     * record, present or future, gets the repair for free, and {@link #scope} itself can be
+     * documented as never {@code null} once construction succeeds.
      */
     public AnalysisWindowPrefs {
         if (scaleOptionsByTab == null || scaleOptionsByTab.size() != TAB_COUNT) {
@@ -111,6 +123,9 @@ public record AnalysisWindowPrefs(double x, double y, double width, double heigh
                             + (scaleOptionsByTab == null ? "null" : scaleOptionsByTab.size()));
         }
         scaleOptionsByTab = List.copyOf(scaleOptionsByTab);
+        if (scope == null) {
+            scope = DEFAULT_SCOPE;
+        }
     }
 
     /**
@@ -120,7 +135,7 @@ public record AnalysisWindowPrefs(double x, double y, double width, double heigh
      */
     public static AnalysisWindowPrefs defaults() {
         return new AnalysisWindowPrefs(Double.NaN, Double.NaN, DEFAULT_WIDTH, DEFAULT_HEIGHT,
-                0, "WHOLE_SLIDE", List.of(ScaleOptions.LINEAR, ScaleOptions.LINEAR,
+                0, DEFAULT_SCOPE, List.of(ScaleOptions.LINEAR, ScaleOptions.LINEAR,
                         ScaleOptions.LINEAR, ScaleOptions.LINEAR));
     }
 
@@ -173,7 +188,7 @@ public record AnalysisWindowPrefs(double x, double y, double width, double heigh
         node.putDouble("width", width);
         node.putDouble("height", height);
         node.putInt("selectedTab", selectedTab);
-        node.put("scope", scope == null ? defaults().scope() : scope);
+        node.put("scope", scope); // never null -- the compact constructor already repaired it
         for (int i = 0; i < TAB_COUNT; i++) {
             ScaleOptions options = scaleOptionsByTab.get(i);
             node.putBoolean("log" + i, options.log());
