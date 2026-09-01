@@ -333,6 +333,31 @@ public abstract class PlotCanvas extends Canvas {
     protected abstract void draw(PlotSurface s, PlotTheme theme);
 
     /**
+     * Exactly the numbers this plot is currently drawing — what {@code AnalysisPane}'s
+     * "Copy plot to clipboard", "Plot as image…" and "Plot data as CSV…" menu items act on
+     * (Task 12), and what they disable against when it comes back empty.
+     * <p>
+     * <b>This must read back the same reduced state {@link #draw(PlotSurface, PlotTheme)}
+     * reads, never re-derive it from the rows a subclass was handed in its own
+     * {@code setRows(...)}.</b> A second reduction of that row list — even one written to
+     * compute the identical numbers — is exactly the "two implementations of one rule" failure
+     * {@link PlotDatum}'s own javadoc points back to this class's own header paragraph for:
+     * the two agree today and silently diverge the next time either is edited without the
+     * other, and a CSV that disagrees with the picture beside it is invisible until someone
+     * happens to compare the two by hand. Each of the four implementations therefore reads the
+     * exact fields/methods {@link #draw} itself reads — {@code CompositionCanvas.leafRows},
+     * {@code RegionComparisonCanvas.regionBars()}, {@code
+     * ScopeComparisonCanvas.scopesPresent()}/{@code valueForScope}, {@code
+     * MarkerPositivityCanvas.markers()}/{@code positiveCount}/{@code negativeCount}/{@code
+     * ungatedCount} — not a fresh filter over whatever rows {@code setRows} was last handed.
+     * <p>
+     * Empty exactly when {@link #draw} would show an empty state instead of bars, so a plot
+     * with nothing on screen offers nothing to export rather than a file with a header line
+     * and no rows.
+     */
+    public abstract List<PlotDatum> plotData();
+
+    /**
      * How a plot's category labels are laid out along its X axis: horizontal when they fit,
      * rotated and elided when they do not, plus the bottom margin that choice costs.
      * <p>

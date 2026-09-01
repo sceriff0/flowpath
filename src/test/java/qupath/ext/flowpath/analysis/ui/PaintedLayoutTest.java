@@ -44,6 +44,8 @@ class PaintedLayoutTest {
         }
 
         PaintedLayout painted() { return paintedLayout(); }
+
+        @Override public List<PlotDatum> plotData() { return List.of(); }
     }
 
     @Test

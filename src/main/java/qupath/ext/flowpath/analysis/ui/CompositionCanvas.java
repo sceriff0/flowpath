@@ -159,6 +159,17 @@ public final class CompositionCanvas extends PlotCanvas {
     }
 
     /**
+     * One datum per bar — {@link #leafRows}, the exact list {@link #draw} iterates over, not a
+     * fresh filter over {@link #wholeSlideRows}. See {@link PlotCanvas#plotData()}.
+     */
+    @Override
+    public List<PlotDatum> plotData() {
+        return leafRows.stream()
+                .map(r -> new PlotDatum(r.path(), "count", r.count()))
+                .toList();
+    }
+
+    /**
      * Bar {@code i} takes {@code theme.series(i)}, which wraps rather than running out — the
      * private palette this class used to carry was a byte-for-byte copy of the dark theme's
      * series list, so a light-theme plot drew dark-theme colours on a white ground.

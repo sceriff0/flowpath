@@ -91,4 +91,31 @@ class ScopeComparisonCanvasTest {
         assertEquals(5, canvas.valueForScope(PopulationStats.Scope.WHOLE_SLIDE),
                 "root 1's own count -- not root 0's 10, and not their sum");
     }
+
+    /**
+     * {@code plotData()} must read back {@link ScopeComparisonCanvas#scopesPresent()} and
+     * {@link ScopeComparisonCanvas#valueForScope} — the exact calls {@code draw()} makes to
+     * build its own axis and bars — not a fresh scan over the raw rows.
+     */
+    @Test
+    void plotDataIsExactlyTheBarsInDrawOrder() {
+        ScopeComparisonCanvas canvas = new ScopeComparisonCanvas();
+        canvas.setRows(AnalysisFixtures.twoLevelRows());
+        canvas.setSelectedPopulation(new PopulationRef(0, "CD45+/CD3+"));
+
+        List<PlotDatum> data = canvas.plotData();
+        List<PopulationStats.Scope> scopes = canvas.scopesPresent();
+        assertEquals(scopes.size(), data.size());
+        for (int i = 0; i < scopes.size(); i++) {
+            assertEquals(scopes.get(i).displayName(), data.get(i).category());
+            assertEquals("CD45+/CD3+", data.get(i).series());
+            assertEquals((double) canvas.valueForScope(scopes.get(i)), data.get(i).value());
+        }
+    }
+
+    @Test
+    void plotDataIsEmptyWithNoPopulationSelected() {
+        ScopeComparisonCanvas canvas = new ScopeComparisonCanvas();
+        assertEquals(List.of(), canvas.plotData());
+    }
 }

@@ -11,14 +11,16 @@ import javafx.collections.transformation.SortedList;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.scene.Node;
-import javafx.scene.control.Button;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
+import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollBar;
 import javafx.scene.control.SelectionMode;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
@@ -38,6 +40,8 @@ import javafx.util.StringConverter;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.session.AnalysisState;
 import qupath.ext.flowpath.analysis.session.DenominatorRef;
+import qupath.ext.flowpath.io.PlotDataCsvExporter;
+import qupath.ext.flowpath.io.PlotImageExporter;
 import qupath.ext.flowpath.io.PopulationStatsExporter;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.lib.gui.dialogs.Dialogs;
@@ -46,8 +50,10 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.DoubleFunction;
 import java.util.function.Function;
@@ -71,6 +77,14 @@ public final class AnalysisPane extends BorderPane {
     private static final KeyCombination COPY_COMBO =
             new KeyCodeCombination(KeyCode.C, KeyCombination.SHORTCUT_DOWN);
 
+    /**
+     * The snapshot scale every plot image export (clipboard and PNG) renders at, so a pasted
+     * or written figure is not soft. A snapshot parameter only — see
+     * {@link PlotImageExporter}'s own class javadoc for why this never touches a canvas's
+     * layout.
+     */
+    private static final double EXPORT_SCALE = 2.0;
+
     private final AnalysisSession session;
 
     private final ChoiceBox<PopulationStats.Scope> scopeChoice = new ChoiceBox<>();
@@ -84,7 +98,17 @@ public final class AnalysisPane extends BorderPane {
     private final ComboBox<PopulationRef> populationCombo = new ComboBox<>();
     private final ComboBox<PopulationRef> scopePopulationCombo = new ComboBox<>();
     private final TextField filterField = new TextField();
-    private final Button exportButton = new Button("Export CSV...");
+    // The "Export ▾" control (Task 12), replacing the old plain "Export CSV..." button.
+    // Items 1-3 act on the plot in the tab plotTabs currently has selected; item 5 is the
+    // pre-existing full-table export, unchanged in behaviour -- see exportCsv() below. A
+    // CustomMenuItem carries item 5 rather than a plain MenuItem because MenuItem itself has
+    // no tooltip property in this JavaFX version; wrapping a Label (which does) as its content
+    // is the same Label+Tooltip pattern the table's own column headers already use below.
+    private final MenuItem copyPlotItem = new MenuItem("Copy plot to clipboard");
+    private final MenuItem plotImageItem = new MenuItem("Plot as image…");
+    private final MenuItem plotDataCsvItem = new MenuItem("Plot data as CSV…");
+    private final CustomMenuItem exportTableItem = buildExportTableItem();
+    private final MenuButton exportMenu = new MenuButton("Export ▾");
     private final TableView<PopulationStats.Row> table = new TableView<>();
     private final Label placeholderLabel = new Label();
     private final Label summaryLabel = new Label();
@@ -117,6 +141,18 @@ public final class AnalysisPane extends BorderPane {
     private final RegionComparisonCanvas regionComparisonCanvas = new RegionComparisonCanvas();
     private final ScopeComparisonCanvas scopeComparisonCanvas = new ScopeComparisonCanvas();
     private final MarkerPositivityCanvas markerPositivityCanvas = new MarkerPositivityCanvas();
+
+    // Parallel to plotTabs.getTabs() -- tab i's own picker/canvas is plotCanvases.get(i).
+    // Built from the four fields just above, in the same order plotTab() adds their tabs
+    // below, so "the plot in the currently selected tab" (see currentPlotCanvas()) is always
+    // this list indexed by plotTabs' own selected index, never a second lookup that could
+    // drift out of step with tab order.
+    private final List<PlotCanvas> plotCanvases = List.of(
+            compositionCanvas, regionComparisonCanvas, scopeComparisonCanvas, markerPositivityCanvas);
+
+    // A field rather than a constructor-local, so the Export menu's tab-selection listener
+    // and currentPlotCanvas()/currentPlotTitle() can all reach it after construction.
+    private final TabPane plotTabs;
 
     private PopulationStats.Scope selectedScope;
     private DenominatorRef selectedDenominatorRef;
@@ -239,7 +275,15 @@ public final class AnalysisPane extends BorderPane {
             if (!updatingPopulationSelection) applyPopulationSelection(value);
         });
 
-        exportButton.setOnAction(e -> exportCsv());
+        // The Export menu's action wiring; the actual writing logic lives in
+        // PlotDataCsvExporter/PlotImageExporter/PopulationStatsExporter, never here -- see
+        // each method's own javadoc.
+        copyPlotItem.setOnAction(e -> copyCurrentPlotToClipboard());
+        plotImageItem.setOnAction(e -> exportCurrentPlotAsImage());
+        plotDataCsvItem.setOnAction(e -> exportCurrentPlotDataAsCsv());
+        exportTableItem.setOnAction(e -> exportCsv());
+        exportMenu.getItems().addAll(
+                copyPlotItem, plotImageItem, plotDataCsvItem, new SeparatorMenuItem(), exportTableItem);
 
         filterField.setPromptText("Filter populations…");
         filterField.setPrefWidth(180);
@@ -261,17 +305,20 @@ public final class AnalysisPane extends BorderPane {
                 new Label("Scope:"), scopeChoice,
                 new Label("Denominator:"), denominatorCombo,
                 filterField,
-                // Task 12 replaces this with an "Export ▾" control; the row is a FlowPane
-                // that simply appends its next child, so that swap needs no layout rework.
-                exportButton);
+                exportMenu);
 
-        TabPane plotTabs = new TabPane(
+        plotTabs = new TabPane(
                 plotTab("Composition", compositionCanvas, new Label("Root:"), rootCombo),
                 plotTab("By Region", regionComparisonCanvas, new Label("Population:"), populationCombo),
                 plotTab("By Scope", scopeComparisonCanvas, new Label("Population:"), scopePopulationCombo),
                 plotTab("Marker Positivity", markerPositivityCanvas,
                         new Label("All single-marker gates, whole slide")));
         plotTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        // Items 1-3 act on whichever tab is selected -- see currentPlotCanvas() -- so a tab
+        // switch alone (no new data) must also re-evaluate whether they have anything to act
+        // on. The push path handles the other half, in setAllPlotRows().
+        plotTabs.getSelectionModel().selectedIndexProperty()
+                .addListener((obs, old, index) -> updateExportMenuState());
 
         SplitPane body = new SplitPane(table, plotTabs);
         body.setOrientation(Orientation.VERTICAL);
@@ -436,6 +483,46 @@ public final class AnalysisPane extends BorderPane {
     }
 
     /**
+     * The Export menu's item labels, in order — {@code ""} for the separator. Pins Task 12's
+     * exact menu order and wording: "Copy plot to clipboard", "Plot as image…", "Plot data as
+     * CSV…", the separator, "Population table as CSV…".
+     */
+    List<String> exportMenuLabels() {
+        return exportMenu.getItems().stream().map(AnalysisPane::exportMenuItemLabel).toList();
+    }
+
+    private static String exportMenuItemLabel(MenuItem item) {
+        if (item instanceof SeparatorMenuItem) return "";
+        // exportTableItem is a CustomMenuItem whose text lives on its Label content (see
+        // buildExportTableItem()), never on MenuItem.getText() itself -- reading that instead
+        // would silently see "" for item 5 rather than throw, which is exactly the kind of
+        // test that passes without testing anything CLAUDE.md warns this task against.
+        if (item instanceof CustomMenuItem custom && custom.getContent() instanceof Label label) {
+            return label.getText();
+        }
+        return item.getText();
+    }
+
+    /**
+     * Whether Export menu item {@code i} (0-based, {@link #exportMenuLabels()} order) is
+     * currently disabled — what pins "items 1-3 disable when the selected tab's plot has no
+     * data" and "item 5 stays bound to {@code AnalysisState.canExport()}".
+     */
+    boolean exportMenuItemDisabled(int i) {
+        return exportMenu.getItems().get(i).isDisable();
+    }
+
+    /**
+     * Select the plot tab at {@code index} (Composition=0, By Region=1, By Scope=2, Marker
+     * Positivity=3) — lets a test drive "items 1-3 act on the plot in the CURRENTLY SELECTED
+     * tab" without a real click, the same reason {@link #selectRoot}/{@link
+     * #selectPopulation}/{@link #selectScope} exist above.
+     */
+    void selectPlotTab(int index) {
+        plotTabs.getSelectionModel().select(index);
+    }
+
+    /**
      * The denominators currently offered by the picker, leading {@code null} ("all cells")
      * included — {@link List#copyOf} would reject that null, hence the plain copy.
      */
@@ -464,9 +551,12 @@ public final class AnalysisPane extends BorderPane {
         return table.getItems().get(rowIndex).percentOfDenominator();
     }
 
-    /** The "Export CSV..." button's enabled state — {@code AnalysisState.canExport()} applied. */
+    /**
+     * Item 5's ("Population table as CSV…") enabled state — {@code AnalysisState.canExport()}
+     * applied.
+     */
     boolean exportEnabled() {
-        return !exportButton.isDisabled();
+        return !exportTableItem.isDisable();
     }
 
     /**
@@ -750,7 +840,7 @@ public final class AnalysisPane extends BorderPane {
             // The one place canExport() is applied. It is a derived fact about the session
             // (AnalysisState), not a judgement this pane re-makes -- the same rule the scope and
             // denominator lists follow above.
-            exportButton.setDisable(!state.canExport());
+            exportTableItem.setDisable(!state.canExport());
 
             List<PopulationStats.Scope> scopes = state.availableScopes();
             scopeChoice.getItems().setAll(scopes);
@@ -949,6 +1039,11 @@ public final class AnalysisPane extends BorderPane {
         // leaving whichever canvas's own setRows() fallback (above) had picked a different
         // population unreconciled with the pane's own choice for the rest of this push.
         applyPopulationSelection(selectedPopulation);
+
+        // Every canvas above just adopted this push's rows (or the empty list, on the no-data
+        // path), so whichever plot is currently selected may have gone from "has data" to
+        // empty or back -- re-evaluate items 1-3 here rather than only on a tab switch.
+        updateExportMenuState();
     }
 
     /**
@@ -1155,6 +1250,123 @@ public final class AnalysisPane extends BorderPane {
             }
         });
         return new ColumnSpec(col, row -> formatter.apply(extractor.applyAsDouble(row)));
+    }
+
+    /**
+     * Build item 5's {@link CustomMenuItem} — a {@link Label} carrying both the item's text
+     * and its tooltip, since {@link MenuItem} itself has no tooltip property to set one on
+     * directly. {@code static} and called from a field initializer, so it runs before
+     * {@code this} is otherwise touched, the same as every other field built inline above it.
+     */
+    private static CustomMenuItem buildExportTableItem() {
+        Label label = new Label("Population table as CSV…");
+        label.setTooltip(new Tooltip(
+                "Writes every scope and region, not only the rows currently shown."));
+        return new CustomMenuItem(label, true);
+    }
+
+    /**
+     * Which plot {@code copyPlotItem}/{@code plotImageItem}/{@code plotDataCsvItem} act on —
+     * whichever {@link PlotCanvas} sits behind {@link #plotTabs}' currently selected tab. See
+     * {@link #plotCanvases}' own comment for why the two stay in lockstep by construction
+     * rather than by a second, hand-kept mapping.
+     */
+    private PlotCanvas currentPlotCanvas() {
+        return plotCanvases.get(Math.max(0, plotTabs.getSelectionModel().getSelectedIndex()));
+    }
+
+    /** The currently selected tab's own title — {@code Tab} is the one place that name lives. */
+    private String currentPlotTitle() {
+        return plotTabs.getTabs().get(Math.max(0, plotTabs.getSelectionModel().getSelectedIndex()))
+                .getText();
+    }
+
+    /**
+     * Enable or disable {@code copyPlotItem}/{@code plotImageItem}/{@code plotDataCsvItem} for
+     * whichever plot is currently selected — called on every tab change and after every push
+     * of fresh rows (see {@link #setAllPlotRows}), so the three items track both "which plot"
+     * and "does it currently have anything to export".
+     * <p>
+     * {@link PlotCanvas#plotData()} empty is the same "nothing to show" signal {@link
+     * PlotCanvas#draw} itself falls back to an empty-state message on — see that method's own
+     * javadoc — so a plot reading "No gated populations yet" on screen can never offer an
+     * export that would just write an empty file.
+     */
+    private void updateExportMenuState() {
+        boolean hasData = !currentPlotCanvas().plotData().isEmpty();
+        copyPlotItem.setDisable(!hasData);
+        plotImageItem.setDisable(!hasData);
+        plotDataCsvItem.setDisable(!hasData);
+    }
+
+    /**
+     * "Copy plot to clipboard" — the plot in the currently selected tab, rendered at
+     * {@link #EXPORT_SCALE} so a pasted figure is not soft (see
+     * {@link PlotImageExporter#copyToClipboard}). Wrapped the same way the two dialog-driven
+     * exports below are, even though there is no file I/O to fail on here, so all three read
+     * as one family of action rather than singling this one out as exempt from error reporting.
+     */
+    private void copyCurrentPlotToClipboard() {
+        try {
+            PlotImageExporter.copyToClipboard(currentPlotCanvas(), EXPORT_SCALE);
+        } catch (RuntimeException ex) {
+            Dialogs.showErrorMessage("Copy Error", ex.getMessage());
+        }
+    }
+
+    /**
+     * "Plot as image…" — <b>one</b> {@link Dialogs#promptToSaveFile} call offering both SVG
+     * and PNG extension filters, SVG first, rather than two separate menu items; this is the
+     * "user-choosable format" the brief asks for. The chosen file's own extension decides which
+     * writer runs — see {@link #isPngFile} for why that also makes SVG the default when the
+     * user types no extension at all.
+     */
+    private void exportCurrentPlotAsImage() {
+        Map<String, String> filters = new LinkedHashMap<>();
+        filters.put("SVG (*.svg)", ".svg");
+        filters.put("PNG (*.png)", ".png");
+        File file = Dialogs.promptToSaveFile(
+                "Export Plot", null, plotFileBaseName() + ".svg", filters);
+        if (file == null) return;
+        try {
+            if (isPngFile(file)) {
+                PlotImageExporter.writePng(file, currentPlotCanvas(), EXPORT_SCALE);
+            } else {
+                PlotImageExporter.writeSvg(file, currentPlotCanvas().toSvg());
+            }
+            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
+        } catch (IOException | RuntimeException ex) {
+            Dialogs.showErrorMessage("Export Error", ex.getMessage());
+        }
+    }
+
+    /** "Plot data as CSV…" — the numbers behind the plot in the currently selected tab. */
+    private void exportCurrentPlotDataAsCsv() {
+        File file = Dialogs.promptToSaveFile("Export Plot Data", null,
+                plotFileBaseName() + "_data.csv", "CSV", ".csv");
+        if (file == null) return;
+        try {
+            PlotDataCsvExporter.export(file, currentPlotTitle(), currentPlotCanvas().plotData());
+            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
+        } catch (IOException | RuntimeException ex) {
+            Dialogs.showErrorMessage("Export Error", ex.getMessage());
+        }
+    }
+
+    /**
+     * {@code true} for a filename ending {@code .png} (case-insensitive); every other case —
+     * including no extension at all — defaults to SVG, matching SVG being both the first
+     * filter offered in {@link #exportCurrentPlotAsImage}'s dialog and, by
+     * {@code Dialogs.promptToSaveFile}'s own rule for a name with no recognised extension, the
+     * filter it defaults the picker to.
+     */
+    private static boolean isPngFile(File file) {
+        return file.getName().toLowerCase(Locale.US).endsWith(".png");
+    }
+
+    /** A filesystem-friendly stem for the currently selected tab's default export filename. */
+    private String plotFileBaseName() {
+        return currentPlotTitle().toLowerCase(Locale.US).replace(' ', '_');
     }
 
     /**

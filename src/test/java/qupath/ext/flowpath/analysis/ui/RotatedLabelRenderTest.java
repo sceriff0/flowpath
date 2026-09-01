@@ -60,6 +60,7 @@ class RotatedLabelRenderTest {
             drawAxes(s, theme, layout, 0, "Population", "Count");
             drawCategoryLabels(s, theme, layout, 0);
         }
+        @Override public List<PlotDatum> plotData() { return List.of(); }
     }
 
     @Test

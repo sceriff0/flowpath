@@ -292,6 +292,31 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
     }
 
     /**
+     * Three data per marker — positive, negative, ungated — reading the exact
+     * {@link #positiveCount}/{@link #negativeCount}/{@link #ungatedCount} calls {@link #draw}
+     * itself makes for each bar, not a fresh pass over {@link #byMarker}.
+     * <p>
+     * Empty in the same two cases {@link #draw} falls back to an empty state instead of bars:
+     * no single-marker gates at all, or a {@link #scopeTotal} of zero. Reproducing both guards
+     * here — rather than only the first — is what keeps this in step with {@link #draw}; the
+     * {@link PlotCanvas#plotData()} contract is "what is currently drawn", and a scope with no
+     * cells draws nothing even when {@link #byMarker} still holds stale marker keys from an
+     * earlier pass.
+     */
+    @Override
+    public List<PlotDatum> plotData() {
+        List<String> markerList = markers();
+        if (markerList.isEmpty() || scopeTotal <= 0) return List.of();
+        List<PlotDatum> data = new ArrayList<>(markerList.size() * 3);
+        for (String marker : markerList) {
+            data.add(new PlotDatum(marker, "positive", positiveCount(marker)));
+            data.add(new PlotDatum(marker, "negative", negativeCount(marker)));
+            data.add(new PlotDatum(marker, "ungated", ungatedCount(marker)));
+        }
+        return data;
+    }
+
+    /**
      * The three segments take {@code theme.positive()}, {@code theme.negative()} and
      * {@code theme.ungated()}, and the legend takes the same three values from the same
      * accessors rather than from a parallel list of literals.

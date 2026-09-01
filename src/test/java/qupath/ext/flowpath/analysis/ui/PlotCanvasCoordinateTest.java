@@ -48,6 +48,7 @@ class PlotCanvasCoordinateTest {
     private static final class TestCanvas extends PlotCanvas {
         TestCanvas() { super(300, 200); }
         @Override protected void draw(PlotSurface s, PlotTheme theme) { /* no drawing needed */ }
+        @Override public List<PlotDatum> plotData() { return List.of(); }
         double y(double v, double min, double max) {
             AxisScale scale = new AxisScale(min, max, false, false);
             return fractionToY(scale.toFraction(v), FLAT, 0);

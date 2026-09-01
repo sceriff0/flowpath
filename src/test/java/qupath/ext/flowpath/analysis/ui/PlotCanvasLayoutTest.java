@@ -16,6 +16,7 @@ class PlotCanvasLayoutTest {
     private static final class Probe extends PlotCanvas {
         Probe() { super(400, 200); }
         @Override protected void draw(PlotSurface s, PlotTheme theme) { }
+        @Override public List<PlotDatum> plotData() { return List.of(); }
         LabelLayout layout(PlotSurface s, List<String> labels) { return layoutLabels(s, labels); }
         double top(int rows) { return plotTop(rows); }
         double height(LabelLayout l, int rows) { return plotHeight(l, rows); }

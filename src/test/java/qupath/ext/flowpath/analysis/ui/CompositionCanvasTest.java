@@ -120,4 +120,48 @@ class CompositionCanvasTest {
         assertEquals(20, sum1, "still exactly the denominator after switching");
         assertEquals(20, canvas.total());
     }
+
+    /**
+     * {@code plotData()} must read back {@link CompositionCanvas#leafRows} — the exact list
+     * {@code draw()} iterates — not recompute anything. A wrong implementation that re-derived
+     * the leaves (e.g. re-sorting {@link #barLabels()} itself, or pulling straight from
+     * {@code wholeSlideRows}) would still pass a same-size/same-set check; this pins the
+     * <em>order</em> and the <em>values</em> together against the bars' own accessors, which a
+     * re-derivation is free to get subtly wrong (a different sort, a stale root selection).
+     */
+    @Test
+    void plotDataIsExactlyTheBarsInDrawOrder() {
+        CompositionCanvas canvas = new CompositionCanvas();
+        canvas.setRows(AnalysisFixtures.twoLevelRows());
+
+        List<PlotDatum> data = canvas.plotData();
+        List<String> bars = canvas.barLabels();
+        assertEquals(bars.size(), data.size(), "one datum per bar, no more, no fewer");
+        for (int i = 0; i < bars.size(); i++) {
+            assertEquals(bars.get(i), data.get(i).category(), "same order the bars are drawn in");
+            assertEquals("count", data.get(i).series());
+            assertEquals((double) canvas.barValue(bars.get(i)), data.get(i).value());
+        }
+    }
+
+    /**
+     * Switching the selected root must be visible in {@code plotData()} too — a canvas whose
+     * export still reported the previous root would be reading stale state rather than what
+     * {@code draw()} currently shows.
+     */
+    @Test
+    void plotDataFollowsTheSelectedRoot() {
+        CompositionCanvas canvas = new CompositionCanvas();
+        canvas.setRows(AnalysisFixtures.twoRootRows());
+        canvas.setSelectedRoot(1);
+
+        assertEquals(Set.of("CD19+", "CD19-"),
+                canvas.plotData().stream().map(PlotDatum::category).collect(java.util.stream.Collectors.toSet()));
+    }
+
+    @Test
+    void plotDataIsEmptyWhenTheCanvasHasNothingToShow() {
+        CompositionCanvas canvas = new CompositionCanvas();
+        assertTrue(canvas.plotData().isEmpty(), "no rows accepted yet -- draw() shows the empty state");
+    }
 }

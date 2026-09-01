@@ -108,6 +108,99 @@ class AnalysisPaneFxTest {
     }
 
     /**
+     * Task 12's brief spells out the exact menu order and wording: three plot-scoped actions,
+     * a separator, then the pre-existing full-table export. Pinned as one list rather than
+     * five separate {@code contains} assertions so a swapped pair of items — which a reader
+     * would notice on screen instantly — still fails a test.
+     */
+    @Test
+    void exportMenuListsItemsInTheOrderTheBriefSpecifies() {
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(new AnalysisSession()));
+        assertEquals(List.of(
+                        "Copy plot to clipboard",
+                        "Plot as image…",
+                        "Plot data as CSV…",
+                        "",
+                        "Population table as CSV…"),
+                FxTestSupport.onFx(pane::exportMenuLabels));
+    }
+
+    /**
+     * Nothing has been accepted yet, so every plot is in its own empty state -- items 1-3 must
+     * not offer an export that would write a header line and nothing else.
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeAreDisabledWithNoDataAtAll() {
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(new AnalysisSession()));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+    }
+
+    /**
+     * The core Task 12 claim: items 1-3 act on -- and are enabled/disabled by -- whichever
+     * plot the {@code TabPane} currently has selected, not a single pane-wide "is there any
+     * data" flag. {@link qupath.ext.flowpath.testing.AnalysisFixtures#simpleInput()} carries a
+     * root {@code CD45} gate but zero annotated regions, so By Region genuinely has nothing to
+     * show while the other three tabs do -- a fixture that gave every tab the same answer
+     * could not tell "follows the tab" apart from "follows one shared flag".
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeFollowTheSelectedTabsOwnData() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(0)); // Composition
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "a CD45 root gate has leaves to show");
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(1)); // By Region
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "simpleInput() carries no annotated regions at all");
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(2)); // By Scope
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "WHOLE_SLIDE is always present, so this plot has one bar");
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(3)); // Marker Positivity
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "CD45 is gated at the root");
+
+        // Item 5 (index 4) is bound to canExport(), never to a tab -- it must stay enabled
+        // across every one of the switches above, including the empty By Region tab.
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(4)));
+    }
+
+    /**
+     * A later push can hand the currently selected tab's plot data it did not have before --
+     * items 1-3 must pick that up without a tab switch, since {@code AnalysisPane} calls
+     * {@code updateExportMenuState()} at the end of every push, not only from the tab
+     * listener.
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeUpdateOnANewPushWithoutATabSwitch() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(1)); // By Region, empty so far
+
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "simpleInput() carries no annotated regions");
+
+        // partiallyKnownRegionAreasInput() DOES carry annotated regions -- accepting it while
+        // still on the By Region tab, with no selectPlotTab call in between, is what proves
+        // updateExportMenuState() runs from the push path and not only from the tab listener.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.partiallyKnownRegionAreasInput()));
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "the new push carries annotated regions, and no tab switch was needed to see it");
+    }
+
+    /**
      * Spec §4 asks the denominator dropdown to also offer "all cells". The converter has
      * always been able to render a {@code null} branch as {@code "(none)"}, but nothing ever
      * put a {@code null} in the list -- so the choice was one-way: a user who picked a

@@ -2,6 +2,7 @@ package qupath.ext.flowpath.analysis.ui;
 
 import qupath.ext.flowpath.model.PopulationStats;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -101,6 +102,29 @@ public final class RegionComparisonCanvas extends PlotCanvas {
                 .mapToInt(PopulationStats.Row::count)
                 .findFirst()
                 .orElse(0);
+    }
+
+    /**
+     * One datum per bar — {@link #regionBars()}, the exact rows {@link #draw} iterates over,
+     * with the same blank-name fallback a reader needs: {@code regionName} repeats across
+     * distinct regions (see {@link #regionBars()}'s own comment), so a category column keyed
+     * on the name alone would collide the same way a name-keyed bar once did. Falls back on
+     * {@code regionIndex} — a row's identity, never guessed — only when the name itself is
+     * blank.
+     */
+    @Override
+    public List<PlotDatum> plotData() {
+        if (selected == null) return List.of();
+        String series = selected.path();
+        List<PlotDatum> data = new ArrayList<>();
+        for (PopulationStats.Row row : regionBars()) {
+            String name = row.regionName();
+            String category = (name == null || name.isBlank())
+                    ? "Region " + row.regionIndex()
+                    : name;
+            data.add(new PlotDatum(category, series, row.count()));
+        }
+        return data;
     }
 
     /**

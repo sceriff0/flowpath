@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.analysis.ui;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.model.PopulationStats;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 
 import java.util.List;
@@ -117,5 +118,62 @@ class RegionComparisonCanvasTest {
         assertEquals(List.of(10, 0),
                 canvas.regionBars().stream().map(r -> r.count()).toList(),
                 "the bars are drawn from each region's own row, in region order");
+    }
+
+    /**
+     * {@code plotData()} must read back {@link RegionComparisonCanvas#regionBars()} — the exact
+     * rows {@code draw()} iterates — not a fresh filter/sort. Pinned against
+     * {@link #regionLabels()} and {@link #valueForRegion} together, in region order, so a wrong
+     * implementation that got the right *set* of numbers but the wrong order (or read a stale
+     * selection) still fails.
+     */
+    @Test
+    void plotDataIsExactlyTheBarsInDrawOrder() {
+        RegionComparisonCanvas canvas = new RegionComparisonCanvas();
+        canvas.setRows(AnalysisFixtures.twoLevelRows());
+        canvas.setSelectedPopulation(new PopulationRef(0, "CD45+/CD3+"));
+
+        List<PlotDatum> data = canvas.plotData();
+        assertEquals(List.of("Region 1", "Region 2"), data.stream().map(PlotDatum::category).toList());
+        assertEquals(List.of("CD45+/CD3+", "CD45+/CD3+"), data.stream().map(PlotDatum::series).toList(),
+                "series is the selected population's own path");
+        assertEquals(List.of(2.0, 3.0), data.stream().map(PlotDatum::value).toList());
+    }
+
+    /**
+     * {@code RegionMask} names an unnamed annotation after its classification, but a region
+     * can still reach here with a blank name; two such regions would be indistinguishable by
+     * name alone, which is exactly the collision {@link #twoRegionsSharingOneNameRows()} pins
+     * one axis over. {@code regionIndex} — a row's real identity, never guessed — is the
+     * fallback, not an empty string or "Unnamed".
+     */
+    @Test
+    void plotDataFallsBackToRegionIndexWhenTheNameIsBlank() {
+        RegionComparisonCanvas canvas = new RegionComparisonCanvas();
+        canvas.setRows(blankRegionNameRows());
+        canvas.setSelectedPopulation(new PopulationRef(0, "CD45+"));
+
+        assertEquals(List.of("Region 0", "Tumor"),
+                canvas.plotData().stream().map(PlotDatum::category).toList(),
+                "a blank name falls back to \"Region \" + regionIndex; a real name is used as-is");
+    }
+
+    @Test
+    void plotDataIsEmptyWithNoPopulationSelected() {
+        RegionComparisonCanvas canvas = new RegionComparisonCanvas();
+        assertEquals(List.of(), canvas.plotData());
+    }
+
+    /** Region 0's name is blank; region 1's is a real, non-blank name. Same population both. */
+    private static List<PopulationStats.Row> blankRegionNameRows() {
+        return List.of(
+                new PopulationStats.Row(PopulationStats.Scope.ANNOTATION_K, null, 0,
+                        "CD45+", "CD45+", "CD45", 0, 0,
+                        3, 3, 10, 10, 0,
+                        30.0, 30.0, Double.NaN, 30.0, 30.0, Double.NaN, Double.NaN),
+                new PopulationStats.Row(PopulationStats.Scope.ANNOTATION_K, "Tumor", 1,
+                        "CD45+", "CD45+", "CD45", 0, 0,
+                        7, 7, 10, 10, 0,
+                        70.0, 70.0, Double.NaN, 70.0, 70.0, Double.NaN, Double.NaN));
     }
 }

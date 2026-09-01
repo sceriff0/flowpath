@@ -2,6 +2,7 @@ package qupath.ext.flowpath.analysis.ui;
 
 import qupath.ext.flowpath.model.PopulationStats;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -89,6 +90,22 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
                 .filter(r -> r.scope() == scope && selected.matches(r))
                 .mapToInt(PopulationStats.Row::count)
                 .sum();
+    }
+
+    /**
+     * One datum per bar — {@link #scopesPresent()} and {@link #valueForScope}, the exact
+     * methods {@link #draw} calls to build its own axis and bars, not a fresh scan over
+     * {@link #rows}.
+     */
+    @Override
+    public List<PlotDatum> plotData() {
+        if (selected == null) return List.of();
+        String series = selected.path();
+        List<PlotDatum> data = new ArrayList<>();
+        for (PopulationStats.Scope scope : scopesPresent()) {
+            data.add(new PlotDatum(scope.displayName(), series, valueForScope(scope)));
+        }
+        return data;
     }
 
     /**
