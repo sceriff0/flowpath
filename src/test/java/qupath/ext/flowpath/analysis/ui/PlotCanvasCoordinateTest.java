@@ -18,11 +18,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ul>
  *   <li>{@code repaint()} is now {@code final} — the whole point of that change is that a
  *       subclass cannot supply its own — so the probe implements {@code draw} instead.</li>
- *   <li>{@code valueToY} takes the plot's geometry explicitly, because the plot's top and
+ *   <li>{@code fractionToY} takes the plot's geometry explicitly, because the plot's top and
  *       height now depend on the legend strip and on whether the category labels rotated.
  *       {@link #FLAT} plus zero legend rows <em>is</em> the old fixed 10/30 padding, so every
  *       number asserted below is the number the old signature produced.</li>
  * </ul>
+ * <p>
+ * Task 6 folded the old linear {@code valueToY(value, min, max, layout, legendRows)} into
+ * {@link AxisScale}: "where does a value sit on the axis" is now {@link AxisScale#toFraction},
+ * and {@code y} below is only the geometric half — turning that already-decided fraction into
+ * a screen row via {@link PlotCanvas#fractionToY}. {@code y} builds its {@link AxisScale}
+ * directly from the {@code (min, max)} pair each case names, via the record's own canonical
+ * constructor, rather than through {@link PlotCanvas#scaleFor}: {@code scaleFor} derives its
+ * ceiling from a data array's own maximum, which is not what a test naming an arbitrary
+ * {@code (min, max)} pair — including the degenerate {@code (10, 10)} below — is exercising.
+ * Every case below is unchanged in what it asserts; only the two calls that produce the number
+ * changed, from one to two.
+ * <p>
  * The evenly-spaced {@code valueTicks} this file used to pin is gone, replaced by
  * {@link PlotCanvas#niceTicks} — see {@code PlotCanvasLayoutTest} for its own coverage, and
  * {@code niceTicksSpanTheRangeOnARoundLadder} below for the case that survives verbatim.
@@ -36,7 +48,10 @@ class PlotCanvasCoordinateTest {
     private static final class TestCanvas extends PlotCanvas {
         TestCanvas() { super(300, 200); }
         @Override protected void draw(PlotSurface s, PlotTheme theme) { /* no drawing needed */ }
-        double y(double v, double min, double max) { return valueToY(v, min, max, FLAT, 0); }
+        double y(double v, double min, double max) {
+            AxisScale scale = new AxisScale(min, max, false, false);
+            return fractionToY(scale.toFraction(v), FLAT, 0);
+        }
         double x(int index, int count) { return categoryToX(index, count); }
     }
 

@@ -56,7 +56,7 @@ class RotatedLabelRenderTest {
         }
         @Override protected void draw(PlotSurface s, PlotTheme theme) {
             LabelLayout layout = layoutLabels(s, labels);
-            drawValueTicks(s, theme, 0, 1000, 4, layout, 0);
+            drawValueTicks(s, theme, scaleFor(new double[] { 1000 }), 4, layout, 0);
             drawAxes(s, theme, layout, 0, "Population", "Count");
             drawCategoryLabels(s, theme, layout, 0);
         }

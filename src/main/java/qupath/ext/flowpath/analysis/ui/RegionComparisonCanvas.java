@@ -114,18 +114,23 @@ public final class RegionComparisonCanvas extends PlotCanvas {
             return;
         }
 
-        int maxCount = bars.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = bars.size();
+        double[] values = bars.stream().mapToDouble(PopulationStats.Row::count).toArray();
+        AxisScale scale = scaleFor(values);
         LabelLayout labels = layoutLabels(s, regionLabels());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
-        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
-        s.setFill(theme.series(0));
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(bars.get(i).count(), 0, maxCount, labels, LEGEND_ROWS);
+            double value = bars.get(i).count();
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
+            s.setFill(theme.series(0));
             s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
         drawAxes(s, theme, labels, LEGEND_ROWS,
                 selected == null ? "Region" : selected.path(), "Count");

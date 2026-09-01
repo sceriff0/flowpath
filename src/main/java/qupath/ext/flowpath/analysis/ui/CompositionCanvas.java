@@ -170,20 +170,25 @@ public final class CompositionCanvas extends PlotCanvas {
             return;
         }
 
-        int maxCount = leafRows.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = leafRows.size();
+        double[] values = leafRows.stream().mapToDouble(PopulationStats.Row::count).toArray();
+        AxisScale scale = scaleFor(values);
         // One layout, reused by every method that needs to know how tall the plot is. Calling
         // layoutLabels twice would be a second answer to the same question.
         LabelLayout labels = layoutLabels(s, barLabels());
         double barW = categoryWidth(n) * 0.7;
-        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
-        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(leafRows.get(i).count(), 0, maxCount, labels, LEGEND_ROWS);
+            double value = leafRows.get(i).count();
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
             s.setFill(theme.series(i));
             s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
         drawAxes(s, theme, labels, LEGEND_ROWS, "Population", "Count");
         drawCategoryLabels(s, theme, labels, LEGEND_ROWS);

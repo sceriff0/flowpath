@@ -106,19 +106,24 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
             return;
         }
 
-        int maxCount = scopes.stream().mapToInt(this::valueForScope).max().orElse(1);
         int n = scopes.size();
+        double[] values = scopes.stream().mapToDouble(this::valueForScope).toArray();
+        AxisScale scale = scaleFor(values);
         LabelLayout labels = layoutLabels(s,
                 scopes.stream().map(PopulationStats.Scope::displayName).toList());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount, labels, LEGEND_ROWS);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
-        drawValueTicks(s, theme, 0, maxCount, 4, labels, LEGEND_ROWS);
-        s.setFill(theme.series(1));
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(valueForScope(scopes.get(i)), 0, maxCount, labels, LEGEND_ROWS);
+            double value = valueForScope(scopes.get(i));
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
+            s.setFill(theme.series(1));
             s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
         drawAxes(s, theme, labels, LEGEND_ROWS,
                 selected == null ? "Scope" : selected.path(), "Count");

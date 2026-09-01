@@ -1,11 +1,12 @@
 package qupath.ext.flowpath.analysis.ui;
 
+import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.value.ObservableBooleanValue;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.paint.Color;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -121,6 +122,30 @@ public abstract class PlotCanvas extends Canvas {
     private PaintedLayout painted;
 
     /**
+     * How this canvas's Y axis reads — log or linear, clipped or not. Owned here and nowhere
+     * else: {@link PlotControls} writes a new value through {@link #setScaleOptions} on every
+     * toggle and never keeps a copy of its own, which is what makes the setting per-plot —
+     * changing one canvas's scale cannot reach across to another the way a shared field or a
+     * static default would.
+     */
+    private ScaleOptions scaleOptions = ScaleOptions.LINEAR;
+
+    /**
+     * Whether the axis {@link #scaleFor} most recently resolved actually clipped a value —
+     * what {@link PlotControls} binds its "clipped" label's visibility to, so the label
+     * reflects what the last paint actually drew rather than merely whether the clip toggle is
+     * on. A canvas whose clip candidate lands on the data's own maximum (see {@link
+     * AxisScale#of}) has the toggle on and nothing clipped, and the label must say so.
+     * <p>
+     * Reset to {@code false} at the top of every {@link #render} pass, the same guard {@link
+     * #painted} uses and for the same reason: a pass that takes the empty-state branch, or one
+     * whose subclass never calls {@link #scaleFor} at all, must not go on reporting whatever
+     * the previous pass found.
+     */
+    private final SimpleBooleanProperty anyClipped =
+            new SimpleBooleanProperty(this, "anyClipped", false);
+
+    /**
      * Real metrics where a toolkit exists, {@link ApproxTextMeasurer} where it does not —
      * {@link FxTextMeasurer} degrades on its own, so a headless test that merely constructs a
      * canvas does not have to care which it got.
@@ -175,6 +200,46 @@ public abstract class PlotCanvas extends Canvas {
         repaint();
     }
 
+    /** How this canvas currently reads its Y axis. */
+    public ScaleOptions scaleOptions() {
+        return scaleOptions;
+    }
+
+    /**
+     * Switch this canvas's axis to {@code options} and redraw. The one write path for {@link
+     * #scaleOptions} — {@link PlotControls} calls this on every toggle and stores nothing of
+     * its own, so there is exactly one place a plot's scale lives.
+     */
+    public void setScaleOptions(ScaleOptions options) {
+        this.scaleOptions = Objects.requireNonNull(options, "options");
+        repaint();
+    }
+
+    /**
+     * Resolve {@code values} — the bar values a subclass is about to draw — into an axis under
+     * this canvas's current {@link #scaleOptions}. The single place any subclass turns data
+     * into an axis; see the class javadoc's "one drawing routine" paragraph for why a second
+     * value→axis computation anywhere else would reintroduce exactly the divergence this
+     * codebase keeps a list of.
+     * <p>
+     * Also records whether the resolved axis clipped anything, via {@link #anyClippedProperty},
+     * so {@link PlotControls} can show its "clipped" label without a subclass having to publish
+     * the same fact through a second channel.
+     */
+    protected AxisScale scaleFor(double[] values) {
+        AxisScale scale = AxisScale.of(values, scaleOptions);
+        anyClipped.set(scale.anyClipped());
+        return scale;
+    }
+
+    /**
+     * Whether the most recent paint's axis clipped at least one value. Package-private: only
+     * {@link PlotControls}, in this same package, needs to bind a label to it.
+     */
+    ObservableBooleanValue anyClippedProperty() {
+        return anyClipped;
+    }
+
     /**
      * Redraw onto the live canvas. {@code final}, and so is {@link #toSvg()}: both delegate to
      * {@link #draw}, which is the only place a subclass can put a drawing instruction. See the
@@ -218,6 +283,7 @@ public abstract class PlotCanvas extends Canvas {
      */
     private void render(PlotSurface surface) {
         painted = null;
+        anyClipped.set(false);
         drawBackground(surface, theme);
         draw(surface, theme);
     }
@@ -225,7 +291,7 @@ public abstract class PlotCanvas extends Canvas {
     /**
      * The geometry one paint actually used: the {@link LabelLayout} it laid its category
      * labels out with, and the number of legend rows it reserved a strip for. Together they
-     * are the only two arguments {@link #plotTop}, {@link #plotHeight} and {@link #valueToY}
+     * are the only two arguments {@link #plotTop}, {@link #plotHeight} and {@link #fractionToY}
      * take, so holding this pair is holding the whole plot rectangle.
      *
      * @param labels     the layout that pass drew with
@@ -356,23 +422,26 @@ public abstract class PlotCanvas extends Canvas {
     }
 
     /**
-     * Map a data value onto this plot's Y axis, in screen space (smaller Y is higher up, so
-     * {@code max} draws at the top). Takes the same {@code (layout, legendRows)} pair every
-     * other layout method takes, so a tick, a bar and the axis frame cannot each resolve the
-     * plot to a different rectangle. Mirrors {@code ScatterPlotCanvas.valueToPixel}'s
-     * degenerate-range behaviour: a non-positive range floors everything at the axis bottom
-     * rather than dividing by zero.
+     * Map a {@code [0, 1]} axis fraction — from {@link AxisScale#toFraction} — onto this
+     * plot's Y axis, in screen space (smaller Y is higher up, so a fraction of 1 draws at the
+     * top). Takes the same {@code (layout, legendRows)} pair every other layout method takes,
+     * so a tick, a bar and the axis frame cannot each resolve the plot to a different
+     * rectangle.
      * <p>
-     * Package-private and temporary: Task 5 replaces every caller with {@code AxisScale}, which
-     * adds the log and percentile mappings this linear one cannot express.
+     * <b>This is the ONLY value→Y mapping in this class, and every canvas's Y coordinate goes
+     * through it.</b> {@link AxisScale#toFraction} is where "where does this value sit on the
+     * axis" is decided — linear, logarithmic, and clamped for a clipped value — and this method
+     * only ever turns that already-decided fraction into a pixel row. Before this, a value's
+     * screen position was linear arithmetic private to this class ({@code valueToY}) with no
+     * way to express a log axis or a percentile clip; folding that same linear formula back in
+     * here, beside {@link AxisScale}'s own copy of it, would be exactly the two-implementations
+     * failure {@code CLAUDE.md}'s "One gate predicate" section describes for the gating path —
+     * a display mapping and a value mapping kept in step by comments instead of by construction.
      */
-    double valueToY(double value, double min, double max, LabelLayout layout, int legendRows) {
+    protected double fractionToY(double fraction, LabelLayout layout, int legendRows) {
         double top = plotTop(legendRows);
         double plotH = plotHeight(layout, legendRows);
-        if (max <= min) return top + plotH;
-        double frac = (value - min) / (max - min);
-        frac = Math.max(0, Math.min(1, frac));
-        return top + plotH * (1 - frac);
+        return top + plotH * (1 - fraction);
     }
 
     /**
@@ -521,28 +590,71 @@ public abstract class PlotCanvas extends Canvas {
     }
 
     /**
-     * Gridlines and Y-axis value labels at {@link #niceTicks} positions, placed by the same
-     * {@link #valueToY} call the bars themselves use — so a tick label can never point at a
-     * different height than the bar beside it claims.
+     * Gridlines and Y-axis value labels at {@code scale}'s own {@link AxisScale#ticks} — a log
+     * axis therefore gets a decade ladder here instead of the 1-2-5 one a linear axis gets, see
+     * {@link AxisScale#ticks} — placed by the same {@link #fractionToY} call the bars
+     * themselves use, so a tick label can never point at a different height than the bar beside
+     * it claims. The label text is {@link AxisScale#formatTick}, not a copy kept here, for the
+     * same reason.
      * <p>
      * Drawn before the data, not after: a gridline painted over a bar reads as a seam in the
      * bar rather than as a gridline behind it.
      */
-    protected void drawValueTicks(PlotSurface s, PlotTheme t, double min, double max,
+    protected void drawValueTicks(PlotSurface s, PlotTheme t, AxisScale scale,
                                   int targetCount, LabelLayout layout, int legendRows) {
-        double[] ticks = niceTicks(min, max, targetCount);
-        double step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+        double[] ticks = scale.ticks(targetCount);
         double left = PADDING_LEFT;
         double right = PADDING_LEFT + plotWidth();
         s.setFont(LABEL_FONT_SIZE, false);
         for (double tick : ticks) {
-            double y = valueToY(tick, min, max, layout, legendRows);
+            double y = fractionToY(scale.toFraction(tick), layout, legendRows);
             s.setStroke(t.gridline());
             s.setLineWidth(1);
             s.strokeLine(left, y, right, y);
             s.setFill(t.mutedText());
-            String label = formatTick(tick, step);
+            String label = scale.formatTick(tick);
             s.fillText(label, left - 4 - s.textWidth(label), y + 3);
+        }
+    }
+
+    /**
+     * Overpaint a bar that {@link AxisScale#isClipped} has drawn all the way to the plot's top
+     * with the conventional axis-break glyph, so a capped bar reads as "capped, and marked" —
+     * never as a bar that merely stopped, which is indistinguishable on screen from a bar whose
+     * true value was small. {@code top} is the Y the clipped bar was itself drawn to (its own
+     * top edge), i.e. {@code fractionToY(1, layout, legendRows)} in linear mode or the
+     * equivalent clamp in log mode — this method does not recompute it, so the band it paints
+     * can never land anywhere but exactly where the bar's own top pixel is.
+     * <p>
+     * Two layers, both specified by the brief this implements: a {@code bandHeight}-tall strip
+     * in {@code theme.background()} at full opacity, which is what makes the break read as a
+     * deliberate cut rather than one more pixel of bar colour, and a 1px {@code theme.axis()}
+     * zig-zag stroked across it — the standard axis-break glyph, built from {@link
+     * PlotSurface#strokeLine} segments because {@link PlotSurface} is deliberately narrow (see
+     * its own class javadoc) and gains no path primitive for one caller.
+     */
+    protected void drawClipMarker(PlotSurface s, PlotTheme t, double centreX, double barWidth,
+                                  double top) {
+        double bandHeight = 4;
+        double left = centreX - barWidth / 2;
+        double right = centreX + barWidth / 2;
+
+        s.setFill(t.background());
+        s.fillRect(left, top, right - left, bandHeight);
+
+        s.setStroke(t.axis());
+        s.setLineWidth(1);
+        double toothWidth = 6;
+        double x = left;
+        boolean atBottomOfBand = true;
+        double prevY = top + bandHeight;
+        while (x < right) {
+            double nextX = Math.min(x + toothWidth, right);
+            double nextY = atBottomOfBand ? top : top + bandHeight;
+            s.strokeLine(x, prevY, nextX, nextY);
+            x = nextX;
+            prevY = nextY;
+            atBottomOfBand = !atBottomOfBand;
         }
     }
 
@@ -677,17 +789,4 @@ public abstract class PlotCanvas extends Canvas {
         return out;
     }
 
-    /**
-     * A tick label with exactly as many decimals as its own step needs — a step of 20000 reads
-     * {@code 40000}, a step of 0.05 reads {@code 0.05}. A fixed one-decimal format got the
-     * second case wrong in the other direction, rendering three distinct ticks as {@code 0.1}
-     * three times over. Negative zero (reachable from {@code ceil(min / step) * step} when
-     * {@code min} is a small negative) is normalised, since {@code -0} in an axis label reads
-     * as a rendering bug.
-     */
-    private static String formatTick(double value, double step) {
-        double v = value == 0 ? 0 : value;
-        int decimals = step >= 1 ? 0 : (int) Math.min(6, Math.ceil(-Math.log10(step)));
-        return String.format(Locale.US, "%." + decimals + "f", v);
-    }
 }

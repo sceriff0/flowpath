@@ -320,25 +320,36 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
 
         List<Color> segmentColors = List.of(theme.positive(), theme.negative(), theme.ungated());
         int n = markerList.size();
+        // The value that matters for the axis is each bar's own total, not the shared
+        // scopeTotal a bar draws against -- the two agree whenever every marker's cells are
+        // fully accounted for (the common case), but a marker with a malformed sibling-gate
+        // group (see the class javadoc) excludes some cells from itself entirely, so its bar's
+        // own total falls short of scopeTotal. Scaling from the real per-bar tops is what a
+        // percentile clip needs to be meaningful rather than accidentally correct only because
+        // every bar happens to share one height.
+        double[] values = markerList.stream()
+                .mapToDouble(m -> positiveCount(m) + negativeCount(m) + ungatedCount(m))
+                .toArray();
+        AxisScale scale = scaleFor(values);
         LabelLayout labels = layoutLabels(s, markerList);
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, scopeTotal, labels, LEGEND_ROWS);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
-        drawValueTicks(s, theme, 0, scopeTotal, 4, labels, LEGEND_ROWS);
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             String marker = markerList.get(i);
             double cx = categoryToX(i, n);
             double x = cx - barW / 2;
 
+            double total = positiveCount(marker) + negativeCount(marker) + ungatedCount(marker);
+
             // Cumulative tops, so each segment is drawn as the gap between two heights on the
             // one axis mapping -- a stack built from per-segment heights instead would drift
             // by a pixel per segment against the ticks beside it.
-            double yAfterPositive = valueToY(positiveCount(marker), 0, scopeTotal, labels, LEGEND_ROWS);
-            double yAfterNegative = valueToY(positiveCount(marker) + negativeCount(marker),
-                    0, scopeTotal, labels, LEGEND_ROWS);
-            double yAfterUngated = valueToY(
-                    positiveCount(marker) + negativeCount(marker) + ungatedCount(marker),
-                    0, scopeTotal, labels, LEGEND_ROWS);
+            double yAfterPositive = fractionToY(scale.toFraction(positiveCount(marker)), labels, LEGEND_ROWS);
+            double yAfterNegative = fractionToY(
+                    scale.toFraction(positiveCount(marker) + negativeCount(marker)), labels, LEGEND_ROWS);
+            double yAfterUngated = fractionToY(scale.toFraction(total), labels, LEGEND_ROWS);
 
             s.setFill(segmentColors.get(0));
             s.fillRect(x, yAfterPositive, barW, baseY - yAfterPositive);
@@ -346,6 +357,9 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
             s.fillRect(x, yAfterNegative, barW, yAfterPositive - yAfterNegative);
             s.setFill(segmentColors.get(2));
             s.fillRect(x, yAfterUngated, barW, yAfterNegative - yAfterUngated);
+            if (scale.isClipped(total)) {
+                drawClipMarker(s, theme, cx, barW, yAfterUngated);
+            }
         }
         drawAxes(s, theme, labels, LEGEND_ROWS, "Marker", "Count");
         drawCategoryLabels(s, theme, labels, LEGEND_ROWS);

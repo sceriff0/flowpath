@@ -178,8 +178,16 @@ public final class AnalysisPane extends BorderPane {
         refresh();
     }
 
+    /**
+     * One tab: its canvas centred, its scale controls docked below. This is the simple form —
+     * Task 11 later replaces the bottom region with a wrapping {@code FlowPane} that also
+     * carries each plot's own Root/Population picker; that restructuring is deliberately not
+     * built here, only the controls this task owns.
+     */
     private static Tab plotTab(String title, PlotCanvas canvas) {
-        Tab tab = new Tab(title, canvas);
+        BorderPane body = new BorderPane(canvas);
+        body.setBottom(new PlotControls(canvas));
+        Tab tab = new Tab(title, body);
         tab.setClosable(false);
         return tab;
     }
