@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -222,6 +223,71 @@ class MarkerPositivityCanvasTest {
 
         BranchTally tally = GatingEngine.assignAll(tree, index, stats, null, null, 0).getTally();
         return PopulationStats.of(tree, tally, List.of(), null, null).rows();
+    }
+
+    /**
+     * {@code plotData()} must read back {@link MarkerPositivityCanvas#positiveCount}/{@code
+     * negativeCount}/{@code ungatedCount} — the exact calls {@code draw()} makes for every bar
+     * — not a fresh pass over the internal tally map. Three data per marker, exactly the
+     * segments the bar stacks.
+     */
+    @Test
+    void plotDataHasThreeDatumsPerMarkerMatchingTheAccessorsExactly() {
+        MarkerPositivityCanvas canvas = new MarkerPositivityCanvas();
+        canvas.setRows(AnalysisFixtures.twoLevelRows());
+
+        List<PlotDatum> data = canvas.plotData();
+        assertEquals(canvas.markers().size() * 3, data.size());
+        for (String marker : canvas.markers()) {
+            List<PlotDatum> forMarker = data.stream().filter(d -> d.category().equals(marker)).toList();
+            assertEquals(Set.of("positive", "negative", "ungated"),
+                    forMarker.stream().map(PlotDatum::series).collect(java.util.stream.Collectors.toSet()));
+            assertEquals((double) canvas.positiveCount(marker), valueFor(forMarker, "positive"));
+            assertEquals((double) canvas.negativeCount(marker), valueFor(forMarker, "negative"));
+            assertEquals((double) canvas.ungatedCount(marker), valueFor(forMarker, "ungated"));
+        }
+    }
+
+    @Test
+    void plotDataIsEmptyWithNoMarkersGatedAtAll() {
+        MarkerPositivityCanvas canvas = new MarkerPositivityCanvas();
+        assertTrue(canvas.plotData().isEmpty());
+    }
+
+    /**
+     * {@code draw()} falls back to an empty state at {@code scopeTotal <= 0} even when
+     * {@link MarkerPositivityCanvas#markers()} is not empty (a marker key can exist with every
+     * tally at zero); {@code plotData()} must take the identical branch rather than reporting
+     * three zero-valued datums nothing is actually drawing.
+     */
+    @Test
+    void plotDataIsEmptyWhenScopeTotalIsZeroEvenThoughAMarkerIsKnown() {
+        MarkerPositivityCanvas canvas = new MarkerPositivityCanvas();
+        canvas.setRows(zeroScopeTotalRows());
+
+        assertFalse(canvas.markers().isEmpty(), "the marker key itself is still known");
+        assertEquals(0, canvas.scopeTotal());
+        assertTrue(canvas.plotData().isEmpty(),
+                "draw() shows \"No cells in this scope\" here, not a zero-height bar");
+    }
+
+    private static double valueFor(List<PlotDatum> data, String series) {
+        return data.stream().filter(d -> d.series().equals(series)).findFirst()
+                .orElseThrow(() -> new AssertionError("no '" + series + "' datum in " + data))
+                .value();
+    }
+
+    /** A single well-formed CD45 gate whose depth-0 branches both carry a zero parentCount. */
+    private static List<PopulationStats.Row> zeroScopeTotalRows() {
+        return List.of(
+                new PopulationStats.Row(PopulationStats.Scope.WHOLE_SLIDE, null, -1,
+                        "CD45+", "CD45+", "CD45", 0, 0,
+                        0, 0, 0, 0, 0,
+                        0.0, 0.0, Double.NaN, 0.0, 0.0, Double.NaN, Double.NaN),
+                new PopulationStats.Row(PopulationStats.Scope.WHOLE_SLIDE, null, -1,
+                        "CD45-", "CD45-", "CD45", 0, 0,
+                        0, 0, 0, 0, 0,
+                        0.0, 0.0, Double.NaN, 0.0, 0.0, Double.NaN, Double.NaN));
     }
 
     /** As {@link AnalysisFixtures#twoLevelRows()}, but {@code CD45+} carries two sibling CD3 gates. */

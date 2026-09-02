@@ -30,10 +30,24 @@ class PopulationStatsExporterTest {
         for (String column : List.of("scope", "region", "path", "branch", "gate_channel",
                 "depth", "root_index", "count", "clean_count", "parent_count",
                 "clean_parent_count", "denominator_count", "percent_of_parent",
-                "percent_of_total", "percent_of_denominator", "area_mm2", "density_per_mm2")) {
+                "percent_of_total", "percent_of_denominator", "percent_of_clean_parent",
+                "percent_of_clean_total", "area_mm2", "density_per_mm2")) {
             assertTrue(header.contains(column), "header missing column: " + column);
         }
         assertFalse(header.contains("image"), "withImage=false must not emit an image column");
+    }
+
+    @Test
+    void headerCarriesTheCleanPercentageColumnsAfterTheDenominator() throws Exception {
+        StringWriter w = new StringWriter();
+        PopulationStatsExporter.writeHeader(w, false);
+        String header = w.toString().trim();
+        assertTrue(header.contains("percent_of_denominator,percent_of_clean_parent,percent_of_clean_total"),
+                header);
+        assertTrue(header.contains("area_mm2"), header);
+        assertEquals(header.split(",").length,
+                java.util.Arrays.stream(header.split(",")).distinct().count(),
+                "no duplicated column names: " + header);
     }
 
     @Test

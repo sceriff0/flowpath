@@ -1,9 +1,8 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -28,6 +27,9 @@ import java.util.Set;
  * entirely. See {@link PopulationRef}.
  */
 public final class ScopeComparisonCanvas extends PlotCanvas {
+
+    /** No legend: one series, already named by the X-axis title. See {@code CompositionCanvas}. */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> rows = List.of();
     private PopulationRef selected;
@@ -58,6 +60,15 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
     }
 
     /**
+     * The population this canvas is currently comparing. Package-private, exercised directly
+     * by {@code AnalysisPaneFxTest} to pin that the By Region and By Scope tabs' own combos
+     * drive one shared selection rather than two independent ones.
+     */
+    PopulationRef selectedPopulation() {
+        return selected;
+    }
+
+    /**
      * The scopes the selected population actually has a row in, in nesting order —
      * {@code [WHOLE_SLIDE]} alone for an unannotated image, all three once regions exist.
      */
@@ -81,32 +92,87 @@ public final class ScopeComparisonCanvas extends PlotCanvas {
                 .sum();
     }
 
+    /**
+     * One datum per bar — {@link #scopesPresent()} and {@link #valueForScope}, the exact
+     * methods {@link #draw} calls to build its own axis and bars, not a fresh scan over
+     * {@link #rows}.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
+    public List<PlotDatum> plotData() {
+        if (selected == null) return List.of();
+        String series = selected.path();
+        List<PlotDatum> data = new ArrayList<>();
+        for (PopulationStats.Scope scope : scopesPresent()) {
+            data.add(new PlotDatum(scope.displayName(), series, valueForScope(scope)));
+        }
+        return data;
+    }
 
+    /**
+     * The bar at {@code (x, y)}, named by its scope's display name and the selected
+     * population's count there — {@link #scopesPresent()} and {@link #valueForScope}, the
+     * exact calls {@link #draw} makes for each bar, indexed by {@link #categorySlotAt}. Every
+     * bar names the same {@link #selected} population — that is what "compared at all three
+     * scopes" means — so the population a click hands over does not depend on which scope's
+     * bar was clicked.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<PopulationStats.Scope> scopes = scopesPresent();
+        if (idx == null || idx >= scopes.size() || selected == null) {
+            return null;
+        }
+        PopulationStats.Scope scope = scopes.get(idx);
+        String detail = valueForScope(scope) + " cells";
+        return new PlotHit(scope.displayName(), detail, selected);
+    }
+
+    /**
+     * {@code theme.series(1)} for every bar — deliberately the <em>second</em> palette entry,
+     * not the first, so this plot and {@code RegionComparisonCanvas} do not read as the same
+     * chart when a user flips between their two tabs.
+     * <p>
+     * The two empty states are different facts and say so. No rows at all means nothing has
+     * been gated yet; rows with nothing selected means the user has a choice to make. The
+     * single "No data" both used to show answered neither question.
+     */
+    @Override
+    protected void draw(PlotSurface s, PlotTheme theme) {
+        if (rows.isEmpty()) {
+            drawEmptyState(s, theme, "No gated populations yet");
+            return;
+        }
+        // Empty exactly when no population is selected -- scopesPresent() filters on the
+        // selection, so a selection that matches nothing lands here too, which is the same
+        // "pick something" state from the reader's point of view.
         List<PopulationStats.Scope> scopes = scopesPresent();
         if (scopes.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "Select a population to compare");
             return;
         }
 
-        int maxCount = scopes.stream().mapToInt(this::valueForScope).max().orElse(1);
         int n = scopes.size();
+        double[] values = scopes.stream().mapToDouble(this::valueForScope).toArray();
+        AxisScale scale = scaleFor(values);
+        LabelLayout labels = layoutLabels(s,
+                scopes.stream().map(PopulationStats.Scope::displayName).toList());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(valueForScope(scopes.get(i)), 0, maxCount);
-            gc.setFill(Color.rgb(87, 217, 163, 0.85));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double value = valueForScope(scopes.get(i));
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
+            s.setFill(theme.series(1));
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
-        drawAxes(gc, selected == null ? "Scope" : selected.path(), "Count");
-        drawCategoryLabels(gc, scopes.stream().map(PopulationStats.Scope::displayName).toList());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS,
+                selected == null ? "Scope" : selected.path(), "Count");
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }

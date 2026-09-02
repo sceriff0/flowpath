@@ -3,7 +3,7 @@ package qupath.ext.flowpath.analysis.ui;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
-import qupath.ext.flowpath.model.Branch;
+import qupath.ext.flowpath.analysis.session.DenominatorRef;
 import qupath.ext.flowpath.model.PopulationStats;
 import qupath.ext.flowpath.testing.AnalysisFixtures;
 import qupath.ext.flowpath.testing.FxTestSupport;
@@ -45,7 +45,7 @@ class AnalysisPaneFxTest {
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
 
         int before = FxTestSupport.onFx(pane::rowCount);
-        FxTestSupport.onFxRun(() -> pane.setDenominator(session.denominatorChoices().get(0)));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(session.denominatorOptions().get(0).ref()));
         assertEquals(before, FxTestSupport.onFx(pane::rowCount));
     }
 
@@ -77,11 +77,12 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.emptyDenominatorInput()));
 
-        Branch emptyBranch = session.denominatorChoices().stream()
-                .filter(b -> "CD45+".equals(b.getName()))
+        DenominatorRef emptyRef = session.denominatorOptions().stream()
+                .filter(o -> "CD45+".equals(o.branch().getName()))
+                .map(AnalysisSession.DenominatorOption::ref)
                 .findFirst()
                 .orElseThrow();
-        FxTestSupport.onFxRun(() -> pane.setDenominator(emptyBranch));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(emptyRef));
 
         assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
         assertTrue(Double.isNaN(FxTestSupport.onFx(() -> pane.percentOfDenominatorAt(0))),
@@ -107,6 +108,99 @@ class AnalysisPaneFxTest {
     }
 
     /**
+     * Task 12's brief spells out the exact menu order and wording: three plot-scoped actions,
+     * a separator, then the pre-existing full-table export. Pinned as one list rather than
+     * five separate {@code contains} assertions so a swapped pair of items — which a reader
+     * would notice on screen instantly — still fails a test.
+     */
+    @Test
+    void exportMenuListsItemsInTheOrderTheBriefSpecifies() {
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(new AnalysisSession()));
+        assertEquals(List.of(
+                        "Copy plot to clipboard",
+                        "Plot as image…",
+                        "Plot data as CSV…",
+                        "",
+                        "Population table as CSV…"),
+                FxTestSupport.onFx(pane::exportMenuLabels));
+    }
+
+    /**
+     * Nothing has been accepted yet, so every plot is in its own empty state -- items 1-3 must
+     * not offer an export that would write a header line and nothing else.
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeAreDisabledWithNoDataAtAll() {
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(new AnalysisSession()));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+    }
+
+    /**
+     * The core Task 12 claim: items 1-3 act on -- and are enabled/disabled by -- whichever
+     * plot the {@code TabPane} currently has selected, not a single pane-wide "is there any
+     * data" flag. {@link qupath.ext.flowpath.testing.AnalysisFixtures#simpleInput()} carries a
+     * root {@code CD45} gate but zero annotated regions, so By Region genuinely has nothing to
+     * show while the other three tabs do -- a fixture that gave every tab the same answer
+     * could not tell "follows the tab" apart from "follows one shared flag".
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeFollowTheSelectedTabsOwnData() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(0)); // Composition
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "a CD45 root gate has leaves to show");
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(1)); // By Region
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "simpleInput() carries no annotated regions at all");
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(1)));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(2)));
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(2)); // By Scope
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "WHOLE_SLIDE is always present, so this plot has one bar");
+
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(3)); // Marker Positivity
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "CD45 is gated at the root");
+
+        // Item 5 (index 4) is bound to canExport(), never to a tab -- it must stay enabled
+        // across every one of the switches above, including the empty By Region tab.
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(4)));
+    }
+
+    /**
+     * A later push can hand the currently selected tab's plot data it did not have before --
+     * items 1-3 must pick that up without a tab switch, since {@code AnalysisPane} calls
+     * {@code updateExportMenuState()} at the end of every push, not only from the tab
+     * listener.
+     */
+    @Test
+    void exportMenuItemsOneThroughThreeUpdateOnANewPushWithoutATabSwitch() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.selectPlotTab(1)); // By Region, empty so far
+
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+        assertTrue(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "simpleInput() carries no annotated regions");
+
+        // partiallyKnownRegionAreasInput() DOES carry annotated regions -- accepting it while
+        // still on the By Region tab, with no selectPlotTab call in between, is what proves
+        // updateExportMenuState() runs from the push path and not only from the tab listener.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.partiallyKnownRegionAreasInput()));
+        assertFalse(FxTestSupport.onFx(() -> pane.exportMenuItemDisabled(0)),
+                "the new push carries annotated regions, and no tab switch was needed to see it");
+    }
+
+    /**
      * Spec §4 asks the denominator dropdown to also offer "all cells". The converter has
      * always been able to render a {@code null} branch as {@code "(none)"}, but nothing ever
      * put a {@code null} in the list -- so the choice was one-way: a user who picked a
@@ -118,17 +212,95 @@ class AnalysisPaneFxTest {
         AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
         FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
 
-        List<Branch> offered = FxTestSupport.onFx(pane::denominatorChoices);
+        List<DenominatorRef> offered = FxTestSupport.onFx(pane::denominatorRefChoices);
         assertNull(offered.get(0), "the first offer is \"all cells\" -- rendered \"(none)\"");
-        assertEquals(session.denominatorChoices().size() + 1, offered.size(),
+        assertEquals(session.denominatorOptions().size() + 1, offered.size(),
                 "every branch, plus the null");
 
-        Branch positive = session.denominatorChoices().get(0);
+        DenominatorRef positive = session.denominatorOptions().get(0).ref();
         FxTestSupport.onFxRun(() -> pane.setDenominator(positive));
         assertEquals("100.0", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)));
         FxTestSupport.onFxRun(() -> pane.setDenominator(null));
         assertEquals("", FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)),
                 "choosing \"(none)\" again clears the denominator column");
+    }
+
+    /**
+     * The regression this task fixes. {@code FlowPathPane.buildAnalysisInput()} deep-copies
+     * the gate tree on every push, and {@code GateNode.deepCopy()} mints fresh {@code Branch}
+     * objects every time -- so a selection keyed on a {@code Branch} (identity comparison)
+     * was never present in the next pass's list and silently went back to "(none)". Every
+     * pre-existing test in this file calls {@code accept()} exactly once, which is why none
+     * of them caught it; this is the same fixture accepted twice, with a selection made in
+     * between.
+     */
+    @Test
+    void aChosenDenominatorSurvivesTheNextGatingPass() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        DenominatorRef chosen = FxTestSupport.onFx(() -> pane.denominatorRefChoices().get(1));
+        FxTestSupport.onFxRun(() -> pane.setDenominator(chosen));
+        String before = FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0));
+        assertNotEquals("", before, "precondition: a denominator produces a percentage");
+
+        // A second, structurally identical pass -- exactly what a live preview push delivers.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        assertEquals(chosen, FxTestSupport.onFx(pane::selectedDenominatorRef),
+                "the choice is keyed on a value, not on a Branch object that was just replaced");
+        assertEquals(before, FxTestSupport.onFx(() -> pane.formattedPercentOfDenominatorAt(0)),
+                "and the column still reports against it");
+    }
+
+    /**
+     * The distinction the survival test above does not exercise: a chosen denominator must
+     * clear when the branch it names is genuinely gone (its gate disabled or removed between
+     * passes), not merely rebuilt by a deep copy. Conflating the two would mean either the
+     * survival fix regresses into "never clears", or this case regresses back into "always
+     * clears" -- both are the same defect from opposite directions.
+     */
+    @Test
+    void aChosenDenominatorClearsOnlyWhenItsGateIsActuallyDisabled() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        AnalysisSession.AnalysisInput simple = AnalysisFixtures.simpleInput();
+        FxTestSupport.onFxRun(() -> pane.accept(simple));
+
+        DenominatorRef chosen = session.denominatorOptions().get(0).ref();
+        FxTestSupport.onFxRun(() -> pane.setDenominator(chosen));
+        assertEquals(chosen, FxTestSupport.onFx(pane::selectedDenominatorRef));
+
+        // Same cells and stats, but an empty tree -- as if every root gate had been
+        // removed since the last accepted pass. No gate, no branch, no row: the ref chosen
+        // must clear, unlike a mere deep copy of the SAME tree above.
+        AnalysisSession.AnalysisInput noRoots = new AnalysisSession.AnalysisInput(
+                new qupath.ext.flowpath.model.GateTree(), simple.index(), simple.stats(),
+                new qupath.ext.flowpath.model.BranchTally(0), List.of(), null, "test-image");
+        FxTestSupport.onFxRun(() -> pane.accept(noRoots));
+
+        assertNull(FxTestSupport.onFx(pane::selectedDenominatorRef),
+                "the branch the ref named no longer has a gate at all -- this must clear, "
+                        + "unlike the deep-copy case above");
+    }
+
+    /**
+     * Closes the second, smaller defect the same fix carries: two roots on one channel used
+     * to render as two identical {@code "CD45+"}/{@code "CD45-"} entries in the denominator
+     * combo, indistinguishable to the user. {@code twoRootInput()} (used by the picker test
+     * below) cannot exercise this -- its two roots are on different channels and never
+     * collide; only {@code twoRootsSameChannelInput()} does.
+     */
+    @Test
+    void twoRootsOnOneChannelGiveDistinguishableDenominators() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        List<String> labels = FxTestSupport.onFx(() -> pane.denominatorLabels());
+        assertEquals(labels.size(), labels.stream().distinct().count(),
+                "no two entries read identically: " + labels);
+        assertTrue(labels.stream().filter(l -> !l.equals("(none)")).allMatch(l -> l.contains("root")),
+                "each names its root: " + labels);
     }
 
     /**
@@ -197,9 +369,427 @@ class AnalysisPaneFxTest {
         assertEquals(List.of("10", "10", "5", "15"), counts);
     }
 
+    /**
+     * The brief's own {@code blankCellsSortToTheEndInEitherDirection} exercises "% of
+     * Denominator", a column that is entirely {@code NaN} for this fixture (no denominator is
+     * ever chosen), so it never actually checks that a real, non-{@code NaN} column reverses
+     * correctly under a descending sort -- only that an all-blank column stays all blank. This
+     * closes that gap directly against "% Parent", which never carries {@code NaN}.
+     */
+    @Test
+    void descendingSortOfRealNumbersIsCorrectlyReversed() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        List<Double> desc = FxTestSupport.onFx(() -> {
+            pane.sortBy("% Parent", false);
+            return pane.visiblePercentOfParent();
+        });
+        for (int i = 1; i < desc.size(); i++) {
+            assertTrue(desc.get(i - 1) >= desc.get(i) - 1e-9, "descending out of order at " + i + ": " + desc);
+        }
+        assertEquals(75.0, desc.get(0), 1e-9, desc.toString());
+    }
+
+    /**
+     * The regression Task 11 fixes: four pickers used to sit in one flat control row and read
+     * as global, but only Scope and Denominator actually drive the table. Root drives only the
+     * Composition tab and Population drives only the two comparison tabs -- both must live on
+     * the tab they actually affect, not above the table where they read as broken when a user
+     * changes them and nothing visible happens.
+     */
+    @Test
+    void eachPlotCarriesItsOwnPickersRatherThanTrustingAGlobalBar() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        // The Root picker belongs to the Composition tab; the Population picker to the
+        // comparison tabs. Neither may sit in the table's control row, where it read as global.
+        assertTrue(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Scope:")));
+        assertTrue(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Denominator:")));
+        assertFalse(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Root:")),
+                "Root drives one plot, so it lives on that plot");
+        assertFalse(FxTestSupport.onFx(() -> pane.tableControlLabels().contains("Population:")));
+    }
+
+    /**
+     * By Region and By Scope each carry their own {@code ComboBox} for the Population picker
+     * (Task 11's layout), but there is only ONE selection behind them -- a user comparing
+     * "CD45+/CD8+" on By Region must still be looking at "CD45+/CD8+" after flipping to By
+     * Scope, not silently back at whatever the other combo happened to default to.
+     */
+    @Test
+    void thePopulationChoiceIsSharedBetweenTheTwoComparisonTabs() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        PopulationRef second = FxTestSupport.onFx(() -> pane.populationChoices().get(1));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation(second));
+        assertEquals(second, FxTestSupport.onFx(() -> pane.regionComparisonCanvas().selectedPopulation()));
+        assertEquals(second, FxTestSupport.onFx(() -> pane.scopeComparisonCanvas().selectedPopulation()));
+    }
+
+    @Test
+    void selectingARowNotifiesTheHostOnceWithThatPopulation() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        assertEquals(1, seen.size(), "one selection, one notification");
+        assertEquals(FxTestSupport.onFx(pane::selectedRowRef), seen.get(0));
+    }
+
+    @Test
+    void aSelectionArrivingFromOutsideIsNotEchoedBack() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+        PopulationRef ref = FxTestSupport.onFx(() -> pane.populationChoices().get(0));
+        FxTestSupport.onFxRun(() -> pane.selectPopulation(ref));
+        assertTrue(seen.isEmpty(), "an inbound selection must not bounce back and loop");
+    }
+
+    /**
+     * {@code restoreSelection} (called from {@code refresh()} on every {@code accept()}) has to
+     * re-select the row naming the previous selection to keep it visible across a live-preview
+     * push -- but that re-selection is bookkeeping, not a new pick, and must not renotify the
+     * host. Every other test in this file that drives a push calls {@code accept()} exactly
+     * once, so nothing else exercises a SECOND push with a handler already installed; this is
+     * the one that does.
+     */
+    @Test
+    void aSecondIdenticalPushDoesNotRenotifyTheHost() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        PopulationRef selected = FxTestSupport.onFx(pane::selectedRowRef);
+        assertNotNull(selected);
+
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+
+        // A structurally identical second pass -- the same shape a live-preview re-gate produces
+        // when nothing about the selected population actually changed.
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        assertTrue(seen.isEmpty(),
+                "a push that only RESTORES the existing selection must not notify the host");
+        assertEquals(selected, FxTestSupport.onFx(pane::selectedRowRef),
+                "the selection itself must still survive the push");
+    }
+
+    /**
+     * The whole-branch review's item 5: {@code updateTable()} brackets its entire body under
+     * {@code suppressSelectionNotification} because mutating {@link #backingRows} makes {@code
+     * TableView} re-select at the previously-selected INDEX on its own, independently of any
+     * {@code select()} call ({@code updateTable}'s own javadoc records that discovery).
+     * {@code applyFilter} mutates {@code filteredRows}' predicate instead of the row list, which
+     * fires the same class of {@code FilteredList -> SortedList -> TableView} change event, and
+     * had no guard at all. Nobody had verified whether a predicate change triggers the same
+     * auto-reselection a list mutation does -- this settles it empirically: filter the selected
+     * row OUT and check whether the host is notified as though a NEW population had been picked.
+     * <p>
+     * It does not fire. Kept as a regression guard either way, per the review's own instruction,
+     * and {@code applyFilter}'s own javadoc records why it stays unguarded.
+     */
+    @Test
+    void filteringOutTheSelectedRowDoesNotNotifyTheHost() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.selectRow(1));
+        PopulationRef selected = FxTestSupport.onFx(pane::selectedRowRef);
+        assertNotNull(selected, "precondition: a row is actually selected");
+
+        java.util.List<PopulationRef> seen = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> pane.setOnPopulationSelected(seen::add));
+
+        // Guaranteed to exclude every row, the selected one included, regardless of fixture.
+        FxTestSupport.onFxRun(() -> pane.setFilter("no-such-population-xyz"));
+
+        assertTrue(seen.isEmpty(),
+                "typing a filter that excludes the selected row must not notify the host as "
+                        + "though a different population had been picked, which would move the "
+                        + "gate tree's own selection out from under the user");
+    }
+
     private static List<String> rowsOf(AnalysisPane pane, String column) {
         List<String> out = new java.util.ArrayList<>();
         for (int i = 0; i < pane.rowCount(); i++) out.add(pane.cellTextAt(i, column));
         return out;
+    }
+
+    /**
+     * Every percentage/density column used to be {@code String}-typed and explicitly
+     * unsortable, because a {@code String} column of numbers sorts lexicographically
+     * ("100.0" above "20.0" above "9.5"). This pins that {@code % Parent} now sorts as a
+     * number.
+     */
+    @Test
+    void percentageColumnsSortNumericallyNotLexicographically() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        assertTrue(FxTestSupport.onFx(() -> pane.isColumnSortable("% Parent")),
+                "a stats table you cannot rank is not a stats table");
+        // 100.0 must not sort above 20.0 above 9.5, which is what a String column did.
+        List<Double> sorted = FxTestSupport.onFx(() -> {
+            pane.sortBy("% Parent", true);
+            return pane.visiblePercentOfParent();
+        });
+        for (int i = 1; i < sorted.size(); i++) {
+            double a = sorted.get(i - 1), b = sorted.get(i);
+            if (Double.isNaN(a) || Double.isNaN(b)) continue;
+            assertTrue(a <= b + 1e-9, "out of order at " + i + ": " + sorted);
+        }
+    }
+
+    /**
+     * A blank cell is "unanswered"; an unanswered row must not head the table in either sort
+     * direction.
+     * <p>
+     * Deliberately uses {@code Area (mm²)} against
+     * {@code AnalysisFixtures.partiallyKnownRegionAreasInput()} at
+     * {@link PopulationStats.Scope#ANNOTATION_K}, not {@code % of Denominator} against a
+     * fixture with no denominator chosen. {@code % of Denominator} is all-or-nothing — every
+     * row is real once a denominator is picked, every row is {@code NaN} when none is — so a
+     * version of this test built on it (an earlier version of this test did exactly that)
+     * cannot distinguish a correct NaN-last comparator from a broken one: an implementation
+     * that put NaN <em>first</em> under a descending sort would still pass, because an
+     * all-{@code NaN} column has no "first" or "last" to get wrong. This fixture's region areas
+     * are two real values plus one {@code NaN}, so the assertions below actually exercise both
+     * "NaN goes after every real value" and "the real values are still in the right order".
+     */
+    @Test
+    void blankCellsSortToTheEndInEitherDirection() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.partiallyKnownRegionAreasInput()));
+        FxTestSupport.onFxRun(() -> pane.selectScope(PopulationStats.Scope.ANNOTATION_K));
+        for (boolean ascending : new boolean[] { true, false }) {
+            List<Double> values = FxTestSupport.onFx(() -> {
+                pane.sortBy("Area (mm²)", ascending);
+                return pane.visibleAreaMm2();
+            });
+            assertTrue(values.stream().anyMatch(v -> !Double.isNaN(v)),
+                    "precondition: the fixture has real areas -- " + values);
+            assertTrue(values.stream().anyMatch(v -> Double.isNaN(v)),
+                    "precondition: the fixture has a blank area too -- " + values);
+
+            int firstNaN = -1;
+            for (int i = 0; i < values.size(); i++) {
+                if (Double.isNaN(values.get(i))) { firstNaN = i; break; }
+            }
+            assertTrue(firstNaN >= 0, "the precondition above guarantees a NaN exists");
+            for (int i = firstNaN; i < values.size(); i++) {
+                assertTrue(Double.isNaN(values.get(i)),
+                        "an unanswered row must never sort above an answered one: " + values);
+            }
+            for (int i = 1; i < firstNaN; i++) {
+                double a = values.get(i - 1), b = values.get(i);
+                boolean inOrder = ascending ? a <= b + 1e-9 : a >= b - 1e-9;
+                assertTrue(inOrder, "real values out of order at " + i + " (ascending=" + ascending + "): " + values);
+            }
+        }
+    }
+
+    /** Filtering narrows the visible rows without rebuilding the underlying stats, and an
+     * emptied table says which of its two possible reasons applies. */
+    @Test
+    void filteringNarrowsTheRowsAndSaysSoWhenItEmptiesThem() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        int all = FxTestSupport.onFx(pane::rowCount);
+        FxTestSupport.onFxRun(() -> pane.setFilter("CD45"));
+        assertTrue(FxTestSupport.onFx(pane::rowCount) <= all);
+        assertTrue(FxTestSupport.onFx(() -> pane.visibleRowPaths().stream()
+                .allMatch(p -> p.toLowerCase().contains("cd45"))));
+
+        FxTestSupport.onFxRun(() -> pane.setFilter("zzzz-no-such-marker"));
+        assertEquals(0, FxTestSupport.onFx(pane::rowCount));
+        assertTrue(FxTestSupport.onFx(pane::placeholderText).contains("zzzz-no-such-marker"),
+                "an empty grid must say why it is empty");
+    }
+
+    /**
+     * Closes the case {@code AnalysisState}'s own invariant deliberately cannot express: data
+     * exists, but the current scope has no rows for it.
+     * <p>
+     * An earlier version of this test wrapped its assertion in
+     * {@code if (pane.rowCount() == 0)} against a fixture that always has rows at its default
+     * scope -- so the body never ran, and the test reported green while asserting nothing. This
+     * version builds the empty case for real: an accepted pass with cells and statistics but an
+     * empty {@link qupath.ext.flowpath.model.GateTree} (no root gates at all), the same
+     * construction {@code aChosenDenominatorClearsOnlyWhenItsGateIsActuallyDisabled} above uses
+     * to simulate every root gate having been removed since the last pass.
+     * {@code AnalysisSession.state().hasData()} is true (a pass was accepted), but
+     * {@code PopulationStats.of} walks zero roots, so {@code Scope.WHOLE_SLIDE} — the only
+     * scope an unannotated pass offers — genuinely has zero rows.
+     */
+    @Test
+    void aTableWithDataButNoRowsAtThisScopeExplainsItself() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        AnalysisSession.AnalysisInput simple = AnalysisFixtures.simpleInput();
+        AnalysisSession.AnalysisInput noRoots = new AnalysisSession.AnalysisInput(
+                new qupath.ext.flowpath.model.GateTree(), simple.index(), simple.stats(),
+                new qupath.ext.flowpath.model.BranchTally(0), List.of(), null, "test-image");
+
+        FxTestSupport.onFxRun(() -> pane.accept(noRoots));
+
+        assertEquals(0, FxTestSupport.onFx(pane::rowCount), "no root gates means no rows to report");
+        assertEquals("No populations at this scope.", FxTestSupport.onFx(pane::placeholderText));
+    }
+
+    /**
+     * A live preview push must not jump the table out from under a user reading it -- in a
+     * SORTED table, not only the insertion-order one a plain {@code accept()} produces. Without
+     * the {@code sortBy} call below, {@code restoreSelection} could satisfy this test by
+     * re-selecting whatever landed at the previously-selected ROW INDEX rather than genuinely
+     * searching for the selected row's own {@code (rootIndex, path)} -- the two are
+     * indistinguishable when the table has never been reordered, since insertion order and
+     * table order are the same thing. Sorting first (descending by {@code Count}, which reorders
+     * this fixture's rows away from insertion order) is what makes "index" and "identity" two
+     * different claims a passing test could actually be telling apart.
+     */
+    @Test
+    void aLivePushKeepsTheSelectedPopulationSelected() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        FxTestSupport.onFxRun(() -> pane.sortBy("Count", false));
+        PopulationRef selected = FxTestSupport.onFx(() -> {
+            pane.selectRow(1);
+            return pane.selectedRowRef();
+        });
+        assertNotNull(selected);
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        assertEquals(selected, FxTestSupport.onFx(pane::selectedRowRef),
+                "the table must not jump out from under a user who is reading it, sorted or not");
+    }
+
+    /** Copy produces a TSV with a header line matching the row's own field count. */
+    @Test
+    void copyProducesTsvWithAHeader() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        String tsv = FxTestSupport.onFx(() -> { pane.selectRow(0); return pane.copySelectionAsTsv(); });
+        String[] lines = tsv.split("\n");
+        assertTrue(lines.length >= 2, tsv);
+        assertTrue(lines[0].contains("Population"), lines[0]);
+        // limit -1: several trailing columns (Density, Area, % of Denominator) are blank for
+        // this fixture (no annotated regions, no denominator chosen), and the no-arg overload
+        // of String.split silently drops trailing empty fields, undercounting the row -- a
+        // real TSV field count must not depend on whether the LAST cell happens to be blank.
+        assertEquals(lines[0].split("\t", -1).length, lines[1].split("\t", -1).length,
+                "the header and the row must have the same number of fields");
+    }
+
+    /**
+     * The summary line is what makes a statistics panel say what it is reporting on -- a
+     * user with two images open otherwise cannot tell which one the numbers describe.
+     */
+    @Test
+    void theSummaryLineNamesTheImageTheCellsAndThePopulations() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.isBlank(), "the panel must say what it is reporting on");
+        assertTrue(summary.contains("cells"), summary);
+        assertTrue(summary.contains("populations"), summary);
+    }
+
+    /**
+     * An unannotated slide has {@code regionCount == 0}; advertising "0 regions" would be
+     * noise rather than information, so the segment must be omitted entirely, not printed
+     * as a zero.
+     */
+    @Test
+    void theSummaryOmitsRegionsWhenThereAreNone() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.simpleInput()));
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.contains("regions"),
+                "an unannotated slide must not advertise zero regions: " + summary);
+    }
+
+    /**
+     * A blank image name is exactly as unknown as a {@code null} one -- {@code
+     * AnalysisFixtures} only ever hands out a real name, so this test builds its own input
+     * with the surrounding fixture's tree/index/tally to isolate the one field under test.
+     */
+    @Test
+    void theSummaryOmitsTheImageSegmentWhenTheNameIsBlank() {
+        AnalysisSession.AnalysisInput base = AnalysisFixtures.simpleInput();
+        AnalysisSession.AnalysisInput blankName = new AnalysisSession.AnalysisInput(
+                base.tree(), base.index(), base.stats(), base.tally(),
+                base.regionNames(), base.regionAreasMm2(), "   ");
+
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(blankName));
+
+        String summary = FxTestSupport.onFx(pane::summaryText);
+        assertFalse(summary.contains("   "), "a blank name must not appear in the summary: " + summary);
+        // startsWith("10 cells") is the actual claim: with the image name omitted, the summary
+        // must lead with the cell count rather than an empty "· " left over from a skipped
+        // name segment. `startsWith(...) || contains("cells")` used to sit here instead --
+        // toothless, since "10 cells" itself contains "cells", so the `contains` half made the
+        // `startsWith` half unreachable as a discriminator.
+        assertTrue(summary.startsWith("10 cells"), summary);
+    }
+
+    /**
+     * The summary's population count must track what the table is actually showing, not
+     * only what the last full push computed -- typing in the filter box changes
+     * {@code table.getItems()} without going through {@code updateTable()} at all, and a
+     * summary line wired only to the push path would silently drift from the table it sits
+     * above the moment a user starts typing.
+     */
+    @Test
+    void theSummaryPopulationCountFollowsTheFilter() {
+        AnalysisSession session = new AnalysisSession();
+        AnalysisPane pane = FxTestSupport.onFx(() -> new AnalysisPane(session));
+        FxTestSupport.onFxRun(() -> pane.accept(AnalysisFixtures.twoRootsSameChannelInput()));
+
+        // No filter active: the plain count, with no "of" -- the summary must not claim a
+        // filter is narrowing anything when none is.
+        int unfilteredRows = FxTestSupport.onFx(pane::rowCount);
+        String unfilteredSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(unfilteredSummary.contains(unfilteredRows + " populations"), unfilteredSummary);
+        assertFalse(unfilteredSummary.contains(" of "), unfilteredSummary);
+
+        // Narrow to a filter that cannot match every row, so the visible count actually
+        // changes rather than coincidentally staying the same. The summary must now read
+        // "{visible} of {total} populations": the total stays on screen (it is the true
+        // count the gating covered, not something a forgotten filter should hide), and the
+        // visible count matches what the table beneath it is actually showing.
+        FxTestSupport.onFxRun(() -> pane.setFilter("CD45+"));
+        int filteredRows = FxTestSupport.onFx(pane::rowCount);
+        assertTrue(filteredRows < unfilteredRows, "the filter must actually narrow the rows shown");
+
+        String filteredSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(filteredSummary.contains(filteredRows + " of " + unfilteredRows + " populations"),
+                filteredSummary);
+
+        // Clearing the filter must restore the plain, un-annotated count -- the "of" segment
+        // is tied to whether a filter is actually narrowing the rows, not left behind once it
+        // has appeared once.
+        FxTestSupport.onFxRun(() -> pane.setFilter(""));
+        int clearedRows = FxTestSupport.onFx(pane::rowCount);
+        assertEquals(unfilteredRows, clearedRows, "clearing the filter must restore every row");
+
+        String clearedSummary = FxTestSupport.onFx(pane::summaryText);
+        assertTrue(clearedSummary.contains(clearedRows + " populations"), clearedSummary);
+        assertFalse(clearedSummary.contains(" of "), clearedSummary);
     }
 }

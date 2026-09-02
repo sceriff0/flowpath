@@ -115,7 +115,8 @@ public final class AnalysisSession {
     public AnalysisState state() {
         if (input == null) {
             return new AnalysisState(false, false, false, 0, 0, List.of(),
-                    "No gating pass to report on yet — gate some cells to see population statistics.");
+                    "No gating pass to report on yet — gate some cells to see population statistics.",
+                    null);
         }
         int regionCount = input.tally().regionCount();
         boolean hasRegions = regionCount > 0;
@@ -125,7 +126,7 @@ public final class AnalysisSession {
                         PopulationStats.Scope.ANNOTATION_K)
                 : List.of(PopulationStats.Scope.WHOLE_SLIDE);
         return new AnalysisState(true, hasRegions, true,
-                input.tally().cellsTotal(), regionCount, scopes, null);
+                input.tally().cellsTotal(), regionCount, scopes, null, input.imageName());
     }
 
     /**
@@ -147,24 +148,79 @@ public final class AnalysisSession {
     }
 
     /**
-     * Every branch a user may choose as the report's denominator: every branch of every
-     * <b>enabled</b> gate in the accepted tree, depth-first.
+     * One branch a user may choose as the report's denominator, offered under a value that
+     * survives the next gating pass, paired with the live {@link Branch} it currently names.
      * <p>
-     * Matches {@link PopulationStats}'s own row order exactly — a disabled gate's branches
-     * are skipped here for the same reason its rows are skipped there, so a user can never
-     * pick a denominator that has no row to go with it.
+     * The pane stores {@link #ref}, never {@link #branch} — see {@link DenominatorRef}'s own
+     * javadoc for why holding the {@code Branch} itself is exactly the bug this task fixes.
+     */
+    public record DenominatorOption(DenominatorRef ref, Branch branch) {}
+
+    /**
+     * Every branch a user may choose as the report's denominator, as a
+     * {@link DenominatorRef}/{@link Branch} pair: every branch of every <b>enabled</b> gate
+     * in the accepted tree, depth-first.
+     * <p>
+     * Matches {@link PopulationStats#collectFromRoots}'s own walk exactly — same
+     * {@code rootIndex} assignment (incremented only for an enabled root, so disabled roots
+     * do not consume a number), same {@code path} construction
+     * ({@code prefix.isEmpty() ? branch.getName() : prefix + "/" + branch.getName()}), same
+     * depth-first descent, same skip of a disabled gate's whole subtree. Diverging from that
+     * walk in any of those details would build a {@link DenominatorRef} that names a
+     * population {@link PopulationStats} never reports a row for — the same failure mode
+     * {@link qupath.ext.flowpath.analysis.ui.PopulationRef} exists to prevent one layer up,
+     * for the exact same reason.
      *
      * @return empty when nothing has been accepted, or since {@link #clear()}
      */
-    public List<Branch> denominatorChoices() {
-        List<Branch> out = new ArrayList<>();
+    public List<DenominatorOption> denominatorOptions() {
+        List<DenominatorOption> out = new ArrayList<>();
         if (input != null) {
-            collectBranches(input.tree().getRoots(), out);
+            collectOptionsFromRoots(input.tree().getRoots(), out);
         }
         return out;
     }
 
-    private static void collectBranches(List<GateNode> nodes, List<Branch> out) {
+    /**
+     * Re-find the live {@link Branch} a {@link DenominatorRef} names in the currently
+     * accepted tree.
+     * <p>
+     * This is the one place the fix actually happens: a ref built against a previous pass's
+     * tree still resolves here, because {@code (rootIndex, path)} is reproduced
+     * byte-for-byte by {@code GateNode.deepCopy()}, unlike the fresh {@link Branch} objects
+     * the copy mints. A {@code null} result is not an error — it is the honest answer when
+     * the branch the user chose has genuinely gone (its gate was disabled, or deleted, or
+     * renamed between passes), and the caller must clear the selection in exactly that case,
+     * never in the "same population, new copy" case a non-null result reports.
+     *
+     * @return the live branch, or {@code null} when no currently offered option matches
+     *         {@code ref}
+     */
+    public Branch resolveDenominator(DenominatorRef ref) {
+        if (ref == null) return null;
+        for (DenominatorOption option : denominatorOptions()) {
+            if (option.ref().equals(ref)) return option.branch();
+        }
+        return null;
+    }
+
+    /**
+     * Assigns each enabled root gate its {@code rootIndex}, in tree order, then walks its
+     * whole subtree before moving to the next root — mirrors
+     * {@link PopulationStats#collectFromRoots} exactly; see {@link #denominatorOptions()}.
+     */
+    private static void collectOptionsFromRoots(List<GateNode> roots, List<DenominatorOption> out) {
+        if (roots == null) return;
+        int rootIndex = 0;
+        for (GateNode root : roots) {
+            if (!root.isEnabled()) continue;
+            collectOptions(List.of(root), "", rootIndex, out);
+            rootIndex++;
+        }
+    }
+
+    private static void collectOptions(List<GateNode> nodes, String prefix, int rootIndex,
+                                       List<DenominatorOption> out) {
         if (nodes == null) return;
         for (GateNode node : nodes) {
             // Mirrors PopulationStats.collect: a disabled gate is a hard stop for its whole
@@ -172,8 +228,9 @@ public final class AnalysisSession {
             // would let the user pick one that produces no row at all.
             if (!node.isEnabled()) continue;
             for (Branch branch : node.getBranches()) {
-                out.add(branch);
-                collectBranches(branch.getChildren(), out);
+                String path = prefix.isEmpty() ? branch.getName() : prefix + "/" + branch.getName();
+                out.add(new DenominatorOption(new DenominatorRef(rootIndex, path), branch));
+                collectOptions(branch.getChildren(), path, rootIndex, out);
             }
         }
     }

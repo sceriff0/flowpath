@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -73,6 +73,16 @@ import java.util.Set;
 public final class MarkerPositivityCanvas extends PlotCanvas {
 
     private static final Logger logger = LoggerFactory.getLogger(MarkerPositivityCanvas.class);
+
+    /**
+     * The three segments of every bar, in stacking order from the axis up. One list, read by
+     * both the drawing loop and the legend, so a legend row can never name a segment the bar
+     * does not draw — and {@code LEGEND_ROWS} is its size rather than a literal 3, so the
+     * strip {@code plotTop} reserves cannot fall out of step with what fills it.
+     */
+    private static final List<String> SEGMENTS = List.of("Positive", "Negative", "Ungated");
+
+    private static final int LEGEND_ROWS = SEGMENTS.size();
 
     /**
      * The identity of one gate node, as far as this reduction can see it: the root gate it
@@ -282,50 +292,174 @@ public final class MarkerPositivityCanvas extends PlotCanvas {
         return scopeTotal;
     }
 
+    /**
+     * Three data per marker — positive, negative, ungated — reading the exact
+     * {@link #positiveCount}/{@link #negativeCount}/{@link #ungatedCount} calls {@link #draw}
+     * itself makes for each bar, not a fresh pass over {@link #byMarker}.
+     * <p>
+     * Empty in the same two cases {@link #draw} falls back to an empty state instead of bars:
+     * no single-marker gates at all, or a {@link #scopeTotal} of zero. Reproducing both guards
+     * here — rather than only the first — is what keeps this in step with {@link #draw}; the
+     * {@link PlotCanvas#plotData()} contract is "what is currently drawn", and a scope with no
+     * cells draws nothing even when {@link #byMarker} still holds stale marker keys from an
+     * earlier pass.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
-
+    public List<PlotDatum> plotData() {
         List<String> markerList = markers();
-        if (markerList.isEmpty() || scopeTotal <= 0) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+        if (markerList.isEmpty() || scopeTotal <= 0) return List.of();
+        List<PlotDatum> data = new ArrayList<>(markerList.size() * 3);
+        for (String marker : markerList) {
+            data.add(new PlotDatum(marker, "positive", positiveCount(marker)));
+            data.add(new PlotDatum(marker, "negative", negativeCount(marker)));
+            data.add(new PlotDatum(marker, "ungated", ungatedCount(marker)));
+        }
+        return data;
+    }
+
+    /**
+     * The segment at {@code (x, y)}: which marker's bar {@link #categorySlotAt} resolves to,
+     * and which of its three stacked segments {@code y} falls in — found by inverting the
+     * exact cumulative boundaries {@link #draw} filled the bar with ({@code baseY}, {@code
+     * yAfterPositive}, {@code yAfterNegative}), not a fresh guess at where a segment "should"
+     * be. Recomputing the {@link AxisScale} here (rather than reading one back) is safe in a
+     * way recomputing a {@link LabelLayout} would not be: an axis scale is a pure function of
+     * {@code values} and {@link #scaleOptions()} with no text measurement involved, so it
+     * cannot disagree with {@link #draw}'s own the way a re-measured label could — see {@link
+     * #categorySlotAt} for why the {@link LabelLayout} and legend row count are still read
+     * back from {@link #paintedLayout()} rather than recomputed.
+     * <p>
+     * The three ranges are, from the axis up: {@code [baseY, yAfterPositive)} is Positive,
+     * {@code [yAfterPositive, yAfterNegative)} is Negative, and everything above that —
+     * including the gap between a short bar's own top and the top of the plot rectangle — is
+     * Ungated. That last range is deliberately open-ended for the same reason {@link
+     * #categorySlotAt} resolves a click beside a thin bar to its slot rather than to nothing:
+     * this plot exists specifically to make the Ungated segment visible, so a click just above
+     * a bar that does not reach very high should still land on the segment the plot is making
+     * the point about, not fall through to no hit.
+     * <p>
+     * <b>No population.</b> A marker's positive (or negative) count can be pooled across
+     * several sibling gate nodes (see the class javadoc's "sibling gates pool" section), so a
+     * segment does not in general correspond to one gate node a click could select unambiguously
+     * — {@link PlotHit#population()} is always {@code null} here.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<String> markerList = markers();
+        if (idx == null || idx >= markerList.size()) {
+            return null;
+        }
+        String marker = markerList.get(idx);
+
+        double[] values = markerList.stream()
+                .mapToDouble(m -> positiveCount(m) + negativeCount(m) + ungatedCount(m))
+                .toArray();
+        AxisScale scale = AxisScale.of(values, scaleOptions());
+        PaintedLayout layout = paintedLayout();
+        LabelLayout labels = layout.labels();
+        int legendRows = layout.legendRows();
+
+        double baseY = fractionToY(0, labels, legendRows);
+        double yAfterPositive = fractionToY(scale.toFraction(positiveCount(marker)), labels, legendRows);
+        double yAfterNegative = fractionToY(
+                scale.toFraction(positiveCount(marker) + negativeCount(marker)), labels, legendRows);
+
+        String segment;
+        int count;
+        if (y >= yAfterPositive) {
+            segment = "Positive";
+            count = positiveCount(marker);
+        } else if (y >= yAfterNegative) {
+            segment = "Negative";
+            count = negativeCount(marker);
+        } else {
+            segment = "Ungated";
+            count = ungatedCount(marker);
+        }
+        double total = values[idx];
+        double percent = total <= 0 ? 0.0 : count * 100.0 / total;
+        String detail = String.format(Locale.US, "%s: %d cells (%.1f%%)", segment, count, percent);
+        return new PlotHit(marker, detail, null);
+    }
+
+    /**
+     * The three segments take {@code theme.positive()}, {@code theme.negative()} and
+     * {@code theme.ungated()}, and the legend takes the same three values from the same
+     * accessors rather than from a parallel list of literals.
+     * <p>
+     * That parallel list is what this canvas got wrong before: the bars drew ungated in
+     * {@code rgb(80, 80, 90)} on an {@code rgb(30, 30, 30)} background — a contrast ratio low
+     * enough that the one segment this plot exists to make visible was the least visible thing
+     * on it — while the legend swatch beside it was {@code 0x505059}, close but not equal. Two
+     * lists of colours for one set of segments is a divergence waiting to happen; there is now
+     * only one.
+     * <p>
+     * The two empty states name different problems: a panel with no single-marker gates has
+     * nothing to report, whereas a scope holding no cells has nothing to report it about.
+     */
+    @Override
+    protected void draw(PlotSurface s, PlotTheme theme) {
+        List<String> markerList = markers();
+        if (markerList.isEmpty()) {
+            drawEmptyState(s, theme, "No single-marker gates to report");
+            return;
+        }
+        if (scopeTotal <= 0) {
+            drawEmptyState(s, theme, "No cells in this scope");
             return;
         }
 
+        List<Color> segmentColors = List.of(theme.positive(), theme.negative(), theme.ungated());
         int n = markerList.size();
+        // The value that matters for the axis is each bar's own total, not the shared
+        // scopeTotal a bar draws against -- the two agree whenever every marker's cells are
+        // fully accounted for (the common case), but a marker with a malformed sibling-gate
+        // group (see the class javadoc) excludes some cells from itself entirely, so its bar's
+        // own total falls short of scopeTotal. Scaling from the real per-bar tops is what a
+        // percentile clip needs to be meaningful rather than accidentally correct only because
+        // every bar happens to share one height.
+        double[] values = markerList.stream()
+                .mapToDouble(m -> positiveCount(m) + negativeCount(m) + ungatedCount(m))
+                .toArray();
+        AxisScale scale = scaleFor(values);
+        LabelLayout labels = layoutLabels(s, markerList);
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, scopeTotal);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
-        Color posColor = Color.rgb(0, 200, 0, 0.85);
-        Color negColor = Color.rgb(160, 160, 160, 0.85);
-        Color ungatedColor = Color.rgb(80, 80, 90, 0.85);
-
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             String marker = markerList.get(i);
             double cx = categoryToX(i, n);
+            double x = cx - barW / 2;
 
-            int pos = positiveCount(marker);
-            int neg = negativeCount(marker);
-            int ungated = ungatedCount(marker);
+            // Read back from values[i] rather than recomputing -- that array is this bar's
+            // total already, computed once above to build the axis. A second
+            // positiveCount+negativeCount+ungatedCount here would be the same "two expressions
+            // computing one number" this task exists to remove one level up, at the value->Y
+            // mapping itself.
+            double total = values[i];
 
-            double yAfterPos = valueToY(pos, 0, scopeTotal);
-            double yAfterNeg = valueToY(pos + neg, 0, scopeTotal);
-            double yAfterUngated = valueToY(pos + neg + ungated, 0, scopeTotal);
+            // Cumulative tops, so each segment is drawn as the gap between two heights on the
+            // one axis mapping -- a stack built from per-segment heights instead would drift
+            // by a pixel per segment against the ticks beside it.
+            double yAfterPositive = fractionToY(scale.toFraction(positiveCount(marker)), labels, LEGEND_ROWS);
+            double yAfterNegative = fractionToY(
+                    scale.toFraction(positiveCount(marker) + negativeCount(marker)), labels, LEGEND_ROWS);
+            double yAfterUngated = fractionToY(scale.toFraction(total), labels, LEGEND_ROWS);
 
-            gc.setFill(posColor);
-            gc.fillRect(cx - barW / 2, yAfterPos, barW, baseY - yAfterPos);
-            gc.setFill(negColor);
-            gc.fillRect(cx - barW / 2, yAfterNeg, barW, yAfterPos - yAfterNeg);
-            gc.setFill(ungatedColor);
-            gc.fillRect(cx - barW / 2, yAfterUngated, barW, yAfterNeg - yAfterUngated);
+            s.setFill(segmentColors.get(0));
+            s.fillRect(x, yAfterPositive, barW, baseY - yAfterPositive);
+            s.setFill(segmentColors.get(1));
+            s.fillRect(x, yAfterNegative, barW, yAfterPositive - yAfterNegative);
+            s.setFill(segmentColors.get(2));
+            s.fillRect(x, yAfterUngated, barW, yAfterNegative - yAfterUngated);
+            if (scale.isClipped(total)) {
+                drawClipMarker(s, theme, cx, barW, yAfterUngated);
+            }
         }
-        drawAxes(gc, "Marker", "Count");
-        drawCategoryLabels(gc, markerList);
-        drawValueTicks(gc, 0, scopeTotal, 4);
-        drawLegend(gc, List.of("Positive", "Negative", "Ungated"),
-                new int[] {0x00C800, 0xA0A0A0, 0x505059});
+        drawAxes(s, theme, labels, LEGEND_ROWS, "Marker", "Count");
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
+        drawLegend(s, theme, LEGEND_ROWS, SEGMENTS, segmentColors);
     }
 }

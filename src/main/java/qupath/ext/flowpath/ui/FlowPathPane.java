@@ -15,6 +15,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
+import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.io.FlowPathSerializer;
@@ -249,6 +250,11 @@ public class FlowPathPane extends BorderPane {
             + "Three nested scopes when annotations are in use: per region, all regions, "
             + "whole slide."));
         analysisButton.setOnAction(e -> openAnalysisWindow());
+        // The tree-selection link's reverse direction: a population selected in the Analysis
+        // window's table (or clicked on a plot bar) lands the TreeView's selection on the gate
+        // that produced it. See onPopulationSelectedFromAnalysis(); the forward direction is
+        // wired the other way, inside onTreeSelectionChanged() below.
+        analysisWindow.setPopulationSelectionListener(this::onPopulationSelectedFromAnalysis);
 
         HBox toolbarSpacer = new HBox();
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
@@ -583,6 +589,15 @@ public class FlowPathPane extends BorderPane {
     private GateNode currentNode; // tracks currently selected gate for replacement
     private boolean suppressTreeSelection = false;
 
+    // Set for the duration of onPopulationSelectedFromAnalysis()'s own tree selection, so
+    // onTreeSelectionChanged does not treat that programmatic move as a user pick and push it
+    // straight back to analysisWindow.selectPopulation() -- the round-trip loop the
+    // tree-selection link exists to avoid.
+    // Deliberately NOT suppressTreeSelection above: that flag also skips the editorPane/ancestor
+    // mask update onTreeSelectionChanged performs, and "selecting a population should select its
+    // gate" needs that update to still happen.
+    private boolean applyingPopulationSelection = false;
+
     private void replaceInTree(List<GateNode> nodes, GateNode oldNode, GateNode newNode) {
         for (GateNode node : nodes) {
             for (Branch branch : node.getBranches()) {
@@ -616,6 +631,64 @@ public class FlowPathPane extends BorderPane {
         return null;
     }
 
+    /**
+     * Resolve a population ref pushed back from the Analysis window's table (or a clicked plot
+     * bar) against the LIVE {@link #gateTree} and land the TreeView's selection on it — the
+     * reverse direction of the push {@link #onTreeSelectionChanged} makes into
+     * {@link AnalysisWindow#selectPopulation}.
+     * <p>
+     * {@code ref} was minted from a report built off {@code gateTree.deepCopy()} (see
+     * {@link #buildAnalysisInput()}), so {@link GateTree#findBranch} — not any object
+     * reference — is what resolves it against the tree the user may have gone on editing since.
+     * A ref that no longer resolves (the gate was deleted, disabled, or renamed since the
+     * report was pushed) is ignored silently: a stale ref is an ordinary consequence of live
+     * editing, not an error to surface, the same rule {@link GateTree#findBranch}'s own javadoc
+     * states.
+     */
+    private void onPopulationSelectedFromAnalysis(PopulationRef ref) {
+        if (ref == null) return;
+        Branch branch = gateTree.findBranch(ref.rootIndex(), ref.path());
+        if (branch == null) return;
+        TreeItem<Object> item = findBranchTreeItem(treeView.getRoot(), branch);
+        if (item == null) return;
+        applyingPopulationSelection = true;
+        try {
+            treeView.getSelectionModel().select(item);
+            treeView.scrollTo(treeView.getRow(item));
+        } finally {
+            applyingPopulationSelection = false;
+        }
+    }
+
+    /** As {@link #findTreeItem}, but locating the {@link FlowPathCell.BranchItem} naming {@code target}. */
+    private TreeItem<Object> findBranchTreeItem(TreeItem<Object> parent, Branch target) {
+        if (parent == null) return null;
+        if (parent.getValue() instanceof FlowPathCell.BranchItem bi && bi.branch == target) {
+            return parent;
+        }
+        for (TreeItem<Object> child : parent.getChildren()) {
+            TreeItem<Object> found = findBranchTreeItem(child, target);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    /**
+     * The {@code (rootIndex, path)} that names {@code target} in the live {@link #gateTree} —
+     * a one-line map from {@link GateTree#locate}'s {@code BranchLocation} (a {@code model}
+     * value) onto {@link PopulationRef} (an {@code analysis.ui} value). The walk itself lives
+     * exactly once, in {@code GateTree}, alongside {@link GateTree#findBranch} which it is the
+     * inverse of, for every path {@code PopulationStats} can emit — see
+     * {@code GateTree.BranchLocation}'s own javadoc for the one case (same-named sibling gates)
+     * that qualifier exists for, and for why that walk cannot live here or on {@code GateTree}
+     * returning a {@code PopulationRef} directly without creating the {@code ui} ↔ {@code model}
+     * layering violation this method exists to avoid.
+     */
+    private PopulationRef populationRefFor(Branch target) {
+        GateTree.BranchLocation location = gateTree.locate(target);
+        return location == null ? null : new PopulationRef(location.rootIndex(), location.path());
+    }
+
     private boolean removeFromTree(List<GateNode> nodes, GateNode target) {
         for (GateNode node : nodes) {
             for (Branch branch : node.getBranches()) {
@@ -642,6 +715,18 @@ public class FlowPathPane extends BorderPane {
             node = gn;
         } else if (item instanceof FlowPathCell.BranchItem branch) {
             node = branch.parentGate;
+            // The forward direction: a branch selected in the TREE highlights its population in
+            // the Analysis window's table, unless this selection is itself the RESULT of an
+            // inbound population pick (see onPopulationSelectedFromAnalysis) -- echoing that
+            // back out is the round-trip loop the tree-selection link exists to avoid.
+            // AnalysisWindow.selectPopulation is already a no-op while the window is closed, so
+            // there is no need to check isShowing() here too.
+            if (!applyingPopulationSelection) {
+                PopulationRef ref = populationRefFor(branch.branch);
+                if (ref != null) {
+                    analysisWindow.selectPopulation(ref);
+                }
+            }
         }
 
         if (node != null) {
@@ -1492,11 +1577,17 @@ public class FlowPathPane extends BorderPane {
      * ({@code FlowPathExtension.showGateTreeWindow}), so a listener left attached
      * keeps a discarded pane — and its whole {@code CellIndex} — reachable, and
      * keeps recomputing ROI masks for a window that is gone.
+     * <p>
+     * {@code analysisWindow.dispose()}, not {@code close()}: THIS {@code FlowPathPane} — and
+     * the {@code AnalysisWindow} it owns — is what is going away here, a fresh pair is built
+     * the next time the window reopens, so there is no future {@code open()} on this instance
+     * left to benefit from {@code close()}'s pane-survival behaviour. Keeping the pane alive
+     * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
         detachHierarchyListener();
         umapWindow.close();
-        analysisWindow.close();
+        analysisWindow.dispose();
         previewService.shutdown();
     }
 }

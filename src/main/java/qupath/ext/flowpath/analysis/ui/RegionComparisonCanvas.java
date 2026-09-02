@@ -1,9 +1,8 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -22,6 +21,9 @@ import java.util.Set;
  * reported the first root's number under both labels. See {@link PopulationRef}.
  */
 public final class RegionComparisonCanvas extends PlotCanvas {
+
+    /** No legend: one series, already named by the X-axis title. See {@code CompositionCanvas}. */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> regionRows = List.of();
     private PopulationRef selected;
@@ -51,6 +53,15 @@ public final class RegionComparisonCanvas extends PlotCanvas {
         Set<PopulationRef> seen = new LinkedHashSet<>();
         for (PopulationStats.Row row : regionRows) seen.add(PopulationRef.of(row));
         return List.copyOf(seen);
+    }
+
+    /**
+     * The population this canvas is currently comparing. Package-private, exercised directly
+     * by {@code AnalysisPaneFxTest} to pin that the By Region and By Scope tabs' own combos
+     * drive one shared selection rather than two independent ones.
+     */
+    PopulationRef selectedPopulation() {
+        return selected;
     }
 
     /**
@@ -93,33 +104,90 @@ public final class RegionComparisonCanvas extends PlotCanvas {
                 .orElse(0);
     }
 
+    /**
+     * One datum per bar — {@link #regionBars()}, the exact rows {@link #draw} iterates over,
+     * with the same blank-name fallback a reader needs: {@code regionName} repeats across
+     * distinct regions (see {@link #regionBars()}'s own comment), so a category column keyed
+     * on the name alone would collide the same way a name-keyed bar once did. Falls back on
+     * {@code regionIndex} — a row's identity, never guessed — only when the name itself is
+     * blank.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
+    public List<PlotDatum> plotData() {
+        if (selected == null) return List.of();
+        String series = selected.path();
+        List<PlotDatum> data = new ArrayList<>();
+        for (PopulationStats.Row row : regionBars()) {
+            String name = row.regionName();
+            String category = (name == null || name.isBlank())
+                    ? "Region " + row.regionIndex()
+                    : name;
+            data.add(new PlotDatum(category, series, row.count()));
+        }
+        return data;
+    }
 
+    /**
+     * The bar at {@code (x, y)}, named by its region and the selected population's count
+     * there — {@link #regionBars()}, the exact rows {@link #draw} iterates over, indexed by
+     * {@link #categorySlotAt}. The blank-name fallback matches {@link #regionLabels()} (the
+     * axis label this bar was drawn under), not {@link #plotData()}'s {@code "Region " + N}
+     * fallback — a tooltip is naming what is on screen, and what is on screen is the axis
+     * label, blank or not.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        List<PopulationStats.Row> bars = regionBars();
+        if (idx == null || idx >= bars.size()) {
+            return null;
+        }
+        PopulationStats.Row row = bars.get(idx);
+        String title = row.regionName() == null ? "" : row.regionName();
+        String detail = row.count() + " cells";
+        return new PlotHit(title, detail, PopulationRef.of(row));
+    }
+
+    /**
+     * One series, so one colour — {@code theme.series(0)}, at full opacity. The 0.85 alpha the
+     * bars used to carry was there to soften a hardcoded blue against a hardcoded dark
+     * background; the palette is now contrast-checked against its own background (see {@code
+     * PlotTheme}), and thinning a checked colour with alpha would put it back below the floor
+     * that check exists to hold.
+     */
+    @Override
+    protected void draw(PlotSurface s, PlotTheme theme) {
+        if (regionRows.isEmpty()) {
+            drawEmptyState(s, theme, "No annotated regions to compare");
+            return;
+        }
         // One bar per row, not one bar per distinct name -- two regions may share a name.
         List<PopulationStats.Row> bars = regionBars();
         if (bars.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "Select a population to compare");
             return;
         }
 
-        int maxCount = bars.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = bars.size();
+        double[] values = bars.stream().mapToDouble(PopulationStats.Row::count).toArray();
+        AxisScale scale = scaleFor(values);
+        LabelLayout labels = layoutLabels(s, regionLabels());
         double barW = categoryWidth(n) * 0.6;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
             double cx = categoryToX(i, n);
-            double topY = valueToY(bars.get(i).count(), 0, maxCount);
-            gc.setFill(Color.rgb(76, 154, 255, 0.85));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double value = bars.get(i).count();
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
+            s.setFill(theme.series(0));
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
-        drawAxes(gc, selected == null ? "Region" : selected.path(), "Count");
-        drawCategoryLabels(gc, regionLabels());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS,
+                selected == null ? "Region" : selected.path(), "Count");
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }

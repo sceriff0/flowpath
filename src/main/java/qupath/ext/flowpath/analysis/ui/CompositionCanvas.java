@@ -1,12 +1,11 @@
 package qupath.ext.flowpath.analysis.ui;
 
-import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.PopulationStats;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * A composition bar chart: how the whole-slide population splits across its leaf
@@ -45,9 +44,15 @@ import java.util.List;
  */
 public final class CompositionCanvas extends PlotCanvas {
 
-    private static final int[] PALETTE = {
-            0x4C9AFF, 0x57D9A3, 0xFFAB00, 0xFF5C5C, 0xB380FF, 0x00C7E6, 0xFFD666, 0x8590A2
-    };
+    /**
+     * No legend: a bar's colour carries no meaning here beyond telling it from its neighbour,
+     * and every bar is already named on the X axis. Named rather than written as a literal
+     * {@code 0} at each call site, because every method that positions something vertically
+     * takes it and they must all be given the same answer — a plot whose ticks were placed
+     * against one legend height and whose bars were placed against another would be off by
+     * exactly the strip.
+     */
+    private static final int LEGEND_ROWS = 0;
 
     private List<PopulationStats.Row> wholeSlideRows = List.of();
     private List<PopulationStats.Row> selectedRootRows = List.of();
@@ -154,33 +159,72 @@ public final class CompositionCanvas extends PlotCanvas {
                 .orElse(0);
     }
 
+    /**
+     * One datum per bar — {@link #leafRows}, the exact list {@link #draw} iterates over, not a
+     * fresh filter over {@link #wholeSlideRows}. See {@link PlotCanvas#plotData()}.
+     */
     @Override
-    protected void repaint() {
-        GraphicsContext gc = getGraphicsContext2D();
-        gc.setFill(Color.rgb(30, 30, 30));
-        gc.fillRect(0, 0, getWidth(), getHeight());
+    public List<PlotDatum> plotData() {
+        return leafRows.stream()
+                .map(r -> new PlotDatum(r.path(), "count", r.count()))
+                .toList();
+    }
 
+    /**
+     * The bar at {@code (x, y)}, named by its own leaf path and the count behind it —
+     * {@link #leafRows}, the exact list {@link #draw} iterates over, indexed by {@link
+     * #categorySlotAt}, which reads back the geometry {@link #draw} actually laid out rather
+     * than re-deriving it. {@link #total()} is the true whole-slide denominator (a root
+     * branch's own {@code parentCount}, not a re-sum of the bars), so the percentage this
+     * reports agrees with the one a re-sum of every bar's own percentage would not
+     * necessarily agree with if a leaf were silently dropped or double-counted.
+     */
+    @Override
+    protected PlotHit hitAt(double x, double y) {
+        Integer idx = categorySlotAt(x, y);
+        if (idx == null || idx >= leafRows.size()) {
+            return null;
+        }
+        PopulationStats.Row row = leafRows.get(idx);
+        int total = total();
+        double percent = total <= 0 ? 0.0 : row.count() * 100.0 / total;
+        String detail = String.format(Locale.US, "%d cells · %.1f%% of root", row.count(), percent);
+        return new PlotHit(row.path(), detail, PopulationRef.of(row));
+    }
+
+    /**
+     * Bar {@code i} takes {@code theme.series(i)}, which wraps rather than running out — the
+     * private palette this class used to carry was a byte-for-byte copy of the dark theme's
+     * series list, so a light-theme plot drew dark-theme colours on a white ground.
+     */
+    @Override
+    protected void draw(PlotSurface s, PlotTheme theme) {
         if (leafRows.isEmpty()) {
-            gc.setFill(Color.gray(0.5));
-            gc.fillText("No data", getWidth() / 2 - 20, getHeight() / 2);
+            drawEmptyState(s, theme, "No gated populations yet");
             return;
         }
 
-        int maxCount = leafRows.stream().mapToInt(PopulationStats.Row::count).max().orElse(1);
         int n = leafRows.size();
+        double[] values = leafRows.stream().mapToDouble(PopulationStats.Row::count).toArray();
+        AxisScale scale = scaleFor(values);
+        // One layout, reused by every method that needs to know how tall the plot is. Calling
+        // layoutLabels twice would be a second answer to the same question.
+        LabelLayout labels = layoutLabels(s, barLabels());
         double barW = categoryWidth(n) * 0.7;
-        double baseY = valueToY(0, 0, maxCount);
+        double baseY = fractionToY(0, labels, LEGEND_ROWS);
 
+        drawValueTicks(s, theme, scale, 4, labels, LEGEND_ROWS);
         for (int i = 0; i < n; i++) {
-            PopulationStats.Row row = leafRows.get(i);
             double cx = categoryToX(i, n);
-            double topY = valueToY(row.count(), 0, maxCount);
-            gc.setFill(Color.rgb((PALETTE[i % PALETTE.length] >> 16) & 0xFF,
-                    (PALETTE[i % PALETTE.length] >> 8) & 0xFF, PALETTE[i % PALETTE.length] & 0xFF));
-            gc.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            double value = leafRows.get(i).count();
+            double topY = fractionToY(scale.toFraction(value), labels, LEGEND_ROWS);
+            s.setFill(theme.series(i));
+            s.fillRect(cx - barW / 2, topY, barW, baseY - topY);
+            if (scale.isClipped(value)) {
+                drawClipMarker(s, theme, cx, barW, topY);
+            }
         }
-        drawAxes(gc, "Population", "Count");
-        drawCategoryLabels(gc, barLabels());
-        drawValueTicks(gc, 0, maxCount, 4);
+        drawAxes(s, theme, labels, LEGEND_ROWS, "Population", "Count");
+        drawCategoryLabels(s, theme, labels, LEGEND_ROWS);
     }
 }

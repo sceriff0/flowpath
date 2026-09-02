@@ -8,7 +8,7 @@ qupathExtension {
     // The publishing coordinate for this extension. NOT io.github.qupath -- that is
     // QuPath's own group, inherited from the extension template and never changed.
     group = "io.github.sceriff0"
-    version = "0.9.0"
+    version = "0.9.2"
     description = "FlowJo-style cell phenotyping for multiplexed imaging: hierarchical gating plus UMAP visualisation of the resulting phenotypes."
     automaticModule = "qupath.ext.flowpath"
 }

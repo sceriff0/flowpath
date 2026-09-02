@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,7 +38,7 @@ class AnalysisStateTest {
     /** The state a session with nothing accepted derives, verbatim. */
     private static AnalysisState empty() {
         return new AnalysisState(false, false, false, 0, 0, List.of(),
-                "No gating pass to report on yet.");
+                "No gating pass to report on yet.", null);
     }
 
     // ------------------------------------------------------------------
@@ -54,22 +55,22 @@ class AnalysisStateTest {
         return Stream.of(
                 new Object[]{"an export offered over a pass that was never accepted",
                         (Builder) () -> new AnalysisState(false, false, true, 0, 0, List.of(),
-                                "nothing to report on yet")},
+                                "nothing to report on yet", null)},
                 new Object[]{"scopes to pick from with no data behind any of them",
                         (Builder) () -> new AnalysisState(false, false, false, 0, 0,
-                                List.of(Scope.WHOLE_SLIDE), "nothing to report on yet")},
+                                List.of(Scope.WHOLE_SLIDE), "nothing to report on yet", null)},
                 new Object[]{"regions announced without a single one to show",
                         (Builder) () -> new AnalysisState(true, true, true, 10, 0,
-                                ALL_SCOPES, null)},
+                                ALL_SCOPES, null, null)},
                 new Object[]{"a negative region count is no more a region than zero is",
                         (Builder) () -> new AnalysisState(true, true, true, 10, -1,
-                                ALL_SCOPES, null)},
+                                ALL_SCOPES, null, null)},
                 new Object[]{"a full panel that explains itself as if it were empty",
                         (Builder) () -> new AnalysisState(true, false, true, 10, 0,
-                                List.of(Scope.WHOLE_SLIDE), "no gating pass yet")},
+                                List.of(Scope.WHOLE_SLIDE), "no gating pass yet", null)},
                 new Object[]{"an empty panel with no explanation to put in place of the table",
                         (Builder) () -> new AnalysisState(false, false, false, 0, 0,
-                                List.of(), null)});
+                                List.of(), null, null)});
     }
 
     /** A deferred construction, so the table can hold one that throws. */
@@ -98,10 +99,10 @@ class AnalysisStateTest {
                 new Object[]{"nothing accepted yet", (Builder) AnalysisStateTest::empty},
                 new Object[]{"a pass over an unannotated slide -- whole slide is the only scope",
                         (Builder) () -> new AnalysisState(true, false, true, 10, 0,
-                                List.of(Scope.WHOLE_SLIDE), null)},
+                                List.of(Scope.WHOLE_SLIDE), null, null)},
                 new Object[]{"a pass over two annotated regions -- all three scopes",
                         (Builder) () -> new AnalysisState(true, true, true, 20, 2,
-                                ALL_SCOPES, null)});
+                                ALL_SCOPES, null, null)});
     }
 
     @ParameterizedTest(name = "{0}")
@@ -131,7 +132,7 @@ class AnalysisStateTest {
     @DisplayName("The scope list is copied, not aliased")
     void availableScopesAreCopied() {
         List<Scope> mutable = new ArrayList<>(List.of(Scope.WHOLE_SLIDE));
-        AnalysisState state = new AnalysisState(true, false, true, 10, 0, mutable, null);
+        AnalysisState state = new AnalysisState(true, false, true, 10, 0, mutable, null, null);
 
         mutable.add(Scope.ANNOTATION_K);
 
@@ -140,5 +141,19 @@ class AnalysisStateTest {
         assertThrows(UnsupportedOperationException.class,
                 () -> state.availableScopes().add(Scope.ANNOTATION_ALL),
                 "and the window cannot add one either");
+    }
+
+    /**
+     * A QuPath image can genuinely have no name, so {@code imageName == null} must be an
+     * ordinary, legal state rather than a contradiction the compact constructor rejects —
+     * unlike {@code emptyMessage}, whose {@code null}-ness is tied to {@code hasData}.
+     */
+    @Test
+    @DisplayName("An unnamed image is legal and does not break the invariants")
+    void anUnnamedImageIsLegalAndDoesNotBreakTheInvariants() {
+        assertDoesNotThrow(() -> new AnalysisState(true, false, true, 100, 0,
+                List.of(Scope.WHOLE_SLIDE), null, null));
+        assertDoesNotThrow(() -> new AnalysisState(true, false, true, 100, 0,
+                List.of(Scope.WHOLE_SLIDE), null, "slide-01.ome.tif"));
     }
 }

@@ -111,6 +111,28 @@ public final class PopulationStats {
      *                              {@code NaN} when the chosen denominator branch holds no
      *                              cells — never zero, which would read as a real answer to a
      *                              question that has none
+     * @param percentOfCleanParent  {@code percent(cleanCount, cleanParentCount)} — the clean
+     *                              counterpart of {@code percentOfParent}, never a clean
+     *                              numerator over the raw {@code parentCount}. {@code 0} for a
+     *                              clean-empty parent, by the same {@link #percent} rule
+     *                              {@code percentOfParent} uses; never {@code NaN} because
+     *                              {@code cleanParentCount} is always available at every scope
+     *                              (see {@code percentOfCleanTotal} for why that would not
+     *                              always be true of a denominator someone chose instead)
+     * @param percentOfCleanTotal   {@code percent(cleanCount, <clean scope total>)}, where the
+     *                              clean scope total is {@link BranchTally#cellsClean()} at
+     *                              {@link Scope#WHOLE_SLIDE}, the sum of {@link
+     *                              BranchTally#cleanCellsInRegion} over every region at {@link
+     *                              Scope#ANNOTATION_ALL} (the clean twin of how {@code
+     *                              unionTotal} is already summed for {@code percentOfTotal}),
+     *                              and {@link BranchTally#cleanCellsInRegion} for the one region
+     *                              at {@link Scope#ANNOTATION_K}. {@code BranchTally} exposes a
+     *                              real clean total at all three scopes — unlike a
+     *                              user-chosen denominator branch, which may not exist — so
+     *                              this is never {@code NaN} in the current model; it stays a
+     *                              computed rather than a hard-coded {@code 0} or {@code 100}
+     *                              so a future scope that lacks a clean total has somewhere to
+     *                              return {@code NaN} from instead of a fabricated number
      * @param areaMm2               the region's area, or {@code NaN} when unknown
      * @param densityPerMm2         {@code count / areaMm2}, or {@code NaN} without an area
      */
@@ -119,6 +141,7 @@ public final class PopulationStats {
                       int count, int cleanCount, int parentCount, int cleanParentCount,
                       int denominatorCount,
                       double percentOfParent, double percentOfTotal, double percentOfDenominator,
+                      double percentOfCleanParent, double percentOfCleanTotal,
                       double areaMm2, double densityPerMm2) {}
 
     private final List<Row> rows;
@@ -159,7 +182,7 @@ public final class PopulationStats {
         boolean hasDenominator = denominator != null;
 
         collectFromRoots(tree.getRoots(), Scope.WHOLE_SLIDE, null, -1,
-                tally.cellsTotal(), tally.cellsTotal(), tally.cellsClean(),
+                tally.cellsTotal(), tally.cellsTotal(), tally.cellsClean(), tally.cellsClean(),
                 hasDenominator, hasDenominator ? tally.total(denominator) : 0,
                 Double.NaN, tally, out);
 
@@ -171,7 +194,7 @@ public final class PopulationStats {
                 if (hasDenominator) unionDenominator += tally.inRegion(denominator, r);
             }
             collectFromRoots(tree.getRoots(), Scope.ANNOTATION_ALL, null, -1,
-                    unionTotal, unionTotal, unionClean,
+                    unionTotal, unionTotal, unionClean, unionClean,
                     hasDenominator, unionDenominator,
                     sumAreas(regionAreasMm2), tally, out);
         }
@@ -181,8 +204,9 @@ public final class PopulationStats {
             double area = (regionAreasMm2 != null && r < regionAreasMm2.length)
                     ? regionAreasMm2[r] : Double.NaN;
             int regionTotal = tally.cellsInRegion(r);
+            int regionClean = tally.cleanCellsInRegion(r);
             collectFromRoots(tree.getRoots(), Scope.ANNOTATION_K, name, r,
-                    regionTotal, regionTotal, tally.cleanCellsInRegion(r),
+                    regionTotal, regionTotal, regionClean, regionClean,
                     hasDenominator, hasDenominator ? tally.inRegion(denominator, r) : 0,
                     area, tally, out);
         }
@@ -198,6 +222,7 @@ public final class PopulationStats {
      */
     private static void collectFromRoots(List<GateNode> roots, Scope scope, String regionName, int region,
                                          int parentCount, int scopeTotal, int cleanParentCount,
+                                         int cleanScopeTotal,
                                          boolean hasDenominator, int denominatorCount,
                                          double areaMm2, BranchTally tally, List<Row> out) {
         int rootIndex = 0;
@@ -209,7 +234,8 @@ public final class PopulationStats {
             // among them.
             if (!root.isEnabled()) continue;
             collect(List.of(root), scope, regionName, region, "", 0, rootIndex,
-                    parentCount, scopeTotal, cleanParentCount, hasDenominator, denominatorCount,
+                    parentCount, scopeTotal, cleanParentCount, cleanScopeTotal,
+                    hasDenominator, denominatorCount,
                     areaMm2, tally, out);
             rootIndex++;
         }
@@ -217,7 +243,7 @@ public final class PopulationStats {
 
     private static void collect(List<GateNode> nodes, Scope scope, String regionName, int region,
                                 String prefix, int depth, int rootIndex,
-                                int parentCount, int scopeTotal, int cleanParentCount,
+                                int parentCount, int scopeTotal, int cleanParentCount, int cleanScopeTotal,
                                 boolean hasDenominator, int denominatorCount,
                                 double areaMm2, BranchTally tally, List<Row> out) {
         if (nodes == null) return;
@@ -237,10 +263,12 @@ public final class PopulationStats {
                         percent(count, parentCount),
                         percent(count, scopeTotal),
                         !hasDenominator ? Double.NaN : percentOfDenominator(count, denominatorCount),
+                        percent(clean, cleanParentCount),
+                        percent(clean, cleanScopeTotal),
                         areaMm2,
                         Double.isNaN(areaMm2) || areaMm2 <= 0 ? Double.NaN : count / areaMm2));
                 collect(branch.getChildren(), scope, regionName, region, path, depth + 1, rootIndex,
-                        count, scopeTotal, clean, hasDenominator, denominatorCount,
+                        count, scopeTotal, clean, cleanScopeTotal, hasDenominator, denominatorCount,
                         areaMm2, tally, out);
             }
         }
