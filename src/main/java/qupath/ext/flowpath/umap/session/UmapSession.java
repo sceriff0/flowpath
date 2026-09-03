@@ -7,6 +7,7 @@ import qupath.ext.flowpath.ingest.IngestOptions;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
@@ -1072,11 +1073,19 @@ public final class UmapSession {
         if (cellIndex == null || markerStats == null || marker == null) return null;
         int idx = cellIndex.getMarkerIndex(marker);
         if (idx < 0) return null;
-        double[] raw = cellIndex.getMarkerValues(idx);
-        if (!asZScore) return raw;
-        double[] z = new double[raw.length];
-        for (int i = 0; i < raw.length; i++) {
-            z[i] = markerStats.toZScore(marker, raw[i]);
+        if (!asZScore) return cellIndex.getMarkerValues(idx);
+        // Standardised through MeasuredColumn rather than through a string-keyed
+        // MarkerStats lookup. The latter reads mean and std out of a map with a 0.0
+        // default, so a column whose statistics were never registered standardises to
+        // exactly 0.0 for every cell -- silent, plausible and wrong, and the defect this
+        // codebase already paid for once. Resolving the column registers its statistics on
+        // construction, so an unregistered column cannot reach the arithmetic. It also
+        // makes this correct for per-compartment columns, which the bare-name lookup only
+        // ever answered by accident of MarkerStats.compute() pre-registering bare markers.
+        MeasuredColumn col = cellIndex.column(marker, null, null, markerStats);
+        double[] z = new double[col.size()];
+        for (int i = 0; i < z.length; i++) {
+            z[i] = col.zScoreAt(i);
         }
         return z;
     }

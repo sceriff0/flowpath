@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import qupath.ext.flowpath.model.MeasuredColumn;
 
 /**
  * The CSV must describe the column the gate actually used.
@@ -128,12 +129,14 @@ class CompartmentCsvTest {
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
         Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, true, 0.0));
 
-        String key = "CD3: Nucleus: Mean";
-        assertTrue(stats.getStd(key) > 1e-10, "fixture must give the nuclear column real variance");
+        MeasuredColumn col = idx.column("CD3", Compartment.NUCLEAR, Statistic.MEAN, stats);
+        assertEquals("CD3: Nucleus: Mean", col.key(),
+                "the nuclear mean must resolve to the structured key, not the bare marker");
+        assertTrue(col.std() > 1e-10, "fixture must give the nuclear column real variance");
         // Bare CD3 has zero variance, so the old bare-key path produced a blank cell here.
         // CSV values are written with %.4f, so allow one rounding step.
-        assertEquals(stats.toZScore(key, 10.0), csv.num(0, "CD3_Nucleus_Mean_zscore"), 1e-4);
-        assertEquals(stats.toZScore(key, 300.0), csv.num(3, "CD3_Nucleus_Mean_zscore"), 1e-4);
+        assertEquals(col.toZScore(10.0), csv.num(0, "CD3_Nucleus_Mean_zscore"), 1e-4);
+        assertEquals(col.toZScore(300.0), csv.num(3, "CD3_Nucleus_Mean_zscore"), 1e-4);
     }
 
     @Test

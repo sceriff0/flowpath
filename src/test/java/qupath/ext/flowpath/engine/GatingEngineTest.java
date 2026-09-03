@@ -20,6 +20,7 @@ import qupath.lib.roi.interfaces.ROI;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import qupath.ext.flowpath.model.MeasuredColumn;
 
 class GatingEngineTest {
 
@@ -1208,7 +1209,8 @@ class GatingEngineTest {
     void aSinglecellPopulationGatesWithoutDividingByZero() {
         CellIndex index = Cells.of(1).marker("A", 42.0).area(100.0).build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(1));
-        assertEquals(0.0, stats.getStd("A"), 1e-12, "one cell has no spread at all");
+        assertEquals(0.0, index.column("A", null, null, stats).std(), 1e-12,
+                "one cell has no spread at all");
 
         // Threshold 0.0 in z-score space: the degenerate column puts the cell exactly at
         // the mean, and the cut is at-or-above, so it lands positive.

@@ -7,6 +7,23 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class MarkerStats {
 
+    // The string-keyed statistics accessors below are deliberately PACKAGE-PRIVATE.
+    //
+    // Together they are the old four-step protocol -- resolve a key, materialise the
+    // column, ensureColumn it, then read through it -- whose third step was easy to skip.
+    // Skipping it did not throw: means.getOrDefault(key, 0.0) gives a std of 0 and
+    // therefore a z-score of exactly 0.0 for every cell, which is silent, plausible and
+    // wrong, and which produced five separate bug fixes in v2.0.1.
+    //
+    // MeasuredColumn was introduced as the only way to obtain a column's statistics
+    // because it registers on construction. That made the mistake unlikely; keeping these
+    // methods public left it *expressible*, and one caller outside this package was still
+    // on it. They are now reachable only from CellIndex.column(...) and MeasuredColumn,
+    // so the documented invariant is a compile error rather than a convention.
+    //
+    // If you need a column's mean, std, percentile or z-score, call
+    // CellIndex.column(channel, compartment, statistic, stats) and ask the MeasuredColumn.
+
     private static final int HISTOGRAM_BINS = 200;
 
     // Keyed by the *resolved* measurement key: a base marker name ("CD3") for
@@ -128,31 +145,39 @@ public class MarkerStats {
      * the gating pre-pass on any thread. No-op for keys already present (including
      * the base markers).
      */
-    public void ensureColumn(String key, double[] rawColumn) {
+    void ensureColumn(String key, double[] rawColumn) {
         if (key == null || rawColumn == null) return;
         if (means.containsKey(key)) return;
         putColumnStats(key, rawColumn, qualityMask);
     }
 
     /** True if statistics for the given resolved key are available. */
+    /**
+     * Whether {@code key}'s statistics have been registered.
+     * <p>
+     * Public, unlike the accessors around it: this asks whether a column was registered
+     * rather than reading a number out of it, so it cannot return the plausible-but-wrong
+     * value those were narrowed to prevent. Tests use it to assert that a caller
+     * registered the column it was about to display.
+     */
     public boolean hasColumn(String key) {
         return means.containsKey(key);
     }
 
-    public double toZScore(String channel, double rawValue) {
+    double toZScore(String channel, double rawValue) {
         double mean = means.getOrDefault(channel, 0.0);
         double std = stds.getOrDefault(channel, 0.0);
         if (std < 1e-10) return 0.0;
         return (rawValue - mean) / std;
     }
 
-    public double fromZScore(String channel, double zScore) {
+    double fromZScore(String channel, double zScore) {
         double mean = means.getOrDefault(channel, 0.0);
         double std = stds.getOrDefault(channel, 0.0);
         return zScore * std + mean;
     }
 
-    public double getPercentileValue(String channel, double percentile) {
+    double getPercentileValue(String channel, double percentile) {
         double[] sorted = sortedValues.get(channel);
         if (sorted == null || sorted.length == 0) return Double.NaN;
         // Clamp the *percentile*, not the two indices it produces. The old code clamped
@@ -184,7 +209,7 @@ public class MarkerStats {
      *
      * @return the rank in [0,100], or NaN if the column is unknown or empty
      */
-    public double percentileRankOf(String channel, double value) {
+    double percentileRankOf(String channel, double value) {
         double[] sorted = sortedValues.get(channel);
         if (sorted == null || sorted.length == 0 || Double.isNaN(value)) return Double.NaN;
         if (sorted.length == 1) return 50.0;
@@ -203,27 +228,27 @@ public class MarkerStats {
         return 100.0 * idx / (sorted.length - 1);
     }
 
-    public double[] getHistogramBins(String channel) {
+    double[] getHistogramBins(String channel) {
         return histogramBins.get(channel);
     }
 
-    public double[] getHistogramCounts(String channel) {
+    double[] getHistogramCounts(String channel) {
         return histogramCounts.get(channel);
     }
 
-    public double getMean(String channel) {
+    double getMean(String channel) {
         return means.getOrDefault(channel, 0.0);
     }
 
-    public double getStd(String channel) {
+    double getStd(String channel) {
         return stds.getOrDefault(channel, 0.0);
     }
 
-    public double getMin(String channel) {
+    double getMin(String channel) {
         return mins.getOrDefault(channel, 0.0);
     }
 
-    public double getMax(String channel) {
+    double getMax(String channel) {
         return maxs.getOrDefault(channel, 0.0);
     }
 

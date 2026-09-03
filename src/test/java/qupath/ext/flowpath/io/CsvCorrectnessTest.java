@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
+import qupath.ext.flowpath.model.MeasuredColumn;
 
 /**
  * Tests that close coverage gaps in the CSV pipeline. Every test verifies
@@ -271,8 +272,9 @@ class CsvCorrectnessTest {
 
         CsvResult csv = run(tree, index, stats, "zscore.csv");
 
-        double mean = stats.getMean("CD45");
-        double std = stats.getStd("CD45");
+        MeasuredColumn col = index.column("CD45", null, null, stats);
+        double mean = col.mean();
+        double std = col.std();
 
         for (int i = 0; i < 4; i++) {
             double raw = values[0][i];

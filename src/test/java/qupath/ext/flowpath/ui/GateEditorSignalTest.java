@@ -26,6 +26,7 @@ import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import qupath.ext.flowpath.model.MeasuredColumn;
 
 /**
  * Regression coverage for the "signal selection" half of the gate editor: the
@@ -203,8 +204,12 @@ class GateEditorSignalTest {
         assertTrue(f.stats().hasColumn(key),
                 "editor must register the resolved column with MarkerStats before displaying it");
 
-        double expLo = f.stats().getPercentileValue(key, gate.getClipPercentileLow());
-        double expHi = f.stats().getPercentileValue(key, gate.getClipPercentileHigh());
+        // Read through the column handle, which is the only public route to a column's
+        // statistics; the hasColumn assertion above still proves the *editor* registered
+        // it, because that ran before this line resolves anything.
+        MeasuredColumn col = f.index().column("CD3", Compartment.NUCLEAR, gate.getStatistic(), f.stats());
+        double expLo = col.percentile(gate.getClipPercentileLow());
+        double expHi = col.percentile(gate.getClipPercentileHigh());
 
         Slider slider = thresholdSlider(f.pane());
         assertEquals(expLo, slider.getMin(), 1e-6,
@@ -221,9 +226,9 @@ class GateEditorSignalTest {
         select(statisticCombo(f.pane(), 0), Statistic.SUM);
 
         assertEquals(Statistic.SUM, gate.getStatistic());
-        String key = f.index().resolvedKey("CD3", Compartment.WHOLE_CELL, Statistic.SUM);
-        double expLo = f.stats().getPercentileValue(key, 1.0);
-        double expHi = f.stats().getPercentileValue(key, 99.0);
+        MeasuredColumn col = f.index().column("CD3", Compartment.WHOLE_CELL, Statistic.SUM, f.stats());
+        double expLo = col.percentile(1.0);
+        double expHi = col.percentile(99.0);
 
         Slider slider = thresholdSlider(f.pane());
         assertEquals(expLo, slider.getMin(), 1e-6, "axis must follow the Sum column");
@@ -269,8 +274,9 @@ class GateEditorSignalTest {
         Fixture f = editorFor(gate);
 
         // Sit the threshold at a known percentile of the bare whole-cell column.
-        String from = f.index().resolvedKey("CD3", Compartment.WHOLE_CELL, gate.getStatistic());
-        double before = f.stats().getPercentileValue(from, 60.0);
+        double before = f.index()
+                .column("CD3", Compartment.WHOLE_CELL, gate.getStatistic(), f.stats())
+                .percentile(60.0);
         FxTestSupport.onFxRun(() -> gate.setThreshold(before));
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
@@ -279,8 +285,8 @@ class GateEditorSignalTest {
         // A bare number does not carry across columns -- a nuclear median is nothing like a
         // whole-cell mean -- so the gate must land on the same *percentile* of the column it
         // now reads, computed from that column's own statistics.
-        String to = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEDIAN);
-        assertEquals(f.stats().getPercentileValue(to, 60.0), gate.getThreshold(), 1e-6,
+        MeasuredColumn to = f.index().column("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, f.stats());
+        assertEquals(to.percentile(60.0), gate.getThreshold(), 1e-6,
                 "the re-map must use the nuclear-median stats, not the bare CD3 stats");
         assertNotEquals(before, gate.getThreshold(), 1e-6,
                 "the fixture must make the two columns distinguishable");
@@ -318,16 +324,17 @@ class GateEditorSignalTest {
         rg.setStatisticX(Statistic.MEAN);             // percentiles below are bare-column values
         rg.setStatisticY(Statistic.MEAN);
         Fixture f = editorFor(rg);
-        double loX = f.stats().getPercentileValue("CD3", 20.0);
-        double hiX = f.stats().getPercentileValue("CD3", 80.0);
+        MeasuredColumn bare = f.index().column("CD3", null, null, f.stats());
+        double loX = bare.percentile(20.0);
+        double hiX = bare.percentile(80.0);
         FxTestSupport.onFxRun(() -> { rg.setMinX(loX); rg.setMaxX(hiX); rg.setMinY(0); rg.setMaxY(200); });
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
 
-        String key = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEAN);
-        assertEquals(f.stats().getPercentileValue(key, 20.0), rg.getMinX(), 1e-6,
+        MeasuredColumn nuclear = f.index().column("CD3", Compartment.NUCLEAR, Statistic.MEAN, f.stats());
+        assertEquals(nuclear.percentile(20.0), rg.getMinX(), 1e-6,
                 "a drawn region must follow its axis to the new column");
-        assertEquals(f.stats().getPercentileValue(key, 80.0), rg.getMaxX(), 1e-6);
+        assertEquals(nuclear.percentile(80.0), rg.getMaxX(), 1e-6);
     }
 
     @Test
@@ -389,13 +396,13 @@ class GateEditorSignalTest {
         gate.setThresholdIsZScore(false);
         gate.setStatistic(Statistic.MEAN);            // raw threshold is a bare-column value
         Fixture f = editorFor(gate);
-        double raw = f.stats().getPercentileValue("CD3", 70.0);
+        double raw = f.index().column("CD3", null, null, f.stats()).percentile(70.0);
         FxTestSupport.onFxRun(() -> gate.setThreshold(raw));
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
 
-        String key = f.index().resolvedKey("CD3", Compartment.NUCLEAR, Statistic.MEAN);
-        assertEquals(f.stats().getPercentileValue(key, 70.0), gate.getThreshold(), 1e-6,
+        MeasuredColumn nuclear = f.index().column("CD3", Compartment.NUCLEAR, Statistic.MEAN, f.stats());
+        assertEquals(nuclear.percentile(70.0), gate.getThreshold(), 1e-6,
                 "a raw threshold must be remapped to the same percentile of the new column");
         Slider slider = thresholdSlider(f.pane());
         assertTrue(slider.getValue() >= slider.getMin() && slider.getValue() <= slider.getMax(),
@@ -524,9 +531,10 @@ class GateEditorSignalTest {
 
         // Build the index first so we can express the saved threshold as a real z-score.
         Fixture probe = editorForZScore(new GateNode("CD3"));
-        String key = probe.index().resolvedKey("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN);
-        double rawAtP60 = probe.stats().getPercentileValue(key, 60.0);
-        double savedZ = probe.stats().toZScore(key, rawAtP60);
+        MeasuredColumn col = probe.index()
+                .column("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, probe.stats());
+        double rawAtP60 = col.percentile(60.0);
+        double savedZ = col.toZScore(rawAtP60);
         gate.setThreshold(savedZ);
 
         Fixture f = editorForZScore(gate);

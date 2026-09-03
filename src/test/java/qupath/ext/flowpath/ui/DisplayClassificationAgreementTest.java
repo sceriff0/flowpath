@@ -24,6 +24,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import qupath.ext.flowpath.model.MeasuredColumn;
 
 /**
  * The display path and the classification path must answer "which branch does this
@@ -325,11 +326,13 @@ class DisplayClassificationAgreementTest {
         MarkerStats stats = MarkerStats.compute(index);
         double[] colX = columnOf(index, MX);
         double[] colY = columnOf(index, MY);
+        MeasuredColumn cx = index.column(MX, null, null, stats);
+        MeasuredColumn cy = index.column(MY, null, null, stats);
         double[] zx = new double[raw.length];
         double[] zy = new double[raw.length];
         for (int i = 0; i < raw.length; i++) {
-            zx[i] = stats.toZScore(MX, colX[i]);
-            zy[i] = stats.toZScore(MY, colY[i]);
+            zx[i] = cx.toZScore(colX[i]);
+            zy[i] = cy.toZScore(colY[i]);
         }
 
         GateTree tree = new GateTree();
