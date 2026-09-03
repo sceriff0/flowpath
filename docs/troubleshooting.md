@@ -38,8 +38,9 @@ your problem, open an issue on the
 ??? question "Why is the Open UMAP button disabled?"
     UMAP exploration is **coming in a future release**. The button is disabled and
     labelled *UMAP (coming soon)* in this version, and ++ctrl+u++ does nothing.
-    Gating, the Analysis window and the CSV exports are unaffected. The UMAP
-    sections in these docs describe how it will work once it ships.
+    Gating and the CSV exports are unaffected. (The **Analysis** button is
+    disabled in this version too — see [Analysis](#analysis).) The UMAP sections
+    in these docs describe how it will work once it ships.
 
 ??? question "Will the gating tree and the UMAP share the same cells?"
     Yes — literally the same in-memory index, not two copies that happen to
@@ -51,7 +52,9 @@ your problem, open an issue on the
     reports every population at **three nested scopes** (whole slide, all
     annotations, per annotation), against **either denominator** (parent, total, or
     any branch you pick), with **area-normalised density** and four comparison
-    plots — and exports the lot as `population_stats.csv`. See
+    plots — and exports the lot as `population_stats.csv`. It is
+    **coming in a future release** (see [Analysis](#analysis)); until then the
+    tree's own per-branch numbers are what you have. See
     [Usage → Step 3](usage.md#step-3-read-the-numbers-in-the-analysis-window).
 
 ??? question "Can I reproduce or share a gating strategy?"
@@ -122,6 +125,12 @@ your problem, open an issue on the
     intensity) before gating to drop segmentation artefacts.
 
 ## Analysis { #analysis }
+
+!!! warning "The Analysis window is coming in a future release"
+    It is not available in this version — the **Analysis** button is disabled and
+    labelled *Analysis (coming soon)*. Gating, the filters and `gate_pheno.csv`
+    are unaffected. The rest of this section describes how it will behave once it
+    ships.
 
 ??? failure "The Analysis button refuses to open the window"
     Three separate reasons, and the notification says which. **"Load an image with

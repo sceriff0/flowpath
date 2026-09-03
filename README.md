@@ -10,12 +10,12 @@ multiplexed imaging data (CODEX, MIBI, mIF).
 
 Build hierarchical marker gates (e.g. `CD45+ → CD3+ → CD8+ = "T cytotoxic"`), drag
 thresholds, draw 2D regions, and watch cells recolour in real time — then read the
-per-population counts and percentages in the **Analysis** window and export them
-as CSV.
+per-cell phenotypes back out as CSV.
 
-**In this release:** hierarchical gating with live preview, the Analysis window
-(population statistics and plots), and per-cell / per-population CSV export.
-**Coming in a future release:** a **UMAP of those same phenotypes**, opened
+**In this release:** hierarchical gating with live preview, the quality and
+annotation-region filters, undo/redo, and per-cell phenotype CSV export.
+**Coming in a future release:** the **Analysis** window (per-population counts,
+percentages, density and plots), and a **UMAP of those same phenotypes**, opened
 without leaving the extension.
 
 Designed to work with the [MIRAGE](https://mirage-pipeline.readthedocs.io/)
@@ -45,10 +45,10 @@ Full install options — JAR drop, build from source — are in the
 ## How the two halves fit together
 
 > [!NOTE]
-> **Coming in a future release.** UMAP exploration is not available in this
-> version — the **Open UMAP** button is disabled and labelled *UMAP (coming
-> soon)*, and `Ctrl+U` does nothing. The section below describes how it will
-> work once it ships.
+> **Coming in a future release.** Neither UMAP exploration nor the Analysis
+> window is available in this version — both toolbar buttons are disabled and
+> labelled *(coming soon)*, and `Ctrl+U` does nothing. The sections that
+> describe them describe how they will work once they ship.
 
 Gating is the way in. The UMAP will open from it and inherit the phenotyping:
 

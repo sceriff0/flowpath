@@ -25,13 +25,16 @@ public class FlowPathExtension implements QuPathExtension {
 
     private static final String NAME = "FlowPath";
     // Shown in QuPath's extension manager, so it must describe what this build actually
-    // offers. UMAP is present in the source but held back for a future release
-    // (FlowPathPane.UMAP_ENABLED); advertising it here would promise a window no user
-    // can open. Put it back in this sentence when that flag flips.
+    // offers. Two halves are present in the source but held back for a future release --
+    // UMAP (FlowPathPane.UMAP_ENABLED) and the Analysis window
+    // (FlowPathPane.ANALYSIS_ENABLED). Advertising either here would promise a window no
+    // user can open. Put each back in this sentence when its flag flips; the feature-flag
+    // tests name this constant in their failure messages for exactly that reason.
     private static final String DESCRIPTION =
-            "Interactive tree-based cell phenotyping with hierarchical gates, plus "
-                    + "population counts, percentages and density for the resulting "
-                    + "phenotypes.";
+            "Interactive tree-based cell phenotyping with hierarchical gates: threshold, "
+                    + "quadrant and 2D region gates over per-compartment marker "
+                    + "measurements, with live preview in the viewer and phenotype CSV "
+                    + "export.";
 
     private Stage stage;
     private FlowPathPane flowPathPane;

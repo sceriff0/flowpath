@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 The Analysis window's overhaul: the population table, its exports and its four plots.
 Fifteen implementation tasks, reviewed one at a time against the diff behind them.
 
+> **What this release actually exposes: hierarchical gating, and nothing else.**
+> Both the UMAP half and the Analysis window are complete in the source and are
+> **held back** from this release behind `FlowPathPane.UMAP_ENABLED` and
+> `FlowPathPane.ANALYSIS_ENABLED`. Their toolbar buttons are disabled, carry no
+> action handler, and are labelled *(coming soon)*. Everything described below is
+> therefore a record of what changed in the codebase, not of what a user of 0.9.2
+> can reach. `UmapFeatureFlagTest` and `AnalysisFeatureFlagTest` pin the shipped
+> values of both flags, so neither can be flipped by accident.
+
 ### Fixed
 
 - **The chosen denominator reset on the next gate nudge.** `Branch` is deliberately

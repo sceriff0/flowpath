@@ -1,10 +1,11 @@
 # Usage
 
-The workflow in this release is three steps: **get cells into QuPath**, **gate
-them into phenotypes**, then **read the population statistics** back out and
-export them. A fourth step — **exploring those phenotypes in a UMAP** — is coming
-in a future release, and is described here so you know what it will do. This page
-walks through it end to end, then lists the options.
+The workflow in this release is two steps: **get cells into QuPath**, then **gate
+them into phenotypes** and export them. Two further steps — **reading the
+population statistics in the Analysis window** and **exploring those phenotypes
+in a UMAP** — are coming in a future release, and are described here so you know
+what they will do. This page walks through it end to end, then lists the
+options.
 
 It assumes you've [installed FlowPath](installation.md) and have a multiplexed
 OME-TIFF open in QuPath 0.7.0 — for example one produced by
@@ -18,10 +19,10 @@ flowchart LR
     I -->|Mask| AM[AnnoMask]
     G1 --> GT[FlowPath · Gating]
     AM --> GT
-    GT --> AN[FlowPath · Analysis]
+    GT -.->|"Analysis<br/>(coming soon)"| AN[FlowPath · Analysis]
     GT -.->|"Open UMAP<br/>(coming soon)"| UM[FlowPath · UMAP]
     GT --> CSV1[gate_pheno.csv]
-    AN --> CSV3[population_stats.csv]
+    AN -.->|coming soon| CSV3[population_stats.csv]
     UM -.->|coming soon| CSV2[umap_coordinates.csv]
 ```
 
@@ -107,7 +108,8 @@ thresholds.
    2D gate: pick X/Y channels and draw the region on the scatter plot.
 4. Add **child gates** to branches to sub-gate, and **name** leaf nodes
    ("T cytotoxic", "Tumor", "Stroma").
-5. Open **Analysis** for per-population counts, percentages and density — see
+5. *(Coming in a future release.)* Open **Analysis** for per-population counts,
+   percentages and density — see
    [Step 3](#step-3-read-the-numbers-in-the-analysis-window).
 
 <figure class="screenshot" markdown>
@@ -120,6 +122,12 @@ export `flowpath.json` (the full gate hierarchy, reloadable and shareable) and
 `gate_pheno.csv` (one row per cell, phenotype + per-marker ± status).
 
 ## Step 3 — Read the numbers in the Analysis window
+
+!!! warning "The Analysis window is coming in a future release"
+    It is not available in this version — the **Analysis** button is disabled and
+    labelled *Analysis (coming soon)*. Steps 1 and 2 above, and the per-cell
+    `gate_pheno.csv` export, are unaffected. The rest of this section describes
+    how the window will work once it ships.
 
 Press **Analysis** in the gating toolbar. The window opens on the gating pass you
 already have — there is nothing to run — and re-reads every subsequent pass for as
@@ -354,7 +362,7 @@ The workflow it will offer:
 |---|---|---|
 | `flowpath.json` | Gating | Gate hierarchy, thresholds, colours, QC settings |
 | `gate_pheno.csv` | Gating | Per-cell phenotype + per-marker ± status |
-| `population_stats.csv` | Analysis | Per-population counts, percentages, area and density — at all three scopes |
+| `population_stats.csv` | Analysis *(coming in a future release)* | Per-population counts, percentages, area and density — at all three scopes |
 | `umap_coordinates.csv` | UMAP *(coming in a future release)* | Per-cell UMAP X/Y + phenotype |
 | PathClasses | Gating (and the UMAP, once it ships) | Named populations stored on the QuPath objects |
 
@@ -371,8 +379,8 @@ cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,p
 0,17,CD4+,6134.5990,2291.3830,18876.4892,7051.9477,65.5930,30.6559,0.5733,0.9412,Cluster A,-3.2415,1.8720,1591.1916,1.8420
 ```
 
-The Analysis window's export is a different shape — one row per **population per
-scope**, not one per cell:
+The Analysis window's export — coming in a future release — is a different shape:
+one row per **population per scope**, not one per cell:
 
 ```csv title="population_stats.csv"
 scope,region,region_index,path,branch,gate_channel,depth,root_index,count,clean_count,parent_count,clean_parent_count,denominator_count,percent_of_parent,percent_of_total,percent_of_denominator,percent_of_clean_parent,percent_of_clean_total,area_mm2,density_per_mm2
@@ -454,7 +462,7 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
 - **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++); drag-and-drop
   to reorder gates between branches.
 
-### Analysis
+### Analysis *(coming in a future release)*
 
 - **Scope** — *Whole slide*, *All annotations*, or *Per annotation*. They nest, and
   an unannotated slide offers only the first.

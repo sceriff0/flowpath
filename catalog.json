@@ -4,7 +4,7 @@
   "extensions": [
     {
       "name": "FlowPath",
-      "description": "Interactive tree-based cell phenotyping with hierarchical gates, plus population counts, percentages and density for the resulting phenotypes. Designed for multiplexed imaging data (CODEX, MIBI, mIF).",
+      "description": "Interactive tree-based cell phenotyping with hierarchical gates: threshold, quadrant and 2D region gates over per-compartment marker measurements, with live preview in the viewer and phenotype CSV export. Designed for multiplexed imaging data (CODEX, MIBI, mIF).",
       "author": "sceriff0",
       "homepage": "https://github.com/sceriff0/flowpath",
       "releases": []

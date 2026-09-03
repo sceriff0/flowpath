@@ -63,15 +63,14 @@ entry:
 |---|---|---|
 | Extensions → FlowPath | ++ctrl+g++ | The gating window |
 
-One menu item is all there is: the Analysis window and everything else open from
-buttons in the gating window's toolbar. See the
-[walkthrough in Usage](usage.md).
+One menu item is all there is: everything else opens from buttons in the gating
+window's toolbar. See the [walkthrough in Usage](usage.md).
 
-!!! warning "UMAP is coming in a future release"
-    UMAP exploration is not available in this version — the **Open UMAP** button
-    is disabled and labelled *UMAP (coming soon)*, and ++ctrl+u++ does nothing.
-    There will still be no separate UMAP menu item when it ships: it opens from
-    the gating window so it can inherit your phenotyping.
+!!! warning "Analysis and UMAP are coming in a future release"
+    Neither is available in this version — the **Analysis** and **Open UMAP**
+    buttons are both disabled and labelled *(coming soon)*, and ++ctrl+u++ does
+    nothing. Neither will get a separate menu item when it ships either: both
+    open from the gating window so they can inherit your phenotyping.
 
 !!! warning "Catalog adds, but no extension appears?"
     Almost always a QuPath version below 0.7.0, or a typo in the catalog URL (it

@@ -12,9 +12,10 @@ hide:
 
 A [QuPath](https://qupath.github.io/) 0.7.0 extension that turns multiplexed
 imaging into living, clickable biology — gate cells into named phenotypes, read
-the population statistics for every branch, and export them. FlowPath picks up
-where the [MIRAGE](https://mirage-pipeline.readthedocs.io/) pipeline leaves off.
-UMAP exploration of those same phenotypes is coming in a future release.
+them back out as CSV. FlowPath picks up where the
+[MIRAGE](https://mirage-pipeline.readthedocs.io/) pipeline leaves off. The
+Analysis window and UMAP exploration of those same phenotypes are both coming in
+a future release.
 
 <div class="flowpath-badges" markdown>
 [:material-rocket-launch: Install](installation.md){ .md-button .md-button--primary }
@@ -41,26 +42,27 @@ measurements** — and gives you these views onto it:
 | View | Role | One line |
 |---|---|---|
 | **Gating** | *phenotype* | Gate detections into named populations with a live hierarchical tree. |
-| **[Analysis](usage.md#step-3-read-the-numbers-in-the-analysis-window)** | *quantify* | Counts, percentages and density per population, at three nested scopes, with plots and a CSV export. |
+| **[Analysis](usage.md#step-3-read-the-numbers-in-the-analysis-window)** *(coming in a future release)* | *quantify* | Counts, percentages and density per population, at three nested scopes, with plots and a CSV export. |
 | **UMAP** *(coming in a future release)* | *explore* | Embed your gated markers in 2D, coloured by the phenotypes you just built, and lasso clusters. |
 
-!!! warning "UMAP is coming in a future release"
-    UMAP exploration is not available in this version — the **Open UMAP** button
-    is disabled and labelled *UMAP (coming soon)*, and ++ctrl+u++ does nothing.
-    Where these docs describe the UMAP, they describe how it will work once it
-    ships.
+!!! warning "Analysis and UMAP are coming in a future release"
+    Neither is available in this version — the **Analysis** and **Open UMAP**
+    buttons are both disabled and labelled *(coming soon)*, and ++ctrl+u++ does
+    nothing. Gating, the filters and the per-cell CSV export are unaffected.
+    Where these docs describe either view, they describe how it will work once
+    it ships.
 
-Gating is the way in. The UMAP will open from it and inherit the phenotyping —
-the same cells, the same colours, the same markers:
+Gating is the way in. Both other views will open from it and inherit the
+phenotyping — the same cells, the same colours, the same markers:
 
 ```mermaid
 flowchart LR
     M[MIRAGE pipeline<br/>OME-TIFF · cells.geojson · masks] --> Q[QuPath 0.7.0]
     subgraph FP[FlowPath]
       GT[Gating<br/>interactive phenotyping]
-      AN[Analysis<br/>population statistics]
+      AN[Analysis · coming soon<br/>population statistics]
       UM[UMAP · coming soon<br/>phenotype-coloured embedding]
-      GT --> AN
+      GT -.->|"Analysis<br/>(coming soon)"| AN
       GT -.->|"Open UMAP<br/>(phenotypes, colours, gated markers)"| UM
     end
     Q --> GT

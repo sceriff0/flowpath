@@ -9,7 +9,12 @@ qupathExtension {
     // QuPath's own group, inherited from the extension template and never changed.
     group = "io.github.sceriff0"
     version = "0.9.2"
-    description = "FlowJo-style cell phenotyping for multiplexed imaging: hierarchical gating plus UMAP visualisation of the resulting phenotypes."
+    // Written into the extension's published metadata, so it must describe what this
+    // build actually offers. Both the UMAP half and the Analysis window are present in
+    // the source but held back for a future release (FlowPathPane.UMAP_ENABLED and
+    // FlowPathPane.ANALYSIS_ENABLED); advertising either here would promise a window no
+    // user can open. Kept in step with FlowPathExtension.DESCRIPTION and catalog.json.
+    description = "FlowJo-style cell phenotyping for multiplexed imaging: interactive hierarchical gating of segmented cells, with live preview in the viewer and phenotype CSV export."
     automaticModule = "qupath.ext.flowpath"
 }
 
