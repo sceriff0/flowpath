@@ -7,7 +7,15 @@
       "description": "Interactive tree-based cell phenotyping with hierarchical gates: threshold, quadrant and 2D region gates over per-compartment marker measurements, with live preview in the viewer and phenotype CSV export. Designed for multiplexed imaging data (CODEX, MIBI, mIF).",
       "author": "sceriff0",
       "homepage": "https://github.com/sceriff0/flowpath",
-      "releases": []
+      "releases": [
+        {
+          "name": "v0.9.2",
+          "main_url": "https://github.com/sceriff0/flowpath/releases/download/v0.9.2/FlowPath-0.9.2-all.jar",
+          "version_range": {
+            "min": "v0.7.0"
+          }
+        }
+      ]
     }
   ]
 }
