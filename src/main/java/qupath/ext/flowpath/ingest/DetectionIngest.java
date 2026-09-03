@@ -86,7 +86,8 @@ public final class DetectionIngest {
         // Collapsing to base markers is itself a silent narrowing: two declared channels
         // that reduce to the same marker leave one row in the panel and no trace of the
         // other. Counted here so "42 channels in, 41 markers out" is explicable.
-        List<String> channels = MeasurementKeys.collapseToBaseMarkers(options.channelNames());
+        List<String> channels = MeasurementKeys.collapseToBaseMarkers(
+                options.channelNames(), capability.compartments());
         List<String> duplicateNames = new ArrayList<>(0);
         int nullNames = 0;
         Set<String> seenChannel = new LinkedHashSet<>();
@@ -95,7 +96,7 @@ public final class DetectionIngest {
                 nullNames++;
                 continue;
             }
-            var parsed = MeasurementKeys.parse(raw);
+            var parsed = MeasurementKeys.parse(raw, capability.compartments());
             String base = parsed != null ? parsed.marker() : MeasurementKeys.stripLayerPrefix(raw);
             if (base == null || base.isBlank()) {
                 nullNames++;
@@ -121,7 +122,7 @@ public final class DetectionIngest {
         // Computed even when panel A wins. Building only the winner is precisely why a
         // mismatched image/GeoJSON pair could never be detected: the loser was never
         // constructed, so there was nothing to compare against.
-        List<String> fromMeasurements = markersFromMeasurements(sampleKeys);
+        List<String> fromMeasurements = markersFromMeasurements(sampleKeys, capability);
 
         boolean channelsWin = !fromChannels.isEmpty();
         List<String> markers = channelsWin ? fromChannels : fromMeasurements;
@@ -213,8 +214,15 @@ public final class DetectionIngest {
      * Sorted rather than first-seen because there is no meaningful order in a measurement
      * map — the channel path is the one that carries panel order.
      */
-    private static List<String> markersFromMeasurements(Set<String> keys) {
-        List<String> collapsed = MeasurementKeys.collapseToBaseMarkers(new ArrayList<>(keys));
+    private static List<String> markersFromMeasurements(Set<String> keys,
+                                                        CompartmentCapability capability) {
+        // The capability is threaded in rather than re-derived: it was built from THESE
+        // keys a few lines above, and it is the vocabulary the gate editor will offer. Read
+        // the same keys with a narrower vocabulary and a discovered compartment stops
+        // parsing here while still being offered there -- the whole key then arrives in the
+        // panel as a phantom marker spelled "CD3: Membrane: Mean".
+        List<String> collapsed = MeasurementKeys.collapseToBaseMarkers(
+                new ArrayList<>(keys), capability.compartments());
         List<String> out = new ArrayList<>();
         for (String name : collapsed) {
             if (name.startsWith("_")) continue;

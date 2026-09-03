@@ -107,11 +107,32 @@ public final class MeasurementKeys {
      * one of the ways the two halves disagreed about the panel.
      */
     public static java.util.List<String> collapseToBaseMarkers(java.util.List<String> names) {
+        return collapseToBaseMarkers(names, null);
+    }
+
+    /**
+     * Collapse to base markers, accepting any compartment in {@code recognised}.
+     * <p>
+     * Anyone who has a {@link CompartmentCapability} in hand <b>must</b> use this form and
+     * pass {@code capability.compartments()}. The one-argument form recognises only the
+     * known three, so on data carrying a discovered fourth compartment it fails to parse
+     * {@code "CD3: Membrane: Mean"}, falls back to {@link #stripLayerPrefix} and adds the
+     * whole key as a phantom marker of that literal name — while the very same capability
+     * is simultaneously offering {@code Membrane} in the gate editor's compartment picker.
+     * The two readers of one key set then disagree about what a compartment is, which is
+     * exactly what {@link CompartmentCapability#compartments()} tells its caller to
+     * prevent.
+     *
+     * @param recognised compartments beyond the known three to accept, or {@code null} for
+     *                   the closed set
+     */
+    public static java.util.List<String> collapseToBaseMarkers(
+            java.util.List<String> names, java.util.Set<Compartment> recognised) {
         var seen = new java.util.LinkedHashSet<String>();
         if (names == null) return new java.util.ArrayList<>(seen);
         for (String name : names) {
             if (name == null) continue;
-            Parsed parsed = parse(name);
+            Parsed parsed = parse(name, recognised);
             String base = parsed != null ? parsed.marker() : stripLayerPrefix(name);
             if (base != null && !base.isBlank()) seen.add(base);
         }

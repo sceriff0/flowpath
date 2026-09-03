@@ -384,6 +384,48 @@ class DetectionIngestTest {
         assertTrue(r.report().isClean());
     }
 
+    /**
+     * The two readers of one key set must agree about what a compartment is.
+     * <p>
+     * {@code CompartmentCapability.compartments()} says so in its own javadoc — <em>"pass it
+     * to MeasurementKeys.parse(String, Set) so a second reader of the same keys agrees with
+     * this one"</em> — and {@link DetectionIngest#read} is that second reader. It held the
+     * capability and did not pass it, so panel discovery ran against the closed set of three
+     * while the gate editor was simultaneously offering the discovered fourth. A key the
+     * editor could resolve therefore failed to parse here, fell back to
+     * {@code stripLayerPrefix} and entered the panel as a phantom marker literally spelled
+     * {@code "CD3: Membrane: Mean"}.
+     * <p>
+     * Two markers must agree on the token before it is promoted, which is why both CD3 and
+     * CD8 carry it — one marker vouching for itself is how QuPath's own
+     * {@code "ROI: 0.50 µm per pixel: …"} shape would sneak in as a compartment.
+     */
+    @Test
+    void aDiscoveredCompartmentDoesNotBecomeAPhantomMarker() {
+        List<PathObject> cells = Cells.of(4).at(i -> i, i -> i * 2.0)
+                .measurement("CD3: Membrane: Mean", 10, 20, 30, 40)
+                .measurement("CD3: Cell: Mean", 11, 21, 31, 41)
+                .measurement("CD8: Membrane: Mean", 5, 15, 25, 35)
+                .measurement("CD8: Cell: Mean", 6, 16, 26, 36)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .detections();
+
+        IngestResult r = DetectionIngest.read(cells, IngestOptions.none());
+
+        // The capability promoted it, so the editor will offer it...
+        assertTrue(r.capability().compartments().contains(Compartment.of("Membrane")),
+                "two markers agreeing must promote the token: " + r.capability().compartments());
+
+        // ...and panel discovery, reading the same keys, must agree.
+        assertEquals(List.of("CD3", "CD8"), r.markerNames(),
+                "panel discovery must collapse the discovered compartment's keys to their "
+                + "base markers, not re-absorb them whole");
+        for (String marker : r.markerNames()) {
+            assertFalse(marker.contains(": "),
+                    "a measurement key reached the panel as a marker name: " + marker);
+        }
+    }
+
     @Test
     void morphologyColumnsNeverReachThePanelAndLabelStaysOut() {
         // Constraint: "label" is a segmentation identity, not a panel member. The CSV
