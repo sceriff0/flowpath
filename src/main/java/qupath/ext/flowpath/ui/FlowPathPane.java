@@ -94,6 +94,27 @@ public class FlowPathPane extends BorderPane {
     static final boolean UMAP_ENABLED = false;
 
     /**
+     * Whether the Analysis half of the extension is offered to users.
+     * <p>
+     * Held back for this release exactly as {@link #UMAP_ENABLED} holds back the UMAP, and
+     * for the same reason: the feature is complete but is not part of what ships. Every
+     * entry point into it — the toolbar button, the per-pass push in
+     * {@link #onPreviewUpdated()}, the tree-to-table selection link and
+     * {@link #openAnalysisWindow()} itself — is gated on this one constant. Nothing under
+     * {@code qupath.ext.flowpath.analysis} was deleted or stubbed: flipping this to
+     * {@code true} restores the feature in full, which is the point of having a single flag
+     * rather than commented-out call sites.
+     * <p>
+     * Note the entry point UMAP does not have. {@code AnalysisWindow}'s population-selection
+     * listener is wired from this pane's constructor and runs on a tree selection rather
+     * than on a button press, so disabling the button alone would leave a window that can
+     * never be opened still driving this pane. See the constructor.
+     * <p>
+     * Package-private so {@code AnalysisFeatureFlagTest} can assert the shipped value.
+     */
+    static final boolean ANALYSIS_ENABLED = false;
+
+    /**
      * The UMAP view this pane opens and keeps fed. Created eagerly but does not build
      * any UI until the user asks for it — an unopened window costs one object.
      */
@@ -243,24 +264,29 @@ public class FlowPathPane extends BorderPane {
 
         // Beside UMAP, not folded into it: this reports what the gate tree already found
         // (counts, percentages, density) rather than re-embedding the cells in a new space.
-        analysisButton = new Button("Analysis");
-        analysisButton.setDisable(true);
-        analysisButton.setTooltip(new Tooltip(
-            "Population counts, percentages and density for the current gating, live.\n"
-            + "Three nested scopes when annotations are in use: per region, all regions, "
-            + "whole slide."));
-        analysisButton.setOnAction(e -> openAnalysisWindow());
+        // See createAnalysisControl.
+        AnalysisControl analysis = createAnalysisControl(this::openAnalysisWindow);
+        analysisButton = analysis.button();
+        Node analysisSlot = analysis.slot();
+
         // The tree-selection link's reverse direction: a population selected in the Analysis
         // window's table (or clicked on a plot bar) lands the TreeView's selection on the gate
         // that produced it. See onPopulationSelectedFromAnalysis(); the forward direction is
         // wired the other way, inside onTreeSelectionChanged() below.
-        analysisWindow.setPopulationSelectionListener(this::onPopulationSelectedFromAnalysis);
+        //
+        // Gated as well, and this is the entry point UMAP had no equivalent of: the listener
+        // is driven by a tree selection rather than by the toolbar button, so leaving it
+        // wired while the feature is off would let a window the user cannot open still call
+        // back into this pane.
+        if (ANALYSIS_ENABLED) {
+            analysisWindow.setPopulationSelectionListener(this::onPopulationSelectedFromAnalysis);
+        }
 
         HBox toolbarSpacer = new HBox();
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, toolbarSpacer, analysisButton, umapSlot);
+            exportBtn, toolbarSpacer, analysisSlot, umapSlot);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -721,7 +747,7 @@ public class FlowPathPane extends BorderPane {
             // back out is the round-trip loop the tree-selection link exists to avoid.
             // AnalysisWindow.selectPopulation is already a no-op while the window is closed, so
             // there is no need to check isShowing() here too.
-            if (!applyingPopulationSelection) {
+            if (ANALYSIS_ENABLED && !applyingPopulationSelection) {
                 PopulationRef ref = populationRefFor(branch.branch);
                 if (ref != null) {
                     analysisWindow.selectPopulation(ref);
@@ -964,7 +990,7 @@ public class FlowPathPane extends BorderPane {
         updateStatusBar();
         refreshColorByRootCombo();
         umapButton.setDisable(!UMAP_ENABLED || cellIndex == null);
-        analysisButton.setDisable(cellIndex == null);
+        analysisButton.setDisable(!ANALYSIS_ENABLED || cellIndex == null);
 
         // Push the new phenotyping to the UMAP if it is open. push() is a no-op when it
         // is not, so the common case costs one boolean check rather than the snapshot
@@ -983,7 +1009,7 @@ public class FlowPathPane extends BorderPane {
         // see AnalysisState.emptyMessage(), which is deliberately null whenever hasData()
         // is true and has nothing to say about "there are no gates". The window simply
         // keeps showing its last real report until a gate exists again.
-        if (analysisWindow.isShowing() && hasEnabledRootGate()) {
+        if (ANALYSIS_ENABLED && analysisWindow.isShowing() && hasEnabledRootGate()) {
             AnalysisSession.AnalysisInput input = buildAnalysisInput();
             if (input != null) {
                 analysisWindow.push(input);
@@ -1044,6 +1070,55 @@ public class FlowPathPane extends BorderPane {
             "UMAP exploration of the gated phenotypes is not part of this release.\n"
             + "It is planned for a future version."));
         return new UmapControl(button, wrapper);
+    }
+
+    /**
+     * The Analysis toolbar button plus the node the toolbar should actually contain.
+     * <p>
+     * The two differ only while the feature is held back, when the button is wrapped so
+     * that its explanation stays reachable — see {@link #createAnalysisControl}.
+     *
+     * @param button the button itself, whose disabled state the pane keeps updating
+     * @param slot   what to add to the toolbar, which may be a wrapper around {@code button}
+     */
+    record AnalysisControl(Button button, Node slot) {}
+
+    /**
+     * Build the Analysis toolbar control for the current value of {@link #ANALYSIS_ENABLED}.
+     * <p>
+     * Extracted from the constructor for the same reason {@link #createUmapControl} was:
+     * {@code FlowPathPane} needs a live {@link QuPathGUI} and cannot be instantiated in the
+     * suite, so a "disabled" button could otherwise regain a handler unnoticed.
+     * <p>
+     * The same defences, in the same order. The button is disabled <em>and</em> carries no
+     * action handler, because a disabled button with a live handler is one
+     * {@code setDisable(false)} away from opening a window this release does not ship. The
+     * label states the reason, because a disabled JavaFX node is not hit-tested and so
+     * never shows its own tooltip; the fuller explanation goes on an enabled wrapper, where
+     * hovering can still reach it.
+     *
+     * @param onOpen what pressing the button should do when the feature is enabled
+     */
+    static AnalysisControl createAnalysisControl(Runnable onOpen) {
+        Button button = new Button(ANALYSIS_ENABLED ? "Analysis" : "Analysis (coming soon)");
+        // Disabled at construction either way: when the feature is on, onPreviewUpdated()
+        // enables it once there are cells to report on.
+        button.setDisable(true);
+
+        if (ANALYSIS_ENABLED) {
+            button.setTooltip(new Tooltip(
+                "Population counts, percentages and density for the current gating, live.\n"
+                + "Three nested scopes when annotations are in use: per region, all regions, "
+                + "whole slide."));
+            button.setOnAction(e -> onOpen.run());
+            return new AnalysisControl(button, button);
+        }
+
+        StackPane wrapper = new StackPane(button);
+        Tooltip.install(wrapper, new Tooltip(
+            "Population counts, percentages and density for the gated phenotypes are not\n"
+            + "part of this release. They are planned for a future version."));
+        return new AnalysisControl(button, wrapper);
     }
 
     /**
@@ -1133,6 +1208,11 @@ public class FlowPathPane extends BorderPane {
      * nothing in {@code AnalysisState.emptyMessage()} to explain why.
      */
     private void openAnalysisWindow() {
+        if (!ANALYSIS_ENABLED) {
+            // Unreachable through the UI while the flag is false. Kept so that a future
+            // caller cannot open the window without also flipping the flag.
+            return;
+        }
         if (cellIndex == null) {
             Dialogs.showWarningNotification("FlowPath", "Load an image with cell detections first.");
             return;
