@@ -4,7 +4,7 @@ package qupath.ext.flowpath.model;
  * A 2D rectangle gate that classifies cells based on whether their (channelX, channelY)
  * marker values fall inside a rectangular region. Produces 2 branches: inside/outside.
  */
-public class RectangleGate extends Region2DGate {
+public final class RectangleGate extends Region2DGate {
 
     private double minX, maxX, minY, maxY;
 

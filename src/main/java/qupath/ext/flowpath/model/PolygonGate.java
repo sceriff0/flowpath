@@ -7,7 +7,7 @@ import java.util.List;
  * A 2D polygon gate that classifies cells based on whether their (channelX, channelY)
  * marker values fall inside a user-drawn polygon. Produces 2 branches: inside/outside.
  */
-public class PolygonGate extends Region2DGate {
+public final class PolygonGate extends Region2DGate {
 
     private List<double[]> vertices = new ArrayList<>(); // [[x0,y0], [x1,y1], ...]
 

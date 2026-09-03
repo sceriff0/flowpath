@@ -13,7 +13,8 @@ import java.util.List;
  * to {@link #getChannels()}, which is the contract {@code GatingEngine} and
  * {@code PhenotypeCsvExporter} rely on to resolve each axis to a measurement column.
  */
-public abstract class Region2DGate extends GateNode {
+public abstract sealed class Region2DGate extends GateNode
+        permits PolygonGate, RectangleGate, EllipseGate {
 
     private static final int GREEN = (0 << 16) | (200 << 8) | 0;
     private static final int GRAY = (128 << 16) | (128 << 8) | 128;

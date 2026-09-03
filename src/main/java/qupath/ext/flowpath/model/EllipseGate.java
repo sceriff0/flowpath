@@ -6,7 +6,7 @@ package qupath.ext.flowpath.model;
  * <p>
  * Containment test: ((x-cx)/rx)^2 + ((y-cy)/ry)^2 &lt;= 1
  */
-public class EllipseGate extends Region2DGate {
+public final class EllipseGate extends Region2DGate {
 
     private double centerX, centerY, radiusX, radiusY;
 

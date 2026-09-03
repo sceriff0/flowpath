@@ -15,7 +15,7 @@ import java.util.List;
  *   <li>Q4 (--): X < thresholdX AND Y < thresholdY (bottom-left)</li>
  * </ul>
  */
-public class QuadrantGate extends GateNode {
+public final class QuadrantGate extends GateNode {
 
     private String channelX;
     private String channelY;

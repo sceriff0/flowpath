@@ -355,8 +355,13 @@ public class FlowPathSerializer {
                 branches.add(bo);
             }
             obj.add("branches", branches);
-        } else {
-            // Threshold gate (default) — backward-compatible format
+        } else if (node.getClass() == GateNode.class) {
+            // Threshold gate — GateNode itself doubles as the 1-D threshold gate.
+            // Matched on the exact class rather than as a trailing `else`: the `else`
+            // spelling meant any gate type added to the model without a case above was
+            // written with a threshold gate's body under its own "type" string, so save()
+            // succeeded and the file only failed on load, in a later session, after the
+            // user's work was already on disk. See the refusal below.
             obj.addProperty("channel", node.getChannel());
             obj.addProperty("threshold", node.getThreshold());
             obj.addProperty("thresholdIsZScore", node.isThresholdIsZScore());
@@ -368,6 +373,19 @@ public class FlowPathSerializer {
             obj.add("negativeColor", ColorUtils.toJsonArray(node.getNegativeColor()));
             obj.add("positiveChildren", serializeNodeList(node.getPositiveChildren()));
             obj.add("negativeChildren", serializeNodeList(node.getNegativeChildren()));
+        } else {
+            // A gate type reached the model without reaching this method. Refusing is the
+            // whole point: writing it as a threshold gate would produce a file whose
+            // "type" and body disagree, which save() cannot detect and load() reports only
+            // as "Unknown gate type" much later. save() builds the entire document in
+            // memory before it opens the writer, so throwing here leaves any existing file
+            // untouched rather than truncated.
+            throw new IllegalStateException(
+                    "No serializer case for gate type '" + node.getGateType() + "' ("
+                    + node.getClass().getName() + "). Add one to "
+                    + "FlowPathSerializer.serializeNode, a matching branch to "
+                    + "deserializeNode, and a display name to FlowPathCell.regionTypeName "
+                    + "and GateEditorPane's label switch.");
         }
 
         return obj;

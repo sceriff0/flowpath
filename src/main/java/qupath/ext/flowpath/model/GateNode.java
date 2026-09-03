@@ -13,7 +13,25 @@ import java.util.List;
  * Instantiate this class directly for a threshold gate; there is no separate
  * {@code ThresholdGate} type.
  */
-public class GateNode {
+public sealed class GateNode permits QuadrantGate, Region2DGate {
+
+    // Sealed, and this permits clause is the gate-type registry.
+    //
+    // The type is written to disk polymorphically -- FlowPathSerializer emits
+    // getGateType() for every node -- while the *body* beside it is chosen by an
+    // instanceof chain. A gate type added to the model but forgotten in that chain used
+    // to fall through to the threshold branch, so the file named the new type and carried
+    // a threshold gate's fields: a save that succeeded and only failed on load, in a
+    // later session, after the user's work was already on disk. Sealing means a new type
+    // cannot exist without editing this line, and this line is where the reader is told
+    // where else to look. GateNodeSealingTest pins the set.
+    //
+    // Note this class is itself instantiable and doubles as the 1-D threshold gate, so a
+    // pattern switch over GateNode cannot be exhaustive in the compiler's sense; the
+    // serializer therefore also rejects an unrecognised concrete type outright rather
+    // than defaulting. Making the base abstract (extracting a ThresholdGate) would close
+    // that remaining gap and is deliberately left as separate work.
+
 
     // --- Shared fields (all gate types) ---
     private boolean enabled = true;
