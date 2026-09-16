@@ -38,6 +38,9 @@ held back, as in 0.9.3.
   changed, which recorded an empty undo step and cleared the redo stack; the threshold and
   quadrant fields also rounded a dragged threshold to the digits they display. Only a real
   change is recorded now, and a typed `Infinity` or `NaN` threshold is rejected.
+- **Some error dialogs were blank.** A failed CSV export, detection read, save or load whose
+  error carried no message showed an empty body (or "null"). The error's type, and its
+  cause when there is one, are named instead.
 - **Quality-filter and annotation-filter changes could not be undone.** Both are now undo
   steps; a slider drag is one, and Reset is one of its own even straight after a drag.
 - **A cell reaching a gate on a channel the image lacks was not flagged.** The walk

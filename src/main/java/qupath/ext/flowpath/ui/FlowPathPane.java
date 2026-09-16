@@ -480,7 +480,7 @@ public class FlowPathPane extends BorderPane {
         public void failed(Throwable error) {
             logger.error("Reading the image's detections failed", error);
             Dialogs.showErrorNotification("FlowPath",
-                    "Could not read the detections: " + error.getMessage());
+                    "Could not read the detections: " + ErrorMessages.describe(error));
         }
     }
 
@@ -496,7 +496,7 @@ public class FlowPathPane extends BorderPane {
         public void failed(Throwable error) {
             logger.error("Exporting the phenotype CSV failed", error);
             updateExportControlsDisabled();
-            Dialogs.showErrorMessage("Export Error", error.getMessage());
+            Dialogs.showErrorMessage("Export Error", ErrorMessages.describe(error));
         }
     }
 
@@ -1527,7 +1527,7 @@ public class FlowPathPane extends BorderPane {
             FlowPathSerializer.save(session.tree(), file, currentProvenance());
             Dialogs.showInfoNotification("FlowPath", "Saved to " + file.getName());
         } catch (Exception ex) {
-            Dialogs.showErrorMessage("Save Error", ex.getMessage());
+            Dialogs.showErrorMessage("Save Error", ErrorMessages.describe(ex));
         }
     }
 
@@ -1567,7 +1567,7 @@ public class FlowPathPane extends BorderPane {
 
             Dialogs.showInfoNotification("FlowPath", "Loaded from " + file.getName());
         } catch (Exception ex) {
-            Dialogs.showErrorMessage("Load Error", ex.getMessage());
+            Dialogs.showErrorMessage("Load Error", ErrorMessages.describe(ex));
         }
     }
 
