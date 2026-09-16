@@ -205,6 +205,28 @@ class UndoStackTest {
         assertEquals(3, undoDepth(history, tree));
     }
 
+    /**
+     * A step recorded as the start of a burst absorbs a coalesced edit from that source straight
+     * after it, but not an earlier burst from the same source: that one ends at the record.
+     */
+    @Test
+    void aStepStartingABurstAbsorbsTheNextCoalescedEditOfItsSource() {
+        AtomicLong clock = new AtomicLong();
+        UndoHistory<GateTree> history = newHistory(clock);
+        GateTree tree = new GateTree();
+
+        clock.set(1000);
+        history.recordCoalesced(tree, "gate");        // records
+        clock.set(1100);
+        history.recordStartingBurst(tree, "gate");    // records despite the open burst
+        clock.set(1150);
+        history.recordCoalesced(tree, "gate");        // folded into the step above
+        clock.set(1200);
+        history.recordCoalesced(tree, "filter");      // another source records
+
+        assertEquals(3, undoDepth(history, tree));
+    }
+
     private static int undoDepth(UndoHistory<GateTree> history, GateTree current) {
         int depth = 0;
         while (history.canUndo()) {

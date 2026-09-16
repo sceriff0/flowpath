@@ -292,6 +292,18 @@ final class GatingSession {
     }
 
     /**
+     * Record the tree before a gate is replaced by one of another type (a shape of another
+     * kind drawn over it), as one undo step. The editor writes the drawn shape and reports the
+     * change straight after, through {@link #recordAppliedEdit}{@code (GATE)}; that report is
+     * folded into this step. Recorded as a plain {@link #recordEdit} and then settled by the
+     * pane's pass request, the report recorded the settled replacement a second time — a
+     * no-op first undo, or an "empty polygon" step before the original gate.
+     */
+    void recordReplacement() {
+        undoHistory.recordStartingBurst(tree, EditSource.GATE);
+    }
+
+    /**
      * Record an edit that has <em>already been written</em> into the tree, as the gate
      * editor reports its edits: it writes into the gate, then notifies. Recording the tree
      * at that point snapshots the edited value, so undo restored nothing. What is recorded

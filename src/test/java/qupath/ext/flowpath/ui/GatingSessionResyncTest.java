@@ -5,11 +5,15 @@ import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
+import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.objects.PathObject;
@@ -369,6 +373,113 @@ class GatingSessionResyncTest {
         session.resync(annotations);
         assertEquals(5, countTrue(session.roiMask()));
         assertArrayEquals(new int[]{0, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    // ---- replacing a region gate by drawing another shape --------------------------------
+
+    /** CD3 = 1..10 and CD8 = 10..1 on slide A's cells. */
+    private static CellIndex slideWithCd8() {
+        return Cells.of(N).marker("CD3", i -> i + 1.0).marker("CD8", i -> 10.0 - i)
+                .area(i -> 10.0 * (i + 1)).at(i -> i * 10.0, i -> 0.0).build();
+    }
+
+    /** Two region roots on the same CD3 x CD8 channels: a rectangle and a polygon. */
+    private static GateTree twoRegionRoots() {
+        GateTree tree = new GateTree();
+        tree.addRoot(onMeans(new RectangleGate("CD3", "CD8", 0.5, 5.5, 0.0, 11.0)));   // CD3 1..5
+        PolygonGate polygon = onMeans(new PolygonGate("CD3", "CD8"));
+        polygon.setVertices(new ArrayList<>(List.of(
+                new double[]{7.5, 0.0}, new double[]{11.0, 0.0}, new double[]{11.0, 11.0}, new double[]{7.5, 11.0})));
+        tree.addRoot(polygon);                                                   // CD3 8..10
+        return tree;
+    }
+
+    /** Both axes on the bare whole-cell mean column {@code Cells.marker} builds. */
+    private static <G extends Region2DGate> G onMeans(G gate) {
+        gate.setStatisticX(Statistic.MEAN);
+        gate.setStatisticY(Statistic.MEAN);
+        return gate;
+    }
+
+    /**
+     * What {@code Region2DGateEditor.onShapeDrawn} and {@code FlowPathPane.replaceGateNode} do
+     * when a shape of another type is drawn over root {@code root}: record the replacement,
+     * swap it in and request a pass (which settles), write the drawn shape if the replacement
+     * was created without it, then report the gate changed.
+     */
+    private static void drawReplacement(GatingSession session, int root, Region2DGate replacement,
+                                        java.util.function.Consumer<Region2DGate> applyDrawn) {
+        session.recordReplacement();
+        session.tree().getRoots().set(root, replacement);
+        session.settle();
+        if (applyDrawn != null) applyDrawn.accept(replacement);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.settle();
+    }
+
+    /**
+     * Drawing a rectangle, ellipse or polygon over a gate of another type is one undo step:
+     * the first Ctrl+Z returns the original gate. The replacement used to be recorded, then
+     * settled, then recorded again by the editor's change report — a no-op step for a
+     * rectangle or ellipse (created already drawn) and an extra "empty polygon" step for a
+     * polygon (created empty, then written). Two passes, two same-channel roots.
+     */
+    @Test
+    void drawingAnotherShapeOverAGateIsUndoneByOneUndo() {
+        record Case(String name, int root, java.util.function.Supplier<Region2DGate> create,
+                    java.util.function.Consumer<Region2DGate> apply) {}
+        List<Case> cases = List.of(
+                new Case("ellipse over the rectangle", 0,
+                        () -> onMeans(new EllipseGate("CD3", "CD8", 9.0, 2.0, 1.5, 1.5)), null),
+                new Case("rectangle over the polygon", 1,
+                        () -> onMeans(new RectangleGate("CD3", "CD8", 0.5, 2.5, 0.0, 11.0)), null),
+                new Case("polygon over the rectangle", 0,
+                        () -> onMeans(new PolygonGate("CD3", "CD8")),
+                        g -> ((PolygonGate) g).setVertices(new ArrayList<>(List.of(
+                                new double[]{0.0, 0.0}, new double[]{3.5, 0.0},
+                                new double[]{3.5, 11.0}, new double[]{0.0, 11.0})))));
+        for (Case c : cases) {
+            AtomicLong clock = new AtomicLong(10_000);
+            RecordingPass pass = new RecordingPass();
+            GatingSession session = new GatingSession(clock::get, pass);
+            CellIndex index = slideWithCd8();
+            session.replaceTree(twoRegionRoots());
+            session.adoptIndex(index);
+            session.resync(NO_ANNOTATIONS);
+            assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)), c.name());
+            assertArrayEquals(new int[]{3, 7}, counts(pass.last(), session.tree().getRoots().get(1)), c.name());
+
+            // A drag on the other root just before, so a burst is in progress.
+            clock.addAndGet(5_000);
+            GateNode other = session.tree().getRoots().get(1 - c.root());
+            other.setExcludeOutliers(true);
+            session.recordAppliedEdit(GatingSession.EditSource.GATE);
+            session.settle();
+            clock.addAndGet(100);
+
+            Class<?> originalType = session.tree().getRoots().get(c.root()).getClass();
+            drawReplacement(session, c.root(), c.create().get(), c.apply());
+            session.resync(NO_ANNOTATIONS);
+            assertNotEquals(originalType, session.tree().getRoots().get(c.root()).getClass(), c.name());
+
+            assertTrue(session.undo(), c.name());
+            session.resync(NO_ANNOTATIONS);
+            GateTree expected = twoRegionRoots();
+            expected.getRoots().get(1 - c.root()).setExcludeOutliers(true);
+            assertEquals(originalType, session.tree().getRoots().get(c.root()).getClass(),
+                    c.name() + ": one undo returns the original gate");
+            assertTrue(session.tree().getRoots().get(1 - c.root()).isExcludeOutliers(),
+                    c.name() + ": the edit before the replacement is its own step");
+            assertArrayEquals(expectedCounts(expected, c.root(), index, null, null),
+                    counts(pass.last(), session.tree().getRoots().get(c.root())), c.name());
+            assertArrayEquals(expectedCounts(expected, 1 - c.root(), index, null, null),
+                    counts(pass.last(), session.tree().getRoots().get(1 - c.root())), c.name());
+
+            assertTrue(session.undo(), c.name());
+            session.resync(NO_ANNOTATIONS);
+            assertFalse(session.tree().getRoots().get(1 - c.root()).isExcludeOutliers(),
+                    c.name() + ": the second undo reverts the earlier edit");
+        }
     }
 
     // ---- statistics are reused while the population they describe is unchanged ---------

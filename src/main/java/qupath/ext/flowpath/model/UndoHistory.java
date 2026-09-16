@@ -100,6 +100,22 @@ public final class UndoHistory<T> {
     }
 
     /**
+     * Record {@code current} as a step of its own — ending any burst in progress, like
+     * {@link #record} — and open a burst for {@code source} at the same instant, so a
+     * {@link #recordCoalesced(Object, Object)} from that source straight after it is folded
+     * into this step rather than recorded again.
+     * <p>
+     * For an edit recorded before its write whose completion is reported afterwards as an
+     * ordinary coalesced edit: replacing a gate by drawing another shape is recorded here,
+     * and the editor's change report that follows must not add a second, no-op step.
+     */
+    public void recordStartingBurst(T current, Object source) {
+        record(current);
+        lastSource = source;
+        lastRecordTime = clock.getAsLong();
+    }
+
+    /**
      * Undo one step: push {@code current} onto the redo stack and return the
      * previous state, or {@link Optional#empty()} if there is nothing to undo.
      */

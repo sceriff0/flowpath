@@ -654,7 +654,8 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void replaceGateNode(GateNode oldNode, GateNode newNode) {
-        pushUndo();
+        // One step with the editor's gateChanged() that follows, not two.
+        session.recordReplacement();
         // Replace in roots
         int rootIdx = session.tree().getRoots().indexOf(oldNode);
         if (rootIdx >= 0) {
