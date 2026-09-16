@@ -56,6 +56,8 @@ public class QualityFilterPane extends TitledPane {
     private final Map<String, Row> rows = new LinkedHashMap<>();
 
     private Consumer<QualityFilter> onFilterChanged;
+    /** Runs before the filter is written, so an undo snapshot taken there holds the old value. */
+    private Runnable onBeforeFilterChange;
 
     /** The controls for one morphology field. */
     private record Row(MorphologyField field, Slider min, Slider max,
@@ -198,8 +200,13 @@ public class QualityFilterPane extends TitledPane {
         // against one slide would silently exclude cells on a slide whose values run wider.
         double min = lo <= r.min().getMin() ? Double.NEGATIVE_INFINITY : lo;
         double max = hi >= r.max().getMax() ? Double.POSITIVE_INFINITY : hi;
+        fireBeforeChange();
         filter.setRange(r.field().slug(), new QualityFilter.Range(min, max));
         fireChanged();
+    }
+
+    private void fireBeforeChange() {
+        if (!suppressEvents && onBeforeFilterChange != null) onBeforeFilterChange.run();
     }
 
     private void fireChanged() {
@@ -229,6 +236,17 @@ public class QualityFilterPane extends TitledPane {
         this.onFilterChanged = callback;
     }
 
+    /**
+     * Called just before a user change is written into the filter.
+     * <p>
+     * The panel edits the filter object in place and fires {@link #setOnFilterChanged
+     * onFilterChanged} afterwards, so an undo snapshot taken in that callback would already
+     * hold the new value and undo would restore nothing. This is where to take it.
+     */
+    public void setOnBeforeFilterChange(Runnable callback) {
+        this.onBeforeFilterChange = callback;
+    }
+
     public QualityFilter getFilter() {
         return filter;
     }
@@ -240,6 +258,7 @@ public class QualityFilterPane extends TitledPane {
 
     /** Clear every constraint and return the sliders to their columns' full span. */
     public void resetToDefaults() {
+        fireBeforeChange();
         for (Row r : rows.values()) filter.setRange(r.field().slug(), null);
         List<MorphologyField> shown = new ArrayList<>();
         for (Row r : rows.values()) shown.add(r.field());
