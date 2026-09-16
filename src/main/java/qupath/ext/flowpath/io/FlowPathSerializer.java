@@ -165,10 +165,11 @@ public class FlowPathSerializer {
             return parseGateTree(root);
         } catch (com.google.gson.JsonSyntaxException | IllegalStateException | ClassCastException
                  | NullPointerException | IndexOutOfBoundsException
-                 | UnsupportedOperationException e) {
+                 | UnsupportedOperationException | NumberFormatException e) {
             // UnsupportedOperationException is what Gson throws for a typed read of a
             // JSON null; catching it keeps every malformed-file path inside the
-            // documented IOException contract.
+            // documented IOException contract. NumberFormatException is Gson's answer to
+            // a string where a number belongs ("threshold": "high").
             throw new IOException("Invalid FlowPath file structure: " + e.getMessage(), e);
         }
     }
@@ -226,16 +227,16 @@ public class FlowPathSerializer {
      */
     private static JsonObject serializeQualityFilter(QualityFilter qf) {
         JsonObject obj = new JsonObject();
-        obj.addProperty("minArea", qf.getMinArea());
-        obj.addProperty("maxArea", qf.getMaxArea());
-        obj.addProperty("minEccentricity", qf.getMinEccentricity());
-        obj.addProperty("maxEccentricity", qf.getMaxEccentricity());
-        obj.addProperty("minSolidity", qf.getMinSolidity());
-        obj.addProperty("maxSolidity", qf.getMaxSolidity());
-        obj.addProperty("minTotalIntensity", qf.getMinTotalIntensity());
-        obj.addProperty("maxTotalIntensity", qf.getMaxTotalIntensity());
-        obj.addProperty("minPerimeter", qf.getMinPerimeter());
-        obj.addProperty("maxPerimeter", qf.getMaxPerimeter());
+        // Legacy keys carry only bounds that are actually set. They used to be written from
+        // the legacy getters, which report an open bound as 0 / 1.0 / Double.MAX_VALUE, and
+        // an unconstrained filter reloaded as five closed ranges -- excluding, among others,
+        // every cell with a negative total intensity. An older reader treats an absent key
+        // as its own default, which is the same "no constraint".
+        writeLegacyBounds(obj, qf, QualityFilter.AREA, "minArea", "maxArea");
+        writeLegacyBounds(obj, qf, QualityFilter.ECCENTRICITY, "minEccentricity", "maxEccentricity");
+        writeLegacyBounds(obj, qf, QualityFilter.SOLIDITY, "minSolidity", "maxSolidity");
+        writeLegacyBounds(obj, qf, QualityFilter.TOTAL_INTENSITY, "minTotalIntensity", "maxTotalIntensity");
+        writeLegacyBounds(obj, qf, QualityFilter.PERIMETER, "minPerimeter", "maxPerimeter");
 
         JsonObject ranges = new JsonObject();
         qf.ranges().forEach((slug, range) -> {
@@ -248,9 +249,33 @@ public class FlowPathSerializer {
         return obj;
     }
 
+    private static void writeLegacyBounds(JsonObject obj, QualityFilter qf, String slug,
+                                          String minKey, String maxKey) {
+        QualityFilter.Range r = qf.range(slug);
+        if (r.min() > Double.NEGATIVE_INFINITY) obj.addProperty(minKey, r.min());
+        if (r.max() < Double.POSITIVE_INFINITY) obj.addProperty(maxKey, r.max());
+    }
+
+    private static void readRanges(JsonObject ranges, QualityFilter qf) {
+        for (var entry : ranges.entrySet()) {
+            if (!entry.getValue().isJsonObject()) continue;
+            JsonObject r = entry.getValue().getAsJsonObject();
+            double lo = r.has("min") ? r.get("min").getAsDouble() : Double.NEGATIVE_INFINITY;
+            double hi = r.has("max") ? r.get("max").getAsDouble() : Double.POSITIVE_INFINITY;
+            qf.setRange(entry.getKey(), new QualityFilter.Range(lo, hi));
+        }
+    }
+
     private static QualityFilter deserializeQualityFilter(JsonObject obj) {
         QualityFilter qf = new QualityFilter();
-        // Legacy properties first, so a v1..v3 file loads exactly as it did.
+        // A file that carries "ranges" was written by a FlowPath that writes the full set
+        // there, so it is authoritative and the legacy keys beside it are only for older
+        // readers. Reading both let a legacy key close a bound "ranges" had left open.
+        if (obj.has("ranges") && obj.get("ranges").isJsonObject()) {
+            readRanges(obj.getAsJsonObject("ranges"), qf);
+            return qf;
+        }
+        // Legacy properties only, so a v1..v3 file loads exactly as it did.
         if (obj.has("minArea")) qf.setMinArea(obj.get("minArea").getAsDouble());
         if (obj.has("maxArea")) qf.setMaxArea(obj.get("maxArea").getAsDouble());
         if (obj.has("minEccentricity")) qf.setMinEccentricity(obj.get("minEccentricity").getAsDouble());
@@ -262,17 +287,6 @@ public class FlowPathSerializer {
         if (obj.has("minPerimeter")) qf.setMinPerimeter(obj.get("minPerimeter").getAsDouble());
         if (obj.has("maxPerimeter")) qf.setMaxPerimeter(obj.get("maxPerimeter").getAsDouble());
 
-        // Then the general form, which wins where both describe the same field: it is the
-        // one that can express a constraint on a field FlowPath has no name for.
-        if (obj.has("ranges") && obj.get("ranges").isJsonObject()) {
-            for (var entry : obj.getAsJsonObject("ranges").entrySet()) {
-                if (!entry.getValue().isJsonObject()) continue;
-                JsonObject r = entry.getValue().getAsJsonObject();
-                double lo = r.has("min") ? r.get("min").getAsDouble() : Double.NEGATIVE_INFINITY;
-                double hi = r.has("max") ? r.get("max").getAsDouble() : Double.POSITIVE_INFINITY;
-                qf.setRange(entry.getKey(), new QualityFilter.Range(lo, hi));
-            }
-        }
         // "hideFiltered" silently ignored for backward compat with v1 files
         return qf;
     }
