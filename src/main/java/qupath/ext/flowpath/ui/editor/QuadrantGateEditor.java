@@ -39,6 +39,14 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
         wireChannelCombo(chXCombo, 0);
         wireChannelCombo(chYCombo, 1);
 
+        // Pin both axes to a signal the export carries BEFORE anything reads a column. The
+        // slider span below is that column's clip window; ranged first, a gate whose stored
+        // statistic the file lacks (a default MEDIAN gate over bare mean columns) resolved to
+        // no column at all and opened on the [-5, 5] default until the next data change.
+        HBox rowX = channelRow("Channel X:", chXCombo, 0);
+        HBox rowY = channelRow("Channel Y:", chYCombo, 1);
+        syncModeSelection();
+
         sliderX.setPrefWidth(300);
         sliderY.setPrefWidth(300);
         SliderUtils.enableScrollControl(sliderX);
@@ -65,11 +73,6 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
         // A value outside the visible window is honoured and the slider widens to show it.
         wireField(valX, true);
         wireField(valY, false);
-
-        syncModeSelection();
-
-        HBox rowX = channelRow("Channel X:", chXCombo, 0);
-        HBox rowY = channelRow("Channel Y:", chYCombo, 1);
 
         VBox root = new VBox(4,
                 rowX, rowY,
