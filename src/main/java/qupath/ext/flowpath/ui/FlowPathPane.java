@@ -49,12 +49,14 @@ import qupath.lib.images.servers.PixelCalibration;
 
 import java.util.List;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.hierarchy.events.PathObjectHierarchyEvent;
-import qupath.lib.objects.hierarchy.events.PathObjectHierarchyListener;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main panel for the FlowPath extension.
@@ -134,9 +136,29 @@ public class FlowPathPane extends BorderPane {
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
     /** What the last ingest could not resolve. Surfaced in the status bar, never modally. */
     private IngestReport ingestReport = IngestReport.empty();
-    private PathObjectHierarchyListener hierarchyListener;
     private boolean suppressRoiFilterEvents = false;
-    private ImageData<?> listenerImageData;
+
+    /**
+     * The pane's one thread for heavy work, so it never runs on the FX thread: reading an
+     * image's detections and computing their statistics now, exporting the CSV next. Single
+     * threaded, so two background jobs never race each other for the session's inputs; it also
+     * times {@link #ingest}'s re-read debounce. Shut down in {@link #shutdown()}.
+     */
+    private final ScheduledExecutorService backgroundExecutor =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "flowpath-background");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** Reads the open image's detections in the background, and again whenever they change. */
+    private final IngestCoordinator ingest;
+
+    private final Button addRootBtn;
+    private final Button exportBtn;
+    private final ProgressIndicator spinner;
+    /** A gating pass is running; the spinner also shows while {@link #ingest} is busy. */
+    private boolean previewRunning;
 
     public FlowPathPane(QuPathGUI qupath) {
         this.qupath = qupath;
@@ -166,7 +188,7 @@ public class FlowPathPane extends BorderPane {
         treeView.setOnContextMenuRequested(e -> showTreeContextMenu(e.getScreenX(), e.getScreenY()));
 
         // Add root gate button
-        Button addRootBtn = new Button("+ Add Root Gate");
+        addRootBtn = new Button("+ Add Root Gate");
         addRootBtn.setMaxWidth(Double.MAX_VALUE);
         addRootBtn.setOnAction(e -> addRootGate());
         addRootBtn.setTooltip(new Tooltip("Add a new top-level gate to the gating hierarchy"));
@@ -235,13 +257,17 @@ public class FlowPathPane extends BorderPane {
         // --- Status bar ---
         statusBar = new Label("Total: 0 cells | Excluded: 0 | Gates: 0");
         statusBar.setStyle("-fx-font-size: 11; -fx-text-fill: #aaaaaa; -fx-padding: 2 6 2 6;");
-        ProgressIndicator spinner = new ProgressIndicator();
+        spinner = new ProgressIndicator();
         spinner.setPrefSize(14, 14);
         spinner.setMaxSize(14, 14);
         spinner.setVisible(false);
-        previewService.setOnUpdateStarted(() -> Platform.runLater(() -> spinner.setVisible(true)));
+        previewService.setOnUpdateStarted(() -> Platform.runLater(() -> {
+            previewRunning = true;
+            updateSpinner();
+        }));
         previewService.setOnUpdateComplete(() -> Platform.runLater(() -> {
-            spinner.setVisible(false);
+            previewRunning = false;
+            updateSpinner();
             onPreviewUpdated();
         }));
         previewService.setOnStatsRecomputed(() -> {
@@ -265,7 +291,7 @@ public class FlowPathPane extends BorderPane {
         Button loadBtn = new Button("Load JSON");
         loadBtn.setOnAction(e -> loadTree());
         loadBtn.setTooltip(new Tooltip("Load gate tree from JSON file (Ctrl+O)"));
-        Button exportBtn = new Button("Export CSV");
+        exportBtn = new Button("Export CSV");
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
 
@@ -330,6 +356,11 @@ public class FlowPathPane extends BorderPane {
         // Style
         setStyle("-fx-background-color: #1e1e1e;");
 
+        // Detections are read on backgroundExecutor and applied on the FX thread. FlowPath's own
+        // classification writes fire hierarchy events too; the coordinator ignores those.
+        ingest = new IngestCoordinator(session, backgroundExecutor, this::scheduleOnBackground,
+                Platform::runLater, previewService::isFiringHierarchyEvent, new IngestHost());
+
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
 
@@ -340,98 +371,117 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * Read the current image's detections and resync everything to them.
-     * <p>
-     * Ends in {@link #resyncToTree()} on every path, so switching images runs a gating pass
-     * over the new cells straight away. It used to stop after computing the statistics: the
-     * tree kept the previous image's counts and the new cells had no phenotype until some
-     * unrelated edit happened to request a pass.
+     * Hand the current image to {@link #ingest}. Its detections are read and their statistics
+     * computed on {@link #backgroundExecutor}, and every path ends in {@link #render}, so
+     * switching images runs a gating pass over the new cells straight away — without freezing
+     * QuPath while a million cells are read. The coordinator also listens to the image's
+     * hierarchy: cells added or deleted while FlowPath is open are read again (debounced,
+     * keeping the gate tree), and an annotation edit under the ROI filter recomputes the mask.
      */
     private void initializeFromImage() {
-        detachHierarchyListener();
-
-        ImageData<?> imageData = qupath.getImageData();
-        if (imageData == null) {
-            clearImageState();
-            editorPane.setChannelNames(markerNames);
-            resyncToTree();
-            return;
-        }
-
-        Collection<PathObject> detections = imageData.getHierarchy().getDetectionObjects();
-        if (detections.isEmpty()) {
-            clearImageState();
-            editorPane.setChannelNames(markerNames);
-            currentNode = null;
-            resyncToTree();
-            Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
-            return;
-        }
-
-        // One read of the hierarchy: the panel, the per-compartment capability, the index
-        // and the report all come from a single measurement-key sample, so the gate editor
-        // can no longer offer a compartment the index resolved to nothing. The pixel
-        // calibration rides along inside — it is the only thing FlowPath holds that MIRAGE
-        // does not, and it is what makes ScaleVerdict possible.
-        IngestResult ingest = DetectionIngest.read(detections, imageData);
-        markerNames = ingest.markerNames();
-        compartmentCapability = ingest.capability();
-        ingestReport = ingest.report();
-        session.adoptIndex(ingest.index());
-
-        editorPane.setChannelNames(markerNames);
-        editorPane.setCompartmentCapability(compartmentCapability);
-
-        // Which QC metrics exist, and how far each slider should travel, are both read
-        // from the index's discovered morphology. This used to be a hand-rolled scan for
-        // three maxima and three booleans, which could only ever describe the five fields
-        // FlowPath had been told about -- it re-ranged area, total intensity and perimeter,
-        // and decided availability for eccentricity, solidity and perimeter, so the two
-        // lists did not even agree with each other.
-        qualityFilterPane.setCellIndex(ingest.index());
-        previewService.setImageData(imageData);
-
-        // Annotation changes (add/remove) change the ROI mask, and with it the statistics.
-        hierarchyListener = event -> {
-            // Skip events fired by our own gating update to prevent feedback loops
-            if (previewService.isFiringHierarchyEvent()) return;
-            if (!event.isChanging() && session.tree().isRoiFilterEnabled()) {
-                Platform.runLater(this::resyncToTree);
-            }
-        };
-        listenerImageData = imageData;
-        imageData.getHierarchy().addListener(hierarchyListener);
-
-        resyncToTree();
+        ingest.open(qupath.getImageData());
     }
 
-    /** Detach the hierarchy listener from whichever image it was registered on. */
-    private void detachHierarchyListener() {
-        if (hierarchyListener != null && listenerImageData != null) {
-            listenerImageData.getHierarchy().removeListener(hierarchyListener);
+    /** {@link IngestCoordinator}'s debounce timer, on the background thread. */
+    private Runnable scheduleOnBackground(Runnable task, long delayMs) {
+        ScheduledFuture<?> future = backgroundExecutor.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+        return () -> future.cancel(false);
+    }
+
+    /** What {@link #ingest} asks of this pane. Every call arrives on the FX thread. */
+    private final class IngestHost implements IngestCoordinator.Host {
+
+        @Override
+        public List<PathObject> annotations(ImageData<?> imageData) {
+            return annotationsToFilterBy(imageData);
         }
-        hierarchyListener = null;
-        listenerImageData = null;
+
+        /**
+         * Drop every reference to the previous image, in this pane <em>and</em> in the
+         * preview service. Clearing only this pane's fields left the service holding the old
+         * {@code ImageData}: a gate edit made with no image open — or while the next image is
+         * still being read — would re-run gating and write PathClass assignments onto the
+         * previous image's detections. The index, statistics and masks reach the service
+         * through the resync that follows; the image data is the one piece it does not carry.
+         */
+        @Override
+        public void cleared(IngestCoordinator.Cleared why) {
+            markerNames = Collections.emptyList();
+            ingestReport = IngestReport.empty();
+            previewService.setImageData(null);
+            qualityFilterPane.setCellIndex(null);
+            // A switch keeps the selected gate, and the channel list its combos show, for the
+            // image being read; the editor is disabled until it lands. With no cells to come
+            // there is nothing to show — and the gate leaves the editor before the channel
+            // list empties, so emptying it cannot retarget the gate's channel.
+            if (why != IngestCoordinator.Cleared.LOADING) {
+                currentNode = null;
+                editorPane.setGateNode(null);
+                editorPane.setChannelNames(markerNames);
+            }
+            if (why == IngestCoordinator.Cleared.NO_DETECTIONS) {
+                Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
+            }
+        }
+
+        /**
+         * One read of the hierarchy: the panel, the per-compartment capability, the index and
+         * the report all come from a single measurement-key sample, so the gate editor can no
+         * longer offer a compartment the index resolved to nothing. The pixel calibration
+         * rides along inside — it is what makes ScaleVerdict possible.
+         */
+        @Override
+        public void ingested(ImageData<?> imageData, IngestResult result) {
+            // Re-read on every detection edit: repopulating the channel list the editor's
+            // combos share is skipped when the panel is unchanged.
+            if (!result.markerNames().equals(markerNames)) {
+                markerNames = result.markerNames();
+                editorPane.setChannelNames(markerNames);
+            }
+            compartmentCapability = result.capability();
+            ingestReport = result.report();
+            editorPane.setCompartmentCapability(compartmentCapability);
+            // Which QC metrics exist, and how far each slider should travel, are both read
+            // from the index's discovered morphology.
+            qualityFilterPane.setCellIndex(result.index());
+            previewService.setImageData(imageData);
+        }
+
+        @Override
+        public void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+            render(notice, newIndex);
+        }
+
+        @Override
+        public void busyChanged(IngestCoordinator.Busy state) {
+            onIngestBusyChanged(state);
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Reading the image's detections failed", error);
+            Dialogs.showErrorNotification("FlowPath",
+                    "Could not read the detections: " + error.getMessage());
+        }
     }
 
     /**
-     * Drop every reference to the previous image, in this pane <em>and</em> in the
-     * preview service.
-     * <p>
-     * Clearing only this pane's fields left the service holding the old
-     * {@code CellIndex} and {@code ImageData}, which pass its non-null guard: a gate
-     * edit made with no image open would then re-run gating and write PathClass
-     * assignments onto the previous image's detections. Callers follow it with
-     * {@link #resyncToTree()}, which hands the service the null index.
+     * While a new image is read the session has no cells, so the controls that need them wait
+     * for it; a refresh of cells the session still holds disables nothing.
      */
-    private void clearImageState() {
-        session.adoptIndex(null);
-        markerNames = Collections.emptyList();
-        ingestReport = IngestReport.empty();
-        // The index, statistics and masks reach the service through the resync that
-        // follows every call to this method; the image data is the one piece it does not
-        // carry.
-        previewService.setImageData(null);
+    private void onIngestBusyChanged(IngestCoordinator.Busy state) {
+        boolean loading = state == IngestCoordinator.Busy.LOADING;
+        addRootBtn.setDisable(loading);
+        exportBtn.setDisable(loading);
+        editorPane.setDisable(loading);
+        umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
+        analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
+        updateSpinner();
+        updateStatusBar();
+    }
+
+    private void updateSpinner() {
+        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE);
     }
 
     /**
@@ -1336,6 +1386,12 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void updateStatusBar() {
+        if (ingest.busy() == IngestCoordinator.Busy.LOADING) {
+            statusBar.setText(String.format("Reading detections\u2026 | Gates: %d",
+                countGates(session.tree().getRoots())));
+            statusBar.setTooltip(null);
+            return;
+        }
         int total = session.index() != null ? session.index().size() : 0;
         int excluded = previewService.getLastExcludedCount();
         int gateCount = countGates(session.tree().getRoots());
@@ -1575,13 +1631,18 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * Bring every widget and the gating pass in line with the session's current tree and
-     * index: the one path for a load, an undo or redo, an image switch, an ROI toggle and an
-     * annotation change.
+     * index, synchronously: the path for a load, an undo or redo and an ROI toggle. An image
+     * switch and a hierarchy change take the same resync through {@link #ingest}, which
+     * computes its heavy half in the background and renders here through {@link #render}.
+     * <p>
+     * These three stay synchronous on purpose: each is a single user action whose undo
+     * baseline, legacy migration and next gating pass must see the resync completed before the
+     * next edit, and the tests pinning undo (see {@code GatingSessionResyncTest}) rely on it.
      * <p>
      * {@link GatingSession#resync} recomputes the ROI mask, quality mask and statistics from
      * this tree's own filters, migrates a legacy z-score tree through those statistics, and
      * requests the gating pass (see {@link #requestGatingPass}). This method then renders the
-     * result: quality-filter panel, ROI checkbox (events suppressed, so rendering is not
+     * result (see {@link #render}): quality-filter panel, ROI checkbox (events suppressed, so rendering is not
      * mistaken for a toggle), editor masks and statistics, tree view, the selected gate if it
      * is still in the tree, and the status bar.
      * <p>
@@ -1590,7 +1651,20 @@ public class FlowPathPane extends BorderPane {
      * at a caller.
      */
     private void resyncToTree() {
-        Optional<GatingSession.MigrationNotice> notice = session.resync(this::annotationsForRoiFilter);
+        render(session.resync(this::annotationsForRoiFilter), false);
+    }
+
+    /**
+     * Render a resync's result — the synchronous one above, or one {@link #ingest} finished in
+     * the background.
+     * <p>
+     * The editor is rebuilt only when it has to be: the cells changed ({@code newIndex}), a
+     * migration rewrote gates in place, or the selected gate is not the one it shows (an undo
+     * or a load swaps in fresh {@code GateNode}s). An annotation edit or a filter toggle keeps
+     * it, and its plots redraw through the masks and statistics set below. Rebuilding on every
+     * resync threw away a polygon half-drawn on the scatter plot whenever an annotation moved.
+     */
+    private void render(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
         GateTree tree = session.tree();
 
         qualityFilterPane.setFilter(tree.getQualityFilter());
@@ -1618,7 +1692,9 @@ public class FlowPathPane extends BorderPane {
             suppressTreeSelection = false;
         }
         editorPane.setAncestorMask(currentNode != null ? computeAncestorMask(currentNode) : null);
-        editorPane.setGateNode(currentNode);
+        if (newIndex || notice.isPresent() || editorPane.getGateNode() != currentNode) {
+            editorPane.setGateNode(currentNode);
+        }
 
         updateStatusBar();
         notice.ifPresent(this::showMigrationNotice);
@@ -1647,7 +1723,8 @@ public class FlowPathPane extends BorderPane {
     /**
      * Clean up resources when the window is closed.
      * <p>
-     * Detaching the hierarchy listener matters as much as stopping the executor:
+     * Closing the ingest coordinator (which detaches its hierarchy listener) matters as much
+     * as stopping the executors:
      * the extension builds a fresh pane every time the window is reopened
      * ({@code FlowPathExtension.showGateTreeWindow}), so a listener left attached
      * keeps a discarded pane — and its whole {@code CellIndex} — reachable, and
@@ -1660,9 +1737,12 @@ public class FlowPathPane extends BorderPane {
      * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
-        detachHierarchyListener();
+        ingest.close();
         umapWindow.close();
         analysisWindow.dispose();
         previewService.shutdown();
+        // shutdownNow: a read still queued is for a pane that is gone. Its result could not
+        // land anyway -- the coordinator is closed -- so there is nothing to wait for.
+        backgroundExecutor.shutdownNow();
     }
 }

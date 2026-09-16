@@ -234,6 +234,11 @@ public class GateEditorPane extends VBox {
         applySignalChange(() -> selected.applyTo(node));
     }
 
+    /** The gate this editor currently shows, or {@code null}. */
+    public GateNode getGateNode() {
+        return currentNode;
+    }
+
     public void setGateNode(GateNode node) {
         this.currentNode = node;
         this.currentScatter = null;
