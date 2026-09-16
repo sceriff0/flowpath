@@ -8,7 +8,7 @@ qupathExtension {
     // The publishing coordinate for this extension. NOT io.github.qupath -- that is
     // QuPath's own group, inherited from the extension template and never changed.
     group = "io.github.sceriff0"
-    version = "0.9.2"
+    version = "0.9.3"
     // Written into the extension's published metadata, so it must describe what this
     // build actually offers. Both the UMAP half and the Analysis window are present in
     // the source but held back for a future release (FlowPathPane.UMAP_ENABLED and

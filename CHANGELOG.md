@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] - 16/09/2026
+
+Gating correctness and quality-filter fixes, found by a UI bug report and an edge-case
+audit of classification, CSV export and gate-tree JSON. 57 edge-case tests added
+(`ClassificationEdgeCaseTest`, `ExportEdgeCaseTest`, `SerializerEdgeCaseTest`), plus
+`MorphologyDiscoveryTest` and `QuadrantSliderSpanTest`. UMAP and the Analysis window
+remain held back, as in 0.9.2.
+
+### Fixed
+
+- **A saved quality filter reloaded with limits it never had.** The legacy
+  `minArea`/`maxArea`/... keys were written from getters that report an open bound as
+  0, 1.0 or `Double.MAX_VALUE`, and read back through setters that store those as real
+  limits; the `"ranges"` object omitted open fields, so nothing corrected them. An
+  unconstrained filter came back as five closed ranges — silently excluding every cell
+  with a negative total intensity — and save/load/save was not stable. Legacy keys are
+  now written only for bounds that are set, and a file carrying `"ranges"` is read from
+  it alone. Files without `"ranges"` load exactly as before.
+- **A cleared rectangle gate selected cells.** "Clear Shape" writes (0,0,0,0), and
+  `RectangleGate.contains` had no zero-extent guard, so a cell at exactly (0,0) was
+  Inside. In z-score mode a zero-spread column standardises every cell to 0.0, so the
+  cleared gate selected the whole population. A rectangle with no extent now encloses
+  nothing, matching `EllipseGate`'s zero-radius guard.
+- **One infinite value turned a whole column negative.** `MarkerStats` excluded NaN but
+  not ±Infinity, so a single infinite cell made the mean infinite and the standard
+  deviation NaN; every finite z-score became NaN and fell into the negative branch.
+  Statistics are now computed over finite values only; an infinite cell still
+  classifies by its sign.
+- **A marker the image does not name appeared as a quality-filter row.** Morphology
+  discovery treated "not a marker of this index" as "a shape measurement", so when the
+  image's channel list won the panel, an extra quantified marker (`wrongPANCK` in the
+  sample `cells.geojson`) became a filterable morphology field. One rule,
+  `MorphologyField.isMorphologyName`, now decides for both marker discovery and the
+  quality filter, so a column is one or the other. It also recognises columns carrying a
+  spatial unit (µm, px) and QuPath's own shape names (circularity, caliper, Feret, ...).
+- **Quality Filter rows showed sliders but no names.** Names were hard-coded white on
+  the pane's light background and squeezed beside two sliders. Each name now has its own
+  row, uses the theme's text colour, and carries a tooltip with the exported key and the
+  observed range.
+- **Quadrant threshold sliders moved too fast.** Their travel was the raw data minimum
+  to maximum, outliers included, while the scatter plot shows the clip-percentile
+  window, so the visible population fit in a few pixels of slider. Slider travel and
+  scatter axes now come from one helper, widened only to contain the current threshold;
+  the sliders re-range when clip percentiles change, fill the row, and gain a text field
+  for exact entry.
+- **A carriage return in a name split a CSV row.** `CellTable.escape` quoted `,`, `"`
+  and `\n` but not `\r`, which pandas and Python's `csv` treat as a row end.
+- **Malformed numbers escaped `FlowPathSerializer.load` as `NumberFormatException`**
+  instead of the documented `IOException`.
+
 ## [0.9.2] - 02/09/2026
 
 The Analysis window's overhaul: the population table, its exports and its four plots.
