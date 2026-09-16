@@ -18,11 +18,11 @@ import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
+import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestReport;
 import qupath.ext.flowpath.ingest.IngestResult;
-import qupath.ext.flowpath.io.PhenotypeCsvExporter;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
@@ -140,9 +140,11 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * The pane's one thread for heavy work, so it never runs on the FX thread: reading an
-     * image's detections and computing their statistics now, exporting the CSV next. Single
-     * threaded, so two background jobs never race each other for the session's inputs; it also
-     * times {@link #ingest}'s re-read debounce. Shut down in {@link #shutdown()}.
+     * image's detections and computing their statistics, and exporting the CSV. Single
+     * threaded, so two background jobs never race each other for the session's inputs — a
+     * re-ingest requested while a CSV export is running simply queues behind it, and lands
+     * once the export's gating pass and write are done. It also times {@link #ingest}'s
+     * re-read debounce. Shut down in {@link #shutdown()}.
      */
     private final ScheduledExecutorService backgroundExecutor =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -154,10 +156,16 @@ public class FlowPathPane extends BorderPane {
     /** Reads the open image's detections in the background, and again whenever they change. */
     private final IngestCoordinator ingest;
 
+    /** Gates the export snapshot and writes the CSV in the background. */
+    private final CsvExportCoordinator csvExport;
+
     private final Button addRootBtn;
     private final Button exportBtn;
     private final ProgressIndicator spinner;
-    /** A gating pass is running; the spinner also shows while {@link #ingest} is busy. */
+    /**
+     * A gating pass is running; the spinner also shows while {@link #ingest} is busy or
+     * {@link #csvExport} is exporting.
+     */
     private boolean previewRunning;
 
     public FlowPathPane(QuPathGUI qupath) {
@@ -361,6 +369,10 @@ public class FlowPathPane extends BorderPane {
         ingest = new IngestCoordinator(session, backgroundExecutor, this::scheduleOnBackground,
                 Platform::runLater, previewService::isFiringHierarchyEvent, new IngestHost());
 
+        // A CSV export's snapshot is gated and written on the same single-threaded executor,
+        // so it never races an ingest for the session's inputs.
+        csvExport = new CsvExportCoordinator(backgroundExecutor, Platform::runLater, new CsvExportHost());
+
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
 
@@ -465,6 +477,22 @@ public class FlowPathPane extends BorderPane {
         }
     }
 
+    /** What {@link #csvExport} asks of this pane. Every call arrives on the FX thread. */
+    private final class CsvExportHost implements CsvExportCoordinator.Host {
+        @Override
+        public void exported(File file) {
+            updateExportControlsDisabled();
+            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Exporting the phenotype CSV failed", error);
+            updateExportControlsDisabled();
+            Dialogs.showErrorMessage("Export Error", error.getMessage());
+        }
+    }
+
     /**
      * While a new image is read the session has no cells, so the controls that need them wait
      * for it; a refresh of cells the session still holds disables nothing.
@@ -472,16 +500,26 @@ public class FlowPathPane extends BorderPane {
     private void onIngestBusyChanged(IngestCoordinator.Busy state) {
         boolean loading = state == IngestCoordinator.Busy.LOADING;
         addRootBtn.setDisable(loading);
-        exportBtn.setDisable(loading);
         editorPane.setDisable(loading);
         umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
         analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
-        updateSpinner();
+        updateExportControlsDisabled();
         updateStatusBar();
     }
 
+    /**
+     * Export CSV (and, through {@link #exportCsv()}'s own guard, Ctrl+E) is disabled while
+     * ingest is loading -- there are no cells to export yet -- or while {@link #csvExport}
+     * is already running one. One guard, checked from both places that can end either state,
+     * rather than a second parallel disable mechanism.
+     */
+    private void updateExportControlsDisabled() {
+        exportBtn.setDisable(ingest.busy() == IngestCoordinator.Busy.LOADING || csvExport.exporting());
+        updateSpinner();
+    }
+
     private void updateSpinner() {
-        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE);
+        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE || csvExport.exporting());
     }
 
     /**
@@ -1521,7 +1559,15 @@ public class FlowPathPane extends BorderPane {
         }
     }
 
+    /**
+     * Snapshot the tree, cells, statistics, ROI mask and regions at this moment and hand them
+     * to {@link #csvExport}, which gates and writes them on {@link #backgroundExecutor}. The
+     * snapshot -- not the live session -- is what reaches the file, so a gate edited while the
+     * export is running never leaks into it. A second call while one is already running (a
+     * stray Ctrl+E; the button is disabled but the accelerator is not tied to it) is a no-op.
+     */
     private void exportCsv() {
+        if (csvExport.exporting()) return;
         if (session.index() == null || session.stats() == null || session.tree().getRoots().isEmpty()) {
             Dialogs.showWarningNotification("FlowPath", "No gates defined or no cells loaded.");
             return;
@@ -1530,14 +1576,10 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptToSaveFile("Export Phenotypes", null, "gate_pheno.csv", "CSV", ".csv");
         if (file == null) return;
 
-        try {
-            GatingEngine.AssignmentResult result = GatingEngine.assignAll(
-                session.tree(), session.index(), session.stats(), session.roiMask());
-            PhenotypeCsvExporter.export(file, session.index(), result, session.tree(), session.stats(), session.regions());
-            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
-        } catch (Exception ex) {
-            Dialogs.showErrorMessage("Export Error", ex.getMessage());
-        }
+        CsvExportJob.Snapshot snapshot = CsvExportJob.Snapshot.of(
+                file, session.tree(), session.index(), session.stats(), session.roiMask(), session.regions());
+        csvExport.export(snapshot);
+        updateExportControlsDisabled();
     }
 
     // --- Context menu ---
