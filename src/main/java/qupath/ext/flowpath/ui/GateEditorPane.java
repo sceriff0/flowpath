@@ -1,125 +1,92 @@
 package qupath.ext.flowpath.ui;
 
 import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
-import javafx.geometry.Pos;
-import javafx.scene.Node;
-import javafx.scene.control.*;
+import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ColorPicker;
+import javafx.scene.control.Label;
+import javafx.scene.control.Separator;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
-import javafx.collections.FXCollections;
-import javafx.util.StringConverter;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
-import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
-import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
-import qupath.ext.flowpath.model.MeasuredColumn;
-import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
-import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
-import qupath.ext.flowpath.model.Statistic;
-import qupath.ext.flowpath.model.ValueMode;
-import qupath.ext.flowpath.ui.editor.AxisMath;
+import qupath.ext.flowpath.ui.editor.EditorContext;
+import qupath.ext.flowpath.ui.editor.GateTypeEditor;
+import qupath.ext.flowpath.ui.editor.GateTypeEditors;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 /**
  * Right-side editor panel for configuring a single gate node.
- * Swaps controls based on gate type: threshold shows histogram + slider,
- * quadrant shows 2-channel controls, boolean shows operation picker, etc.
+ * <p>
+ * The pane owns the chrome every gate type shares — the type label, outlier clipping, branch
+ * names and colours, and the action buttons — and exactly one {@link GateTypeEditor} for the
+ * type-specific controls, chosen by {@link GateTypeEditors#forGate}. Opening another gate
+ * disposes that editor and builds a new one, so no widget of the previous gate can survive
+ * into the next; new data reaches it through {@link GateTypeEditor#refresh} without a rebuild.
  */
 public class GateEditorPane extends VBox {
 
-    private static final org.slf4j.Logger logger =
-            org.slf4j.LoggerFactory.getLogger(GateEditorPane.class);
-
-    // --- Shared controls ---
+    // --- Shared chrome ---
     private final Label gateTypeLabel;
     private final Spinner<Double> clipLowSpinner;
     private final Spinner<Double> clipHighSpinner;
     private final CheckBox excludeOutliersBox;
+    private final Label clipInfoLabel;
     private final VBox gateSpecificArea;
     private final VBox branchNamesArea;
     private final VBox actionButtonArea;
 
-    // --- Shared threshold/quadrant controls (reused across gate types) ---
-    private final ComboBox<String> channelCombo;
-    private final ToggleGroup modeGroup;
-    /**
-     * The "Values" selector. One row, rebuilt from {@link ValueMode#availableFor} whenever
-     * the gate or its resolved columns change, and reused by all three editors because only
-     * one is on screen at a time.
-     */
-    private final HBox modeRow;
-    /** What the row currently offers, in the order it offers them. */
-    private List<ValueMode> currentModes = List.of();
-    /** The mode the gate is in, so a selection change knows what it is changing <em>from</em>. */
-    private ValueMode currentMode;
+    private final ObservableList<String> channelNames = FXCollections.observableArrayList();
 
+    /** The gate on screen, or {@code null}. */
     private GateNode currentNode;
+    /** The controls for {@link #currentNode}'s type; {@code null} exactly when it is. */
+    private GateTypeEditor typeEditor;
+
     private CellIndex cellIndex;
     private MarkerStats markerStats;
     private CompartmentCapability compartmentCapability;
     private boolean[] roiMask;
     private boolean[] ancestorMask;
     private boolean suppressEvents = false;
-    // Non-null only when a 2D gate editor (quadrant/polygon/rect/ellipse) is active.
-    // Used by shared clip controls to update axis range. Cleared in setGateNode().
-    private ScatterPlotCanvas currentScatter;
-    // Non-null only when a threshold gate editor is active.
-    // Created fresh in buildThresholdEditor(), cleared in other editor builders.
-    private HistogramCanvas currentHistogram;
-    private Slider currentThresholdSlider;
-    private TextField currentThresholdField;
-    /** Re-ranges the quadrant editor's sliders after a clip change; null for other gates. */
-    private Runnable currentQuadrantRerange;
-    private Label currentPopulationLabel;
-    private Label clipInfoLabel;
 
     private Consumer<GateNode> onNodeChanged;
     private IntConsumer onAddToBranch;
     private Runnable onRemoveGate;
-    private java.util.function.BiConsumer<GateNode, GateNode> onReplaceGate;
+    private BiConsumer<GateNode, GateNode> onReplaceGate;
+
+    private final EditorContext context = new Context();
 
     public GateEditorPane() {
         setSpacing(8);
         setPadding(new Insets(10));
         getStyleClass().add("fp-panel");
 
-        // Gate type indicator
         gateTypeLabel = new Label("No gate selected");
         gateTypeLabel.getStyleClass().add("fp-section-header");
         gateTypeLabel.setStyle("-fx-font-size: 11;");
 
-        // --- Threshold-specific controls (always created, shown/hidden as needed) ---
-        channelCombo = new ComboBox<>();
-        channelCombo.setPrefWidth(200);
-        channelCombo.setTooltip(new Tooltip("Select the marker channel for this gate"));
-
-        modeGroup = new ToggleGroup();
-        // Built empty; syncModeSelection fills it from what the file turns out to carry.
-        modeRow = new HBox(12, new Label("Values:") {{ getStyleClass().add("fp-primary-text"); }});
-        modeRow.setAlignment(Pos.CENTER_LEFT);
-        modeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
-            if (suppressEvents || currentNode == null || val == null) return;
-            if (val.getUserData() instanceof ValueMode selected) onModeSelected(selected);
-        });
-
-        // --- Shared: Outlier Clipping ---
+        // --- Outlier clipping ---
         clipLowSpinner = new Spinner<>(0.0, 50.0, 1.0, 0.5);
         clipLowSpinner.setPrefWidth(75);
         clipLowSpinner.setEditable(true);
@@ -136,61 +103,43 @@ public class GateEditorPane extends VBox {
             "Percentiles are computed from all quality-passing cells, not per gate population."));
 
         clipLowSpinner.valueProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents && currentNode != null) {
-                double clamped = Math.min(val, clipHighSpinner.getValue() - 0.5);
-                if (clamped != val) { clipLowSpinner.getValueFactory().setValue(clamped); return; }
-                currentNode.setClipPercentileLow(val);
-                updateHistogram();
-                if (currentScatter != null && markerStats != null) {
-                    applyAxisRangeFor(currentScatter, currentNode);
-                }
-                if (currentQuadrantRerange != null) currentQuadrantRerange.run();
-                fireNodeChanged();
-            }
+            if (suppressEvents || currentNode == null) return;
+            double clamped = Math.min(val, clipHighSpinner.getValue() - 0.5);
+            if (clamped != val) { clipLowSpinner.getValueFactory().setValue(clamped); return; }
+            currentNode.setClipPercentileLow(val);
+            // The clip window is every type editor's axis window: histogram and slider range,
+            // scatter axes, quadrant slider travel.
+            if (typeEditor != null) typeEditor.refresh();
+            fireNodeChanged();
         });
         clipHighSpinner.valueProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents && currentNode != null) {
-                double clamped = Math.max(val, clipLowSpinner.getValue() + 0.5);
-                if (clamped != val) { clipHighSpinner.getValueFactory().setValue(clamped); return; }
-                currentNode.setClipPercentileHigh(val);
-                updateHistogram();
-                if (currentScatter != null && markerStats != null) {
-                    applyAxisRangeFor(currentScatter, currentNode);
-                }
-                if (currentQuadrantRerange != null) currentQuadrantRerange.run();
-                fireNodeChanged();
-            }
+            if (suppressEvents || currentNode == null) return;
+            double clamped = Math.max(val, clipLowSpinner.getValue() + 0.5);
+            if (clamped != val) { clipHighSpinner.getValueFactory().setValue(clamped); return; }
+            currentNode.setClipPercentileHigh(val);
+            if (typeEditor != null) typeEditor.refresh();
+            fireNodeChanged();
         });
         excludeOutliersBox.selectedProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents && currentNode != null) {
-                currentNode.setExcludeOutliers(val);
-                fireNodeChanged();
-            }
+            if (suppressEvents || currentNode == null) return;
+            currentNode.setExcludeOutliers(val);
+            fireNodeChanged();
         });
 
-        Label clipInfoLabel = new Label("Percentiles based on all cells, not this gate's population");
+        clipInfoLabel = new Label("Percentiles based on all cells, not this gate's population");
         clipInfoLabel.getStyleClass().add("fp-hint");
         clipInfoLabel.setStyle("-fx-font-size: 9;");
         clipInfoLabel.setVisible(false);
         clipInfoLabel.managedProperty().bind(clipInfoLabel.visibleProperty());
-        this.clipInfoLabel = clipInfoLabel;
 
         HBox clipRow = new HBox(6,
-            new Label("Clip:") {{ getStyleClass().add("fp-primary-text"); }},
-            clipLowSpinner, new Label("% to") {{ getStyleClass().add("fp-primary-text"); }},
-            clipHighSpinner, new Label("%") {{ getStyleClass().add("fp-primary-text"); }},
-            excludeOutliersBox);
+            primaryLabel("Clip:"), clipLowSpinner, primaryLabel("% to"),
+            clipHighSpinner, primaryLabel("%"), excludeOutliersBox);
 
-        // Swappable areas
         gateSpecificArea = new VBox(4);
         branchNamesArea = new VBox(4);
         actionButtonArea = new VBox(4);
 
-        // The channel pickers are wired per gate, in the builders, through
-        // wireChannelCombo — a channel change is a decision about one axis, and each
-        // builder knows only which slot its combo drives and what to redraw afterwards.
-
-        // Assemble
         getChildren().addAll(
             gateTypeLabel,
             gateSpecificArea,
@@ -204,50 +153,21 @@ public class GateEditorPane extends VBox {
         setDisabled(true);
     }
 
-    /**
-     * Populate the editor with a gate node's current values.
-     * Rebuilds the gate-specific UI section based on gate type.
-     */
-
-    /**
-     * Move the current gate into {@code selected}.
-     * <p>
-     * Every mode names a different column — anything that changes the normalisation
-     * suffix, such as Raw to MIRAGE's {@code " Z"}. A bare threshold does not carry across
-     * columns (a Sum is ~100x the corresponding Mean), which is exactly what
-     * {@link #applySignalChange} exists for: it re-maps the threshold to the same percentile
-     * of the new column, so the gate lands on the same cells rather than collapsing to
-     * all-positive or all-negative.
-     */
-    private void onModeSelected(ValueMode selected) {
-        GateNode node = currentNode;
-        if (node == null || selected == null) return;
-        ValueMode previous = currentMode;
-        if (previous != null && previous.normalisation().equals(selected.normalisation())) {
-            return;
-        }
-        currentMode = selected;
-
-        // Every mode names a different measurement column, so switching is always a change
-        // of scale — a raw Median threshold means nothing against a "Median Z" column.
-        // applySignalChange re-maps the threshold to the same percentile of the new column
-        // and re-syncs this row afterwards, so the gate keeps the cells it had.
-        applySignalChange(() -> selected.applyTo(node));
-    }
-
     /** The gate this editor currently shows, or {@code null}. */
     public GateNode getGateNode() {
         return currentNode;
     }
 
+    /**
+     * Show {@code node}, or nothing. The previous type editor is disposed first, so none of its
+     * controls can write to {@code node} or to the gate it showed.
+     */
     public void setGateNode(GateNode node) {
+        if (typeEditor != null) {
+            typeEditor.dispose();
+            typeEditor = null;
+        }
         this.currentNode = node;
-        this.currentScatter = null;
-        this.currentHistogram = null;
-        this.currentThresholdSlider = null;
-        this.currentThresholdField = null;
-        this.currentPopulationLabel = null;
-        this.currentQuadrantRerange = null;
         if (node == null) {
             withSuppressedEvents(() -> setDisabled(true));
             gateTypeLabel.setText("No gate selected");
@@ -264,12 +184,10 @@ public class GateEditorPane extends VBox {
         withSuppressedEvents(() -> {
             setDisabled(false);
 
-            // Shared controls
             clipLowSpinner.getValueFactory().setValue(node.getClipPercentileLow());
             clipHighSpinner.getValueFactory().setValue(node.getClipPercentileHigh());
             excludeOutliersBox.setSelected(node.isExcludeOutliers());
 
-            // Gate type label
             String typeDisplay = switch (node.getGateType()) {
                 case "threshold" -> "Threshold Gate";
                 case "quadrant" -> "Quadrant Gate";
@@ -280,389 +198,13 @@ public class GateEditorPane extends VBox {
             };
             gateTypeLabel.setText(typeDisplay);
 
-            // Rebuild gate-specific area
-            gateSpecificArea.getChildren().clear();
-            if (node instanceof QuadrantGate qg) {
-                buildQuadrantEditor(qg);
-            } else if (node instanceof Region2DGate region2d) {
-                build2DEditor(region2d);
-            } else {
-                buildThresholdEditor(node);
-            }
+            GateTypeEditor editor = GateTypeEditors.forGate(node, context);
+            typeEditor = editor;
+            gateSpecificArea.getChildren().setAll(editor.build());
 
-            // Rebuild branch names/colors
             buildBranchNamesEditor(node);
-
-            // Rebuild action buttons
             buildActionButtons(node);
         });
-
-        if (isThresholdGate(node)) {
-            updateHistogram();
-        }
-    }
-
-    // ---- Gate-type-specific editor builders ----
-
-    private void buildThresholdEditor(GateNode node) {
-        Label chLabel = new Label("Channel:");
-        chLabel.getStyleClass().add("fp-primary-text");
-        HBox channelRow = new HBox(8, chLabel, channelCombo);
-        channelCombo.setValue(node.getChannel());
-        addSignalControls(channelRow, GateAxis.of(node, 0));
-        wireChannelCombo(channelCombo, node, 0);
-
-        syncModeSelection(node);
-
-        // Create fresh controls for this gate (local-creation pattern, like quadrant editor)
-        HistogramCanvas histogram = new HistogramCanvas();
-        Label hoverLabel = new Label(" ");
-        hoverLabel.getStyleClass().add("fp-muted");
-        hoverLabel.setStyle("-fx-font-size: 9;");
-        histogram.setOnMouseHover(val -> hoverLabel.setText(String.format(Locale.US, "Value: %.4f", val)));
-
-        Slider slider = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, node.getThreshold());
-        slider.setPrefWidth(300);
-        SliderUtils.makeRangeFriendly(slider);
-        TextField valueField = new TextField(String.format(Locale.US, "%.4f", node.getThreshold()));
-        valueField.setPrefWidth(80);
-        valueField.getStyleClass().add("fp-mono-field");
-
-        Label populationLabel = new Label("Positive: -- | Negative: --");
-        populationLabel.getStyleClass().add("fp-muted");
-        populationLabel.setStyle("-fx-font-size: 10;");
-
-        histogram.setGate(node);
-        histogram.setPosColor(ColorUtils.intToColor(node.getPositiveColor()));
-        histogram.setNegColor(ColorUtils.intToColor(node.getNegativeColor()));
-
-        // Store references for external updates (updateHistogram, etc.)
-        currentHistogram = histogram;
-        currentThresholdSlider = slider;
-        currentThresholdField = valueField;
-        currentPopulationLabel = populationLabel;
-
-        // Wire slider listener
-        slider.valueProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents && currentNode != null) {
-                currentNode.setThreshold(val.doubleValue());
-                valueField.setText(String.format(Locale.US, "%.4f", val.doubleValue()));
-                histogram.setThreshold(val.doubleValue());
-                fireNodeChanged();
-                updatePopulationCounts();
-            }
-        });
-
-        // Wire text field
-        valueField.setOnAction(e -> applyThresholdFromField());
-        valueField.focusedProperty().addListener((obs, old, focused) -> {
-            if (!focused) applyThresholdFromField();
-        });
-
-        // Wire histogram drag-threshold
-        histogram.setOnThresholdChanged(val -> {
-            if (!suppressEvents && currentNode != null) {
-                currentNode.setThreshold(val);
-                slider.setValue(val);
-                valueField.setText(String.format(Locale.US, "%.4f", val));
-                fireNodeChanged();
-                updatePopulationCounts();
-            }
-        });
-
-        HBox threshRow = new HBox(8,
-            new Label("Threshold:") {{ getStyleClass().add("fp-primary-text"); }},
-            slider, valueField);
-        HBox.setHgrow(slider, Priority.ALWAYS);
-
-        gateSpecificArea.getChildren().addAll(
-            channelRow, modeRow,
-            createSectionHeader("Histogram"), histogram, hoverLabel,
-            createSectionHeader("Threshold"), threshRow, populationLabel
-        );
-    }
-
-    private void buildQuadrantEditor(QuadrantGate gate) {
-        currentHistogram = null;
-        currentThresholdSlider = null;
-        currentThresholdField = null;
-        currentPopulationLabel = null;
-        Label chXLabel = new Label("Channel X:");
-        chXLabel.getStyleClass().add("fp-primary-text");
-        ComboBox<String> chXCombo = new ComboBox<>(channelCombo.getItems());
-        chXCombo.setValue(gate.getChannelX());
-        chXCombo.setPrefWidth(150);
-
-        Label chYLabel = new Label("Channel Y:");
-        chYLabel.getStyleClass().add("fp-primary-text");
-        ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
-        chYCombo.setValue(gate.getChannelY());
-        chYCombo.setPrefWidth(150);
-
-        // One handler per axis, wired before the plot is built — this method used to wire
-        // each combo twice, early and again after the scatter existed, with a longer body
-        // the second time. Which one you got depended on whether the gate's channels were
-        // in the index, and only one of the two re-resolved the axis.
-        wireChannelCombo(chXCombo, gate, 0);
-        wireChannelCombo(chYCombo, gate, 1);
-
-        // Slider travel is the SAME window the scatter plot's axes show: each axis' clip
-        // percentiles, in the gate's coordinate space. It used to be the raw data min to
-        // max, every outlier included, so on a skewed marker the part of the plot a user
-        // can actually see was a few pixels of slider — the thumb raced across the visible
-        // population, and its position said nothing about where the line was drawn.
-        Slider sliderX = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, 0);
-        Slider sliderY = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, 0);
-        sliderX.setPrefWidth(300);
-        sliderY.setPrefWidth(300);
-        SliderUtils.enableScrollControl(sliderX);
-        SliderUtils.enableScrollControl(sliderY);
-        TextField valX = thresholdField(gate.getThresholdX());
-        TextField valY = thresholdField(gate.getThresholdY());
-
-        final ScatterPlotCanvas[] scatterRef = {null};
-
-        Runnable rerange = () -> withSuppressedEvents(() -> {
-            double[] spanX = AxisMath.quadrantSliderSpan(AxisMath.clipSpan(columnX(gate), gate.getClipPercentileLow(), gate.getClipPercentileHigh()), gate.getThresholdX());
-            double[] spanY = AxisMath.quadrantSliderSpan(AxisMath.clipSpan(columnY(gate), gate.getClipPercentileLow(), gate.getClipPercentileHigh()), gate.getThresholdY());
-            // Widen before narrowing so setMin never crosses the current max, and re-pin the
-            // value afterwards: Slider clamps silently on a range move.
-            sliderX.setMin(Math.min(sliderX.getMin(), spanX[0]));
-            sliderX.setMax(spanX[1]);
-            sliderX.setMin(spanX[0]);
-            sliderX.setValue(gate.getThresholdX());
-            sliderY.setMin(Math.min(sliderY.getMin(), spanY[0]));
-            sliderY.setMax(spanY[1]);
-            sliderY.setMin(spanY[0]);
-            sliderY.setValue(gate.getThresholdY());
-            SliderUtils.applyRangeStep(sliderX);
-            SliderUtils.applyRangeStep(sliderY);
-        });
-        rerange.run();
-        currentQuadrantRerange = rerange;
-
-        sliderX.valueProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents) {
-                gate.setThresholdX(val.doubleValue());
-                valX.setText(String.format(Locale.US, "%.3f", val.doubleValue()));
-                if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
-                fireNodeChanged();
-            }
-        });
-
-        sliderY.valueProperty().addListener((obs, old, val) -> {
-            if (!suppressEvents) {
-                gate.setThresholdY(val.doubleValue());
-                valY.setText(String.format(Locale.US, "%.3f", val.doubleValue()));
-                if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
-                fireNodeChanged();
-            }
-        });
-
-        // Typed entry, for a threshold the slider's resolution cannot land on exactly.
-        // A value outside the visible window is honoured and the slider widens to show it.
-        wireQuadrantField(valX, gate, true, rerange, scatterRef);
-        wireQuadrantField(valY, gate, false, rerange, scatterRef);
-
-        syncModeSelection(gate);
-
-        HBox rowX = new HBox(8, chXLabel, chXCombo);
-        addSignalControls(rowX, GateAxis.of(gate, 0));
-        HBox rowY = new HBox(8, chYLabel, chYCombo);
-        addSignalControls(rowY, GateAxis.of(gate, 1));
-
-        gateSpecificArea.getChildren().addAll(
-            rowX, rowY,
-            modeRow,
-            createSectionHeader("Threshold X"), growRow(sliderX, valX),
-            createSectionHeader("Threshold Y"), growRow(sliderY, valY)
-        );
-
-        // Add scatter plot if data is available
-        if (hasPlottableAxes(gate)) {
-            double[][] filtered = plotData(gate);
-            ScatterPlotCanvas scatter = new ScatterPlotCanvas();
-            scatter.setData(filtered[0], filtered[1], gate.getChannelX(), gate.getChannelY());
-            scatter.setGateOverlay(gate);
-            if (markerStats != null) {
-                applyAxisRangeFor(scatter, gate);
-            }
-            applyBranchColorsToScatter(scatter, gate);
-            scatterRef[0] = scatter;
-            this.currentScatter = scatter;
-            gateSpecificArea.getChildren().addAll(createSectionHeader("Scatter Plot"), scatter);
-        }
-    }
-
-    private void build2DEditor(Region2DGate node) {
-        currentHistogram = null;
-        currentThresholdSlider = null;
-        currentThresholdField = null;
-        currentPopulationLabel = null;
-        // Channel pickers
-        Label chXLabel = new Label("Channel X:");
-        chXLabel.getStyleClass().add("fp-primary-text");
-        ComboBox<String> chXCombo = new ComboBox<>(channelCombo.getItems());
-        chXCombo.setPrefWidth(150);
-        Label chYLabel = new Label("Channel Y:");
-        chYLabel.getStyleClass().add("fp-primary-text");
-        ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
-        chYCombo.setPrefWidth(150);
-
-        chXCombo.setValue(node.getChannelX());
-        chYCombo.setValue(node.getChannelY());
-
-        // Drawing toolbar — shape picker
-        ToggleGroup toolGroup = new ToggleGroup();
-        ToggleButton polygonBtn = new ToggleButton("Polygon");
-        polygonBtn.setToggleGroup(toolGroup);
-        ToggleButton rectBtn = new ToggleButton("Rectangle");
-        rectBtn.setToggleGroup(toolGroup);
-        ToggleButton ellipseBtn = new ToggleButton("Ellipse");
-        ellipseBtn.setToggleGroup(toolGroup);
-        Button clearShapeBtn = new Button("Clear Shape");
-        clearShapeBtn.setOnAction(e -> {
-            node.clearShape();
-            // Rebuild the editor to show fresh scatter (no overlay)
-            setGateNode(node);
-            fireNodeChanged();
-        });
-        HBox drawToolbar = new HBox(4, polygonBtn, rectBtn, ellipseBtn, clearShapeBtn);
-
-        switch (node) {
-            case PolygonGate _ -> polygonBtn.setSelected(true);
-            case RectangleGate _ -> rectBtn.setSelected(true);
-            case EllipseGate _ -> ellipseBtn.setSelected(true);
-        }
-
-        syncModeSelection(node);
-
-        HBox rowX = new HBox(8, chXLabel, chXCombo);
-        addSignalControls(rowX, GateAxis.of(node, 0));
-        HBox rowY = new HBox(8, chYLabel, chYCombo);
-        addSignalControls(rowY, GateAxis.of(node, 1));
-
-        // Wired before the plot is built: a gate whose channels this image does not carry
-        // still has to accept a channel change — that is the only way to point it at one
-        // the image does carry. The old handler bailed out when either combo was blank.
-        wireChannelCombo(chXCombo, node, 0);
-        wireChannelCombo(chYCombo, node, 1);
-
-        gateSpecificArea.getChildren().addAll(
-            rowX, rowY,
-            modeRow,
-            createSectionHeader("Shape"), drawToolbar
-        );
-
-        // Scatter plot if data available
-        if (hasPlottableAxes(node)) {
-            {
-                ScatterPlotCanvas scatter = new ScatterPlotCanvas();
-                double[][] filtered = plotData(node);
-                scatter.setData(filtered[0], filtered[1], node.getChannelX(), node.getChannelY());
-                if (markerStats != null) {
-                    applyAxisRangeFor(scatter, node);
-                }
-                this.currentScatter = scatter;
-
-                // Apply branch colors to scatter plot
-                applyBranchColorsToScatter(scatter, node);
-
-                // The gate itself is the overlay — including a gate whose shape is not
-                // drawable yet. It classifies every cell as outside, and the plot now says
-                // so instead of painting the whole population as if it were selected.
-                scatter.setGateOverlay(node);
-
-                // Wire toolbar to drawing mode
-                toolGroup.selectedToggleProperty().addListener((obs, old, val) -> {
-                    if (val == polygonBtn) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.POLYGON);
-                    else if (val == rectBtn) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.RECTANGLE);
-                    else if (val == ellipseBtn) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
-                    else scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.NONE);
-                });
-
-                // Wire callbacks — convert gate type if needed, then update model
-                scatter.setOnPolygonDrawn(vertices -> {
-                    GateNode target = currentNode;
-                    boolean replaced = false;
-                    if (!(target instanceof PolygonGate)) {
-                        PolygonGate pg = new PolygonGate(chXCombo.getValue(), chYCombo.getValue());
-                        pg.setEnabled(target.isEnabled());
-                        copySharedSettings(target, pg);
-                        if (onReplaceGate != null) onReplaceGate.accept(target, pg);
-                        currentNode = pg;
-                        target = pg;
-                        replaced = true;
-                    }
-                    ((PolygonGate) target).setVertices(new ArrayList<>(vertices));
-                    scatter.setGateOverlay(target);
-                    fireNodeChanged();
-                    if (replaced) {
-                        Platform.runLater(() -> setGateNode(currentNode));
-                    }
-                });
-                scatter.setOnRectangleDrawn(bounds -> {
-                    GateNode target = currentNode;
-                    boolean replaced = false;
-                    if (!(target instanceof RectangleGate)) {
-                        RectangleGate rg = new RectangleGate(chXCombo.getValue(), chYCombo.getValue(),
-                            bounds[0], bounds[1], bounds[2], bounds[3]);
-                        rg.setEnabled(target.isEnabled());
-                        copySharedSettings(target, rg);
-                        if (onReplaceGate != null) onReplaceGate.accept(target, rg);
-                        currentNode = rg;
-                        target = rg;
-                        replaced = true;
-                    } else {
-                        RectangleGate rg = (RectangleGate) target;
-                        rg.setMinX(bounds[0]); rg.setMaxX(bounds[1]);
-                        rg.setMinY(bounds[2]); rg.setMaxY(bounds[3]);
-                    }
-                    scatter.setGateOverlay(target);
-                    fireNodeChanged();
-                    if (replaced) {
-                        Platform.runLater(() -> setGateNode(currentNode));
-                    }
-                });
-                scatter.setOnEllipseDrawn(params -> {
-                    GateNode target = currentNode;
-                    boolean replaced = false;
-                    if (!(target instanceof EllipseGate)) {
-                        EllipseGate eg = new EllipseGate(chXCombo.getValue(), chYCombo.getValue(),
-                            params[0], params[1], params[2], params[3]);
-                        eg.setEnabled(target.isEnabled());
-                        copySharedSettings(target, eg);
-                        if (onReplaceGate != null) onReplaceGate.accept(target, eg);
-                        currentNode = eg;
-                        target = eg;
-                        replaced = true;
-                    } else {
-                        EllipseGate eg = (EllipseGate) target;
-                        eg.setCenterX(params[0]); eg.setCenterY(params[1]);
-                        eg.setRadiusX(params[2]); eg.setRadiusY(params[3]);
-                    }
-                    scatter.setGateOverlay(target);
-                    fireNodeChanged();
-                    if (replaced) {
-                        Platform.runLater(() -> setGateNode(currentNode));
-                    }
-                });
-
-                switch (node) {
-                    case PolygonGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.POLYGON);
-                    case RectangleGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.RECTANGLE);
-                    case EllipseGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
-                }
-
-                gateSpecificArea.getChildren().add(scatter);
-
-                return;
-            }
-        }
-
-        Label noData = new Label("Load an image to see the scatter plot");
-        noData.getStyleClass().add("fp-hint");
-        gateSpecificArea.getChildren().add(noData);
     }
 
     // ---- Branch names/colors editor (generic for any gate type) ----
@@ -716,15 +258,7 @@ public class GateEditorPane extends VBox {
                     if (currentNode != null && idx < currentNode.getBranches().size()) {
                         currentNode.getBranches().get(idx).setColor(ColorUtils.colorToInt(val));
                     }
-                    if (currentScatter != null && currentNode != null) {
-                        applyBranchColorsToScatter(currentScatter, currentNode);
-                    }
-                    if (currentHistogram != null && currentNode != null
-                            && !(currentNode instanceof QuadrantGate)
-                            && !(currentNode instanceof Region2DGate)) {
-                        currentHistogram.setPosColor(ColorUtils.intToColor(currentNode.getPositiveColor()));
-                        currentHistogram.setNegColor(ColorUtils.intToColor(currentNode.getNegativeColor()));
-                    }
+                    if (typeEditor != null) typeEditor.branchColorsChanged();
                     fireNodeChanged();
                 }
             });
@@ -754,7 +288,6 @@ public class GateEditorPane extends VBox {
         List<Branch> branches = node.getBranches();
         HBox buttonRow = new HBox(8);
 
-        // Add "Add child gate to [branch]" button for each branch
         for (int i = 0; i < branches.size(); i++) {
             Branch branch = branches.get(i);
             int branchIdx = i;
@@ -778,212 +311,49 @@ public class GateEditorPane extends VBox {
 
     // ---- Public API ----
 
-    public void setChannelNames(List<String> names) { channelCombo.getItems().setAll(names); }
+    public void setChannelNames(List<String> names) { channelNames.setAll(names); }
 
     /** Per-compartment availability for the loaded image (drives the signal-type selectors). */
     public void setCompartmentCapability(CompartmentCapability capability) {
         this.compartmentCapability = capability;
     }
 
-    /**
-     * Append a "Signal:" compartment selector (and, when the export carries more than one
-     * statistic, a statistic selector) to {@code row} for one gate axis.
-     * <p>
-     * The layout is this pane's; the decision is {@link GateAxis}'. {@link
-     * GateAxis#choicesFrom} answers both what may be offered and what the axis must be
-     * read as, and the axis is pinned to that signal <em>whether or not</em> a selector
-     * appears. Skipping the pin because there was nothing to show is how a gate ended up
-     * on {@code "<marker>: <Compartment>: Mean"} — MIRAGE's default quantification emits
-     * Median only, so that column is not in the file, and the axis read NaN for every
-     * cell: an empty histogram and a gate classifying nothing.
-     */
-    private void addSignalControls(HBox row, GateAxis axis) {
-        GateAxis.Choices choices = axis.choicesFrom(compartmentCapability);
-        axis.apply(choices.signal());
-        if (!choices.offersCompartment()) return;
-
-        String channel = axis.channel();
-        ComboBox<Compartment> compCombo =
-                new ComboBox<>(FXCollections.observableArrayList(choices.compartments()));
-        compCombo.setValue(choices.signal().compartment());
-        compCombo.setConverter(new StringConverter<>() {
-            @Override public String toString(Compartment c) { return c == null ? "" : c.displayName(); }
-            @Override public Compartment fromString(String s) { return null; }
-        });
-        compCombo.setTooltip(new Tooltip("Signal compartment for " + channel));
-        compCombo.setOnAction(e -> {
-            if (!suppressEvents && currentNode != null) {
-                applySignalChange(() ->
-                        axis.apply(new GateAxis.Signal(compCombo.getValue(), axis.statistic())));
-            }
-        });
-        Label sigLabel = new Label("Signal:");
-        sigLabel.getStyleClass().add("fp-primary-text");
-        row.getChildren().addAll(sigLabel, compCombo);
-
-        if (!choices.offersStatistic()) return;
-        ComboBox<Statistic> statCombo =
-                new ComboBox<>(FXCollections.observableArrayList(choices.statistics()));
-        statCombo.setValue(choices.signal().statistic());
-        statCombo.setConverter(new StringConverter<>() {
-            @Override public String toString(Statistic s) { return s == null ? "" : s.displayName(); }
-            @Override public Statistic fromString(String s) { return null; }
-        });
-        statCombo.setTooltip(new Tooltip("Summary statistic for " + channel));
-        statCombo.setOnAction(e -> {
-            if (!suppressEvents && currentNode != null) {
-                applySignalChange(() ->
-                        axis.apply(new GateAxis.Signal(axis.compartment(), statCombo.getValue())));
-            }
-        });
-        row.getChildren().add(statCombo);
-    }
-
-    /**
-     * Point {@code combo} at slot {@code slot} of {@code gate}: everything a channel
-     * change implies is {@link GateAxis#retarget}'s, and everything it leaves behind on
-     * screen is this pane's.
-     * <p>
-     * {@code retarget} repoints the axis, re-pins its compartment and statistic to a
-     * column the <em>new</em> channel is quantified with, and moves the branch labels the
-     * user has not claimed. The pane then refreshes the branch-name editor and queues a
-     * rebuild, which is what re-derives the signal selectors — a legacy channel offers no
-     * compartment choice, and one that replaces it must stop showing one.
-     * <p>
-     * There is deliberately no immediate plot refresh here. Each builder used to run one,
-     * because the re-pin arrived only with the rebuild and the plot would otherwise have
-     * shown the old channel's compartment until then. Now that {@code retarget} pins
-     * before returning, the rebuild on the next pulse draws the right thing the first
-     * time, and a second drawing path is one more place for the two to disagree.
-     */
-    private void wireChannelCombo(ComboBox<String> combo, GateNode gate, int slot) {
-        combo.setOnAction(e -> {
-            // currentNode is the gate the editor is showing. A combo left over from a
-            // superseded build (a gate-type conversion queues its own rebuild) must not
-            // write to a gate that is no longer in the tree.
-            if (suppressEvents || currentNode != gate) return;
-            if (!GateAxis.of(gate, slot).retarget(combo.getValue(), compartmentCapability)) return;
-            buildBranchNamesEditor(gate);
-            fireNodeChanged();
-            rebuildForChannelChange();
-        });
-    }
-
-
-    /**
-     * Carry a drawn region across a raw-mode compartment/statistic switch by remapping
-     * each coordinate to the same percentile of its axis' new column, so the shape keeps
-     * enclosing a comparable population instead of landing off-plot.
-     * <p>
-     * The per-shape mechanics (degenerate-shape guard, rectangle bound re-sorting, ellipse
-     * bounding-box round trip) live on {@link Region2DGate#remapCoordinates} now; this method
-     * only supplies the two axis functions.
-     */
-    private void remapRegionShape(Region2DGate gate, MeasuredColumn oldX, MeasuredColumn newX,
-                                  MeasuredColumn oldY, MeasuredColumn newY) {
-        gate.remapCoordinates(
-                v -> AxisMath.remapRawThreshold(oldX, newX, v),
-                v -> AxisMath.remapRawThreshold(oldY, newY, v));
-    }
-
-    /**
-     * Apply a compartment/statistic selection and bring the rest of the editor with it.
-     * <p>
-     * The threshold is remapped to the same percentile of the newly selected column: a bare
-     * number does not carry across columns (a Sum is ~100x the corresponding Mean, a nuclear
-     * intensity nothing like a whole-cell one), so without this the gate silently collapses
-     * to "everything positive" or "everything negative".
-     * <p>
-     * Threshold gates refresh in place via {@link #updateHistogram()}. Quadrant gates
-     * build their axis sliders from the column's own data range, so they are rebuilt
-     * rather than patched.
-     */
-    private void applySignalChange(Runnable mutation) {
-        GateNode node = currentNode;
-        if (node == null) return;
-        boolean threshold = isThresholdGate(node);
-        MeasuredColumn oldCol = threshold ? thresholdColumn(node) : null;
-        MeasuredColumn oldColX = threshold ? null : columnX(node);
-        MeasuredColumn oldColY = threshold ? null : columnY(node);
-        double oldThreshold = node.getThreshold();
-
-        mutation.run();
-
-        if (threshold) {
-            node.setThreshold(AxisMath.remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
-        } else if (node instanceof QuadrantGate qg) {
-            qg.setThresholdX(AxisMath.remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
-            qg.setThresholdY(AxisMath.remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
-        } else if (node instanceof Region2DGate region) {
-            remapRegionShape(region, oldColX, columnX(node), oldColY, columnY(node));
-        }
-
-        // The axis now resolves to a different column, so which modes are on offer has to
-        // be asked again: a Median column and a "Median Z" column are not the same offer.
-        syncModeSelection(node);
-
-        if (threshold) {
-            updateHistogram();
-            fireNodeChanged();
-        } else {
-            fireNodeChanged();
-            Platform.runLater(() -> setGateNode(node));
-        }
-    }
     public void setCellIndex(CellIndex index) { this.cellIndex = index; }
+
     public void setMarkerStats(MarkerStats stats) {
         this.markerStats = stats;
         refreshForNewData();
     }
+
     public void setRoiMask(boolean[] mask) {
         this.roiMask = mask;
         refreshForNewData();
     }
+
     public void setAncestorMask(boolean[] mask) {
         this.ancestorMask = mask;
-        if (clipInfoLabel != null) clipInfoLabel.setVisible(mask != null);
+        clipInfoLabel.setVisible(mask != null);
         refreshForNewData();
     }
 
     /**
      * Bring every data-driven control of the gate on screen in line with new statistics or
      * masks, without rebuilding the editor (a rebuild discards a half-drawn polygon, so the
-     * pane skips it when only the data changed). The histogram and threshold slider, the
-     * scatter plot's clip-anchored axes, and the quadrant sliders — whose travel is the same
-     * clip window as those axes. Leaving the quadrant sliders out re-anchored the plot while
-     * the sliders kept the old span, the slider/plot mismatch 0.9.3 fixed.
+     * pane skips it when only the data changed). Which controls those are is the type
+     * editor's: the histogram and threshold slider; the scatter plot and, for a quadrant, the
+     * sliders whose travel is the scatter's clip window.
      */
     private void refreshForNewData() {
-        if (currentNode == null) return;
-        updateHistogram();
-        refreshScatterPlot();
-        if (currentQuadrantRerange != null) currentQuadrantRerange.run();
+        if (typeEditor != null) typeEditor.refresh();
     }
+
     public void setOnNodeChanged(Consumer<GateNode> callback) { this.onNodeChanged = callback; }
     public void setOnAddToBranch(IntConsumer callback) { this.onAddToBranch = callback; }
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
-    public void setOnReplaceGate(java.util.function.BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
+    public void setOnReplaceGate(BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
 
     public void updatePopulationCounts() {
-        if (currentPopulationLabel == null) return;
-        if (currentNode == null) {
-            currentPopulationLabel.setText("Positive: -- | Negative: --");
-            return;
-        }
-        List<Branch> branches = currentNode.getBranches();
-        if (branches.size() == 2) {
-            int pos = branches.get(0).getCount();
-            int neg = branches.get(1).getCount();
-            int total = pos + neg;
-            if (total > 0) {
-                currentPopulationLabel.setText(String.format(
-                    "%s: %,d (%.1f%%) | %s: %,d (%.1f%%)",
-                    branches.get(0).getName(), pos, 100.0 * pos / total,
-                    branches.get(1).getName(), neg, 100.0 * neg / total));
-            } else {
-                currentPopulationLabel.setText(branches.get(0).getName() + ": 0 | " + branches.get(1).getName() + ": 0");
-            }
-        }
+        if (typeEditor != null) typeEditor.updatePopulationCounts();
     }
 
     // ---- Internal ----
@@ -1017,300 +387,26 @@ public class GateEditorPane extends VBox {
         }
     }
 
-    // ---- resolved measurement columns (must match GatingEngine) ----
-
-    /**
-     * The measurement column for a channel + compartment + statistic, statistics included.
-     * <p>
-     * {@code GatingEngine} compares and percentile-clips against the column
-     * {@code CellIndex} resolves — {@code "CD3: Nucleus: Median"} rather than the bare
-     * {@code "CD3"}. The editor must read the same column, or the histogram axis, the
-     * threshold line and the actual classification all describe different data.
-     * {@link CellIndex#column} is that one resolution, shared with the engine.
-     * <p>
-     * {@link MarkerStats#compute} only summarises the bare markers, and a fresh
-     * {@code MarkerStats} arrives on image load, QC change and ROI change, so the
-     * compartment columns this editor needs may not be registered yet.
-     * {@code CellIndex.column} registers them; that is the point of holding a
-     * {@link MeasuredColumn} rather than a key.
-     *
-     * @return the column, or {@code null} when there is nothing to resolve against yet
-     *         (no channel, no index, or no statistics)
-     */
-    private MeasuredColumn column(String channel, Compartment comp, Statistic stat) {
-        if (channel == null || cellIndex == null || markerStats == null) return null;
-        return cellIndex.column(channel, comp, stat, markerStats);
-    }
-
-    /**
-     * Resolved column for one axis <em>slot</em> of {@code node}, or null when the gate
-     * type has no such axis.
-     * <p>
-     * Addressed by slot rather than by position in {@code getChannels()}, which omits an
-     * unset channel: on a gate whose X channel is null, {@code compartmentAt(0)} answers
-     * with the <em>Y</em> axis' compartment, and {@code compartmentAt(1)} with an
-     * out-of-range whole-cell Mean. {@link GateAxis} reads and writes the same slot by
-     * construction, so that skew is not expressible.
-     */
-    private MeasuredColumn axisColumn(GateNode node, int slot) {
-        if (node == null || slot >= GateAxis.axisCount(node)) return null;
-        return GateAxis.of(node, slot).columnIn(cellIndex, markerStats);
-    }
-
-    /** Resolved column for a threshold gate's single channel. */
-    private MeasuredColumn thresholdColumn(GateNode node) {
-        return axisColumn(node, 0);
-    }
-
-    /** Resolved column for a 2D gate's X axis. */
-    private MeasuredColumn columnX(GateNode node) {
-        return axisColumn(node, 0);
-    }
-
-    /** Resolved column for a 2D gate's Y axis. */
-    private MeasuredColumn columnY(GateNode node) {
-        return axisColumn(node, 1);
-    }
-
-    /**
-     * True when both of {@code node}'s axes name a channel the loaded index carries, so
-     * there is something to plot.
-     */
-    private boolean hasPlottableAxes(GateNode node) {
-        if (node == null || cellIndex == null || GateAxis.axisCount(node) < 2) return false;
-        for (GateAxis axis : GateAxis.axesOf(node)) {
-            String channel = axis.channel();
-            if (channel == null || cellIndex.getMarkerIndex(channel) < 0) return false;
-        }
-        return true;
-    }
-
-    /**
-     * The points to plot for a 2D gate: each axis read through its <em>own</em> resolved
-     * column, as measured.
-     * <p>
-     * One spelling. This block existed four times — the quadrant slider range, the
-     * quadrant scatter, its channel-change refresh, and the region scatter — and a fix
-     * landing in one of them was the whole shape of commit {@code 6b66868}: three copies
-     * plotted the bare whole-cell mean while the gate classified on a nuclear median, so
-     * the overlay sat over points that were not the ones being gated.
-     */
-    private double[][] plotData(GateNode node) {
-        GateAxis x = GateAxis.of(node, 0);
-        GateAxis y = GateAxis.of(node, 1);
-        return getFilteredXY(x.channel(), x.compartment(), x.statistic(),
-                y.channel(), y.compartment(), y.statistic());
-    }
-
-    /** Re-read {@code node}'s points onto {@code scatter} and re-anchor its axes. */
-    private void redrawScatter(ScatterPlotCanvas scatter, GateNode node) {
-        if (scatter == null || !hasPlottableAxes(node)) return;
-        double[][] data = plotData(node);
-        scatter.setData(data[0], data[1],
-                GateAxis.of(node, 0).channel(), GateAxis.of(node, 1).channel());
-        if (markerStats != null) {
-            applyAxisRangeFor(scatter, node);
-        }
-    }
-
-    private double[][] getFilteredXY(String chX, Compartment compX, Statistic statX,
-                                     String chY, Compartment compY, Statistic statY) {
-        double[] allX = cellIndex.getResolvedColumn(chX, compX, statX);
-        double[] allY = cellIndex.getResolvedColumn(chY, compY, statY);
-        boolean hasMask = roiMask != null || ancestorMask != null;
-        if (!hasMask) return new double[][]{allX, allY};
-        int count = 0;
-        for (int i = 0; i < allX.length; i++) {
-            if (passesMasks(i)) count++;
-        }
-        double[] fx = new double[count], fy = new double[count];
-        int j = 0;
-        for (int i = 0; i < allX.length; i++) {
-            if (passesMasks(i)) { fx[j] = allX[i]; fy[j] = allY[i]; j++; }
-        }
-        return new double[][]{fx, fy};
-    }
-
-    /** Check if a cell index passes both ROI mask and ancestor mask. */
-    private boolean passesMasks(int i) {
-        if (roiMask != null && !roiMask[i]) return false;
-        if (ancestorMask != null && !ancestorMask[i]) return false;
-        return true;
-    }
-
-    private void updateHistogram() {
-        if (currentNode == null || cellIndex == null || markerStats == null) return;
-        if (currentHistogram == null || currentThresholdSlider == null) return;
-        String channel = currentNode.getChannel();
-        if (channel == null) return;
-        int markerIdx = cellIndex.getMarkerIndex(channel);
-        if (markerIdx < 0) return;
-
-        // The column the engine will actually gate on. Everything below — values, clip
-        // percentiles, slider range — comes off this one handle, so the
-        // histogram shows exactly what GatingEngine compares against.
-        MeasuredColumn col = thresholdColumn(currentNode);
-        if (col == null) return;
-        // Cells in the current population with a measured value, so no percentile or clip
-        // computed from them can come out NaN.
-        double[] displayValues = AxisMath.measuredValues(col.values(), roiMask, ancestorMask);
-        // Global per-column clip percentiles, so the same channel+compartment+statistic uses
-        // one axis everywhere it appears in the gate tree. When the parent-filtered cells sit
-        // outside it, the histogram's "X cells outside clip range" message says so.
-        double[] window = AxisMath.thresholdWindow(
-                col.percentile(currentNode.getClipPercentileLow()),
-                col.percentile(currentNode.getClipPercentileHigh()),
-                displayValues);
-        final double clipMin = window[0];
-        final double clipMax = window[1];
-
-        currentHistogram.setData(displayValues, clipMin, clipMax);
-        currentHistogram.setThreshold(currentNode.getThreshold());
-        // Suppress events when updating slider range to prevent clamping from
-        // writing a corrupted value back to the node
-        withSuppressedEvents(() -> {
-            currentThresholdSlider.setMin(clipMin);
-            currentThresholdSlider.setMax(clipMax);
-            // Re-pin the step to the new range so threshold "speed" matches the
-            // QC sliders whether the column is ~10 wide or ~10000s wide.
-            SliderUtils.applyRangeStep(currentThresholdSlider);
-            // Re-pin the thumb and the text field AFTER the range move. Slider.setMin
-            // and setMax silently clamp the current value, so a mode/compartment switch
-            // would otherwise leave the node, the thumb and the field holding three
-            // different numbers — and the next drag would start from the clamped edge.
-            currentThresholdSlider.setValue(currentNode.getThreshold());
-            if (currentThresholdField != null) {
-                currentThresholdField.setText(String.format(Locale.US, "%.4f", currentNode.getThreshold()));
-            }
-        });
-        updatePopulationCounts();
-    }
-
-    private boolean isThresholdGate(GateNode node) {
-        return !(node instanceof QuadrantGate) && !(node instanceof Region2DGate);
-    }
-
-    /**
-     * Rebuild the editor after a gate's channel changed, so the per-axis signal
-     * <em>selectors</em> are re-derived for the new channel.
-     * <p>
-     * Selectors, not selection. The selection itself is already correct by the time this
-     * runs: {@link GateAxis#retarget} re-pins the axis to a column the new channel is
-     * actually quantified with before it returns, which is what stopped a retarget
-     * leaving {@code Nucleus} on a whole-cell-only channel and reading NaN for every
-     * cell. What {@code retarget} cannot do is change what is on screen, and the combos
-     * are built from {@link GateAxis#choicesFrom}: whether a compartment combo exists at
-     * all, whether a statistic combo does, and which options each offers are all answers
-     * about <em>this</em> channel's {@link CompartmentCapability}. A legacy channel
-     * offers no compartment choice and one that replaces it must stop showing one; a
-     * Median-only channel must stop offering Mean. Only {@link #setGateNode} builds
-     * those, so only a rebuild re-derives them.
-     * <p>
-     * Deferred so the rebuild does not tear down the combo whose action is running.
-     */
-    private void rebuildForChannelChange() {
-        GateNode node = currentNode;
-        if (node == null) return;
-        Platform.runLater(() -> {
-            if (currentNode == node) setGateNode(node);
-        });
-    }
-
-    /**
-     * Rebuild the "Values" row from what this gate can actually offer, and select the mode
-     * it is in.
-     * <p>
-     * The row is <b>derived, never set</b>: {@link ValueMode#availableFor} is the only
-     * thing that decides which buttons exist, from the gate, the capability scanned at
-     * ingest and (when loaded) the data. This method renders that answer and decides
-     * nothing — the same division {@code UiStateController} keeps on the UMAP side, and for
-     * the same reason. The control it replaces was a fixed pair whose disabled state was
-     * computed here, in the editor, from three separate predicates; a second caller
-     * answering "can this be z-scored?" slightly differently is how a display and a
-     * classification path drift apart.
-     * <p>
-     * When the gate's own combination is not on offer — a saved gate pinned to a column
-     * this file does not carry — {@link ValueMode#selectedIn} falls back to raw, and that
-     * fallback is <b>written back onto the gate</b>. Selecting a button while events are
-     * suppressed changes no model state, so without this the engine would keep reading a
-     * column the editor has stopped drawing.
-     */
-    private void syncModeSelection(GateNode node) {
-        if (node == null) return;
-        List<ValueMode> modes = ValueMode.availableFor(node, compartmentCapability);
-        ValueMode selected = ValueMode.selectedIn(modes, node);
-        currentModes = modes;
-
-        // One mode is not a choice. On a typical export the file carries no
-        // pre-standardised column, so there is exactly one way to read the gate and the
-        // row is hidden rather than shown with a single button nobody can act on.
-        boolean offerRow = ValueMode.isAChoice(modes);
-
-        withSuppressedEvents(() -> {
-            modeGroup.getToggles().clear();
-            modeRow.getChildren().remove(1, modeRow.getChildren().size());
-            modeRow.setVisible(offerRow);
-            modeRow.setManaged(offerRow);
-            if (!offerRow) return;
-            for (ValueMode mode : modes) {
-                RadioButton button = new RadioButton(mode.label());
-                button.setToggleGroup(modeGroup);
-                button.setUserData(mode);
-                button.getStyleClass().add("fp-primary-text");
-                button.setTooltip(new Tooltip(mode.tooltip()));
-                if (mode.equals(selected)) button.setSelected(true);
-                modeRow.getChildren().add(button);
-            }
-        });
-
-        currentMode = selected;
-
-        // A gate saved under the retired computed z-score is not migrated here any more:
-        // LegacyZScoreMigration converts the whole tree when it first meets an index, so a
-        // gate the user never opens is converted too.
-        if (selected != null && !alreadyIn(node, selected)) {
-            selected.applyTo(node);
-        }
-    }
-
-    /** Whether {@code node} already reads the way {@code mode} says it should. */
-    private static boolean alreadyIn(GateNode node, ValueMode mode) {
-        for (GateAxis axis : GateAxis.axesOf(node)) {
-            Statistic statistic = axis.statistic();
-            if (statistic == null) continue;
-            if (!statistic.normalisation().equals(mode.normalisation())) return false;
-        }
-        return true;
-    }
-
+    /** Re-entrant: a nested call must not lift the outer call's suppression early. */
     private void withSuppressedEvents(Runnable action) {
+        boolean previous = suppressEvents;
         suppressEvents = true;
-        try { action.run(); } finally { suppressEvents = false; }
+        try { action.run(); } finally { suppressEvents = previous; }
     }
 
     private void fireNodeChanged() {
         if (onNodeChanged != null && currentNode != null) onNodeChanged.accept(currentNode);
     }
 
-    private void applyThresholdFromField() {
-        if (suppressEvents || currentNode == null || currentThresholdField == null) return;
-        try {
-            double val = AxisMath.parseThreshold(currentThresholdField.getText());
-            withSuppressedEvents(() -> {
-                currentNode.setThreshold(val);
-                if (currentThresholdSlider != null) currentThresholdSlider.setValue(val);
-                if (currentHistogram != null) currentHistogram.setThreshold(val);
-            });
-            fireNodeChanged();
-            updatePopulationCounts();
-        } catch (NumberFormatException ex) {
-            currentThresholdField.setText(String.format(Locale.US, "%.4f", currentNode.getThreshold()));
-        }
-    }
-
     private static String toWebColor(Color c) {
         return String.format("#%02x%02x%02x",
             (int)(c.getRed() * 255), (int)(c.getGreen() * 255), (int)(c.getBlue() * 255));
+    }
+
+    private static Label primaryLabel(String text) {
+        Label label = new Label(text);
+        label.getStyleClass().add("fp-primary-text");
+        return label;
     }
 
     private static Label createSectionHeader(String text) {
@@ -1321,90 +417,34 @@ public class GateEditorPane extends VBox {
         return header;
     }
 
-    /**
-     * Anchor the scatter axes on the clip percentiles of each axis' own resolved
-     * column, as measured. {@code node} is
-     * only read for its clip percentiles; the columns come from {@link #columnX}/
-     * {@link #columnY} so a nuclear or median axis anchors on its own distribution.
-     */
-    private void applyClipAxisRange(ScatterPlotCanvas scatter, MeasuredColumn colX, MeasuredColumn colY,
-                                    GateNode node) {
-        double[] x = AxisMath.clipSpan(colX, node.getClipPercentileLow(), node.getClipPercentileHigh());
-        double[] y = AxisMath.clipSpan(colY, node.getClipPercentileLow(), node.getClipPercentileHigh());
-        if (x == null || y == null) {
-            scatter.clearAxisRange();
-            return;
+    /** What the type editor sees of this pane. */
+    private final class Context implements EditorContext {
+        @Override public CellIndex cellIndex() { return cellIndex; }
+        @Override public MarkerStats markerStats() { return markerStats; }
+        @Override public CompartmentCapability capability() { return compartmentCapability; }
+        @Override public boolean[] roiMask() { return roiMask; }
+        @Override public boolean[] ancestorMask() { return ancestorMask; }
+        @Override public ObservableList<String> channelNames() { return channelNames; }
+        @Override public GateNode shownGate() { return currentNode; }
+        @Override public boolean eventsSuppressed() { return suppressEvents; }
+        @Override public void withSuppressedEvents(Runnable action) { GateEditorPane.this.withSuppressedEvents(action); }
+        @Override public void gateChanged() { fireNodeChanged(); }
+        @Override public void branchNamesChanged() { buildBranchNamesEditor(currentNode); }
+        @Override public void show(GateNode gate) { setGateNode(gate); }
+
+        @Override
+        public void showLater(GateNode gate) {
+            Platform.runLater(() -> {
+                if (currentNode == gate) setGateNode(gate);
+            });
         }
-        scatter.setAxisRange(x[0], x[1], y[0], y[1]);
-    }
 
-    private static TextField thresholdField(double value) {
-        TextField field = new TextField(String.format(Locale.US, "%.3f", value));
-        field.setPrefWidth(80);
-        field.setMinWidth(Region.USE_PREF_SIZE);
-        field.getStyleClass().add("fp-mono-field");
-        return field;
-    }
-
-    private static HBox growRow(Slider slider, TextField field) {
-        HBox row = new HBox(8, slider, field);
-        HBox.setHgrow(slider, Priority.ALWAYS);
-        slider.setMaxWidth(Double.MAX_VALUE);
-        return row;
-    }
-
-    /** Commit a typed quadrant threshold on Enter or focus loss; revert on a bad number. */
-    private void wireQuadrantField(TextField field, QuadrantGate gate, boolean xAxis,
-                                   Runnable rerange, ScatterPlotCanvas[] scatterRef) {
-        Runnable commit = () -> {
-            if (suppressEvents || currentNode != gate) return;
-            double current = xAxis ? gate.getThresholdX() : gate.getThresholdY();
-            double val;
-            try {
-                val = AxisMath.parseThreshold(field.getText());
-            } catch (NumberFormatException ex) {
-                field.setText(String.format(Locale.US, "%.3f", current));
-                return;
-            }
-            if (!Double.isFinite(val)) {
-                field.setText(String.format(Locale.US, "%.3f", current));
-                return;
-            }
-            if (val == current) return;
-            if (xAxis) gate.setThresholdX(val); else gate.setThresholdY(val);
-            rerange.run();
-            field.setText(String.format(Locale.US, "%.3f", val));
-            if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
-            fireNodeChanged();
-        };
-        field.setOnAction(e -> commit.run());
-        field.focusedProperty().addListener((obs, old, focused) -> {
-            if (!focused) commit.run();
-        });
-    }
-
-    /** Re-anchor {@code scatter}'s axes for {@code node}'s current axis selection. */
-    private void applyAxisRangeFor(ScatterPlotCanvas scatter, GateNode node) {
-        applyClipAxisRange(scatter, columnX(node), columnY(node), node);
-    }
-
-    /** Re-read the scatter currently on screen, for whichever gate it is showing. */
-    private void refreshScatterPlot() {
-        redrawScatter(currentScatter, currentNode);
-    }
-
-    private void applyBranchColorsToScatter(ScatterPlotCanvas scatter, GateNode node) {
-        List<Branch> branches = node.getBranches();
-        if (node instanceof QuadrantGate && branches.size() == 4) {
-            scatter.setQuadrantColors(
-                ColorUtils.intToColor(branches.get(0).getColor()).deriveColor(0, 1, 1, 0.6),
-                ColorUtils.intToColor(branches.get(1).getColor()).deriveColor(0, 1, 1, 0.6),
-                ColorUtils.intToColor(branches.get(2).getColor()).deriveColor(0, 1, 1, 0.6),
-                ColorUtils.intToColor(branches.get(3).getColor()).deriveColor(0, 1, 1, 0.6));
-        } else if (branches.size() >= 2) {
-            scatter.setInsideColor(ColorUtils.intToColor(branches.get(0).getColor()).deriveColor(0, 1, 1, 0.6));
-            scatter.setOutsideColor(ColorUtils.intToColor(branches.get(1).getColor()).deriveColor(0, 1, 1, 0.3));
+        @Override
+        public void replaceGate(GateNode old, GateNode replacement) {
+            replacement.setEnabled(old.isEnabled());
+            copySharedSettings(old, replacement);
+            if (onReplaceGate != null) onReplaceGate.accept(old, replacement);
+            currentNode = replacement;
         }
     }
-
 }

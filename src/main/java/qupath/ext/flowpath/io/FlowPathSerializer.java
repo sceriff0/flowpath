@@ -399,7 +399,7 @@ public class FlowPathSerializer {
                     + node.getClass().getName() + "). Add one to "
                     + "FlowPathSerializer.serializeNode, a matching branch to "
                     + "deserializeNode, and a display name to FlowPathCell.regionTypeName "
-                    + "and GateEditorPane's label switch.");
+                    + "and GateEditorPane's label switch (the editor itself is chosen in GateTypeEditors.forGate).");
         }
 
         return obj;

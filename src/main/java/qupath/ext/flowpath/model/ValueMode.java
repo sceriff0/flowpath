@@ -158,7 +158,7 @@ public record ValueMode(Kind kind, String normalisation, String label, String to
      * <p>
      * Note this does <em>not</em> convert the threshold. Moving between columns is a
      * change of scale, and only a caller holding the index can re-map it; see
-     * {@code GateEditorPane.onModeSelected}.
+     * {@code AbstractGateTypeEditor.onModeSelected}.
      */
     public void applyTo(GateNode gate) {
         if (gate == null) return;

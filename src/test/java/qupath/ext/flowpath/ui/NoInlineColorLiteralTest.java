@@ -30,7 +30,8 @@ class NoInlineColorLiteralTest {
 
     /**
      * The gating-half files this task named: {@code FlowPathPane}, {@code GateEditorPane},
-     * {@code QualityFilterPane} and {@code FlowPathCell}. Canvas drawing
+     * {@code QualityFilterPane} and {@code FlowPathCell}, plus the {@code ui/editor} type
+     * editors that took over {@code GateEditorPane}'s gate-specific controls. Canvas drawing
      * ({@code ScatterPlotCanvas}, {@code HistogramCanvas}) and the UMAP/analysis halves are
      * out of scope for this task.
      */
@@ -38,7 +39,13 @@ class NoInlineColorLiteralTest {
             "src/main/java/qupath/ext/flowpath/ui/FlowPathPane.java",
             "src/main/java/qupath/ext/flowpath/ui/GateEditorPane.java",
             "src/main/java/qupath/ext/flowpath/ui/QualityFilterPane.java",
-            "src/main/java/qupath/ext/flowpath/ui/FlowPathCell.java"
+            "src/main/java/qupath/ext/flowpath/ui/FlowPathCell.java",
+            // The per-gate-type controls GateEditorPane was split into (Task 10).
+            "src/main/java/qupath/ext/flowpath/ui/editor/AbstractGateTypeEditor.java",
+            "src/main/java/qupath/ext/flowpath/ui/editor/TwoAxisGateEditor.java",
+            "src/main/java/qupath/ext/flowpath/ui/editor/ThresholdGateEditor.java",
+            "src/main/java/qupath/ext/flowpath/ui/editor/QuadrantGateEditor.java",
+            "src/main/java/qupath/ext/flowpath/ui/editor/Region2DGateEditor.java"
     );
 
     /**
