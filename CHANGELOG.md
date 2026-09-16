@@ -21,7 +21,9 @@ held back, as in 0.9.3.
   mask, the ROI mask or the column statistics, so the restored gates were counted against
   the filter they were undone away from. Every one of them now goes through a single resync
   (ROI mask, quality mask, statistics from the *incoming* tree's filters, legacy conversion,
-  gating pass).
+  gating pass). The statistics are recomputed only when the cells or the combined filter
+  mask actually changed, so undoing a threshold nudge does not re-sort every column of a
+  large slide on the UI thread.
 - **Switching images did not gate the new cells.** Opening another image installed its
   cells but requested no pass, so counts stayed stale until the first edit. The new image
   is now gated as soon as its cells land.

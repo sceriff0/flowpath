@@ -71,6 +71,13 @@ final class GatingSession {
     private RegionMask regions;
     private boolean[] qualityMask;
     private MarkerStats stats;
+    /**
+     * The index and combined mask {@link #stats} were computed over, or {@code null} when that
+     * is not known (statistics a background recompute handed in). A resync whose masks come
+     * out equal to these keeps {@link #stats} instead of re-sorting every column.
+     */
+    private CellIndex statsIndex;
+    private boolean[] statsMask;
 
     /**
      * The last migration notice shown while the tree changed nothing, so the same "these gates
@@ -109,13 +116,20 @@ final class GatingSession {
      * gating pass: ROI mask, quality mask, statistics, legacy migration, pass — in that order.
      * Computes the heavy part on the calling thread; see {@link #resync(Derived, Supplier)} for
      * adopting one computed elsewhere.
+     * <p>
+     * The masks are always recomputed, but the statistics — which sort every marker column
+     * over every cell, seconds on a large slide — only when the index or the combined mask
+     * they were computed over changed. Undo, redo, load and the ROI toggle run this on the FX
+     * thread, and a gate-only undo changes neither.
      *
      * @param annotations the annotations the ROI filter should use; only asked for when the
      *                    tree's filter is on and there are cells to filter
      * @return the migration notice to show, if any
      */
     Optional<MigrationNotice> resync(Supplier<List<PathObject>> annotations) {
-        return adopt(index == null ? Derived.NONE : derive(derivationInputs(index, annotations)));
+        if (index == null) return adopt(Derived.NONE);
+        return adopt(derive(derivationInputs(index, annotations), statsIndex == index ? statsMask : null,
+                statsIndex == index ? stats : null));
     }
 
     /**
@@ -134,7 +148,7 @@ final class GatingSession {
         if (derived.index() != index
                 || derived.roiFilterEnabled() != tree.isRoiFilterEnabled()
                 || !Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()))) {
-            derived = derive(derivationInputs(index, annotations));
+            return resync(annotations);
         }
         return adopt(derived);
     }
@@ -145,6 +159,8 @@ final class GatingSession {
         roiMask = regions != null ? regions.included() : null;
         qualityMask = derived.qualityMask();
         stats = derived.stats();
+        statsIndex = derived.index();
+        statsMask = combinedMask();
         if (index != null) notice = migrateLegacyZScores();
         settle();
         gatingPass.request(new PassInput(tree, index, stats, roiMask, regions));
@@ -193,6 +209,14 @@ final class GatingSession {
      * function of captured inputs, so it can run off the FX thread. Touches no session state.
      */
     static Derived derive(DerivationInputs in) {
+        return derive(in, null, null);
+    }
+
+    /**
+     * {@link #derive(DerivationInputs)}, keeping {@code reusable} when its combined mask
+     * {@code reusableMask} equals the one derived here. Both must describe {@code in.index()}.
+     */
+    private static Derived derive(DerivationInputs in, boolean[] reusableMask, MarkerStats reusable) {
         CellIndex idx = in.index();
         if (idx == null) return Derived.NONE;
         RegionMask regions = in.roiFilterEnabled() ? usableRegions(idx, in.annotations()) : null;
@@ -201,7 +225,10 @@ final class GatingSession {
         boolean[] combined = quality == null ? roi
                 : roi == null ? quality
                 : GatingEngine.combineMasks(quality, roi);
-        return new Derived(idx, in.roiFilterEnabled(), regions, quality, MarkerStats.compute(idx, combined));
+        MarkerStats stats = reusable != null && Arrays.equals(combined, reusableMask)
+                ? reusable
+                : MarkerStats.compute(idx, combined);
+        return new Derived(idx, in.roiFilterEnabled(), regions, quality, stats);
     }
 
     private static boolean[] qualityMaskOf(CellIndex idx, QualityFilter filter) {
@@ -330,6 +357,10 @@ final class GatingSession {
     /** Statistics a background recompute produced for the current masks. */
     void adoptStats(MarkerStats recomputed) {
         this.stats = recomputed;
+        // Computed from the filter as some earlier tick left it; which mask that was is not
+        // known here, so the next resync recomputes rather than reuse them.
+        this.statsIndex = null;
+        this.statsMask = null;
     }
 
     // ---- migration ---------------------------------------------------------------------

@@ -371,6 +371,129 @@ class GatingSessionResyncTest {
         assertArrayEquals(new int[]{0, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
     }
 
+    // ---- statistics are reused while the population they describe is unchanged ---------
+
+    /**
+     * Statistics sort every marker column over every cell, and undo, redo, load and the ROI
+     * toggle resync on the FX thread. They are a pure function of the index and the combined
+     * mask, so a resync whose masks did not change keeps them: a Ctrl+Z of a threshold nudge
+     * must not re-sort a million-cell slide. Pinned with a quality filter and the ROI filter
+     * both on, across a gate edit, its undo and its redo, on two same-channel roots.
+     */
+    @Test
+    void aGateOnlyUndoReusesTheSameStatistics() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        CellIndex index = slideA();
+        GateTree tree = twoRootsOnCd3();
+        tree.getQualityFilter().setRange("area", new QualityFilter.Range(25, Double.POSITIVE_INFINITY));
+        tree.setRoiFilterEnabled(true);
+        session.replaceTree(tree);
+        session.adoptIndex(index);
+        // x = 0..70: cells 0..7; with area >= 25, cells 2..7 (CD3 3..8).
+        PathObject left = PathObjects.createAnnotationObject(ROIs.createRectangleROI(-5, -5, 80, 10, PLANE));
+        Supplier<List<PathObject>> annotations = () -> List.of(left);
+        session.resync(annotations);
+        MarkerStats computed = session.stats();
+        assertEquals(5.5, meanCd3(index, computed), 1e-12, "statistics over CD3 3..8");
+
+        clock.addAndGet(5_000);
+        session.tree().getRoots().get(0).setThreshold(7.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.resync(annotations);
+        assertSame(computed, session.stats(), "a gate edit changes no mask");
+        assertArrayEquals(new int[]{1, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        assertTrue(session.undo());
+        session.resync(annotations);
+        assertSame(computed, session.stats(), "a gate-only undo reuses the statistics");
+        assertSame(computed, pass.lastInput().stats());
+        assertArrayEquals(new int[]{3, 3}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(expectedCounts(session.tree(), 1, index, session.combinedMask(), session.roiMask()),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+
+        assertTrue(session.redo());
+        session.resync(annotations);
+        assertSame(computed, session.stats(), "and so does its redo");
+        assertArrayEquals(new int[]{1, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        // The annotation moved: the ROI mask is different, so the statistics are recomputed.
+        PathObject narrower = PathObjects.createAnnotationObject(ROIs.createRectangleROI(-5, -5, 60, 10, PLANE));
+        session.resync(() -> List.of(narrower));
+        assertNotSame(computed, session.stats(), "a different ROI mask recomputes");
+        assertEquals(4.5, meanCd3(index, session.stats()), 1e-12, "statistics over CD3 3..6");
+    }
+
+    /** An undo that restores a different quality filter recomputes, and a later gate-only one reuses again. */
+    @Test
+    void anUndoRestoringADifferentQualityFilterRecomputesTheStatistics() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        CellIndex index = slideA();
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(index);
+        session.resync(NO_ANNOTATIONS);
+
+        clock.addAndGet(5_000);
+        session.recordEdit();
+        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.resync(NO_ANNOTATIONS);
+        MarkerStats filtered = session.stats();
+        assertEquals(7.5, meanCd3(index, filtered), 1e-12);
+
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertNotSame(filtered, session.stats(), "the restored filter selects other cells");
+        assertEquals(5.5, meanCd3(index, session.stats()), 1e-12, "statistics over all ten cells");
+        assertSame(session.stats(), pass.lastInput().stats());
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(expectedCounts(session.tree(), 1, index, null, null),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+
+        assertTrue(session.redo());
+        session.resync(NO_ANNOTATIONS);
+        assertEquals(7.5, meanCd3(index, session.stats()), 1e-12, "redo recomputes for the narrower filter");
+        assertArrayEquals(new int[]{5, 1}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    /**
+     * A quality-filter tick recomputes the mask at once and the statistics in the background.
+     * A resync before those land must not keep the old statistics just because the tree's
+     * filter already matches the current mask: they describe the mask before the tick.
+     */
+    @Test
+    void aResyncWhileADragsStatisticsArePendingRecomputes() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        CellIndex index = slideA();
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(index);
+        session.resync(NO_ANNOTATIONS);
+        MarkerStats before = session.stats();
+
+        session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
+        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.settle();
+        session.recomputeQualityMask();            // statistics not adopted yet
+
+        session.resync(NO_ANNOTATIONS);
+        assertNotSame(before, session.stats());
+        assertEquals(7.5, meanCd3(index, session.stats()), 1e-12, "statistics for the filter the tree has");
+        assertArrayEquals(expectedCounts(session.tree(), 1, index, session.qualityMask(), null),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+
+        // Statistics handed in from the background describe a mask the session cannot check,
+        // so the next resync recomputes rather than trust them.
+        MarkerStats adopted = MarkerStats.compute(index, session.qualityMask());
+        session.adoptStats(adopted);
+        session.resync(NO_ANNOTATIONS);
+        assertNotSame(adopted, session.stats());
+        assertEquals(7.5, meanCd3(index, session.stats()), 1e-12);
+    }
+
     // ---- (iii) image switch --------------------------------------------------------------
 
     @Test
