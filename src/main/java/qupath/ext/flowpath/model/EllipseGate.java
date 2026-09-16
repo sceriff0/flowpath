@@ -34,6 +34,12 @@ public final class EllipseGate extends Region2DGate {
     public double getRadiusY() { return radiusY; }
     public void setRadiusY(double v) { this.radiusY = v; }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The rim is inclusive ({@code <= 1}), per {@link Region2DGate#contains}. An ellipse
+     * with a non-positive radius on either axis encloses nothing.
+     */
     @Override
     public boolean contains(double x, double y) {
         if (radiusX <= 0 || radiusY <= 0) return false;

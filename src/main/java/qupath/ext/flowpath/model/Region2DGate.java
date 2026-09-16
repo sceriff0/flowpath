@@ -59,7 +59,15 @@ public abstract sealed class Region2DGate extends GateNode
                 channelX + "/" + channelY + " (out)");
     }
 
-    /** Does the point fall inside this gate's region, in the gate's own coordinate space? */
+    /**
+     * Does the point fall inside this gate's region, in the gate's own coordinate space?
+     * <p>
+     * The one boundary rule for every shape: a point exactly on the region's edge or a
+     * vertex counts as Inside, not Outside. A shape with no usable extent (a cleared
+     * rectangle or ellipse, a polygon with fewer than 3 vertices or with every vertex
+     * collinear) encloses nothing, including points that would otherwise sit on its
+     * boundary. Each shape's own {@code contains} documents how it applies this rule.
+     */
     public abstract boolean contains(double x, double y);
 
     /** Branch 0 is inside the region, branch 1 outside. */

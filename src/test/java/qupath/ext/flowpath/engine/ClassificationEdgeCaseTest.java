@@ -125,23 +125,42 @@ class ClassificationEdgeCaseTest {
 
     // ---- region boundaries and degenerate shapes ----
 
-    // Characterisation of PolygonGate's ray-casting boundary rule, which is half-open: the
-    // left/bottom edges of an axis-aligned square are inside, the right/top edges outside.
-    // Note this differs from RectangleGate (all edges inclusive) for the same square.
+    // All four edges and all four vertices of an axis-aligned square are Inside -- the same
+    // rule RectangleGate already applies to the same square (see Region2DGate's javadoc).
+    // A point one representable double outside any edge is Outside.
     @Test
-    void polygonBoundaryIsHalfOpenLeftAndBottomInRightAndTopOut() {
+    void polygonBoundaryIncludesEveryEdgeAndVertex() {
         PolygonGate gate = new PolygonGate("X", "Y");
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0},
                 new double[]{2, 2}, new double[]{0, 2}));
 
         assertTrue(gate.contains(0.0, 1.0), "left edge");
         assertTrue(gate.contains(1.0, 0.0), "bottom edge");
+        assertTrue(gate.contains(2.0, 1.0), "right edge");
+        assertTrue(gate.contains(1.0, 2.0), "top edge");
         assertTrue(gate.contains(0.0, 0.0), "bottom-left vertex");
-        assertFalse(gate.contains(2.0, 1.0), "right edge");
-        assertFalse(gate.contains(1.0, 2.0), "top edge");
-        assertFalse(gate.contains(2.0, 2.0), "top-right vertex");
-        assertFalse(gate.contains(2.0, 0.0), "bottom-right vertex");
-        assertFalse(gate.contains(0.0, 2.0), "top-left vertex");
+        assertTrue(gate.contains(2.0, 2.0), "top-right vertex");
+        assertTrue(gate.contains(2.0, 0.0), "bottom-right vertex");
+        assertTrue(gate.contains(0.0, 2.0), "top-left vertex");
+
+        double justOutside = Math.nextUp(2.0);
+        assertFalse(gate.contains(justOutside, 1.0), "just past the right edge");
+        assertFalse(gate.contains(1.0, justOutside), "just past the top edge");
+        assertFalse(gate.contains(Math.nextDown(0.0), 1.0), "just past the left edge");
+        assertFalse(gate.contains(1.0, Math.nextDown(0.0)), "just past the bottom edge");
+    }
+
+    // A self-intersecting (bowtie) polygon still puts every point on any of its edges
+    // Inside, including the crossing segments and the point where they cross.
+    @Test
+    void selfIntersectingPolygonEdgesIncludingTheCrossingAreInside() {
+        PolygonGate gate = new PolygonGate("X", "Y");
+        gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 2},
+                new double[]{2, 0}, new double[]{0, 2}));
+
+        assertTrue(gate.contains(0.5, 0.5), "on the (0,0)-(2,2) diagonal edge");
+        assertTrue(gate.contains(1.0, 1.0), "the crossing point of the two diagonals");
+        assertTrue(gate.contains(1.5, 0.5), "on the (2,0)-(0,2) diagonal edge");
     }
 
     // A self-intersecting (bowtie) polygon follows the even-odd rule: the two lobes are

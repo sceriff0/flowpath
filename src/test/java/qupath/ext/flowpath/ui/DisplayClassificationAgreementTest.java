@@ -190,6 +190,32 @@ class DisplayClassificationAgreementTest {
         assertAgrees("polygon", gate, px, py);
     }
 
+    // Every edge and vertex of the square is Inside on both paths -- not merely agreeing with
+    // each other on some rule, but agreeing on the specific Inside rule the user chose.
+    @Test
+    void polygonBoundaryIsInsideOnBothPathsForEveryEdgeAndVertex() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        PolygonGate gate = new PolygonGate(MX, MY);
+        gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0}, new double[]{2, 2}, new double[]{0, 2}));
+        named(gate);
+
+        // left edge, bottom edge, right edge, top edge, then all four vertices.
+        double[] px = {0.0, 1.0, 2.0, 1.0, 0.0, 2.0, 2.0, 0.0};
+        double[] py = {1.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 2.0};
+
+        CellIndex index = indexOf(px, py);
+        MarkerStats stats = MarkerStats.compute(index);
+        double[] colX = columnOf(index, MX);
+        double[] colY = columnOf(index, MY);
+
+        int[] classified = classify(gate, index, stats);
+        int[] drawn = display2D(gate, colX, colY);
+        for (int i = 0; i < px.length; i++) {
+            assertEquals(0, classified[i], "point " + i + " classified Inside (branch 0)");
+            assertEquals(0, drawn[i], "point " + i + " drawn Inside (branch 0)");
+        }
+    }
+
     // ---- the shapes the user has not finished drawing yet ----
     //
     // A region gate with no usable shape classifies every cell as Outside. The plot has
