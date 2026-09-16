@@ -166,20 +166,37 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         context.gateChanged();
     }
 
+    /**
+     * Commit the typed threshold, on Enter or focus loss. Only a real change is written and
+     * reported: a field still showing the gate's own value (in its four-decimal rendering) is
+     * not an edit, and reporting it recorded a no-op undo step that cleared the redo stack —
+     * and rewrote a dragged threshold with its rounded rendering. A non-finite value is
+     * rejected like unparseable text, as the quadrant fields do.
+     */
     private void applyThresholdFromField() {
         if (!accepting()) return;
+        double current = gate.getThreshold();
+        String text = valueField.getText();
+        if (format(current).equals(text)) return;
+        double val;
         try {
-            double val = AxisMath.parseThreshold(valueField.getText());
-            context.withSuppressedEvents(() -> {
-                gate.setThreshold(val);
-                slider.setValue(val);
-                histogram.setThreshold(val);
-            });
-            context.gateChanged();
-            updatePopulationCounts();
+            val = AxisMath.parseThreshold(text);
         } catch (NumberFormatException ex) {
-            valueField.setText(format(gate.getThreshold()));
+            valueField.setText(format(current));
+            return;
         }
+        if (!Double.isFinite(val)) {
+            valueField.setText(format(current));
+            return;
+        }
+        if (val == current) return;
+        context.withSuppressedEvents(() -> {
+            gate.setThreshold(val);
+            slider.setValue(val);
+            histogram.setThreshold(val);
+        });
+        context.gateChanged();
+        updatePopulationCounts();
     }
 
     private static String format(double value) {

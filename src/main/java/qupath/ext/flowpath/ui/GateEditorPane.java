@@ -257,9 +257,21 @@ public class GateEditorPane extends VBox {
                     }
                 }
             });
-            nameField.setOnAction(e -> { fireNodeChanged(); buildActionButtons(currentNode); });
+            // Typing writes the name as it goes; Enter or focus loss reports it, once, and
+            // only if it differs from the name last reported. An unchanged commit used to
+            // report anyway: a no-op undo step that also cleared the redo stack.
+            String[] committed = {branch.getName()};
+            Runnable commitName = () -> {
+                if (currentNode == null || idx >= currentNode.getBranches().size()) return;
+                String name = currentNode.getBranches().get(idx).getName();
+                if (java.util.Objects.equals(name, committed[0])) return;
+                committed[0] = name;
+                fireNodeChanged();
+                buildActionButtons(currentNode);
+            };
+            nameField.setOnAction(e -> commitName.run());
             nameField.focusedProperty().addListener((obs, old, focused) -> {
-                if (!focused) { fireNodeChanged(); buildActionButtons(currentNode); }
+                if (!focused) commitName.run();
             });
 
             ColorPicker colorPicker = new ColorPicker(ColorUtils.intToColor(branch.getColor()));

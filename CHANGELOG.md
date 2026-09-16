@@ -33,6 +33,11 @@ held back, as in 0.9.3.
 - **A long drag took several undos.** The 500 ms coalescing window was measured from the
   first tick, so a slow drag split into several steps. The window now slides with every
   tick, and a quality-filter drag no longer merges into a gate edit made just before it.
+- **Clicking into a text field and out again cost you your redo.** The threshold field and
+  the branch-name fields reported an edit on every Enter or focus loss, even with nothing
+  changed, which recorded an empty undo step and cleared the redo stack; the threshold and
+  quadrant fields also rounded a dragged threshold to the digits they display. Only a real
+  change is recorded now, and a typed `Infinity` or `NaN` threshold is rejected.
 - **Quality-filter and annotation-filter changes could not be undone.** Both are now undo
   steps; a slider drag is one.
 - **A cell reaching a gate on a channel the image lacks was not flagged.** The walk

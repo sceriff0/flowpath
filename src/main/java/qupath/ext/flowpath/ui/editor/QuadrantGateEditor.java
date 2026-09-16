@@ -122,6 +122,9 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
         Runnable commit = () -> {
             if (!accepting()) return;
             double current = xAxis ? gate.getThresholdX() : gate.getThresholdY();
+            // Still the gate's own value in the field's rendering: not an edit. Parsed, it
+            // is the rounded value, which a dragged threshold is not equal to.
+            if (format(current).equals(field.getText())) return;
             double val;
             try {
                 val = AxisMath.parseThreshold(field.getText());
