@@ -77,14 +77,19 @@ public class MarkerStats {
     private void putColumnStats(String name, double[] raw, boolean[] mask) {
         int n = raw.length;
 
+        // Only finite values describe the distribution. NaN is "unmeasured"; a single
+        // +/-Infinity used to make the mean infinite and the std NaN, and the std guard in
+        // toZScore is false for NaN -- so every finite cell's z-score became NaN, and NaN
+        // compares false against any threshold: the whole column silently went negative.
+        // The infinite cell itself still classifies by its sign against the finite stats.
         int actualCount = 0;
         for (int i = 0; i < n; i++) {
-            if ((mask == null || mask[i]) && !Double.isNaN(raw[i])) actualCount++;
+            if ((mask == null || mask[i]) && Double.isFinite(raw[i])) actualCount++;
         }
         double[] passing = new double[actualCount];
         int idx = 0;
         for (int i = 0; i < n; i++) {
-            if ((mask == null || mask[i]) && !Double.isNaN(raw[i])) {
+            if ((mask == null || mask[i]) && Double.isFinite(raw[i])) {
                 passing[idx++] = raw[i];
             }
         }
