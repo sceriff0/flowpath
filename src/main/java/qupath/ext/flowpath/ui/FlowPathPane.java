@@ -247,8 +247,6 @@ public class FlowPathPane extends BorderPane {
         // --- Right side: Gate Editor ---
         editorPane = new GateEditorPane();
         editorPane.setOnNodeChanged(node -> onGateNodeChanged());
-        editorPane.setOnAddToPositive(this::addGateToPositive);
-        editorPane.setOnAddToNegative(this::addGateToNegative);
         editorPane.setOnAddToBranch(this::addChildGate);
         editorPane.setOnRemoveGate(this::removeSelectedGate);
         editorPane.setOnReplaceGate(this::replaceGateNode);
@@ -581,14 +579,6 @@ public class FlowPathPane extends BorderPane {
         session.tree().addRoot(node);
         rebuildTreeView();
         requestPreviewUpdate();
-    }
-
-    private void addGateToPositive() {
-        addChildGate(0);
-    }
-
-    private void addGateToNegative() {
-        addChildGate(1);
     }
 
     private void addChildGate(int branchIndex) {

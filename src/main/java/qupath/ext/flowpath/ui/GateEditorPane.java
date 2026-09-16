@@ -90,8 +90,6 @@ public class GateEditorPane extends VBox {
     private Label clipInfoLabel;
 
     private Consumer<GateNode> onNodeChanged;
-    private Runnable onAddToPositive;
-    private Runnable onAddToNegative;
     private IntConsumer onAddToBranch;
     private Runnable onRemoveGate;
     private java.util.function.BiConsumer<GateNode, GateNode> onReplaceGate;
@@ -981,8 +979,6 @@ public class GateEditorPane extends VBox {
         if (currentQuadrantRerange != null) currentQuadrantRerange.run();
     }
     public void setOnNodeChanged(Consumer<GateNode> callback) { this.onNodeChanged = callback; }
-    public void setOnAddToPositive(Runnable callback) { this.onAddToPositive = callback; }
-    public void setOnAddToNegative(Runnable callback) { this.onAddToNegative = callback; }
     public void setOnAddToBranch(IntConsumer callback) { this.onAddToBranch = callback; }
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(java.util.function.BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
