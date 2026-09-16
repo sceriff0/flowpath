@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ingest;
 
+import qupath.ext.flowpath.model.CoordinateSpace;
 import qupath.ext.flowpath.model.ScaleVerdict;
 
 import java.util.ArrayList;
@@ -72,6 +73,9 @@ import java.util.Map;
  * @param roiFallbackCells                   cells with no usable centroid measurement pair,
  *                                           positioned from their ROI centroid instead — see
  *                                           {@code CellGeometry.roiFallbackCount()}
+ * @param centroidColumnsPresent             whether the export carries a centroid
+ *                                           measurement pair at all
+ * @param positionSpace                      the space resolved positions are in
  */
 public record IngestReport(int detectionCount,
                            int cellObjects,
@@ -88,7 +92,9 @@ public record IngestReport(int detectionCount,
                            int sampledCells,
                            int sampleSize,
                            ScaleVerdict scaleVerdict,
-                           int roiFallbackCells) {
+                           int roiFallbackCells,
+                           boolean centroidColumnsPresent,
+                           CoordinateSpace positionSpace) {
 
     public IngestReport {
         droppedChannels = List.copyOf(droppedChannels);
@@ -153,7 +159,8 @@ public record IngestReport(int detectionCount,
         return new IngestReport(0, 0, 0, 0,
                 new Discovery(Source.NONE, List.of(), List.of(), List.of(), List.of()),
                 List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), 0,
-                0, 0, ScaleVerdict.noMeasurement(), 0);
+                0, 0, ScaleVerdict.noMeasurement(), 0, false,
+                CoordinateSpace.PIXELS);
     }
 
     /**
@@ -270,18 +277,30 @@ public record IngestReport(int detectionCount,
     }
 
     /**
-     * More than half the cells had no centroid measurement pair. A few stragglers are a
-     * note; a majority means the position columns are mostly not what the export wrote.
+     * The export carries centroid columns, yet more than half the cells lacked them. A few
+     * stragglers are a note; a majority means the position column is mostly not what the
+     * export wrote. An export with no centroid columns at all (plain QuPath detections) is
+     * never a finding: positioning every cell from its ROI is how such data is read.
      */
     private boolean mostCellsFellBackToRoi() {
-        return roiFallbackCells > 0 && (long) roiFallbackCells * 2 > detectionCount;
+        return centroidColumnsPresent
+                && roiFallbackCells > 0 && (long) roiFallbackCells * 2 > detectionCount;
     }
 
+    /** Worded by what actually happened to the positions, which depends on the space. */
     private String roiFallbackLine() {
+        if (!centroidColumnsPresent) {
+            return String.format(Locale.US,
+                    "%,d of %,d cells are positioned from their ROI centroid, in pixels — the "
+                            + "export carries no Centroid X/Y measurements", roiFallbackCells,
+                    detectionCount);
+        }
+        String how = positionSpace == CoordinateSpace.MICRONS
+                ? "converted to µm through the image calibration (NaN when it is uncalibrated)"
+                : "in pixels, the same space as the export's own centroid columns";
         return String.format(Locale.US,
-                "%,d of %,d cells have no Centroid X/Y measurement pair and are positioned "
-                        + "from their ROI centroid instead (pixels, converted to µm only "
-                        + "through the image calibration)", roiFallbackCells, detectionCount);
+                "%,d of %,d cells lack the Centroid X/Y measurement pair and are positioned "
+                        + "from their ROI centroid instead, %s", roiFallbackCells, detectionCount, how);
     }
 
     private static String count(int n, String singular, String plural) {

@@ -165,7 +165,9 @@ public final class DetectionIngest {
                 nullNames + d.nullMarkerNames(),
                 d.sampledCells(), d.sampleSize(),
                 index.geometry().scaleVerdict(),
-                index.geometry().roiFallbackCount());
+                index.geometry().roiFallbackCount(),
+                index.geometry().centroidColumnsPresent(),
+                index.geometry().sourceSpace());
 
         return new IngestResult(index, capability, markers,
                 selection == null ? MarkerSelection.defaultFor(markers) : selection,

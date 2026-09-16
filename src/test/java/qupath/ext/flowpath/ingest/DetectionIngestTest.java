@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
+import qupath.ext.flowpath.model.CoordinateSpace;
 import qupath.ext.flowpath.model.MeasurementKeySample;
 import qupath.ext.flowpath.model.ScaleVerdict;
 import qupath.ext.flowpath.model.Statistic;
@@ -286,7 +287,7 @@ class DetectionIngestTest {
         // The distinction FlowPath's gating cannot represent. export_geojson.py OMITS a
         // NaN (unknown); quantify.py writes a literal 0.0 for a genuinely empty
         // compartment (known, and zero). Both look like "no signal" in a histogram.
-        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i).centroidsMicronsFromRoi(1.0)
+        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i)
                 .morphology("Area µm²", 42.0)
                 .marker("Anucleate", 0.0)                          // quantify.py: truly empty
                 .marker("Joined", 5.0).absentOn(i -> i >= 3)       // export_geojson.py: omitted on 2
@@ -307,7 +308,7 @@ class DetectionIngestTest {
     void literalZerosAloneDoNotMakeAReportUnclean() {
         // An anucleate cell is ordinary data. Flagging it would make every real export
         // dirty and train the user to ignore the warning.
-        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i).centroidsMicronsFromRoi(1.0)
+        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i)
                 .morphology("Area µm²", 42.0)
                 .marker("CD3", 0.0)
                 .detections();
@@ -480,31 +481,78 @@ class DetectionIngestTest {
     void noCentroidFallbackSaysNothing() {
         IngestReport report = reportWithCentroidsMissingOn(10, 0);
         assertEquals(0, report.roiFallbackCells());
+        assertTrue(report.centroidColumnsPresent());
         assertTrue(report.isClean(), report.findings().toString());
         assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")), report.notes().toString());
     }
 
     @Test
-    void aMinorityOfCentroidFallbacksIsANote() {
+    void aMinorityOfCentroidFallbacksIsANoteConvertedToMicrons() {
         for (int missing : new int[]{1, 5}) {
             IngestReport report = reportWithCentroidsMissingOn(10, missing);
             assertEquals(missing, report.roiFallbackCells());
+            assertEquals(CoordinateSpace.MICRONS, report.positionSpace());
             assertTrue(report.isClean(), "at most half is not a finding: " + report.findings());
-            assertTrue(report.notes().stream().anyMatch(s -> s.contains(missing + " of 10")
-                    && s.contains("ROI centroid")), report.notes().toString());
+            String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                    .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+            assertTrue(line.contains(missing + " of 10"), line);
+            assertTrue(line.contains("converted to µm"), "a micrometre index converts: " + line);
             assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
         }
     }
 
     @Test
-    void aMajorityOfCentroidFallbacksIsAFinding() {
+    void aMajorityOfCentroidFallbacksWithTheColumnsPresentIsAFinding() {
         IngestReport report = reportWithCentroidsMissingOn(10, 6);
         assertEquals(6, report.roiFallbackCells());
+        assertTrue(report.centroidColumnsPresent());
         assertFalse(report.isClean());
         assertTrue(report.findings().stream().anyMatch(s -> s.contains("6 of 10")
                 && s.contains("ROI centroid")), report.findings().toString());
         assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
                 "said once, as a finding, not also as a note");
         assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
+    }
+
+    @Test
+    void anExportWithNoCentroidColumnsAtAllIsANoteInPixels() {
+        // Plain QuPath detections: no Centroid X/Y measurement anywhere, so every cell is
+        // positioned from its ROI. That is how such data is meant to be read, not a defect,
+        // and it must not put a warning in the status bar on every load.
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertEquals(10, report.roiFallbackCells());
+        assertFalse(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertTrue(report.isClean(), report.findings().toString());
+        String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+        assertTrue(line.contains("10 of 10"), line);
+        assertTrue(line.contains("pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
+    }
+
+    @Test
+    void aFallbackInAPixelCentroidExportStaysInPixels() {
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .measurement("Centroid X px", i -> i)
+                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 3)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertTrue(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertEquals(3, report.roiFallbackCells());
+        assertTrue(report.isClean(), report.findings().toString());
+        String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+        assertTrue(line.contains("in pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
     }
 }

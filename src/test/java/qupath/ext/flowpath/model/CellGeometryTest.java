@@ -72,6 +72,7 @@ class CellGeometryTest {
 
         assertEquals(CoordinateSpace.MICRONS, geom.sourceSpace());
         assertEquals(0, geom.roiFallbackCount(), "every cell carried both centroids");
+        assertTrue(geom.centroidColumnsPresent());
 
         // Micrometres come straight from the measurement...
         assertEquals(40.0 * PIXEL_SIZE, geom.micronsX(0), 1e-9);
@@ -101,6 +102,7 @@ class CellGeometryTest {
 
         assertEquals(CoordinateSpace.PIXELS, geom.sourceSpace(), "the space is recorded");
         assertEquals(1, geom.roiFallbackCount(), "the cell took the ROI fallback");
+        assertFalse(geom.centroidColumnsPresent(), "the export offered no centroid pair at all");
         assertEquals(12.5, geom.pixelsX(0), 1e-9);
         assertEquals(34.5, geom.pixelsY(0), 1e-9);
         assertTrue(Double.isNaN(geom.micronsX(0)),
@@ -124,6 +126,7 @@ class CellGeometryTest {
         assertEquals(12.5, geom.pixelsX(0), 1e-9);
         assertEquals(34.5, geom.pixelsY(0), 1e-9);
         assertNotEquals(999.0, geom.sourceX(0), "the orphaned µm value must not be used");
+        assertFalse(geom.centroidColumnsPresent(), "one axis is not a centroid pair");
     }
 
     @Test
@@ -138,6 +141,7 @@ class CellGeometryTest {
 
         assertEquals(CoordinateSpace.MICRONS, geom.sourceSpace());
         assertEquals(1, geom.roiFallbackCount());
+        assertTrue(geom.centroidColumnsPresent(), "the pair exists; this one cell lacked it");
         assertEquals(200.0 * PIXEL_SIZE, geom.micronsX(5), 1e-9,
                 "the fallback cell is converted into the index's declared space");
         assertEquals(200.0, geom.pixelsX(5), 1e-9);
