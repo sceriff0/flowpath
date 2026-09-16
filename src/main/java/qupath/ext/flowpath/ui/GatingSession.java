@@ -5,10 +5,12 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.UndoHistory;
 import qupath.lib.objects.PathObject;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -105,28 +107,105 @@ final class GatingSession {
     /**
      * Bring every derived piece in line with the current tree and index, then request a
      * gating pass: ROI mask, quality mask, statistics, legacy migration, pass — in that order.
+     * Computes the heavy part on the calling thread; see {@link #resync(Derived, Supplier)} for
+     * adopting one computed elsewhere.
      *
      * @param annotations the annotations the ROI filter should use; only asked for when the
      *                    tree's filter is on and there are cells to filter
      * @return the migration notice to show, if any
      */
     Optional<MigrationNotice> resync(Supplier<List<PathObject>> annotations) {
-        Optional<MigrationNotice> notice = Optional.empty();
-        if (index == null) {
-            roiMask = null;
-            regions = null;
-            qualityMask = null;
-            stats = null;
-        } else {
-            regions = tree.isRoiFilterEnabled() ? usableRegions(index, annotations.get()) : null;
-            roiMask = regions != null ? regions.included() : null;
-            recomputeQualityMask();
-            stats = MarkerStats.compute(index, combinedMask());
-            notice = migrateLegacyZScores();
+        return adopt(index == null ? Derived.NONE : derive(derivationInputs(index, annotations)));
+    }
+
+    /**
+     * The same resync, adopting masks and statistics {@linkplain #derive derived} on another
+     * thread — but only while they still describe this session: the same index, the same ROI
+     * flag and a quality filter that selects the same cells. If the tree or index moved on
+     * while the derivation ran (an undo, a filter drag, a toggle, a new image), it is derived
+     * again here, synchronously, from the current state. A stale derivation is never adopted.
+     * <p>
+     * The annotations are the one input not re-checked: a derivation carries the annotations
+     * captured when it was requested, and any later annotation change requests its own.
+     */
+    Optional<MigrationNotice> resync(Derived derived, Supplier<List<PathObject>> annotations) {
+        Objects.requireNonNull(derived, "derived");
+        if (index == null) return adopt(Derived.NONE);
+        if (derived.index() != index
+                || derived.roiFilterEnabled() != tree.isRoiFilterEnabled()
+                || !Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()))) {
+            derived = derive(derivationInputs(index, annotations));
         }
+        return adopt(derived);
+    }
+
+    private Optional<MigrationNotice> adopt(Derived derived) {
+        Optional<MigrationNotice> notice = Optional.empty();
+        regions = derived.regions();
+        roiMask = regions != null ? regions.included() : null;
+        qualityMask = derived.qualityMask();
+        stats = derived.stats();
+        if (index != null) notice = migrateLegacyZScores();
         settle();
         gatingPass.request(new PassInput(tree, index, stats, roiMask, regions));
         return notice;
+    }
+
+    // ---- the heavy part, on any thread -------------------------------------------------
+
+    /**
+     * What a derivation reads, captured on the thread that owns the session so it can be
+     * handed to another: the cells, a <em>copy</em> of the tree's quality filter (the panel
+     * writes into the live one while the user drags), the ROI flag and the annotations.
+     */
+    record DerivationInputs(CellIndex index, QualityFilter qualityFilter, boolean roiFilterEnabled,
+                            List<PathObject> annotations) {
+        DerivationInputs {
+            annotations = annotations == null ? List.of() : List.copyOf(annotations);
+        }
+
+        /** The same inputs against another index — a read of the image that has not landed yet. */
+        DerivationInputs withIndex(CellIndex newIndex) {
+            return new DerivationInputs(newIndex, qualityFilter, roiFilterEnabled, annotations);
+        }
+    }
+
+    /** Masks and statistics derived from {@link DerivationInputs}; adopted by {@link #resync(Derived, Supplier)}. */
+    record Derived(CellIndex index, boolean roiFilterEnabled, RegionMask regions, boolean[] qualityMask,
+                   MarkerStats stats) {
+        static final Derived NONE = new Derived(null, false, null, null, null);
+    }
+
+    /**
+     * Capture what {@link #derive} needs for {@code forIndex} — the current index, or one being
+     * read, whose cells are not known yet. Annotations are asked for only when the tree's ROI
+     * filter is on.
+     */
+    DerivationInputs derivationInputs(CellIndex forIndex, Supplier<List<PathObject>> annotations) {
+        QualityFilter filter = tree.getQualityFilter();
+        boolean roi = tree.isRoiFilterEnabled();
+        return new DerivationInputs(forIndex, filter == null ? null : filter.deepCopy(), roi,
+                roi ? annotations.get() : List.of());
+    }
+
+    /**
+     * The expensive half of a resync — region mask, quality mask, statistics — as a pure
+     * function of captured inputs, so it can run off the FX thread. Touches no session state.
+     */
+    static Derived derive(DerivationInputs in) {
+        CellIndex idx = in.index();
+        if (idx == null) return Derived.NONE;
+        RegionMask regions = in.roiFilterEnabled() ? usableRegions(idx, in.annotations()) : null;
+        boolean[] roi = regions != null ? regions.included() : null;
+        boolean[] quality = qualityMaskOf(idx, in.qualityFilter());
+        boolean[] combined = quality == null ? roi
+                : roi == null ? quality
+                : GatingEngine.combineMasks(quality, roi);
+        return new Derived(idx, in.roiFilterEnabled(), regions, quality, MarkerStats.compute(idx, combined));
+    }
+
+    private static boolean[] qualityMaskOf(CellIndex idx, QualityFilter filter) {
+        return filter == null ? null : GatingEngine.computeQualityMask(idx, filter);
     }
 
     /**
@@ -149,6 +228,16 @@ final class GatingSession {
     void adoptIndex(CellIndex newIndex) {
         this.index = newIndex;
         this.lastUnchangedMigrationNotice = null;
+    }
+
+    /**
+     * The same image's cells, read again because its detection set changed. Unlike
+     * {@link #adoptIndex} the missing-channel notice is not shown again: the panel is the
+     * image's, and repeating it on every detection edit would train the user to ignore it.
+     * Follow with {@link #resync}.
+     */
+    void rereadIndex(CellIndex newIndex) {
+        this.index = newIndex;
     }
 
     /** Replace the tree (a load), as one undo step. Follow with {@link #resync}. */
@@ -235,7 +324,7 @@ final class GatingSession {
      * thread.
      */
     void recomputeQualityMask() {
-        qualityMask = index == null ? null : GatingEngine.computeQualityMask(index, tree.getQualityFilter());
+        qualityMask = index == null ? null : qualityMaskOf(index, tree.getQualityFilter());
     }
 
     /** Statistics a background recompute produced for the current masks. */

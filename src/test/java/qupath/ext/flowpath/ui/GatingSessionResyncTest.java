@@ -508,6 +508,88 @@ class GatingSessionResyncTest {
         assertEquals(col.mean() + col.std(), flagged.getThreshold(), 1e-9);
     }
 
+    // ---- a derivation computed on another thread ------------------------------------------
+
+    /**
+     * The heavy half of a resync (masks and statistics) can be computed from inputs captured
+     * earlier and adopted later, but only while the tree and index still describe what it was
+     * computed from — two passes: one before, one through the adopted derivation.
+     */
+    @Test
+    void aDerivationThatStillDescribesTheTreeIsAdoptedAsComputed() {
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(() -> 0L, pass);
+        CellIndex index = slideA();
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(index);
+        session.resync(NO_ANNOTATIONS);
+
+        GatingSession.DerivationInputs inputs = session.derivationInputs(index, NO_ANNOTATIONS);
+        GatingSession.Derived derived = GatingSession.derive(inputs);
+        session.resync(derived, NO_ANNOTATIONS);
+
+        assertSame(derived.stats(), session.stats(), "a matching derivation is adopted, not recomputed");
+        assertSame(derived.stats(), pass.lastInput().stats());
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(expectedCounts(session.tree(), 1, index, session.qualityMask(), null),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+    }
+
+    /**
+     * The quality filter moved while the derivation ran: its statistics describe a filter the
+     * tree no longer has, so the resync recomputes rather than gate the new filter against them.
+     */
+    @Test
+    void aDerivationWhoseFilterTheTreeNoLongerHasIsRecomputed() {
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(() -> 0L, pass);
+        CellIndex index = slideA();
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(index);
+        session.resync(NO_ANNOTATIONS);
+
+        GatingSession.Derived stale = GatingSession.derive(session.derivationInputs(index, NO_ANNOTATIONS));
+        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.resync(stale, NO_ANNOTATIONS);
+
+        assertNotSame(stale.stats(), session.stats());
+        assertEquals(6, countTrue(session.qualityMask()));
+        assertEquals(7.5, meanCd3(index, session.stats()), 1e-12, "statistics over CD3 5..10");
+        assertArrayEquals(new int[]{5, 1}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(expectedCounts(session.tree(), 1, index, session.qualityMask(), null),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+    }
+
+    /** The ROI filter was toggled, or the index replaced, while the derivation ran. */
+    @Test
+    void aDerivationForAnotherIndexOrRoiFlagIsRecomputed() {
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(() -> 0L, pass);
+        CellIndex a = slideA();
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(a);
+        session.resync(NO_ANNOTATIONS);
+
+        GatingSession.Derived forA = GatingSession.derive(session.derivationInputs(a, NO_ANNOTATIONS));
+        CellIndex b = slideB();
+        session.adoptIndex(b);
+        session.resync(forA, NO_ANNOTATIONS);
+        assertSame(b, pass.lastInput().index());
+        assertEquals(6, countTrue(session.qualityMask()));
+        assertArrayEquals(new int[]{4, 2}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        PathObject left = PathObjects.createAnnotationObject(ROIs.createRectangleROI(-5, -5, 30, 10, PLANE));
+        Supplier<List<PathObject>> annotations = () -> List.of(left);
+        GatingSession.Derived roiOff = GatingSession.derive(session.derivationInputs(b, annotations));
+        session.setRoiFilterEnabled(true);
+        session.resync(roiOff, annotations);
+        assertNotNull(session.roiMask(), "the toggle's mask is computed, not the stale unfiltered one");
+        assertEquals(3, countTrue(session.roiMask()));
+        assertArrayEquals(new int[]{1, 2}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(expectedCounts(session.tree(), 1, b, session.roiMask(), session.roiMask()),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+    }
+
     private static int countTrue(boolean[] mask) {
         int c = 0;
         for (boolean b : mask) if (b) c++;
