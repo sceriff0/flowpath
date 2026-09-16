@@ -98,20 +98,14 @@ public class QualityFilter {
         return true;
     }
 
-    // ---- legacy named accessors -------------------------------------------------
+    // ---- legacy named setters ---------------------------------------------------
     //
-    // The serializer and the older tests address these five by name. They are thin views
-    // onto the map, so there is one representation rather than two that can disagree.
-
-    private double min(String slug, double fallback) {
-        double v = range(slug).min();
-        return v <= Double.NEGATIVE_INFINITY ? fallback : v;
-    }
-
-    private double max(String slug, double fallback) {
-        double v = range(slug).max();
-        return v >= Double.POSITIVE_INFINITY ? fallback : v;
-    }
+    // FlowPathSerializer.deserializeQualityFilter addresses these five by name to load
+    // v1..v3 JSON, which is the only remaining production reason they exist. The getters
+    // that used to sit beside them were removed: nothing in src/main called them, and their
+    // per-field fallback (0 for an unset min, 1.0 for an unset max solidity, and so on) was
+    // a translation only the getter performed -- range(slug) is the one representation now,
+    // and an unset bound reads as the open range it is, not a field-specific guessed number.
 
     private void withMin(String slug, double v) {
         setRange(slug, new Range(v, range(slug).max()));
@@ -121,29 +115,19 @@ public class QualityFilter {
         setRange(slug, new Range(range(slug).min(), v));
     }
 
-    public double getMinArea() { return min(AREA, 0); }
     public void setMinArea(double v) { withMin(AREA, v); }
-    public double getMaxArea() { return max(AREA, Double.MAX_VALUE); }
     public void setMaxArea(double v) { withMax(AREA, v); }
 
-    public double getMinEccentricity() { return min(ECCENTRICITY, 0.0); }
     public void setMinEccentricity(double v) { withMin(ECCENTRICITY, v); }
-    public double getMaxEccentricity() { return max(ECCENTRICITY, 1.0); }
     public void setMaxEccentricity(double v) { withMax(ECCENTRICITY, v); }
 
-    public double getMinSolidity() { return min(SOLIDITY, 0.0); }
     public void setMinSolidity(double v) { withMin(SOLIDITY, v); }
-    public double getMaxSolidity() { return max(SOLIDITY, 1.0); }
     public void setMaxSolidity(double v) { withMax(SOLIDITY, v); }
 
-    public double getMinPerimeter() { return min(PERIMETER, 0); }
     public void setMinPerimeter(double v) { withMin(PERIMETER, v); }
-    public double getMaxPerimeter() { return max(PERIMETER, Double.MAX_VALUE); }
     public void setMaxPerimeter(double v) { withMax(PERIMETER, v); }
 
-    public double getMinTotalIntensity() { return min(TOTAL_INTENSITY, 0); }
     public void setMinTotalIntensity(double v) { withMin(TOTAL_INTENSITY, v); }
-    public double getMaxTotalIntensity() { return max(TOTAL_INTENSITY, Double.MAX_VALUE); }
     public void setMaxTotalIntensity(double v) { withMax(TOTAL_INTENSITY, v); }
 
     /** A deep copy, carrying every range including those for fields FlowPath does not name. */

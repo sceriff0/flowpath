@@ -207,10 +207,10 @@ class QualityFilterTest {
         qf.setMinPerimeter(10);
         qf.setMaxPerimeter(200);
         var copy = qf.deepCopy();
-        assertEquals(0.3, copy.getMinEccentricity());
-        assertEquals(0.8, copy.getMaxSolidity());
-        assertEquals(3000, copy.getMaxTotalIntensity());
-        assertEquals(10, copy.getMinPerimeter());
-        assertEquals(200, copy.getMaxPerimeter());
+        assertEquals(0.3, copy.range(QualityFilter.ECCENTRICITY).min());
+        assertEquals(0.8, copy.range(QualityFilter.SOLIDITY).max());
+        assertEquals(3000, copy.range(QualityFilter.TOTAL_INTENSITY).max());
+        assertEquals(10, copy.range(QualityFilter.PERIMETER).min());
+        assertEquals(200, copy.range(QualityFilter.PERIMETER).max());
     }
 }

@@ -94,17 +94,17 @@ class FlowPathSerializerTest {
         GateTree loaded = FlowPathSerializer.load(file);
 
         QualityFilter lqf = loaded.getQualityFilter();
-        assertEquals(25, lqf.getMinArea());
-        assertEquals(500, lqf.getMaxArea());
-        assertEquals(100, lqf.getMinTotalIntensity());
-        assertEquals(0.9, lqf.getMaxEccentricity());
-        assertEquals(0.5, lqf.getMinSolidity());
-        // New fields defaulted since not set
-        assertEquals(0.0, lqf.getMinEccentricity());
-        assertEquals(1.0, lqf.getMaxSolidity());
-        assertEquals(Double.MAX_VALUE, lqf.getMaxTotalIntensity());
-        assertEquals(0.0, lqf.getMinPerimeter());
-        assertEquals(Double.MAX_VALUE, lqf.getMaxPerimeter());
+        assertEquals(25, lqf.range(QualityFilter.AREA).min());
+        assertEquals(500, lqf.range(QualityFilter.AREA).max());
+        assertEquals(100, lqf.range(QualityFilter.TOTAL_INTENSITY).min());
+        assertEquals(0.9, lqf.range(QualityFilter.ECCENTRICITY).max());
+        assertEquals(0.5, lqf.range(QualityFilter.SOLIDITY).min());
+        // New fields left unconstrained since not set
+        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.ECCENTRICITY).min());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.SOLIDITY).max());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.TOTAL_INTENSITY).max());
+        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).min());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).max());
     }
 
     @Test
@@ -281,16 +281,16 @@ class FlowPathSerializerTest {
         GateTree loaded = FlowPathSerializer.load(file);
 
         QualityFilter lqf = loaded.getQualityFilter();
-        assertEquals(25, lqf.getMinArea());
-        assertEquals(500, lqf.getMaxArea());
-        assertEquals(0.2, lqf.getMinEccentricity());
-        assertEquals(0.9, lqf.getMaxEccentricity());
-        assertEquals(0.3, lqf.getMinSolidity());
-        assertEquals(0.85, lqf.getMaxSolidity());
-        assertEquals(100, lqf.getMinTotalIntensity());
-        assertEquals(8000, lqf.getMaxTotalIntensity());
-        assertEquals(10, lqf.getMinPerimeter());
-        assertEquals(300, lqf.getMaxPerimeter());
+        assertEquals(25, lqf.range(QualityFilter.AREA).min());
+        assertEquals(500, lqf.range(QualityFilter.AREA).max());
+        assertEquals(0.2, lqf.range(QualityFilter.ECCENTRICITY).min());
+        assertEquals(0.9, lqf.range(QualityFilter.ECCENTRICITY).max());
+        assertEquals(0.3, lqf.range(QualityFilter.SOLIDITY).min());
+        assertEquals(0.85, lqf.range(QualityFilter.SOLIDITY).max());
+        assertEquals(100, lqf.range(QualityFilter.TOTAL_INTENSITY).min());
+        assertEquals(8000, lqf.range(QualityFilter.TOTAL_INTENSITY).max());
+        assertEquals(10, lqf.range(QualityFilter.PERIMETER).min());
+        assertEquals(300, lqf.range(QualityFilter.PERIMETER).max());
     }
 
     @Test
@@ -312,17 +312,17 @@ class FlowPathSerializerTest {
         try (var w = new java.io.BufferedWriter(new java.io.FileWriter(file))) { w.write(json); }
         GateTree loaded = FlowPathSerializer.load(file);
         QualityFilter lqf = loaded.getQualityFilter();
-        assertEquals(50, lqf.getMinArea());
-        assertEquals(1000, lqf.getMaxArea());
-        assertEquals(200, lqf.getMinTotalIntensity());
-        assertEquals(0.8, lqf.getMaxEccentricity());
-        assertEquals(0.5, lqf.getMinSolidity());
-        // New fields default to "disabled" values
-        assertEquals(0.0, lqf.getMinEccentricity());
-        assertEquals(1.0, lqf.getMaxSolidity());
-        assertEquals(Double.MAX_VALUE, lqf.getMaxTotalIntensity());
-        assertEquals(0.0, lqf.getMinPerimeter());
-        assertEquals(Double.MAX_VALUE, lqf.getMaxPerimeter());
+        assertEquals(50, lqf.range(QualityFilter.AREA).min());
+        assertEquals(1000, lqf.range(QualityFilter.AREA).max());
+        assertEquals(200, lqf.range(QualityFilter.TOTAL_INTENSITY).min());
+        assertEquals(0.8, lqf.range(QualityFilter.ECCENTRICITY).max());
+        assertEquals(0.5, lqf.range(QualityFilter.SOLIDITY).min());
+        // New fields left unconstrained -- this legacy JSON never mentions them
+        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.ECCENTRICITY).min());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.SOLIDITY).max());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.TOTAL_INTENSITY).max());
+        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).min());
+        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).max());
     }
 
     @Test
