@@ -56,8 +56,14 @@ public class QualityFilterPane extends TitledPane {
     private final Map<String, Row> rows = new LinkedHashMap<>();
 
     private Consumer<QualityFilter> onFilterChanged;
+    /**
+     * What kind of user change is about to be written: a slider tick, which arrives in bursts
+     * and is recorded coalesced, or a Reset, which is one discrete click.
+     */
+    public enum ChangeKind { DRAG, RESET }
+
     /** Runs before the filter is written, so an undo snapshot taken there holds the old value. */
-    private Runnable onBeforeFilterChange;
+    private Consumer<ChangeKind> onBeforeFilterChange;
 
     /** The controls for one morphology field. */
     private record Row(MorphologyField field, Slider min, Slider max,
@@ -203,13 +209,13 @@ public class QualityFilterPane extends TitledPane {
         // against one slide would silently exclude cells on a slide whose values run wider.
         double min = lo <= r.min().getMin() ? Double.NEGATIVE_INFINITY : lo;
         double max = hi >= r.max().getMax() ? Double.POSITIVE_INFINITY : hi;
-        fireBeforeChange();
+        fireBeforeChange(ChangeKind.DRAG);
         filter.setRange(r.field().slug(), new QualityFilter.Range(min, max));
         fireChanged();
     }
 
-    private void fireBeforeChange() {
-        if (!suppressEvents && onBeforeFilterChange != null) onBeforeFilterChange.run();
+    private void fireBeforeChange(ChangeKind kind) {
+        if (!suppressEvents && onBeforeFilterChange != null) onBeforeFilterChange.accept(kind);
     }
 
     private void fireChanged() {
@@ -240,13 +246,15 @@ public class QualityFilterPane extends TitledPane {
     }
 
     /**
-     * Called just before a user change is written into the filter.
+     * Called just before a user change is written into the filter, with what kind of change
+     * it is: a slider tick ({@link ChangeKind#DRAG}, coalesced by the caller) or a Reset
+     * ({@link ChangeKind#RESET}, a step of its own).
      * <p>
      * The panel edits the filter object in place and fires {@link #setOnFilterChanged
      * onFilterChanged} afterwards, so an undo snapshot taken in that callback would already
      * hold the new value and undo would restore nothing. This is where to take it.
      */
-    public void setOnBeforeFilterChange(Runnable callback) {
+    public void setOnBeforeFilterChange(Consumer<ChangeKind> callback) {
         this.onBeforeFilterChange = callback;
     }
 
@@ -259,9 +267,15 @@ public class QualityFilterPane extends TitledPane {
         return List.copyOf(rows.keySet());
     }
 
-    /** Clear every constraint and return the sliders to their columns' full span. */
+    /**
+     * Clear every constraint and return the sliders to their columns' full span. A discrete
+     * change ({@link ChangeKind#RESET}): announced as a slider tick it was folded into a drag
+     * made within the coalescing window, and one undo reverted both. A reset that would clear
+     * nothing announces nothing, so it records no empty undo step.
+     */
     public void resetToDefaults() {
-        fireBeforeChange();
+        if (rows.keySet().stream().allMatch(slug -> filter.range(slug).isOpen())) return;
+        fireBeforeChange(ChangeKind.RESET);
         for (Row r : rows.values()) filter.setRange(r.field().slug(), null);
         List<MorphologyField> shown = new ArrayList<>();
         for (Row r : rows.values()) shown.add(r.field());

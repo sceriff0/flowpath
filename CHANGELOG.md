@@ -39,7 +39,7 @@ held back, as in 0.9.3.
   quadrant fields also rounded a dragged threshold to the digits they display. Only a real
   change is recorded now, and a typed `Infinity` or `NaN` threshold is rejected.
 - **Quality-filter and annotation-filter changes could not be undone.** Both are now undo
-  steps; a slider drag is one.
+  steps; a slider drag is one, and Reset is one of its own even straight after a drag.
 - **A cell reaching a gate on a channel the image lacks was not flagged.** The walk
   stopped there silently, so nothing in the CSV said why the cell went no deeper. Such a
   cell is now flagged `Unmeasured` (it keeps its ancestors' phenotype and descends no

@@ -220,9 +220,14 @@ public class FlowPathPane extends BorderPane {
 
         qualityFilterPane = new QualityFilterPane(session.tree().getQualityFilter());
         // Recorded before the panel writes into the tree's filter, so undo restores the
-        // value the drag started from. Coalesced: a drag is one step.
-        qualityFilterPane.setOnBeforeFilterChange(
-            () -> session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER));
+        // value the drag started from. A drag is coalesced into one step; Reset is a
+        // discrete step that ends any drag burst rather than folding into it.
+        qualityFilterPane.setOnBeforeFilterChange(kind -> {
+            switch (kind) {
+                case DRAG -> session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
+                case RESET -> session.recordEdit();
+            }
+        });
         qualityFilterPane.setOnFilterChanged(filter -> onQualityFilterChanged());
 
         // Color-by-root selector (for multi-root trees)
