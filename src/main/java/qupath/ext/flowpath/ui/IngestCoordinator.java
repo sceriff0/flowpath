@@ -10,6 +10,7 @@ import qupath.lib.objects.hierarchy.events.PathObjectHierarchyEvent;
 import qupath.lib.objects.hierarchy.events.PathObjectHierarchyListener;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -33,10 +35,18 @@ import java.util.function.Supplier;
  * <b>The stale-result guard.</b> Every piece of background work is stamped with a generation
  * taken on the FX thread when it is submitted, and its result is applied — on the FX thread,
  * through {@link GatingSession#resync(GatingSession.Derived, Supplier)} — only if no newer work
- * was submitted since. A slow read of image A can therefore never land over image B. The
- * background side never reads a field of this class: everything it needs is captured into the
- * job first (the detection list, a copy of the quality filter, the annotations, the index to
- * compare against), so there is no state shared between the two threads except the job itself.
+ * was submitted since. A slow read of image A can therefore never land over image B. The job
+ * also checks the generation before each expensive step and returns early once superseded, so
+ * switching A→B→C does not run A's and B's reads in full on the single background thread
+ * before C's. The generation is the one piece of state the background side reads; everything
+ * else it needs is captured into the job first (the detection list, a copy of the quality
+ * filter, the annotations, the index to compare against).
+ * <p>
+ * <b>Only an image switch supersedes work in flight.</b> A hierarchy change that settles while
+ * a read or check is still running does not replace it — that turned an annotation edit during
+ * a first load into a second full read, and events arriving more often than one read takes
+ * into a read that never landed. The change is remembered instead, and checked once the
+ * running job lands, against the cells it produced.
  * <p>
  * <b>The refresh.</b> A hierarchy event that is not FlowPath's own classification write
  * ({@code firingOwnEvent}) and not mid-edit arms one {@value #REFRESH_DEBOUNCE_MS} ms timer;
@@ -80,6 +90,12 @@ final class IngestCoordinator {
         REFRESHING
     }
 
+    /** Turns detections into an index: {@link DetectionIngest#read}, injectable for tests. */
+    @FunctionalInterface
+    interface Reader {
+        IngestResult read(Collection<PathObject> detections, ImageData<?> imageData);
+    }
+
     /** The pane. Every call arrives on the FX thread. */
     interface Host {
         /** The annotations the ROI filter should use on {@code imageData}. */
@@ -121,11 +137,16 @@ final class IngestCoordinator {
     private final Executor fxThread;
     private final BooleanSupplier firingOwnEvent;
     private final Host host;
+    private final Reader reader;
     private final PathObjectHierarchyListener listener = this::onHierarchyChanged;
+
+    /** Bumped on the FX thread; read by a running job to stop once superseded. */
+    private final AtomicLong generation = new AtomicLong();
 
     // ---- FX-thread state ---------------------------------------------------------------
     private ImageData<?> image;
-    private long generation;
+    /** A change settled while a job was running: check again once it lands. */
+    private boolean recheckAfterLanding;
     private Busy busy = Busy.IDLE;
     private boolean closed;
     private Runnable cancelRefresh;
@@ -136,6 +157,12 @@ final class IngestCoordinator {
 
     IngestCoordinator(GatingSession session, Executor background, Scheduler scheduler, Executor fxThread,
                       BooleanSupplier firingOwnEvent, Host host) {
+        this(session, background, scheduler, fxThread, firingOwnEvent, host, DetectionIngest::read);
+    }
+
+    IngestCoordinator(GatingSession session, Executor background, Scheduler scheduler, Executor fxThread,
+                      BooleanSupplier firingOwnEvent, Host host, Reader reader) {
+        this.reader = Objects.requireNonNull(reader, "reader");
         this.session = Objects.requireNonNull(session, "session");
         this.background = Objects.requireNonNull(background, "background");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
@@ -237,6 +264,12 @@ final class IngestCoordinator {
     /** The quiet period ended: compare the detections now in the hierarchy with the index. */
     private void refresh() {
         if (image == null) return;
+        if (busy != Busy.IDLE) {
+            // A job is running. Superseding it would throw its work away and start over; let it
+            // land, then compare against what it produced.
+            recheckAfterLanding = true;
+            return;
+        }
         List<PathObject> detections = detectionsOf(image);
         CellIndex baseline = session.index();
         if (detections.isEmpty()) {
@@ -265,19 +298,25 @@ final class IngestCoordinator {
      */
     private void submit(ImageData<?> imageData, List<PathObject> detections, CellIndex baseline, boolean forceRead) {
         supersede();
-        long stamp = generation;
+        long stamp = generation.get();
         long readsCovered = readsRequested;
         boolean read = forceRead || baseline == null;
         GatingSession.DerivationInputs inputs =
                 session.derivationInputs(baseline, () -> host.annotations(imageData));
 
         background.execute(() -> {
+            // Superseded jobs stop before each expensive step and post nothing: whatever
+            // superseded them owns the session and the busy state now.
+            if (superseded(stamp)) return;
             Outcome outcome;
             try {
                 if (read || !sameCells(baseline, detections)) {
-                    IngestResult result = DetectionIngest.read(detections, imageData);
+                    if (superseded(stamp)) return;
+                    IngestResult result = reader.read(detections, imageData);
+                    if (superseded(stamp)) return;
                     outcome = new Read(result, GatingSession.derive(inputs.withIndex(result.index())));
                 } else if (inputs.roiFilterEnabled()) {
+                    if (superseded(stamp)) return;
                     outcome = new Rederived(GatingSession.derive(inputs));
                 } else {
                     outcome = new Unchanged();
@@ -292,7 +331,7 @@ final class IngestCoordinator {
     }
 
     private void land(long stamp, ImageData<?> imageData, CellIndex baseline, long readsCovered, Outcome outcome) {
-        if (closed || stamp != generation) return;     // superseded: newer work owns the session
+        if (closed || superseded(stamp)) return;     // newer work owns the session
         setBusy(Busy.IDLE);
         Supplier<List<PathObject>> annotations = () -> host.annotations(imageData);
         switch (outcome) {
@@ -310,6 +349,14 @@ final class IngestCoordinator {
             case Unchanged u -> { }
             case Failed f -> host.failed(f.error());
         }
+        if (recheckAfterLanding) {
+            recheckAfterLanding = false;
+            refresh();
+        }
+    }
+
+    private boolean superseded(long stamp) {
+        return generation.get() != stamp;
     }
 
     /**
@@ -343,7 +390,8 @@ final class IngestCoordinator {
 
     /** Drop anything in flight or armed: its result, if it comes, is no longer wanted. */
     private void supersede() {
-        generation++;
+        generation.incrementAndGet();
+        recheckAfterLanding = false;
         cancelPendingRefresh();
     }
 

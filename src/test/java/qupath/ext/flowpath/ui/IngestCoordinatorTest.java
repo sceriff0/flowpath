@@ -2,6 +2,7 @@ package qupath.ext.flowpath.ui;
 
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
+import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
@@ -116,8 +117,13 @@ class IngestCoordinatorTest {
         final RecordingHost host = new RecordingHost();
         final AtomicBoolean firingOwnEvent = new AtomicBoolean();
         final GatingSession session = new GatingSession(() -> 0L, pass);
+        /** How many detections each actual {@code DetectionIngest.read} call was given, in order. */
+        final List<Integer> reads = new ArrayList<>();
         final IngestCoordinator coordinator = new IngestCoordinator(session, background, scheduler,
-                Runnable::run, firingOwnEvent::get, host);
+                Runnable::run, firingOwnEvent::get, host, (detections, imageData) -> {
+                    reads.add(detections.size());
+                    return DetectionIngest.read(detections, imageData);
+                });
 
         Rig() {
             session.replaceTree(twoRootsOnCd3());
@@ -403,11 +409,11 @@ class IngestCoordinatorTest {
 
     /**
      * The index holds copies of the values, so a measurement change on a detection is read
-     * again although the set of cells is the same — even when a later annotation edit
-     * supersedes the read before it lands.
+     * again although the set of cells is the same — and an annotation edit that settles while
+     * that read runs neither discards it nor loses the owed read.
      */
     @Test
-    void aMeasurementChangeOnADetectionIsReadAgainEvenIfSupersededInFlight() {
+    void aMeasurementChangeOnADetectionIsReadAgainWhenAnotherChangeArrivesInFlight() {
         Rig rig = new Rig();
         List<PathObject> cells = cd3Cells(10);
         ImageData<BufferedImage> image = imageWith("a", cells);
@@ -424,12 +430,52 @@ class IngestCoordinatorTest {
         image.getHierarchy().addObject(PathObjects.createAnnotationObject(
                 ROIs.createRectangleROI(-5, 0, 50, 10, PLANE)));
         rig.scheduler.elapse();
-        rig.background.runAll();             // the read is dropped; the newer check must read
+        assertEquals(1, rig.background.pending(), "the running read is not superseded");
+        rig.background.runAll();
 
         assertEquals(10, rig.session.index().size());
         assertArrayEquals(new int[]{6, 4}, counts(rig, rig.root(0)));
         assertArrayEquals(new int[]{9, 1}, counts(rig, rig.root(1)));
         assertEquals(2, rig.host.ingested.size());
+    }
+
+    /**
+     * An annotation edit during a first load neither discards the read in flight nor queues a
+     * second one: it is checked once the read lands, against the cells it produced.
+     */
+    @Test
+    void anAnnotationEditDuringTheFirstReadIsCheckedAfterItLandsNotReadAgain() {
+        Rig rig = new Rig();
+        ImageData<BufferedImage> image = imageWith("a", cd3Cells(10));
+        rig.coordinator.open(image);
+        image.getHierarchy().addObject(PathObjects.createAnnotationObject(
+                ROIs.createRectangleROI(-5, 0, 50, 10, PLANE)));
+        rig.scheduler.elapse();
+        assertEquals(1, rig.background.pending(), "no second job queued behind the read");
+        assertEquals(IngestCoordinator.Busy.LOADING, rig.host.lastBusy());
+
+        rig.background.runAll();
+        assertEquals(1, rig.reads.size(), "exactly one read");
+        assertEquals(1, rig.host.ingested.size(), "exactly one read result applied");
+        assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
+        assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
+        assertArrayEquals(new int[]{8, 2}, counts(rig, rig.root(1)));
+    }
+
+    /** Switching A→B→C: A's and B's jobs stop before reading, so C's is not queued behind them. */
+    @Test
+    void supersededReadsReturnEarlyWithoutReading() {
+        Rig rig = new Rig();
+        rig.coordinator.open(imageWith("a", cd3Cells(10)));
+        rig.coordinator.open(imageWith("b", cd3Cells(4)));
+        rig.coordinator.open(imageWith("c", cd3Cells(6)));
+        assertEquals(3, rig.background.pending());
+
+        rig.background.runAll();
+        assertEquals(List.of(6), rig.reads, "only the newest image (c, six cells) is read");
+        assertEquals(6, rig.session.index().size());
+        assertEquals(1, rig.host.ingested.size());
+        assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
     }
 
     /** A change pending when the image switches belongs to the old image. */
