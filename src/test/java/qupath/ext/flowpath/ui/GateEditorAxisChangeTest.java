@@ -88,7 +88,7 @@ class GateEditorAxisChangeTest {
         CellIndex index = cells().build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
         CompartmentCapability capability =
-                CompartmentCapability.scan(Arrays.asList(index.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(index.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "CD4", "CD8"));

@@ -121,7 +121,7 @@ public final class CellGeometry {
      * @param calibration the image's pixel calibration, or {@code null} when unavailable
      */
     public static CellGeometry of(PathObject[] objects, PixelCalibration calibration) {
-        return of(objects, CellIndex.sampleMeasurementKeys(objects), calibration);
+        return of(objects, MeasurementKeySample.keys(objects), calibration);
     }
 
     /**

@@ -82,7 +82,7 @@ class GateEditorDataRefreshTest {
         gate.setThresholdX(20);    // inside every window below, so the slider is not widened
         gate.setThresholdY(40);
         CompartmentCapability capability =
-                CompartmentCapability.scan(Arrays.asList(index.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(index.getObjects()));
 
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {

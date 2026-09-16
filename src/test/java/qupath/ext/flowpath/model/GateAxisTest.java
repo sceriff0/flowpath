@@ -40,7 +40,7 @@ class GateAxisTest {
     }
 
     private static CompartmentCapability capabilityOf(CellIndex index) {
-        return CompartmentCapability.scan(Arrays.asList(index.getObjects()), 100);
+        return CompartmentCapability.scan(Arrays.asList(index.getObjects()));
     }
 
     /** An export carrying every compartment and every statistic for CD3. */

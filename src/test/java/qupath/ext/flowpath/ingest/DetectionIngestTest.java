@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
+import qupath.ext.flowpath.model.MeasurementKeySample;
 import qupath.ext.flowpath.model.ScaleVerdict;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
@@ -180,10 +181,7 @@ class DetectionIngestTest {
     void aMarkerFirstAppearingAfterCellTwentyStillResolves() {
         // The 2.0.1 drift: CellIndex sampled 20 keys while the capability scan sampled
         // 100, so a marker whose keys first appeared at cell 50 was OFFERED in the gate
-        // editor and resolved to nothing. The two depths are now the same constant.
-        assertEquals(CompartmentCapability.DEFAULT_SAMPLE_SIZE, CellIndex.KEY_SAMPLE_SIZE,
-                "the resolution sample and the capability scan must share one depth");
-
+        // editor and resolved to nothing. There is now one sample, MeasurementKeySample.
         var cells = new ArrayList<>(mirageExport(50, "CD3"));
         cells.addAll(mirageExport(50, "CD3", "LateMarker"));
 
@@ -198,20 +196,46 @@ class DetectionIngestTest {
     }
 
     @Test
-    void aMarkerPresentOnlyBeyondTheKeySampleIsReportedAsUnresolvable() {
-        // Past the sample the resolution has to give up — that is the deliberate v2.0.1
-        // tradeoff. What is new is that giving up is now stated instead of producing a
-        // silently empty histogram.
-        var cells = new ArrayList<>(mirageExport(CellIndex.KEY_SAMPLE_SIZE + 10, "CD3"));
-        cells.addAll(mirageExport(5, "CD3", "VeryLateMarker"));
+    void aKeyOnlyOnCell500Of600IsDiscoveredAndResolved() {
+        // Past the old 100-cell head: a merged export whose second field of view carries
+        // a marker the first did not.
+        var cells = mirageExportCells(600, "CD3")
+                .measurement("Late", i -> 7.0).absentOn(i -> i != 500)
+                .detections();
 
-        IngestResult r = DetectionIngest.read(cells,
-                IngestOptions.none().withChannelNames(List.of("CD3", "VeryLateMarker")));
+        IngestResult r = DetectionIngest.read(cells, IngestOptions.none());
+        assertTrue(r.markerNames().contains("Late"), "discovered: " + r.markerNames());
+        assertFalse(r.report().unresolvedMarkers().contains("Late"), "and resolved by the index");
+        assertEquals(7.0, r.index().getMarkerValues(r.index().getMarkerIndex("Late"))[500], 1e-9);
+        assertEquals(600, r.report().sampledCells());
+    }
 
-        assertEquals(List.of("CD3"), r.markerNames(),
-                "beyond the sample the channel cannot be validated, so it is dropped");
-        assertEquals(List.of("VeryLateMarker"), r.report().droppedChannels());
-        assertFalse(r.report().isClean());
+    @Test
+    void thePanelSampleAndTheIndexSampleAreTheSameSample() {
+        // The adapter's discovery and CellIndex.build's key resolution used to be two loops
+        // that merely happened to share a depth. On a collection large enough to be
+        // strided, a key on one strided cell must be both offered (the adapter's sample)
+        // and resolved (the index's sample) -- and one off the stride must be neither.
+        int n = 3000;   // stride ceil(2900 / 900) = 4
+        var cells = mirageExportCells(n, "CD3")
+                .measurement("OnStride", i -> 3.0).absentOn(i -> i != 2900)
+                .measurement("OffStride", i -> 3.0).absentOn(i -> i != 2901)
+                .detections();
+
+        IngestResult offered = DetectionIngest.read(cells, IngestOptions.none());
+        assertTrue(offered.markerNames().contains("OnStride"), offered.markerNames().toString());
+        assertFalse(offered.markerNames().contains("OffStride"), offered.markerNames().toString());
+
+        IngestResult asked = DetectionIngest.read(cells,
+                IngestOptions.none().withChannelNames(List.of("CD3", "OnStride", "OffStride")));
+        assertEquals(List.of("OffStride"), asked.report().droppedChannels());
+        assertEquals(List.of(), asked.report().unresolvedMarkers(),
+                "every marker the adapter offered, the index resolved from the same keys");
+        assertEquals(MeasurementKeySample.size(n), asked.report().sampledCells());
+        assertEquals(MeasurementKeySample.MAX_CELLS, asked.report().sampleSize());
+        assertEquals(MeasurementKeySample.keys(cells),
+                MeasurementKeySample.keys(asked.index().getObjects()),
+                "the collection the adapter read and the array the index holds sample alike");
     }
 
     @Test
@@ -262,7 +286,7 @@ class DetectionIngestTest {
         // The distinction FlowPath's gating cannot represent. export_geojson.py OMITS a
         // NaN (unknown); quantify.py writes a literal 0.0 for a genuinely empty
         // compartment (known, and zero). Both look like "no signal" in a histogram.
-        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i)
+        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i).centroidsMicronsFromRoi(1.0)
                 .morphology("Area µm²", 42.0)
                 .marker("Anucleate", 0.0)                          // quantify.py: truly empty
                 .marker("Joined", 5.0).absentOn(i -> i >= 3)       // export_geojson.py: omitted on 2
@@ -283,7 +307,7 @@ class DetectionIngestTest {
     void literalZerosAloneDoNotMakeAReportUnclean() {
         // An anucleate cell is ordinary data. Flagging it would make every real export
         // dirty and train the user to ignore the warning.
-        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i)
+        List<PathObject> cells = Cells.of(5).at(i -> i, i -> i).centroidsMicronsFromRoi(1.0)
                 .morphology("Area µm²", 42.0)
                 .marker("CD3", 0.0)
                 .detections();
@@ -439,5 +463,48 @@ class DetectionIngestTest {
         assertTrue(DetectionIngest.isMorphologyName("Centroid X µm"));
         assertFalse(DetectionIngest.isMorphologyName("YAP1"),
                 "prefix-matching x/y must not swallow real markers");
+    }
+    // ---- ROI-centroid fallback ----------------------------------------------------
+
+    /** A MIRAGE export whose centroid pair is absent on the first {@code missing} cells. */
+    private static IngestReport reportWithCentroidsMissingOn(int n, int missing) {
+        var cells = Cells.of(n).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .centroidsMicronsFromRoi(1.0).absentOn(i -> i < missing)
+                .detections();
+        return read(cells, "CD3").report();
+    }
+
+    @Test
+    void noCentroidFallbackSaysNothing() {
+        IngestReport report = reportWithCentroidsMissingOn(10, 0);
+        assertEquals(0, report.roiFallbackCells());
+        assertTrue(report.isClean(), report.findings().toString());
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")), report.notes().toString());
+    }
+
+    @Test
+    void aMinorityOfCentroidFallbacksIsANote() {
+        for (int missing : new int[]{1, 5}) {
+            IngestReport report = reportWithCentroidsMissingOn(10, missing);
+            assertEquals(missing, report.roiFallbackCells());
+            assertTrue(report.isClean(), "at most half is not a finding: " + report.findings());
+            assertTrue(report.notes().stream().anyMatch(s -> s.contains(missing + " of 10")
+                    && s.contains("ROI centroid")), report.notes().toString());
+            assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
+        }
+    }
+
+    @Test
+    void aMajorityOfCentroidFallbacksIsAFinding() {
+        IngestReport report = reportWithCentroidsMissingOn(10, 6);
+        assertEquals(6, report.roiFallbackCells());
+        assertFalse(report.isClean());
+        assertTrue(report.findings().stream().anyMatch(s -> s.contains("6 of 10")
+                && s.contains("ROI centroid")), report.findings().toString());
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
+                "said once, as a finding, not also as a note");
+        assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
     }
 }

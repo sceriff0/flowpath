@@ -69,6 +69,9 @@ import java.util.Map;
  * @param sampledCells                       cells whose key sets formed the sample
  * @param sampleSize                         the sample ceiling
  * @param scaleVerdict                       the µm-vs-calibration cross-check
+ * @param roiFallbackCells                   cells with no usable centroid measurement pair,
+ *                                           positioned from their ROI centroid instead — see
+ *                                           {@code CellGeometry.roiFallbackCount()}
  */
 public record IngestReport(int detectionCount,
                            int cellObjects,
@@ -84,7 +87,8 @@ public record IngestReport(int detectionCount,
                            int nullMarkerNames,
                            int sampledCells,
                            int sampleSize,
-                           ScaleVerdict scaleVerdict) {
+                           ScaleVerdict scaleVerdict,
+                           int roiFallbackCells) {
 
     public IngestReport {
         droppedChannels = List.copyOf(droppedChannels);
@@ -149,7 +153,7 @@ public record IngestReport(int detectionCount,
         return new IngestReport(0, 0, 0, 0,
                 new Discovery(Source.NONE, List.of(), List.of(), List.of(), List.of()),
                 List.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), 0,
-                0, 0, ScaleVerdict.noMeasurement());
+                0, 0, ScaleVerdict.noMeasurement(), 0);
     }
 
     /**
@@ -218,6 +222,9 @@ public record IngestReport(int detectionCount,
         if (scaleVerdict != null && scaleVerdict.isDisagreement()) {
             out.add(scaleVerdict.describe());
         }
+        if (mostCellsFellBackToRoi()) {
+            out.add(roiFallbackLine());
+        }
         return out;
     }
 
@@ -229,6 +236,9 @@ public record IngestReport(int detectionCount,
                     + " carry a literal 0.0 in the sample — a genuinely empty compartment "
                     + "(e.g. an anucleate cell), which is NOT the same as the omitted-and-"
                     + "therefore-NaN case above: " + previewCounts(sampledZeroValueCells));
+        }
+        if (roiFallbackCells > 0 && !mostCellsFellBackToRoi()) {
+            out.add(roiFallbackLine());
         }
         return out;
     }
@@ -257,6 +267,21 @@ public record IngestReport(int detectionCount,
                     sampledCells);
         }
         return String.join("\n", all);
+    }
+
+    /**
+     * More than half the cells had no centroid measurement pair. A few stragglers are a
+     * note; a majority means the position columns are mostly not what the export wrote.
+     */
+    private boolean mostCellsFellBackToRoi() {
+        return roiFallbackCells > 0 && (long) roiFallbackCells * 2 > detectionCount;
+    }
+
+    private String roiFallbackLine() {
+        return String.format(Locale.US,
+                "%,d of %,d cells have no Centroid X/Y measurement pair and are positioned "
+                        + "from their ROI centroid instead (pixels, converted to µm only "
+                        + "through the image calibration)", roiFallbackCells, detectionCount);
     }
 
     private static String count(int n, String singular, String plural) {

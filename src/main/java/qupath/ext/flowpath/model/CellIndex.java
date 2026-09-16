@@ -184,7 +184,7 @@ public class CellIndex {
         // measurement map — O(cells x markers x keys) string comparisons, which
         // dominated index-build time on large slides. With a resolved key the
         // inner loop is a single hash lookup.
-        Set<String> sampleKeys = sampleMeasurementKeys(objects);
+        Set<String> sampleKeys = MeasurementKeySample.keys(objects);
         String[] markerKeys = new String[m];
         for (int j = 0; j < m; j++) {
             markerKeys[j] = resolveMarkerKey(sampleKeys, markers[j], comps[j], stats[j]);
@@ -192,9 +192,9 @@ public class CellIndex {
 
         // Adapter bookkeeping, gathered INSIDE this one pass. Every counter below is
         // either on a branch that is not the hot path (a null measurement, i.e. a key the
-        // sample resolved but this cell lacks) or bounded to the first KEY_SAMPLE_SIZE
-        // cells. Nothing here adds a second walk over the detections, and nothing adds a
-        // per-cell string scan — see the v2.0.1 note above for why that matters.
+        // sample resolved but this cell lacks) or bounded to the cells the key sample
+        // read (MeasurementKeySample.includes). Nothing here adds a second walk over the
+        // detections, and nothing adds a per-cell string scan — see the v2.0.1 note above for why that matters.
         int[] missingPerMarker = new int[m];
         int[] sampledZerosPerMarker = new int[m];
         int cellObjects = 0;
@@ -259,7 +259,7 @@ public class CellIndex {
             // Bounded to the key sample: a literal-zero census over every cell would put
             // an extra compare on the m x n inner loop, and a scale error or a failed
             // upstream join is uniform enough that the sample settles it.
-            boolean census = i < KEY_SAMPLE_SIZE;
+            boolean census = MeasurementKeySample.includes(i, n);
 
             double totalIntensity = 0;
             for (int j = 0; j < m; j++) {
@@ -324,7 +324,7 @@ public class CellIndex {
         }
         BuildDiagnostics partial = new BuildDiagnostics(
                 n, cellObjects, tileObjects, otherObjects,
-                Math.min(n, KEY_SAMPLE_SIZE), KEY_SAMPLE_SIZE,
+                MeasurementKeySample.size(n), MeasurementKeySample.MAX_CELLS,
                 Map.copyOf(resolved), List.copyOf(unresolved),
                 Map.copyOf(missing), Map.copyOf(zeros),
                 List.of(), 0);
@@ -332,19 +332,6 @@ public class CellIndex {
         return new CellIndex(objects, markers, values, areas, perimeters, eccentricities,
                 solidities, totalIntensities, labels, geometry, sampleKeys, partial);
     }
-
-    /**
-     * How many detections to inspect when resolving measurement keys.
-     * <p>
-     * Deliberately equal to {@link CompartmentCapability#DEFAULT_SAMPLE_SIZE}. It was 20
-     * while capability scanning was 100, which is the drift 2.0.1 documented but only
-     * half-fixed: a marker whose structured keys first appeared past cell 20 was offered
-     * by the capability scan and then resolved to {@code null} here, so the gate editor
-     * listed a compartment whose column read NaN for every cell. Sampling 100 cells' key
-     * sets once per build costs well under a millisecond and cannot be the hot path — the
-     * hot path is the {@code cells x markers} loop, which is untouched by this constant.
-     */
-    public static final int KEY_SAMPLE_SIZE = CompartmentCapability.DEFAULT_SAMPLE_SIZE;
 
     /**
      * What {@link #build} observed about the data it was handed but could not act on —
@@ -359,7 +346,7 @@ public class CellIndex {
      * @param tileObjects             of those, tiles/superpixels — never really cells
      * @param otherObjects            of those, plain detections (the legacy import shape)
      * @param sampledCells            cells whose key sets formed the resolution sample
-     * @param sampleSize              the sample ceiling, {@link #KEY_SAMPLE_SIZE}
+     * @param sampleSize              the sample ceiling, {@link MeasurementKeySample#MAX_CELLS}
      * @param resolvedMarkerKeys      marker -&gt; the one concrete measurement key it reads
      * @param unresolvedMarkers       markers the sample offered no key for at all
      * @param cellsMissingResolvedKey marker -&gt; cells lacking a key the sample resolved
@@ -388,27 +375,6 @@ public class CellIndex {
     /** What the build pass observed but could not act on. Never {@code null}. */
     public BuildDiagnostics diagnostics() {
         return diagnostics;
-    }
-
-    /**
-     * Union of measurement keys across the first {@link #KEY_SAMPLE_SIZE} detections.
-     * Matches the sampling depth marker discovery already uses, so a marker that was
-     * discoverable is also resolvable here.
-     * <p>
-     * Insertion-ordered: the fuzzy passes in {@link #resolveMeasurementKey} and
-     * {@link #matchKey} return the <em>first</em> matching key, so iteration order
-     * decides which column a prefix like {@code "area"} resolves to. A hash set made
-     * that choice depend on string hashes; first-seen order reproduces the per-cell
-     * scan these resolvers replaced.
-     */
-    static Set<String> sampleMeasurementKeys(PathObject[] objects) {
-        Set<String> keys = new LinkedHashSet<>();
-        int sampled = 0;
-        for (PathObject obj : objects) {
-            keys.addAll(getMeasurements(obj).keySet());
-            if (++sampled >= KEY_SAMPLE_SIZE) break;
-        }
-        return keys;
     }
 
     /**

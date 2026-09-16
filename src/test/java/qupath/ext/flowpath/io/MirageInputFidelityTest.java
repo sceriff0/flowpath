@@ -145,7 +145,7 @@ class MirageInputFidelityTest {
     @Test
     void capabilityScanReportsExactlyWhatMirageWrote() {
         var cap = CompartmentCapability.scan(
-                mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections(), 10);
+                mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections());
 
         assertTrue(cap.isRich(), "a MIRAGE compartment export is a rich GeoJSON");
         assertEquals(java.util.Set.copyOf(Compartment.known()), cap.compartmentsFor("CD3"));
@@ -157,7 +157,7 @@ class MirageInputFidelityTest {
     @Test
     void legacyWholeCellOnlyExportIsNotMistakenForRich() {
         var cap = CompartmentCapability.scan(
-                Cells.of(1).marker("CD3", 50.0).morphology("Area µm²", 100.0).detections(), 10);
+                Cells.of(1).marker("CD3", 50.0).morphology("Area µm²", 100.0).detections());
         assertFalse(cap.isRich(), "no compartment keys -> legacy, selectors stay pinned");
         assertTrue(cap.compartmentsFor("CD3").isEmpty());
     }
@@ -190,7 +190,7 @@ class MirageInputFidelityTest {
                 .morphology("Area µm²", 100.0);
 
         // Discovery advertises exactly Median for the Cell compartment (no Mean/Sum columns).
-        var cap = CompartmentCapability.scan(cells.detections(), 10);
+        var cap = CompartmentCapability.scan(cells.detections());
         assertTrue(cap.isRich(), "a per-compartment Median key makes this a rich export");
         assertEquals(java.util.Set.of(Statistic.MEDIAN), cap.statisticsFor("CD3"),
                 "a default (non-expanded) run exposes only Median");

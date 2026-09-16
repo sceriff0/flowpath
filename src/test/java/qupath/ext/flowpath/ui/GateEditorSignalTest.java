@@ -80,7 +80,7 @@ class GateEditorSignalTest {
     private static Fixture editorFor(GateNode gate) {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "CD8"));
@@ -424,7 +424,7 @@ class GateEditorSignalTest {
                 .area(100.0)
                 .build();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "FLAT"));

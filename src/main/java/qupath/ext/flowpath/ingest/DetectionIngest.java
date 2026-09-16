@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ingest;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
+import qupath.ext.flowpath.model.MeasurementKeySample;
 import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.lib.images.ImageData;
@@ -34,9 +35,10 @@ import java.util.Set;
  * <h2>One read, one sample, one answer</h2>
  * {@link #read} takes exactly one measurement-key sample and derives the panel, the
  * capability and the index from it. The panel a user gates on and the keys the index
- * resolved therefore cannot disagree, because they are the same evidence. The sample depth
- * is {@link CellIndex#KEY_SAMPLE_SIZE}, which is now equal to
- * {@link CompartmentCapability#DEFAULT_SAMPLE_SIZE} for the same reason.
+ * resolved therefore cannot disagree, because they are the same evidence — and because
+ * {@link CellIndex#build} takes its own sample through the same
+ * {@link MeasurementKeySample}, the two are the same detections, not merely the same
+ * depth.
  *
  * <h2>It reports, it does not refuse</h2>
  * Nothing here rejects input that previously loaded, and nothing here changes what a gate
@@ -46,7 +48,7 @@ import java.util.Set;
  * clicks later.
  *
  * <h2>Cost</h2>
- * One walk over the first {@link CellIndex#KEY_SAMPLE_SIZE} detections' key sets for
+ * One read of at most {@link MeasurementKeySample#MAX_CELLS} detections' key sets for
  * discovery and capability, then one walk over all detections inside
  * {@link CellIndex#build}. The report's per-cell counts are gathered inside that existing
  * build pass — see {@link CellIndex.BuildDiagnostics} — so this adds no second pass over
@@ -80,7 +82,7 @@ public final class DetectionIngest {
         if (detections == null) detections = List.of();
 
         // ---- the one sample -------------------------------------------------------
-        Set<String> sampleKeys = sampleMeasurementKeys(detections);
+        Set<String> sampleKeys = MeasurementKeySample.keys(detections);
         CompartmentCapability capability = CompartmentCapability.fromKeys(sampleKeys);
 
         // ---- candidate panel A: the image's declared channels ---------------------
@@ -162,7 +164,8 @@ public final class DetectionIngest {
                 union(duplicateNames, d.duplicateMarkerNames()),
                 nullNames + d.nullMarkerNames(),
                 d.sampledCells(), d.sampleSize(),
-                index.geometry().scaleVerdict());
+                index.geometry().scaleVerdict(),
+                index.geometry().roiFallbackCount());
 
         return new IngestResult(index, capability, markers,
                 selection == null ? MarkerSelection.defaultFor(markers) : selection,
@@ -241,27 +244,6 @@ public final class DetectionIngest {
      */
     public static boolean isMorphologyName(String name) {
         return MorphologyField.isMorphologyName(name);
-    }
-
-    /**
-     * Union of measurement keys over the first {@link CellIndex#KEY_SAMPLE_SIZE}
-     * detections, in first-seen order. The same depth and the same ordering guarantee
-     * {@link CellIndex#build} uses, so the panel offered and the keys resolved agree.
-     */
-    static Set<String> sampleMeasurementKeys(Collection<PathObject> detections) {
-        Set<String> keys = new LinkedHashSet<>();
-        int sampled = 0;
-        for (PathObject obj : detections) {
-            try {
-                var m = obj.getMeasurements();
-                if (m != null) keys.addAll(m.keySet());
-            } catch (Exception ignored) {
-                // A measurement list can throw on a partially constructed object; an
-                // unreadable cell contributes nothing rather than aborting the ingest.
-            }
-            if (++sampled >= CellIndex.KEY_SAMPLE_SIZE) break;
-        }
-        return keys;
     }
 
     // ------------------------------------------------------------------
