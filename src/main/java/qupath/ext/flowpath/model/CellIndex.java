@@ -842,6 +842,11 @@ public class CellIndex {
             if (MeasurementKeys.parse(key, compartments) != null) continue;
             String bare = MeasurementKeys.stripLayerPrefix(key);
             if (markerIndexByName.containsKey(bare)) continue;             // bare marker column
+            // "Not a marker of this index" is not the same as "a shape". When the image's
+            // channel list wins the panel, a marker the export quantified but the image does
+            // not name is absent from the index -- and used to land here as a filterable
+            // "morphology" column. Marker discovery's own rule decides instead.
+            if (!MorphologyField.isMorphologyName(bare)) continue;
             String slug = MorphologyField.slugOf(key);
             if (slug.isEmpty() || claimed.contains(slug)) continue;
             if (slug.startsWith("centroid_")) continue;                    // position, not shape

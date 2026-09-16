@@ -65,6 +65,59 @@ public record MorphologyField(String slug, String key, String label, double[] va
     }
 
     /**
+     * Morphology and identity columns, matched by lowercase prefix so both naming
+     * conventions are covered: QuPath's ({@code "Area µm²"}, {@code "Centroid X µm"},
+     * {@code "Major Axis Length µm"}) and {@code import_phenotype.groovy}'s
+     * ({@code "area"}, {@code "convex_area"}, {@code "axis_major_length"}).
+     * {@code "label"} is the segmentation identity, not a panel member.
+     */
+    private static final java.util.Set<String> PREFIXES = java.util.Set.of(
+            "centroid", "area", "eccentricity", "perimeter", "convex",
+            "solidity", "axis_major", "axis_minor", "major axis", "minor axis",
+            "label", "fov", "cell_size",
+            // Shape words QuPath's own detection writes, usually after a "Nucleus: " or
+            // "Cell: " prefix — matched against the part after the last colon.
+            "circularity", "roundness", "compactness", "elongation", "max caliper",
+            "min caliper", "aspect ratio", "orientation", "feret"
+    );
+
+    /**
+     * Single-letter coordinate columns, matched exactly: prefix-matching {@code "x"} and
+     * {@code "y"} swallowed YAP1, XBP1 and Xist.
+     */
+    private static final java.util.Set<String> EXACT = java.util.Set.of("x", "y");
+
+    /**
+     * A spatial unit after a space. Intensity is never measured in µm or pixels, so a column
+     * carrying one is a shape. The leading space is load-bearing — {@code "Sum"} ends in
+     * {@code "um"}.
+     */
+    private static final java.util.regex.Pattern SPATIAL_UNIT = java.util.regex.Pattern.compile(
+            ".*\\s(µm²|µm2|µm\\^2|µm|um²|um2|um\\^2|um|px|pixels?)$");
+
+    /**
+     * <b>True if a measurement name is a morphology or identity column rather than a marker
+     * channel</b> — the one rule both halves of discovery use.
+     * <p>
+     * Marker discovery keeps everything this rejects, and quality-filter discovery offers
+     * only what this accepts, so a column is one or the other and never both. Before they
+     * shared it, a marker the export quantified but the image did not name was not a marker
+     * <em>of the index</em>, and so turned up in the quality filter as a shape measurement.
+     */
+    public static boolean isMorphologyName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        String lower = name.toLowerCase(Locale.ROOT).trim();
+        if (EXACT.contains(lower)) return true;
+        if (SPATIAL_UNIT.matcher(lower).matches()) return true;
+        int colon = lower.lastIndexOf(':');
+        String tail = colon >= 0 ? lower.substring(colon + 1).trim() : lower;
+        for (String prefix : PREFIXES) {
+            if (lower.startsWith(prefix) || tail.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    /**
      * A stable identifier for a measurement name, with trailing units removed and
      * everything else folded to {@code lower_snake_case}.
      * <p>

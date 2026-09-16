@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ingest;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
+import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.MeasurementKeys;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.PixelCalibration;
@@ -234,45 +235,12 @@ public final class DetectionIngest {
     }
 
     /**
-     * Morphology and geometry columns, matched by lowercase prefix so both naming
-     * conventions are covered:
-     *   QuPath default — {@code "Area µm²"}, {@code "Centroid X µm"}, {@code "Eccentricity"},
-     *   {@code "Perimeter µm"}, {@code "Solidity"}, {@code "Convex Area µm²"},
-     *   {@code "Major/Minor Axis Length µm"};
-     *   {@code import_phenotype.groovy} — {@code "area µm²"}, {@code "eccentricity"},
-     *   {@code "perimeter"}, {@code "convex_area"}, {@code "axis_major_length"},
-     *   {@code "axis_minor_length"}.
-     * <p>
-     * {@code "label"} belongs here: it is the segmentation identity, not a panel member.
-     * The CSV exporter writes it as its own column, which is a separate concern.
-     */
-    private static final Set<String> MORPHOLOGY_PREFIXES = Set.of(
-            "centroid", "area", "eccentricity", "perimeter", "convex",
-            "solidity", "axis_major", "axis_minor", "major axis", "minor axis",
-            "label", "fov", "cell_size"
-    );
-
-    /**
-     * Spatial-coordinate columns whose names are a single letter. These must be matched
-     * exactly, never by prefix: prefix-matching {@code "x"} and {@code "y"} also swallowed
-     * real panel markers such as YAP1, XBP1 and Xist, which then vanished from the channel
-     * list with no warning shown to the user.
-     */
-    private static final Set<String> MORPHOLOGY_EXACT = Set.of("x", "y");
-
-    /**
      * True if a measurement name is a morphology/identity column rather than a marker
-     * channel. The single implementation — the gating half and the UMAP half each carried
-     * their own list, and they did not agree.
+     * channel. Delegates to {@link MorphologyField#isMorphologyName}, which the quality
+     * filter's discovery also uses, so a column is a marker or a shape and never both.
      */
     public static boolean isMorphologyName(String name) {
-        if (name == null || name.isEmpty()) return false;
-        String lower = name.toLowerCase(Locale.ROOT);
-        if (MORPHOLOGY_EXACT.contains(lower)) return true;
-        for (String prefix : MORPHOLOGY_PREFIXES) {
-            if (lower.startsWith(prefix)) return true;
-        }
-        return false;
+        return MorphologyField.isMorphologyName(name);
     }
 
     /**
