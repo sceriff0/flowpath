@@ -65,7 +65,6 @@ class LivePreviewServiceTallyIdentityTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         // GateTree's default (non-null, empty-range) quality filter, not the null one the
         // AnalysisFixtures use: LivePreviewService deep-copies the tree on every pass and
@@ -148,11 +147,9 @@ class LivePreviewServiceTallyIdentityTest {
         // The AnalysisFixtures.twoRootsSameChannelInput() shape: one channel, two cuts.
         GateNode rootA = new GateNode("CD45", 10.5);
         rootA.setStatistic(Statistic.MEAN);
-        rootA.setThresholdIsZScore(false);
 
         GateNode rootB = new GateNode("CD45", 15.5);
         rootB.setStatistic(Statistic.MEAN);
-        rootB.setThresholdIsZScore(false);
 
         // GateTree's default (non-null) quality filter, as above: deepCopy() dereferences it.
         GateTree tree = new GateTree();
@@ -226,7 +223,6 @@ class LivePreviewServiceTallyIdentityTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.addRoot(root);
@@ -264,7 +260,6 @@ class LivePreviewServiceTallyIdentityTest {
             // copy's tally is rebound onto it.
             GateNode addedMidPass = new GateNode("CD45", 7.5);
             addedMidPass.setStatistic(Statistic.MEAN);
-            addedMidPass.setThresholdIsZScore(false);
 
             CountDownLatch mutated = new CountDownLatch(1);
             CountDownLatch secondPassPublished = new CountDownLatch(1);

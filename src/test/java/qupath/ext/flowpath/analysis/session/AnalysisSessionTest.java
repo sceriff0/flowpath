@@ -135,7 +135,6 @@ class AnalysisSessionTest {
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         root.setEnabled(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -222,13 +221,11 @@ class AnalysisSessionTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         // An enabled child gate under the CD45+ branch: its branches must appear, spliced
         // in depth-first right after CD45+ and before CD45-.
         GateNode enabledChild = new GateNode("CD3", 3.5);
         enabledChild.setStatistic(Statistic.MEAN);
-        enabledChild.setThresholdIsZScore(false);
         root.getBranches().get(0).getChildren().add(enabledChild);
 
         // A disabled child gate under the CD45- branch, on a channel ("CD8") that appears
@@ -247,7 +244,6 @@ class AnalysisSessionTest {
         // offered as denominators with no row, and no gating pass behind them.
         GateNode enabledGrandchild = new GateNode("CD19", 3.5);
         enabledGrandchild.setStatistic(Statistic.MEAN);
-        enabledGrandchild.setThresholdIsZScore(false);
         disabledChild.getBranches().get(0).getChildren().add(enabledGrandchild);
 
         GateTree tree = new GateTree();
@@ -290,7 +286,6 @@ class AnalysisSessionTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(root);

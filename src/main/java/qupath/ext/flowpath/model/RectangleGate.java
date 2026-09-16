@@ -34,8 +34,9 @@ public final class RectangleGate extends Region2DGate {
     @Override
     public boolean contains(double x, double y) {
         // A rectangle with no extent encloses nothing. "Clear Shape" writes (0,0,0,0), and
-        // without this a cell at exactly (0,0) was Inside -- in z-score mode, where a column
-        // with no spread standardises every cell to 0.0, that was the whole population.
+        // without this a cell at exactly (0,0) was Inside -- under the since-retired computed
+        // z-score, where a column with no spread standardised every cell to 0.0, that was the
+        // whole population; on a raw background channel reading 0 it still would be.
         // EllipseGate has the same guard on a zero radius.
         if (!(maxX > minX) || !(maxY > minY)) return false;
         return x >= minX && x <= maxX && y >= minY && y <= maxY;

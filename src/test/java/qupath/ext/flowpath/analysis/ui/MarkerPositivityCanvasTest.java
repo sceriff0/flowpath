@@ -210,11 +210,9 @@ class MarkerPositivityCanvasTest {
 
         GateNode nested = new GateNode("CD45", 15.5);
         nested.setStatistic(Statistic.MEAN);
-        nested.setThresholdIsZScore(false);
 
         GateNode root = new GateNode("CD45", 10.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         root.setPositiveChildren(List.of(nested));
 
         GateTree tree = new GateTree();
@@ -304,19 +302,15 @@ class MarkerPositivityCanvasTest {
 
         GateNode cd3UnderNegative = new GateNode("CD3", 5.5);
         cd3UnderNegative.setStatistic(Statistic.MEAN);
-        cd3UnderNegative.setThresholdIsZScore(false);
 
         GateNode cd3UnderPositiveA = new GateNode("CD3", 5.5);
         cd3UnderPositiveA.setStatistic(Statistic.MEAN);
-        cd3UnderPositiveA.setThresholdIsZScore(false);
 
         GateNode cd3UnderPositiveB = new GateNode("CD3", 7.5);
         cd3UnderPositiveB.setStatistic(Statistic.MEAN);
-        cd3UnderPositiveB.setThresholdIsZScore(false);
 
         GateNode cd45Gate = new GateNode("CD45", 10.5);
         cd45Gate.setStatistic(Statistic.MEAN);
-        cd45Gate.setThresholdIsZScore(false);
         cd45Gate.setPositiveChildren(List.of(cd3UnderPositiveA, cd3UnderPositiveB));
         cd45Gate.setNegativeChildren(List.of(cd3UnderNegative));
 

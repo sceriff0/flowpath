@@ -64,7 +64,6 @@ class NewGateTypesTest {
         QuadrantGate gate = new QuadrantGate("CD45", "CD3", 5.0, 5.0);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         // default QualityFilter (passes all)
@@ -93,7 +92,6 @@ class NewGateTypesTest {
     @Test
     void quadrantDeepCopyIndependence() {
         QuadrantGate original = new QuadrantGate("CD45", "CD3", 5.0, 3.0);
-        original.setThresholdIsZScore(false);
         original.setClipPercentileLow(2.0);
         original.setClipPercentileHigh(98.0);
         original.setExcludeOutliers(true);
@@ -249,7 +247,6 @@ class NewGateTypesTest {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2.0, 8.0, 2.0, 8.0);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         // default QualityFilter (passes all)
@@ -333,7 +330,6 @@ class NewGateTypesTest {
     @Test
     void quadrantGateSerializationRoundTrip() throws IOException {
         QuadrantGate gate = new QuadrantGate("CD45", "CD3", 2.5, 3.5);
-        gate.setThresholdIsZScore(false);
         gate.setClipPercentileLow(2.0);
         gate.setClipPercentileHigh(98.0);
         gate.setExcludeOutliers(true);

@@ -56,8 +56,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * neither mechanism is the only thing standing between the rule and a silent wrong
  * answer.
  * <p>
- * Orthogonal to FlowPath's live z-score toggle, which is applied on top of
- * whichever statistic is selected.
+ * FlowPath applies no standardisation of its own on top of whichever statistic is
+ * selected; a standardised reading is only ever one of these pipeline columns (see
+ * {@link ValueMode}).
  */
 public final class Statistic {
 
@@ -187,14 +188,10 @@ public final class Statistic {
      * True when MIRAGE has <b>already standardised</b> this column across the cells of one
      * patient — the {@code " Z"} and {@code " RobustZ"} variants.
      * <p>
-     * The reason FlowPath cares: its own z-score toggle standardises whatever column is
-     * selected, so turning it on over an already-standardised statistic z-scores a
-     * z-score. Nothing would throw, and the second pass is close to a no-op on a
-     * well-behaved column, which is exactly what makes it hard to notice — the axis would
-     * simply be wrong by a rescaling that varies with the filtered population.
-     * <p>
-     * Note the two are not the same number even in principle: MIRAGE standardises across
-     * every cell of a patient, FlowPath across the cells currently loaded and filtered.
+     * FlowPath's own z-score toggle, since retired, used to standardise whatever column was
+     * selected, so turning it on over an already-standardised statistic z-scored a
+     * z-score. MIRAGE standardises across every cell of a patient; FlowPath's version was
+     * across the cells currently loaded and filtered, so the two were never the same number.
      */
     public boolean isStandardised() {
         return !normalisation().isEmpty();

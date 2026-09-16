@@ -74,7 +74,6 @@ class PlotHitTestTest {
 
         GateNode root = new GateNode(channel, 10.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);

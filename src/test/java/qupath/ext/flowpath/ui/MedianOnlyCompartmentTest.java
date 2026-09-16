@@ -251,7 +251,6 @@ class MedianOnlyCompartmentTest {
         gate.setChannel("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
         GateAxis.pinAll(gate, cap);
-        gate.setThresholdIsZScore(false);
         // Nuclear medians run 500..1500; split them down the middle.
         gate.setThreshold(1000.0);
 

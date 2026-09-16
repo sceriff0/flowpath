@@ -73,10 +73,8 @@ class PopulationStatsTest {
     private static GateTree twoLevelTree() {
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD8", 8.5);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         root.getBranches().get(0).getChildren().add(child);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -298,7 +296,6 @@ class PopulationStatsTest {
     /** CD45 x CD8 quadrant gate over the same 10 cells, split at 5.5 on both axes. */
     private static GateTree quadrantTree() {
         QuadrantGate root = new QuadrantGate("CD45", "CD8", 5.5, 5.5);
-        root.setThresholdIsZScore(false);
         root.setCompartmentX(Compartment.WHOLE_CELL);
         root.setStatisticX(Statistic.MEAN);
         root.setCompartmentY(Compartment.WHOLE_CELL);
@@ -355,11 +352,9 @@ class PopulationStatsTest {
     void twoRootsOnTheSameChannelAreDistinguishedByRootIndexNotPath() {
         GateNode rootA = new GateNode("CD45", 5.5);
         rootA.setStatistic(Statistic.MEAN);
-        rootA.setThresholdIsZScore(false);
 
         GateNode rootB = new GateNode("CD45", 5.5);
         rootB.setStatistic(Statistic.MEAN);
-        rootB.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -567,7 +562,6 @@ class PopulationStatsTest {
     private static GateNode threshold(String channel, double at) {
         GateNode node = new GateNode(channel, at);
         node.setStatistic(Statistic.MEAN);
-        node.setThresholdIsZScore(false);
         return node;
     }
 

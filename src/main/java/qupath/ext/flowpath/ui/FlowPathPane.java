@@ -31,6 +31,7 @@ import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
@@ -366,6 +367,10 @@ public class FlowPathPane extends BorderPane {
         // Compute quality mask and stats (using combined mask)
         recomputeQualityMask();
         markerStats = MarkerStats.compute(cellIndex, getCombinedMask());
+
+        // The tree now meets an index: convert a legacy z-space tree before the editor or
+        // the preview reads a single number from it.
+        migrateLegacyZScores(markerStats);
 
         // Update UI
         editorPane.setChannelNames(markerNames);
@@ -1511,6 +1516,13 @@ public class FlowPathPane extends BorderPane {
             suppressRoiFilterEvents = false;
             recomputeRoiMask();
 
+            // Convert a legacy z-space tree now, against the loaded tree's own quality
+            // filter, rather than when (and only if) each gate is opened in the editor.
+            if (cellIndex != null && LegacyZScoreMigration.needsMigration(gateTree)) {
+                recomputeQualityMask();
+                migrateLegacyZScores(MarkerStats.compute(cellIndex, getCombinedMask()));
+            }
+
             rebuildTreeView();
             onQualityFilterChanged();
             requestPreviewUpdate();
@@ -1643,10 +1655,30 @@ public class FlowPathPane extends BorderPane {
 
     private void afterUndoRedo() {
         currentNode = null;
+        // A snapshot recorded before an image was open can still hold a legacy z-space tree.
+        migrateLegacyZScores(markerStats);
         qualityFilterPane.setFilter(gateTree.getQualityFilter());
         editorPane.setGateNode(null);
         rebuildTreeView();
         requestPreviewUpdate();
+    }
+
+    /**
+     * Convert a tree saved under the retired computed z-score onto raw values, now that it
+     * has an index to convert against, and say so when anything changed. A no-op without an
+     * index (the conversion waits for one) or when no gate carries the flag.
+     */
+    private void migrateLegacyZScores(MarkerStats stats) {
+        if (cellIndex == null || stats == null || !LegacyZScoreMigration.needsMigration(gateTree)) {
+            return;
+        }
+        LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(gateTree, cellIndex, stats);
+        if (result.isEmpty()) return;
+        if (result.unconvertible().isEmpty()) {
+            Dialogs.showInfoNotification("FlowPath", result.message());
+        } else {
+            Dialogs.showWarningNotification("FlowPath", result.message());
+        }
     }
 
     /**

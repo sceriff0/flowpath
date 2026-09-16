@@ -178,7 +178,6 @@ class ExportEdgeCaseTest {
     private static GateNode rawGate(String channel, double threshold) {
         GateNode g = new GateNode(channel, threshold);
         g.setStatistic(Statistic.MEAN);
-        g.setThresholdIsZScore(false);
         return g;
     }
 
@@ -236,7 +235,7 @@ class ExportEdgeCaseTest {
 
     /**
      * Pins: marker (channel) names containing a double quote, an LF and non-ASCII produce
-     * header fields that are whole, valid quoted fields with the {@code _raw/_zscore/_sign}
+     * header fields that are whole, valid quoted fields with the {@code _raw/_sign}
      * suffix inside the quotes (only the comma case was pinned before), and the file is UTF-8.
      */
     @Test
@@ -260,7 +259,7 @@ class ExportEdgeCaseTest {
         Table t = table(text);
 
         for (String m : List.of(quoted, newline, unicode)) {
-            for (String suffix : List.of("_raw", "_zscore", "_sign")) {
+            for (String suffix : List.of("_raw", "_sign")) {
                 assertTrue(t.header().contains(m + suffix),
                         "header must carry '" + m + suffix + "': " + t.header());
             }
@@ -703,7 +702,6 @@ class ExportEdgeCaseTest {
         root.setClipPercentileLow(0.5);
         root.setClipPercentileHigh(99.5);
         QuadrantGate quad = new QuadrantGate("CD3", "CD8", 5.0, 5.0);
-        quad.setThresholdIsZScore(false);
         quad.setStatisticX(Statistic.MEAN);   // a fresh quadrant defaults to MEDIAN, which
         quad.setStatisticY(Statistic.MEAN);   // this legacy-shaped fixture does not carry
         GateNode ki = rawGate("Ki67", 2.0);

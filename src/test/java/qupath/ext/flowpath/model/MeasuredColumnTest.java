@@ -62,7 +62,7 @@ class MeasuredColumnTest {
 
         for (int i = 0; i < index.size(); i++) {
             assertEquals(raw[i], col.valueAt(i), 0.0);
-            assertEquals(manual.toZScore(key, raw[i]), col.zScoreAt(i), 1e-12);
+            assertEquals((raw[i] - manual.getMean(key)) / manual.getStd(key), col.zScoreAt(i), 1e-12);
         }
         assertEquals(manual.getMean(key), col.mean(), 1e-12);
         assertEquals(manual.getStd(key), col.std(), 1e-12);
@@ -140,8 +140,9 @@ class MeasuredColumnTest {
         // plausible-looking "this cell is exactly at the mean" for every cell, and
         // percentile clipping that silently no-ops.
         assertFalse(stats.hasColumn(key), "compute() only summarises the bare markers");
-        assertEquals(0.0, stats.toZScore(key, 90.0), 0.0,
-                "the silent wrong answer this refactor exists to make unreachable");
+        assertEquals(0.0, stats.getStd(key), 0.0,
+                "the silent wrong answer this refactor exists to make unreachable: a std of 0 "
+                + "standardised every cell to exactly the mean");
         assertTrue(Double.isNaN(stats.getPercentileValue(key, 50)));
 
         // Going through the handle registers the column as part of resolving it.

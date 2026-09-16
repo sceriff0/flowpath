@@ -11,6 +11,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
+import qupath.ext.flowpath.model.LegacyZScoreMigration;
+import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Statistic;
@@ -299,7 +301,6 @@ class GateEditorSignalTest {
     void regionGateEditorOffersACompartmentSelectorPerAxis() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 100, 0, 100);
-        rg.setThresholdIsZScore(false);
         Fixture f = editorFor(rg);
 
         // One per axis, in X-then-Y order.
@@ -320,7 +321,6 @@ class GateEditorSignalTest {
     void rawModeRegionShapeIsRemappedOnCompartmentChange() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 0, 0, 0);
-        rg.setThresholdIsZScore(false);
         rg.setStatisticX(Statistic.MEAN);             // percentiles below are bare-column values
         rg.setStatisticY(Statistic.MEAN);
         Fixture f = editorFor(rg);
@@ -341,7 +341,6 @@ class GateEditorSignalTest {
     void clearedRegionShapeIsNotResurrectedByACompartmentChange() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 0, 0, 0);
-        rg.setThresholdIsZScore(false);
         Fixture f = editorFor(rg);
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
@@ -366,7 +365,6 @@ class GateEditorSignalTest {
         try {
             Locale.setDefault(Locale.ITALY);
             GateNode gate = new GateNode("CD3");
-            gate.setThresholdIsZScore(false);
             gate.setThreshold(0.3303);
             Fixture f = editorFor(gate);
 
@@ -393,7 +391,6 @@ class GateEditorSignalTest {
     void rawModeCompartmentChangeRemapsThresholdByPercentile() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
         gate.setStatistic(Statistic.MEAN);            // raw threshold is a bare-column value
         Fixture f = editorFor(gate);
         double raw = f.index().column("CD3", null, null, f.stats()).percentile(70.0);
@@ -521,9 +518,13 @@ class GateEditorSignalTest {
      * around 1 — compared against a column whose values run to hundreds, so every cell
      * reads negative: no error, and a gate tree that still looks right. The threshold must
      * come back to the column's own units, landing on the same cells it did before.
+     * <p>
+     * The conversion is {@link LegacyZScoreMigration}'s, run when the tree meets the index —
+     * not the editor's, which only reached the gates a user happened to open. Opening the
+     * migrated gate must then leave its threshold exactly where the migration put it.
      */
     @Test
-    void aGateSavedInTheRetiredZScoreModeIsConvertedNotJustCleared() {
+    void aGateSavedInTheRetiredZScoreModeIsConvertedBeforeTheEditorSeesIt() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         GateNode gate = new GateNode("CD3");
         gate.setStatistic(Statistic.MEDIAN);
@@ -536,8 +537,14 @@ class GateEditorSignalTest {
         double rawAtP60 = col.percentile(60.0);
         double savedZ = col.toZScore(rawAtP60);
         gate.setThreshold(savedZ);
+        GateTree tree = new GateTree();
+        tree.addRoot(gate);
 
-        Fixture f = editorForZScore(gate);
+        LegacyZScoreMigration.Result result =
+                LegacyZScoreMigration.migrate(tree, probe.index(), probe.stats());
+        assertEquals(1, result.converted());
+
+        editorForZScore(gate);
         flushFx();
 
         assertFalse(gate.isThresholdIsZScore(), "the retired flag must be cleared");

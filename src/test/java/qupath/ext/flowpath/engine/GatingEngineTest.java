@@ -40,7 +40,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("CD45", 5.5);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -61,8 +60,10 @@ class GatingEngineTest {
     }
 
     @Test
-    void assignAllWithZScore() {
-        // 10 cells with values 1..10, mean=5.5, z-score threshold=0 splits at the mean
+    void aLegacyZScoreThresholdGatesTheSameCellsOnceMigrated() {
+        // 10 cells with values 1..10, mean=5.5: a legacy z-threshold of 0 split at the mean.
+        // The engine no longer standardises, so the gate is migrated first -- as the pane
+        // does when a tree meets an index -- and must still split at the mean.
         List<String> markers = List.of("CD45");
         double[][] values = { {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} };
         CellIndex index = Cells.columns(markers, values).build();
@@ -77,6 +78,8 @@ class GatingEngineTest {
         tree.setQualityFilter(null);
         tree.addRoot(gate);
 
+        qupath.ext.flowpath.model.LegacyZScoreMigration.migrate(tree, index, stats);
+        assertEquals(5.5, gate.getThreshold(), 1e-9, "z = 0 is the column mean");
         AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
         // mean = 5.5, so values >= 5.5 have z >= 0 -> positive
@@ -158,7 +161,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("CD45", 50.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
         gate.setClipPercentileHigh(99.0);
@@ -197,11 +199,9 @@ class GatingEngineTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateNode childGate = new GateNode("CD3", 3.5);
         childGate.setStatistic(Statistic.MEAN);
-        childGate.setThresholdIsZScore(false);
         root.getPositiveChildren().add(childGate);
 
         GateTree tree = new GateTree();
@@ -237,7 +237,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("NONEXISTENT", 0.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -285,7 +284,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("CD45", 3.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -330,14 +328,12 @@ class GatingEngineTest {
 
             GateNode clipper = new GateNode("A", 5.0);
             clipper.setStatistic(Statistic.MEAN);
-            clipper.setThresholdIsZScore(false);
             clipper.setExcludeOutliers(true);
             clipper.setClipPercentileLow(20.0);
             clipper.setClipPercentileHigh(80.0);
 
             GateNode plain = new GateNode("B", 5.0);
             plain.setStatistic(Statistic.MEAN);
-            plain.setThresholdIsZScore(false);
 
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
@@ -391,7 +387,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("CD3", 25.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -431,10 +426,8 @@ class GatingEngineTest {
 
         GateNode parent = new GateNode("CD45", 5.0);
         parent.setStatistic(Statistic.MEAN);
-        parent.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 50.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         parent.getBranches().get(0).getChildren().add(child);
 
         GateTree tree = new GateTree();
@@ -464,7 +457,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("A", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(20.0);
         gate.setClipPercentileHigh(80.0);
@@ -526,7 +518,6 @@ class GatingEngineTest {
         QuadrantGate gate = new QuadrantGate("X", "Y", 10.5, 5.0);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(10.0);
         gate.setClipPercentileHigh(90.0);
@@ -587,7 +578,6 @@ class GatingEngineTest {
         QuadrantGate gate = new QuadrantGate("X", "Y", 5.0, 10.5);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(10.0);
         gate.setClipPercentileHigh(90.0);
@@ -655,7 +645,6 @@ class GatingEngineTest {
 
         GateNode root = new GateNode("CD45", 3.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.getRoots().add(root);
 
@@ -681,10 +670,8 @@ class GatingEngineTest {
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
-        parent.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 25.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
 
         // Add child under positive branch of parent
         parent.getBranches().get(0).getChildren().add(child);
@@ -710,7 +697,6 @@ class GatingEngineTest {
 
         GateNode root = new GateNode("CD45", 3.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.getRoots().add(root);
 
@@ -738,10 +724,8 @@ class GatingEngineTest {
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
-        parent.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 15.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
 
         // Add child under NEGATIVE branch (index 1)
         parent.getBranches().get(1).getChildren().add(child);
@@ -774,13 +758,10 @@ class GatingEngineTest {
 
         GateNode grandparent = new GateNode("CD45", 3.0);
         grandparent.setStatistic(Statistic.MEAN);
-        grandparent.setThresholdIsZScore(false);
         GateNode parent = new GateNode("CD3", 35.0);
         parent.setStatistic(Statistic.MEAN);
-        parent.setThresholdIsZScore(false);
         GateNode grandchild = new GateNode("CD8", 250.0);
         grandchild.setStatistic(Statistic.MEAN);
-        grandchild.setThresholdIsZScore(false);
 
         grandparent.getBranches().get(0).getChildren().add(parent);  // parent under CD45+
         parent.getBranches().get(0).getChildren().add(grandchild);   // grandchild under CD3+
@@ -818,11 +799,9 @@ class GatingEngineTest {
 
         GateNode parent = new GateNode("CD45", 3.0);
         parent.setStatistic(Statistic.MEAN);
-        parent.setThresholdIsZScore(false);
         parent.setEnabled(false);  // disabled
         GateNode child = new GateNode("CD3", 25.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
 
         parent.getBranches().get(0).getChildren().add(child);
 
@@ -858,10 +837,8 @@ class GatingEngineTest {
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
-        root1.setThresholdIsZScore(false);
         GateNode root2 = new GateNode("PANCK", 5.0);
         root2.setStatistic(Statistic.MEAN);
-        root2.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -892,7 +869,6 @@ class GatingEngineTest {
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
-        root1.setThresholdIsZScore(false);
         // Set known colors
         int red = (255 << 16);
         int blue = 255;
@@ -901,7 +877,6 @@ class GatingEngineTest {
 
         GateNode root2 = new GateNode("PANCK", 5.0);
         root2.setStatistic(Statistic.MEAN);
-        root2.setThresholdIsZScore(false);
         int green = (255 << 8);
         int gray = (128 << 16) | (128 << 8) | 128;
         root2.getBranches().get(0).setColor(green);  // PANCK+ = green
@@ -935,7 +910,6 @@ class GatingEngineTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -958,10 +932,8 @@ class GatingEngineTest {
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
-        root1.setThresholdIsZScore(false);
         GateNode root2 = new GateNode("PANCK", 5.0);
         root2.setStatistic(Statistic.MEAN);
-        root2.setThresholdIsZScore(false);
         root2.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -984,13 +956,10 @@ class GatingEngineTest {
 
         GateNode r1 = new GateNode("A", 5.0);
         r1.setStatistic(Statistic.MEAN);
-        r1.setThresholdIsZScore(false);
         GateNode r2 = new GateNode("B", 5.0);
         r2.setStatistic(Statistic.MEAN);
-        r2.setThresholdIsZScore(false);
         GateNode r3 = new GateNode("C", 5.0);
         r3.setStatistic(Statistic.MEAN);
-        r3.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -1018,14 +987,12 @@ class GatingEngineTest {
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
-        root1.setThresholdIsZScore(false);
         root1.setExcludeOutliers(true);
         root1.setClipPercentileLow(1.0);
         root1.setClipPercentileHigh(99.0);
 
         GateNode root2 = new GateNode("PANCK", 5.0);
         root2.setStatistic(Statistic.MEAN);
-        root2.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -1080,11 +1047,9 @@ class GatingEngineTest {
 
             GateNode rootA = new GateNode("A", 25.0);
             rootA.setStatistic(Statistic.MEAN);
-            rootA.setThresholdIsZScore(false);
 
             GateNode rootB = new GateNode("B", 25.0);
             rootB.setStatistic(Statistic.MEAN);
-            rootB.setThresholdIsZScore(false);
 
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
@@ -1149,7 +1114,6 @@ class GatingEngineTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -1191,19 +1155,19 @@ class GatingEngineTest {
     }
 
     /**
-     * A one-cell population has a standard deviation of exactly zero, so a z-score gate is
-     * asked to divide by it. {@link qupath.ext.flowpath.model.MeasuredColumn#toZScore}
-     * answers {@code 0.0} for any column whose std is below {@code 1e-10} instead of
-     * returning {@code Infinity} or {@code NaN} — the cell is defined to sit exactly at the
-     * mean, which for a single cell it does.
+     * A one-cell population has a standard deviation of exactly zero. Gates used to be
+     * standardised against it, and anything that divided by that zero would produce
+     * {@code Infinity} or {@code NaN}; gates now compare the value as measured, but the
+     * degenerate column still has to gate without blowing up the walk, and its statistics
+     * (percentiles, histogram) are still computed from it.
      * <p>
      * That matters twice over. An {@code Infinity} would place the cell in the positive
      * branch of every gate at once; a {@code NaN} is worse, because {@code branchOf} tests
      * NaN <em>before</em> the geometry and would report the cell {@code UNMEASURED} — a cell
      * with a perfectly good measurement filed under "no data", counted nowhere and flagged
-     * incomplete in the CSV. This pins the collapse-to-the-mean answer, and with it the
-     * {@code clean(branch) == branch.getCount()} parity that the tree view and the Analysis
-     * window's Clean column both depend on.
+     * incomplete in the CSV. This pins the at-or-above answer on both sides of the cut, and
+     * with it the {@code clean(branch) == branch.getCount()} parity that the tree view and
+     * the Analysis window's Clean column both depend on.
      */
     @Test
     void aSinglecellPopulationGatesWithoutDividingByZero() {
@@ -1212,11 +1176,9 @@ class GatingEngineTest {
         assertEquals(0.0, index.column("A", null, null, stats).std(), 1e-12,
                 "one cell has no spread at all");
 
-        // Threshold 0.0 in z-score space: the degenerate column puts the cell exactly at
-        // the mean, and the cut is at-or-above, so it lands positive.
-        GateNode gate = new GateNode("A", 0.0);
+        // A cut exactly at the only value: at-or-above, so it lands positive.
+        GateNode gate = new GateNode("A", 42.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(true);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -1231,7 +1193,7 @@ class GatingEngineTest {
         assertFalse(result.getOutlier()[0]);
         assertFalse(result.getExcluded()[0]);
         assertEquals("A+", result.getPhenotypes()[0],
-                "z == 0.0 at a z-threshold of 0.0 is at-or-above, so the cell is positive");
+                "42.0 at a threshold of 42.0 is at-or-above, so the cell is positive");
         assertEquals(1, gate.getBranches().get(0).getCount());
         assertEquals(0, gate.getBranches().get(1).getCount());
 
@@ -1246,19 +1208,17 @@ class GatingEngineTest {
                     "and stays within the denominator every percentage divides by");
         }
 
-        // The other side of the same cut, to show the collapse really is to 0.0 and not to
-        // something that merely happens to be positive: at a z-threshold above 0 the same
-        // cell is negative.
-        GateNode strict = new GateNode("A", 0.5);
+        // The other side of the same cut, to show the cell is read as its own value and not
+        // as something that merely happens to be positive: just above it, it is negative.
+        GateNode strict = new GateNode("A", 42.5);
         strict.setStatistic(Statistic.MEAN);
-        strict.setThresholdIsZScore(true);
         GateTree strictTree = new GateTree();
         strictTree.setQualityFilter(null);
         strictTree.addRoot(strict);
 
         AssignmentResult strictResult = GatingEngine.assignAll(strictTree, index, stats);
         assertEquals("A-", strictResult.getPhenotypes()[0],
-                "z == 0.0 is below a threshold of 0.5 -- not Infinity, which would be above "
+                "42.0 is below a threshold of 42.5 -- not Infinity, which would be above "
                         + "every threshold");
         assertFalse(strictResult.getUnmeasured()[0], "and not NaN, which would read as no data");
         assertEquals(strict.getBranches().get(1).getCount(),

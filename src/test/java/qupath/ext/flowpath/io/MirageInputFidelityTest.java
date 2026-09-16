@@ -239,7 +239,6 @@ class MirageInputFidelityTest {
         GateNode gate = new GateNode("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setThreshold(50.0);
 
         GateTree tree = new GateTree();
@@ -272,9 +271,8 @@ class MirageInputFidelityTest {
                     "row " + i + ": phenotype and sign must never disagree");
         }
 
-        // DAPI is constant, ungated: raw present, z-score blank (std 0), sign blank.
+        // DAPI is constant, ungated: raw present, sign blank.
         assertEquals(500.0, csv.num(0, "DAPI_raw"), 1e-4);
-        assertEquals("", csv.val(0, "DAPI_zscore"), "zero-variance column has no z-score");
         assertEquals("", csv.val(0, "DAPI_sign"), "an ungated marker has no sign");
     }
 
@@ -294,7 +292,6 @@ class MirageInputFidelityTest {
             MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(2));
 
             GateNode gate = new GateNode("CD3", 3.0);
-            gate.setThresholdIsZScore(false);
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
             tree.addRoot(gate);
@@ -328,7 +325,6 @@ class MirageInputFidelityTest {
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(1));
 
         GateNode gate = new GateNode(marker, 5.0);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);

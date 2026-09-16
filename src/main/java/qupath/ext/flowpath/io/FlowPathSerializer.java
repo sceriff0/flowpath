@@ -354,7 +354,6 @@ public class FlowPathSerializer {
             obj.addProperty("channelY", qg.getChannelY());
             obj.addProperty("thresholdX", qg.getThresholdX());
             obj.addProperty("thresholdY", qg.getThresholdY());
-            obj.addProperty("thresholdIsZScore", qg.isThresholdIsZScore());
             obj.addProperty("compartmentX", qg.getCompartmentX().name());
             obj.addProperty("compartmentY", qg.getCompartmentY().name());
             obj.addProperty("statisticX", qg.getStatisticX().token());
@@ -378,7 +377,6 @@ public class FlowPathSerializer {
             // user's work was already on disk. See the refusal below.
             obj.addProperty("channel", node.getChannel());
             obj.addProperty("threshold", node.getThreshold());
-            obj.addProperty("thresholdIsZScore", node.isThresholdIsZScore());
             obj.addProperty("compartment", node.getCompartment().name());
             obj.addProperty("statistic", node.getStatistic().token());
             obj.addProperty("positiveName", node.getPositiveName());
@@ -409,7 +407,6 @@ public class FlowPathSerializer {
     private static void serializeRegionAxes(JsonObject obj, Region2DGate gate) {
         obj.addProperty("channelX", gate.getChannelX());
         obj.addProperty("channelY", gate.getChannelY());
-        obj.addProperty("thresholdIsZScore", gate.isThresholdIsZScore());
         obj.addProperty("compartmentX", gate.getCompartmentX().name());
         obj.addProperty("compartmentY", gate.getCompartmentY().name());
         obj.addProperty("statisticX", gate.getStatisticX().token());
@@ -541,6 +538,9 @@ public class FlowPathSerializer {
         node.setChannel(optString(obj, "channel"));
         if (obj.has("threshold"))
             node.setThreshold(obj.get("threshold").getAsDouble());
+        // Read, never written: a file saved before the computed z-score was retired holds
+        // this threshold in standard deviations, and LegacyZScoreMigration needs the flag to
+        // know to convert it. An absent flag means raw -- every file written since.
         if (obj.has("thresholdIsZScore"))
             node.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
         node.setCompartment(parseCompartment(obj, "compartment"));
@@ -602,7 +602,7 @@ public class FlowPathSerializer {
         gate.setClipPercentileHigh(clipHigh);
         gate.setExcludeOutliers(excludeOutliers);
 
-        // Shared axis block for all 2D region gate types: channels, z-score flag,
+        // Shared axis block for all 2D region gate types: channels, the legacy z-score flag,
         // and the per-axis compartment/statistic (absent in v1/v2 files, which then
         // default to whole-cell mean and behave exactly as before).
         if (gate instanceof Region2DGate region) {

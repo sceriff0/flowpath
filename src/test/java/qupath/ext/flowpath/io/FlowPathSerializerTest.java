@@ -31,7 +31,6 @@ class FlowPathSerializerTest {
         root.setClipPercentileLow(2.0);
         root.setClipPercentileHigh(98.0);
         root.setExcludeOutliers(true);
-        root.setThresholdIsZScore(false);
         tree.addRoot(root);
 
         File file = tempDir.resolve("test.json").toFile();

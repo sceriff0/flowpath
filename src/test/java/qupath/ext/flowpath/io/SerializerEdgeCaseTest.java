@@ -47,7 +47,7 @@ class SerializerEdgeCaseTest {
     /**
      * Every field of every gate type, with children under every branch of every type
      * (all four quadrant branches, inside AND outside of each region gate), unknown
-     * compartment/statistic tokens on the Y axes, non-default clip/outlier/enabled/z-score
+     * compartment/statistic tokens on the Y axes, non-default clip/outlier/enabled
      * flags, custom names and colours, unsorted polygon vertices, and a fully constrained
      * quality filter. Pins a deep structural equality AND that write -> read -> write is
      * byte-identical (the timestamp line aside).
@@ -106,7 +106,6 @@ class SerializerEdgeCaseTest {
         GateNode a = new GateNode("CD3", 0.5);
         GateNode b = new GateNode("CD3", -1.25);
         b.setEnabled(false);
-        b.setThresholdIsZScore(false);
         b.getPositiveChildren().add(new GateNode("CD8", 2.0));
         tree.addRoot(a);
         tree.addRoot(b);
@@ -344,7 +343,8 @@ class SerializerEdgeCaseTest {
         assertEquals(1.0, g.getClipPercentileLow());
         assertEquals(99.0, g.getClipPercentileHigh());
         assertFalse(g.isExcludeOutliers());
-        assertTrue(g.isThresholdIsZScore());
+        assertFalse(g.isThresholdIsZScore(), "an absent flag is raw: every file written since "
+                + "the computed z-score was retired omits it");
         assertNull(g.getChannel());
         assertEquals(0.0, g.getThreshold());
         assertEquals(Compartment.WHOLE_CELL, g.getCompartment());
@@ -497,7 +497,6 @@ class SerializerEdgeCaseTest {
         GateTree tree = new GateTree();
 
         GateNode root = new GateNode("CD45", 1.25);
-        root.setThresholdIsZScore(false);
         root.setCompartment(Compartment.NUCLEAR);
         root.setStatistic(Statistic.SUM);
         root.setPositiveName("Immune");
@@ -513,7 +512,6 @@ class SerializerEdgeCaseTest {
         quad.setStatisticX(Statistic.MEAN);
         quad.setCompartmentY(Compartment.of("Membrane"));
         quad.setStatisticY(Statistic.of("REDSEA"));
-        quad.setThresholdIsZScore(false);
         quad.setEnabled(false);
         quad.setClipPercentileLow(0.0);
         quad.setClipPercentileHigh(100.0);
@@ -532,7 +530,6 @@ class SerializerEdgeCaseTest {
         poly.setStatisticX(Statistic.MEDIAN);
         poly.setCompartmentY(Compartment.CYTOPLASMIC);
         poly.setStatisticY(Statistic.of("Median RobustZ"));
-        poly.setThresholdIsZScore(true);
         poly.getInsideBranch().setName("B cells");
         poly.getInsideBranch().setColor(0x336699);
         poly.getOutsideBranch().setName("not B");
@@ -549,7 +546,6 @@ class SerializerEdgeCaseTest {
         EllipseGate ellOut = new EllipseGate("CD68", "CD163", 1.0, -2.0, 0.5, 3.25);
         ellOut.setCompartmentX(Compartment.CYTOPLASMIC);
         ellOut.setStatisticY(Statistic.SUM);
-        ellOut.setThresholdIsZScore(false);
         poly.getOutsideBranch().getChildren().add(ellOut);
         ellOut.getInsideBranch().getChildren().add(new GateNode("CD206", 0.1));
         ellOut.getOutsideBranch().getChildren().add(new GateNode("HLA-DR", -0.1));

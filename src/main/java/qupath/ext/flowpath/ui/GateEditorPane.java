@@ -57,21 +57,6 @@ public class GateEditorPane extends VBox {
 
     // --- Shared threshold/quadrant controls (reused across gate types) ---
     private final ComboBox<String> channelCombo;
-    /**
-     * The accent for a number FlowPath computes rather than reads. Distinct from the
-     * gate-type blue and from the warning orange, both of which already mean something
-     * else in this pane.
-     */
-    private static final String COMPUTED_HERE_COLOR = "#7fc4a8";
-
-    /** Muted, matching the pane's other unavailable controls. */
-    private static final String UNAVAILABLE_COLOR = "#666666";
-
-    private static final String ZSCORE_AVAILABLE_TOOLTIP =
-            "Standardise against this column's own distribution.\n"
-            + "Computed by FlowPath over the cells currently loaded and filtered \u2014 "
-            + "not a value read from the export.";
-
     private final ToggleGroup modeGroup;
     /**
      * The "Values" selector. One row, rebuilt from {@link ValueMode#availableFor} whenever
@@ -226,31 +211,18 @@ public class GateEditorPane extends VBox {
     /**
      * Move the current gate into {@code selected}.
      * <p>
-     * Two different transitions hide behind one selector, and telling them apart is the
-     * whole job:
-     * <ul>
-     *   <li><b>Same column, different space</b> — Raw &harr; the computed z-score. The gate
-     *       keeps reading the same measurement; only the units it is written in change, so
-     *       thresholds and shapes are <em>converted</em> through that column's own mean and
-     *       standard deviation.</li>
-     *   <li><b>A different column</b> — anything that changes the normalisation suffix, such
-     *       as Raw to MIRAGE's {@code " Z"}. A bare threshold does not carry across columns
-     *       (a Sum is ~100x the corresponding Mean), which is exactly what
-     *       {@link #applySignalChange} exists for: it re-maps the threshold to the same
-     *       percentile of the new column, so the gate lands on the same cells rather than
-     *       collapsing to all-positive or all-negative.</li>
-     * </ul>
-     * Conflating the two was the old defect in miniature. The previous radio could only
-     * express the first, so reaching MIRAGE's already-standardised column meant using the
-     * Statistic dropdown instead — a different control, which did not know a mode had been
-     * chosen at all and silently disabled this one.
+     * Every mode names a different column — anything that changes the normalisation
+     * suffix, such as Raw to MIRAGE's {@code " Z"}. A bare threshold does not carry across
+     * columns (a Sum is ~100x the corresponding Mean), which is exactly what
+     * {@link #applySignalChange} exists for: it re-maps the threshold to the same percentile
+     * of the new column, so the gate lands on the same cells rather than collapsing to
+     * all-positive or all-negative.
      */
     private void onModeSelected(ValueMode selected) {
         GateNode node = currentNode;
         if (node == null || selected == null) return;
         ValueMode previous = currentMode;
-        if (previous != null && previous.normalisation().equals(selected.normalisation())
-                && !node.isThresholdIsZScore()) {
+        if (previous != null && previous.normalisation().equals(selected.normalisation())) {
             return;
         }
         currentMode = selected;
@@ -260,97 +232,6 @@ public class GateEditorPane extends VBox {
         // applySignalChange re-maps the threshold to the same percentile of the new column
         // and re-syncs this row afterwards, so the gate keeps the cells it had.
         applySignalChange(() -> selected.applyTo(node));
-    }
-
-    /**
-     * Rewrite {@code node}'s thresholds and shapes between raw and z-score space, against
-     * the same resolved columns the engine compares on.
-     * <p>
-     * <b>Model only — this must not touch the UI.</b> Its one caller is the migration in
-     * {@link #syncModeSelection}, which runs <em>during</em> an editor rebuild; the
-     * {@code fireNodeChanged()} and {@code Platform.runLater(() -> setGateNode(node))}
-     * this used to end with re-entered that rebuild, and the editor came back with no
-     * sliders, no combos and no scatter plot at all. The caller finishes the build.
-     * <p>
-     * A column with no spread is left alone rather than converted through a zero standard
-     * deviation.
-     */
-    private void convertGateSpace(GateNode node, boolean toZScore) {
-        if (node == null) return;
-            if (isThresholdGate(node)) {
-                // Transform the threshold against the same resolved column the engine
-                // compares on. The caller re-ranges the axis and re-pins the slider
-                // afterwards, so the gate lands on the same cells.
-                MeasuredColumn col = thresholdColumn(node);
-                if (col != null && col.hasSpread()) {
-                    double oldVal = node.getThreshold();
-                    node.setThreshold(toZScore
-                            ? col.toZScore(oldVal)
-                            : col.fromZScore(oldVal));
-                }
-            } else if (node instanceof QuadrantGate qg) {
-                // Transform quadrant thresholds between coordinate spaces
-                MeasuredColumn colX = columnX(qg);
-                MeasuredColumn colY = columnY(qg);
-                if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
-                    if (toZScore) {
-                        qg.setThresholdX(colX.toZScore(qg.getThresholdX()));
-                        qg.setThresholdY(colY.toZScore(qg.getThresholdY()));
-                    } else {
-                        qg.setThresholdX(colX.fromZScore(qg.getThresholdX()));
-                        qg.setThresholdY(colY.fromZScore(qg.getThresholdY()));
-                    }
-                }
-            } else if (node instanceof Region2DGate) {
-                // Transform shape coordinates between raw and z-score space
-                MeasuredColumn colX = columnX(node);
-                MeasuredColumn colY = columnY(node);
-                if (colX != null && colY != null && colX.hasSpread() && colY.hasSpread()) {
-                    if (node instanceof PolygonGate pg && !pg.getVertices().isEmpty()) {
-                        List<double[]> transformed = new ArrayList<>();
-                        for (double[] v : pg.getVertices()) {
-                            transformed.add(new double[]{
-                                    toZScore ? colX.toZScore(v[0]) : colX.fromZScore(v[0]),
-                                    toZScore ? colY.toZScore(v[1]) : colY.fromZScore(v[1])
-                            });
-                        }
-                        pg.setVertices(transformed);
-                    } else if (node instanceof RectangleGate rg
-                            && rg.getMaxX() - rg.getMinX() > 1e-10) {
-                        if (toZScore) {
-                            rg.setMinX(colX.toZScore(rg.getMinX()));
-                            rg.setMaxX(colX.toZScore(rg.getMaxX()));
-                            rg.setMinY(colY.toZScore(rg.getMinY()));
-                            rg.setMaxY(colY.toZScore(rg.getMaxY()));
-                        } else {
-                            rg.setMinX(colX.fromZScore(rg.getMinX()));
-                            rg.setMaxX(colX.fromZScore(rg.getMaxX()));
-                            rg.setMinY(colY.fromZScore(rg.getMinY()));
-                            rg.setMaxY(colY.fromZScore(rg.getMaxY()));
-                        }
-                    } else if (node instanceof EllipseGate eg && eg.getRadiusX() > 1e-10) {
-                        double stdX = colX.std();
-                        double stdY = colY.std();
-                        if (toZScore) {
-                            eg.setCenterX(colX.toZScore(eg.getCenterX()));
-                            eg.setCenterY(colY.toZScore(eg.getCenterY()));
-                            eg.setRadiusX(eg.getRadiusX() / stdX);
-                            eg.setRadiusY(eg.getRadiusY() / stdY);
-                        } else {
-                            eg.setCenterX(colX.fromZScore(eg.getCenterX()));
-                            eg.setCenterY(colY.fromZScore(eg.getCenterY()));
-                            eg.setRadiusX(eg.getRadiusX() * stdX);
-                            eg.setRadiusY(eg.getRadiusY() * stdY);
-                        }
-                    }
-                } else {
-                    // Can't transform — clear shape as fallback
-                    if (node instanceof PolygonGate pg) pg.setVertices(List.of());
-                    else if (node instanceof RectangleGate rg) { rg.setMinX(0); rg.setMaxX(0); rg.setMinY(0); rg.setMaxY(0); }
-                    else if (node instanceof EllipseGate eg) { eg.setCenterX(0); eg.setCenterY(0); eg.setRadiusX(0); eg.setRadiusY(0); }
-                }
-                return;
-            }
     }
 
     public void setGateNode(GateNode node) {
@@ -1024,12 +905,10 @@ public class GateEditorPane extends VBox {
     /**
      * Apply a compartment/statistic selection and bring the rest of the editor with it.
      * <p>
-     * In <b>raw</b> mode the threshold is remapped to the same percentile of the newly
-     * selected column: a bare number does not carry across columns (a Sum is ~100x the
-     * corresponding Mean, a nuclear intensity nothing like a whole-cell one), so
-     * without this the gate silently collapses to "everything positive" or "everything
-     * negative". In <b>z-score</b> mode no remap is needed — a z-score means the same
-     * thing in either column — and the axis simply re-standardises.
+     * The threshold is remapped to the same percentile of the newly selected column: a bare
+     * number does not carry across columns (a Sum is ~100x the corresponding Mean, a nuclear
+     * intensity nothing like a whole-cell one), so without this the gate silently collapses
+     * to "everything positive" or "everything negative".
      * <p>
      * Threshold gates refresh in place via {@link #updateHistogram()}. Quadrant gates
      * build their axis sliders from the column's own data range, so they are rebuilt
@@ -1039,7 +918,6 @@ public class GateEditorPane extends VBox {
         GateNode node = currentNode;
         if (node == null) return;
         boolean threshold = isThresholdGate(node);
-        boolean raw = !node.isThresholdIsZScore();
         MeasuredColumn oldCol = threshold ? thresholdColumn(node) : null;
         MeasuredColumn oldColX = threshold ? null : columnX(node);
         MeasuredColumn oldColY = threshold ? null : columnY(node);
@@ -1047,20 +925,17 @@ public class GateEditorPane extends VBox {
 
         mutation.run();
 
-        if (raw) {
-            if (threshold) {
-                node.setThreshold(remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
-            } else if (node instanceof QuadrantGate qg) {
-                qg.setThresholdX(remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
-                qg.setThresholdY(remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
-            } else if (node instanceof Region2DGate region) {
-                remapRegionShape(region, oldColX, columnX(node), oldColY, columnY(node));
-            }
+        if (threshold) {
+            node.setThreshold(remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
+        } else if (node instanceof QuadrantGate qg) {
+            qg.setThresholdX(remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
+            qg.setThresholdY(remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
+        } else if (node instanceof Region2DGate region) {
+            remapRegionShape(region, oldColX, columnX(node), oldColY, columnY(node));
         }
 
-        // The axis now resolves to a different column, so both z-score questions have to
-        // be asked again: a Median column with spread and a "Median Z" column are not the
-        // same offer.
+        // The axis now resolves to a different column, so which modes are on offer has to
+        // be asked again: a Median column and a "Median Z" column are not the same offer.
         syncModeSelection(node);
 
         if (threshold) {
@@ -1101,17 +976,6 @@ public class GateEditorPane extends VBox {
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(java.util.function.BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
 
-    /**
-     * Whether the current gate still carries the retired standardise-here flag.
-     * <p>
-     * FlowPath no longer offers a z-score of its own — a gate compares against columns
-     * that exist in the export — so this is true only for a gate loaded from a file
-     * written before that change, and only until {@link #syncModeSelection} migrates it.
-     */
-    public boolean isUseZScore() {
-        return currentNode != null && currentNode.isThresholdIsZScore();
-    }
-
     public void updatePopulationCounts() {
         if (currentPopulationLabel == null) return;
         if (currentNode == null) {
@@ -1140,13 +1004,12 @@ public class GateEditorPane extends VBox {
      * Carry a gate's settings onto its replacement when the user converts one gate
      * type into another by drawing a different shape.
      * <p>
-     * The drawn coordinates are read straight off the scatter plot, which renders in
-     * the <em>source</em> gate's coordinate space: z-scored or raw per its z-score
-     * flag, and standardised against each axis' resolved column (channel +
-     * compartment + statistic). Both therefore have to travel with the shape. If they
-     * do not, {@code GatingEngine} evaluates the boundary in a different space than
-     * it was drawn in — the overlay still renders over the points, so nothing looks
-     * wrong while every cell is misclassified.
+     * The drawn coordinates are read straight off the scatter plot, which renders each
+     * axis' resolved column (channel + compartment + statistic) as measured. The axis
+     * signals therefore have to travel with the shape. If they do not,
+     * {@code GatingEngine} evaluates the boundary against different columns than it was
+     * drawn over — the overlay still renders over the points, so nothing looks wrong
+     * while every cell is misclassified.
      * <p>
      * Package-private and static so the conversion contract is testable without a
      * JavaFX toolkit.
@@ -1155,7 +1018,6 @@ public class GateEditorPane extends VBox {
         to.setClipPercentileLow(from.getClipPercentileLow());
         to.setClipPercentileHigh(from.getClipPercentileHigh());
         to.setExcludeOutliers(from.isExcludeOutliers());
-        to.setThresholdIsZScore(from.isThresholdIsZScore());
         GateAxis.copySignals(from, to);
         // Copy branch children, colors, and names from old gate to new gate
         for (int i = 0; i < Math.min(from.getBranches().size(), to.getBranches().size()); i++) {
@@ -1172,7 +1034,7 @@ public class GateEditorPane extends VBox {
     /**
      * The measurement column for a channel + compartment + statistic, statistics included.
      * <p>
-     * {@code GatingEngine} z-scores and percentile-clips against the column
+     * {@code GatingEngine} compares and percentile-clips against the column
      * {@code CellIndex} resolves — {@code "CD3: Nucleus: Median"} rather than the bare
      * {@code "CD3"}. The editor must read the same column, or the histogram axis, the
      * threshold line and the actual classification all describe different data.
@@ -1251,8 +1113,7 @@ public class GateEditorPane extends VBox {
 
     /**
      * The points to plot for a 2D gate: each axis read through its <em>own</em> resolved
-     * column, and standardised against its own distribution when the gate is in z-score
-     * space.
+     * column, as measured.
      * <p>
      * One spelling. This block existed four times — the quadrant slider range, the
      * quadrant scatter, its channel-change refresh, and the region scatter — and a fix
@@ -1263,10 +1124,6 @@ public class GateEditorPane extends VBox {
     private double[][] plotData(GateNode node) {
         GateAxis x = GateAxis.of(node, 0);
         GateAxis y = GateAxis.of(node, 1);
-        if (node.isThresholdIsZScore() && markerStats != null) {
-            return getFilteredXYWithZScore(x.channel(), x.compartment(), x.statistic(),
-                    y.channel(), y.compartment(), y.statistic());
-        }
         return getFilteredXY(x.channel(), x.compartment(), x.statistic(),
                 y.channel(), y.compartment(), y.statistic());
     }
@@ -1300,31 +1157,6 @@ public class GateEditorPane extends VBox {
         return new double[][]{fx, fy};
     }
 
-    /**
-     * Like getFilteredXY but transforms values to z-score space.
-     * Used for 2D gate scatter plots where thresholds/shapes are in z-score space.
-     * <p>
-     * Standardises each axis against its own <em>resolved</em> column: z-scoring a
-     * nuclear-median value with the whole-cell-mean mean/std would place every point
-     * somewhere the gate boundaries do not mean anything.
-     */
-    private double[][] getFilteredXYWithZScore(String chX, Compartment compX, Statistic statX,
-                                               String chY, Compartment compY, Statistic statY) {
-        double[][] raw = getFilteredXY(chX, compX, statX, chY, compY, statY);
-        MeasuredColumn colX = column(chX, compX, statX);
-        MeasuredColumn colY = column(chY, compY, statY);
-        if (colX == null || colY == null) return raw;
-        double[] fx = raw[0];
-        double[] fy = raw[1];
-        double[] zx = new double[fx.length];
-        double[] zy = new double[fy.length];
-        for (int i = 0; i < fx.length; i++) {
-            zx[i] = colX.toZScore(fx[i]);
-            zy[i] = colY.toZScore(fy[i]);
-        }
-        return new double[][]{zx, zy};
-    }
-
     /** Check if a cell index passes both ROI mask and ancestor mask. */
     private boolean passesMasks(int i) {
         if (roiMask != null && !roiMask[i]) return false;
@@ -1340,8 +1172,8 @@ public class GateEditorPane extends VBox {
         int markerIdx = cellIndex.getMarkerIndex(channel);
         if (markerIdx < 0) return;
 
-        // The column the engine will actually gate on. Everything below — values, z-score
-        // transform, clip percentiles, slider range — comes off this one handle, so the
+        // The column the engine will actually gate on. Everything below — values, clip
+        // percentiles, slider range — comes off this one handle, so the
         // histogram shows exactly what GatingEngine compares against.
         MeasuredColumn col = thresholdColumn(currentNode);
         if (col == null) return;
@@ -1371,19 +1203,7 @@ public class GateEditorPane extends VBox {
                 for (double v : allValues) if (!Double.isNaN(v)) rawValues[j++] = v;
             }
         }
-        boolean useZ = currentNode.isThresholdIsZScore() && col.hasSpread();
-
-        double[] displayValues;
-        if (useZ) {
-            displayValues = new double[rawValues.length];
-            double mean = col.mean();
-            double std = col.std();
-            for (int i = 0; i < rawValues.length; i++) {
-                displayValues[i] = (rawValues[i] - mean) / std;
-            }
-        } else {
-            displayValues = rawValues;
-        }
+        double[] displayValues = rawValues;
 
         // Anchor the histogram clip range on global per-marker percentiles so
         // the same axis is used for this channel everywhere it appears in the
@@ -1398,10 +1218,6 @@ public class GateEditorPane extends VBox {
         // uses one axis everywhere it appears in the gate tree.
         double clipLo = col.percentile(pctLo);
         double clipHi = col.percentile(pctHi);
-        if (useZ) {
-            clipLo = col.toZScore(clipLo);
-            clipHi = col.toZScore(clipHi);
-        }
 
         // Defensive fallback only when the global percentile is unusable
         // (column constant in the full population, or absent from markerStats).
@@ -1426,7 +1242,7 @@ public class GateEditorPane extends VBox {
             currentThresholdSlider.setMin(clipMin);
             currentThresholdSlider.setMax(clipMax);
             // Re-pin the step to the new range so threshold "speed" matches the
-            // QC sliders whether the axis is z-score (~10 wide) or raw (~10000s wide).
+            // QC sliders whether the column is ~10 wide or ~10000s wide.
             SliderUtils.applyRangeStep(currentThresholdSlider);
             // Re-pin the thumb and the text field AFTER the range move. Slider.setMin
             // and setMax silently clamp the current value, so a mode/compartment switch
@@ -1494,28 +1310,6 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * Point the Raw/Z-score toggle at {@code node}, and offer z-score only when this gate's
-     * axes can actually deliver one.
-     * <p>
-     * The button used to be created selected and never disabled, while the drawing code
-     * asked a second question the button had not: {@code updateHistogram} computes
-     * {@code isThresholdIsZScore() && col.hasSpread()} and draws raw values on a flat
-     * column. So the editor rendered raw under a button reading "Z-score", and flipping the
-     * toggle there moved the label and the gate's flag without converting the threshold —
-     * the conversion is guarded on the same {@code hasSpread()} the button was not.
-     * <p>
-     * Two separate reasons to withdraw the offer, and they become answerable at different
-     * times. A statistic MIRAGE already standardised is knowable from the gate alone, so it
-     * is checked first and holds even before an index is attached. Whether the column is
-     * flat needs data; until there is some, the question is left open and the node's own
-     * preference stands, so an editor that has not seen cells cannot discard a saved gate's
-     * setting.
-     * <p>
-     * Re-run from {@link #applySignalChange} as well as on rebuild, because changing the
-     * compartment or the statistic changes which column the axis resolves to — and
-     * therefore both answers.
-     */
-    /**
      * Rebuild the "Values" row from what this gate can actually offer, and select the mode
      * it is in.
      * <p>
@@ -1564,42 +1358,22 @@ public class GateEditorPane extends VBox {
 
         currentMode = selected;
 
-        // Migration, and the reason this cannot be a silent write-back. A gate saved
-        // before FlowPath stopped deriving its own z-score carries a threshold expressed
-        // in standard deviations. Clearing the flag alone would leave that number being
-        // compared against raw intensities — a threshold of 1.5 against a column whose
-        // values run to thousands, so every cell reads negative, with no error and a gate
-        // tree that still looks right. Convert first, then clear.
-        if (node.isThresholdIsZScore()) {
-            convertGateSpace(node, false);   // z-score space -> raw, against the same column
-            node.setThresholdIsZScore(false);
-            logger.debug("Migrated gate '{}' off the retired computed z-score mode; "
-                    + "threshold converted to raw space", node.getChannel());
-        } else if (selected != null && !alreadyIn(node, selected)) {
+        // A gate saved under the retired computed z-score is not migrated here any more:
+        // LegacyZScoreMigration converts the whole tree when it first meets an index, so a
+        // gate the user never opens is converted too.
+        if (selected != null && !alreadyIn(node, selected)) {
             selected.applyTo(node);
         }
     }
 
     /** Whether {@code node} already reads the way {@code mode} says it should. */
     private static boolean alreadyIn(GateNode node, ValueMode mode) {
-        if (node.isThresholdIsZScore()) return false;
         for (GateAxis axis : GateAxis.axesOf(node)) {
             Statistic statistic = axis.statistic();
             if (statistic == null) continue;
             if (!statistic.normalisation().equals(mode.normalisation())) return false;
         }
         return true;
-    }
-
-    /** Why the computed z-score is not on offer, in the user's terms. */
-    private static String unavailableZScoreReason(boolean alreadyStandardised) {
-        if (alreadyStandardised) {
-            return "This statistic is already standardised by MIRAGE, across every cell of "
-                    + "the patient.\nStandardising it again would rescale the axis by "
-                    + "whatever is currently filtered.";
-        }
-        return "This channel's values are constant, so there is no spread to standardise "
-                + "against.";
     }
 
     private void withSuppressedEvents(Runnable action) {
@@ -1653,14 +1427,14 @@ public class GateEditorPane extends VBox {
 
     /**
      * Anchor the scatter axes on the clip percentiles of each axis' own resolved
-     * column, matching whichever coordinate space the gate is in. {@code node} is
+     * column, as measured. {@code node} is
      * only read for its clip percentiles; the columns come from {@link #columnX}/
      * {@link #columnY} so a nuclear or median axis anchors on its own distribution.
      */
     private void applyClipAxisRange(ScatterPlotCanvas scatter, MeasuredColumn colX, MeasuredColumn colY,
-                                    GateNode node, boolean zScore) {
-        double[] x = clipSpan(colX, node, zScore);
-        double[] y = clipSpan(colY, node, zScore);
+                                    GateNode node) {
+        double[] x = clipSpan(colX, node);
+        double[] y = clipSpan(colY, node);
         if (x == null || y == null) {
             scatter.clearAxisRange();
             return;
@@ -1669,23 +1443,15 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * One axis' visible window: {@code col}'s clip percentiles, in the gate's coordinate
-     * space, or {@code null} when they do not make a usable range. The scatter plot's axes
+     * One axis' visible window: {@code col}'s clip percentiles, or {@code null} when they do
+     * not make a usable range. The scatter plot's axes
      * and the quadrant editor's slider travel both come from here, so what the slider spans
      * is what the plot shows.
      */
-    private double[] clipSpan(MeasuredColumn col, GateNode node) {
-        return clipSpan(col, node, node.isThresholdIsZScore());
-    }
-
-    private static double[] clipSpan(MeasuredColumn col, GateNode node, boolean zScore) {
+    private static double[] clipSpan(MeasuredColumn col, GateNode node) {
         if (col == null) return null;
         double lo = col.percentile(node.getClipPercentileLow());
         double hi = col.percentile(node.getClipPercentileHigh());
-        if (zScore) {
-            lo = col.toZScore(lo);
-            hi = col.toZScore(hi);
-        }
         if (Double.isNaN(lo) || Double.isNaN(hi) || !(hi > lo)) return null;
         return new double[]{lo, hi};
     }
@@ -1693,7 +1459,7 @@ public class GateEditorPane extends VBox {
     /**
      * The travel for a quadrant threshold slider: the axis' visible window, widened just
      * enough to contain the gate's current threshold so the thumb never lies about it by
-     * pinning to an end. Falls back to {@code [-5, 5]} (the z-score default the threshold
+     * pinning to an end. Falls back to {@code [-5, 5]} (the default window the threshold
      * editor also starts from) when there is no window. Pure, so it is table-testable
      * without a toolkit.
      */
@@ -1755,7 +1521,7 @@ public class GateEditorPane extends VBox {
 
     /** Re-anchor {@code scatter}'s axes for {@code node}'s current axis selection. */
     private void applyAxisRangeFor(ScatterPlotCanvas scatter, GateNode node) {
-        applyClipAxisRange(scatter, columnX(node), columnY(node), node, node.isThresholdIsZScore());
+        applyClipAxisRange(scatter, columnX(node), columnY(node), node);
     }
 
     /** Re-read the scatter currently on screen, for whichever gate it is showing. */

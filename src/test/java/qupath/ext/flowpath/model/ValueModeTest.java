@@ -27,7 +27,6 @@ class ValueModeTest {
         gate.setChannel(marker);
         gate.setCompartment(compartment);
         gate.setStatistic(statistic);
-        gate.setThresholdIsZScore(false);
         return gate;
     }
 
@@ -40,7 +39,6 @@ class ValueModeTest {
         gate.setChannelY(markerY);
         gate.setCompartmentY(Compartment.WHOLE_CELL);
         gate.setStatisticY(statY);
-        gate.setThresholdIsZScore(false);
         return gate;
     }
 
@@ -190,7 +188,6 @@ class ValueModeTest {
 
         assertEquals(Statistic.of("Median Z"), gate.getStatisticX());
         assertEquals(Statistic.of("Mean Z"), gate.getStatisticY());
-        assertFalse(gate.isThresholdIsZScore());
     }
 
     /** Returning to Raw strips the suffix from every axis. */
@@ -202,25 +199,27 @@ class ValueModeTest {
 
         assertEquals(Statistic.MEDIAN, gate.getStatisticX());
         assertEquals(Statistic.MEAN, gate.getStatisticY());
-        assertFalse(gate.isThresholdIsZScore());
     }
 
     /**
-     * <b>A gate saved with the retired flag is in no offered mode.</b> Its threshold is
-     * expressed in standard deviations FlowPath derived, and nothing on the menu means
-     * that any more -- so the selection falls back to raw, which is the caller's cue to
-     * convert the threshold before clearing the flag.
+     * <b>The retired flag is not a mode, and choosing a mode does not touch it.</b> Clearing
+     * it is {@link LegacyZScoreMigration}'s job, because only a caller holding the index can
+     * convert the numbers it describes; a mode write that dropped it on the way past would
+     * leave a threshold in standard deviations compared against raw intensities.
      */
     @Test
-    void aGateCarryingTheRetiredFlagFallsBackToRaw() {
+    void theRetiredFlagNeitherSelectsNorIsClearedByAMode() {
         var capability = CompartmentCapability.fromKeys(Set.of(
                 "CD3: Cell: Median", "CD3: Cell: Median Z"));
         var gate = thresholdOn("CD3", Compartment.WHOLE_CELL, Statistic.of("Median Z"));
         gate.setThresholdIsZScore(true);
 
         var modes = ValueMode.availableFor(gate, capability);
-        assertEquals(ValueMode.Kind.RAW, ValueMode.selectedIn(modes, gate).kind(),
-                "the flag means the number came from FlowPath, which is no longer a mode");
+        ValueMode selected = ValueMode.selectedIn(modes, gate);
+        assertEquals(ValueMode.Kind.MIRAGE, selected.kind(),
+                "the mode is read off the column the gate points at");
+        modes.get(0).applyTo(gate);
+        assertTrue(gate.isThresholdIsZScore(), "only the migration clears the flag");
     }
 
     /** Axes that disagree about normalisation have no gate-wide mode; raw is the answer. */

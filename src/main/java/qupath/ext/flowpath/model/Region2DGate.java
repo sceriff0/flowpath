@@ -68,6 +68,12 @@ public abstract sealed class Region2DGate extends GateNode
         return contains(x, y) ? 0 : 1;
     }
 
+    /** Inside (branch 0) counts as positive on both of the region's axis columns. */
+    @Override
+    public boolean branchIsPositiveOn(int branch, int axis) {
+        return branch == 0;
+    }
+
     /**
      * A region gate has no 1-D cut — positivity on a single axis is not defined for it,
      * and answering anyway (with the unused inherited {@code threshold} field, which is
