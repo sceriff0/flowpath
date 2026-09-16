@@ -212,7 +212,7 @@ class GateEditorAxisChangeTest {
         assertTrue(column.hasSpread(), "a column of NaN or one repeated value has no spread");
     }
 
-    // ---- one axis: buildThresholdEditor --------------------------------------
+    // ---- one axis: ThresholdGateEditor ---------------------------------------
 
     @Test
     void thresholdChannelChangeRepinsTheAxisToTheNewChannelsColumn() {
@@ -254,7 +254,7 @@ class GateEditorAxisChangeTest {
         assertEquals("CD4-", branchNames(gate).get(1));
     }
 
-    // ---- two axes: buildQuadrantEditor ---------------------------------------
+    // ---- two axes: QuadrantGateEditor ----------------------------------------
 
     @Test
     void quadrantXChannelChangeRepinsOnlyTheXAxis() {
@@ -315,7 +315,7 @@ class GateEditorAxisChangeTest {
         assertEquals("CD8-/CD4+", branchNames(gate).get(1));
     }
 
-    // ---- two axes: build2DEditor ---------------------------------------------
+    // ---- two axes: Region2DGateEditor ---------------------------------------
 
     @Test
     void regionXChannelChangeRepinsOnlyTheXAxis() {
