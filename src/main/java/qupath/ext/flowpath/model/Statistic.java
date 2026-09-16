@@ -184,19 +184,6 @@ public final class Statistic {
         return of(baseToken() + norm);
     }
 
-    /**
-     * True when MIRAGE has <b>already standardised</b> this column across the cells of one
-     * patient — the {@code " Z"} and {@code " RobustZ"} variants.
-     * <p>
-     * FlowPath's own z-score toggle, since retired, used to standardise whatever column was
-     * selected, so turning it on over an already-standardised statistic z-scored a
-     * z-score. MIRAGE standardises across every cell of a patient; FlowPath's version was
-     * across the cells currently loaded and filtered, so the two were never the same number.
-     */
-    public boolean isStandardised() {
-        return !normalisation().isEmpty();
-    }
-
     /** True if this is one of the three statistics FlowPath ships an opinion about. */
     public boolean isKnown() {
         return KNOWN.contains(this);
