@@ -1,5 +1,7 @@
 package qupath.ext.flowpath.model;
 
+import java.util.function.DoubleUnaryOperator;
+
 /**
  * A 2D ellipse gate that classifies cells based on whether their (channelX, channelY)
  * marker values fall inside an elliptical region. Produces 2 branches: inside/outside.
@@ -46,6 +48,35 @@ public final class EllipseGate extends Region2DGate {
         double dx = (x - centerX) / radiusX;
         double dy = (y - centerY) / radiusY;
         return (dx * dx + dy * dy) <= 1.0;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void clearShape() {
+        centerX = 0;
+        centerY = 0;
+        radiusX = 0;
+        radiusY = 0;
+    }
+
+    /**
+     * {@inheritDoc} A zero (or near-zero) X radius is left alone. The bounding box on each
+     * axis is remapped and the centre/radius recomputed from it: for a linear {@code fx}/
+     * {@code fy} (as {@code LegacyZScoreMigration} uses) this reduces exactly to mapping the
+     * centre directly and scaling each radius by the map's slope magnitude, which is the
+     * correct behaviour for a radius -- it has no position to shift.
+     */
+    @Override
+    public void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy) {
+        if (radiusX <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
+        double loX = fx.applyAsDouble(centerX - radiusX);
+        double hiX = fx.applyAsDouble(centerX + radiusX);
+        double loY = fy.applyAsDouble(centerY - radiusY);
+        double hiY = fy.applyAsDouble(centerY + radiusY);
+        centerX = (loX + hiX) / 2;
+        radiusX = Math.abs(hiX - loX) / 2;
+        centerY = (loY + hiY) / 2;
+        radiusY = Math.abs(hiY - loY) / 2;
     }
 
     @Override

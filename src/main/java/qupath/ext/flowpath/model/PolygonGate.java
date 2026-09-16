@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleUnaryOperator;
 
 /**
  * A 2D polygon gate that classifies cells based on whether their (channelX, channelY)
@@ -98,6 +99,24 @@ public final class PolygonGate extends Region2DGate {
             }
         }
         return inside;
+    }
+
+    /** {@inheritDoc} An empty vertex list is already degenerate, per {@link #isDegenerate}. */
+    @Override
+    public void clearShape() {
+        vertices = new ArrayList<>();
+    }
+
+    /**
+     * {@inheritDoc} Each vertex is mapped independently; an empty polygon has none to map,
+     * so no separate degenerate guard is needed here.
+     */
+    @Override
+    public void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy) {
+        for (double[] v : vertices) {
+            v[0] = fx.applyAsDouble(v[0]);
+            v[1] = fy.applyAsDouble(v[1]);
+        }
     }
 
     @Override

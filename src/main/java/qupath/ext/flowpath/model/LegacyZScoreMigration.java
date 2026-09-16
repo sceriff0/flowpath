@@ -215,29 +215,14 @@ public final class LegacyZScoreMigration {
                 qg.setThresholdX(x.fromZScore(qg.getThresholdX()));
                 qg.setThresholdY(y.fromZScore(qg.getThresholdY()));
             }
-            case PolygonGate pg -> {
-                List<double[]> raw = new ArrayList<>(pg.getVertices().size());
-                for (double[] v : pg.getVertices()) {
-                    raw.add(new double[]{x.fromZScore(v[0]), y.fromZScore(v[1])});
-                }
-                pg.setVertices(raw);
-            }
-            case RectangleGate rg -> {
-                double minX = x.fromZScore(rg.getMinX());
-                double maxX = x.fromZScore(rg.getMaxX());
-                double minY = y.fromZScore(rg.getMinY());
-                double maxY = y.fromZScore(rg.getMaxY());
-                rg.setMinX(minX);
-                rg.setMaxX(maxX);
-                rg.setMinY(minY);
-                rg.setMaxY(maxY);
-            }
-            case EllipseGate eg -> {
-                eg.setCenterX(x.fromZScore(eg.getCenterX()));
-                eg.setCenterY(y.fromZScore(eg.getCenterY()));
-                eg.setRadiusX(eg.getRadiusX() * x.std());
-                eg.setRadiusY(eg.getRadiusY() * y.std());
-            }
+            // fromZScore is linear (value * std + mean), so routing every shape through the
+            // model's generic remapCoordinates reproduces exactly what this used to do by
+            // hand per shape: a polygon vertex maps directly, a rectangle bound maps
+            // directly (its slope is always positive, so the re-sort is a no-op here), and
+            // an ellipse's bounding-box round trip reduces to mapping the centre through
+            // fromZScore and scaling each radius by |std| -- the same "radius scales, does
+            // not shift" rule this method used to spell out for EllipseGate alone.
+            case Region2DGate region -> region.remapCoordinates(x::fromZScore, y::fromZScore);
             default -> node.setThreshold(x.fromZScore(node.getThreshold()));
         }
         return Outcome.CONVERTED;
@@ -250,13 +235,16 @@ public final class LegacyZScoreMigration {
         return column != null && column.hasSpread() ? column : null;
     }
 
-    /** A region that encloses nothing in any space, so there is nothing to convert. */
+    /**
+     * A region that encloses nothing in any space, so there is nothing to convert.
+     * Exhaustive over Region2DGate's sealed permits with no default: a new region shape
+     * fails to compile here rather than silently being treated as always convertible.
+     */
     private static boolean hasNoShape(Region2DGate region) {
         return switch (region) {
             case PolygonGate pg -> pg.getVertices().isEmpty();
             case RectangleGate rg -> !(rg.getMaxX() > rg.getMinX()) || !(rg.getMaxY() > rg.getMinY());
             case EllipseGate eg -> !(eg.getRadiusX() > 0) || !(eg.getRadiusY() > 0);
-            default -> false;
         };
     }
 }

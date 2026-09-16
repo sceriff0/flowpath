@@ -159,12 +159,17 @@ public class FlowPathCell extends TreeCell<Object> {
         return label;
     }
 
-    /** The gate-type word shown on a 2D region gate. */
+    /**
+     * The gate-type word shown on a 2D region gate. A genuine per-type dispatch over
+     * Region2DGate's sealed permits: exhaustive with no default, so a new region shape
+     * fails to compile here instead of silently displaying as a generic "region".
+     */
     private static String regionTypeName(Region2DGate gate) {
-        if (gate instanceof PolygonGate) return "polygon";
-        if (gate instanceof RectangleGate) return "rectangle";
-        if (gate instanceof EllipseGate) return "ellipse";
-        return "region";
+        return switch (gate) {
+            case PolygonGate _ -> "polygon";
+            case RectangleGate _ -> "rectangle";
+            case EllipseGate _ -> "ellipse";
+        };
     }
 
     /**

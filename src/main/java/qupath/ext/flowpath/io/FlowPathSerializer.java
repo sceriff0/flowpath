@@ -613,7 +613,7 @@ public class FlowPathSerializer {
         return gate;
     }
 
-    private static GateNode deserialize2DNode(GateNode gate, JsonObject obj,
+    private static Region2DGate deserialize2DNode(Region2DGate gate, JsonObject obj,
                                                 double clipLow, double clipHigh, boolean excludeOutliers) throws IOException {
         gate.setClipPercentileLow(clipLow);
         gate.setClipPercentileHigh(clipHigh);
@@ -622,36 +622,41 @@ public class FlowPathSerializer {
         // Shared axis block for all 2D region gate types: channels, the legacy z-score flag,
         // and the per-axis compartment/statistic (absent in v1/v2 files, which then
         // default to whole-cell mean and behave exactly as before).
-        if (gate instanceof Region2DGate region) {
-            region.setChannelX(optString(obj, "channelX"));
-            region.setChannelY(optString(obj, "channelY"));
-            region.setCompartmentX(parseCompartment(obj, "compartmentX"));
-            region.setCompartmentY(parseCompartment(obj, "compartmentY"));
-            region.setStatisticX(parseStatistic(obj, "statisticX"));
-            region.setStatisticY(parseStatistic(obj, "statisticY"));
-        }
+        gate.setChannelX(optString(obj, "channelX"));
+        gate.setChannelY(optString(obj, "channelY"));
+        gate.setCompartmentX(parseCompartment(obj, "compartmentX"));
+        gate.setCompartmentY(parseCompartment(obj, "compartmentY"));
+        gate.setStatisticX(parseStatistic(obj, "statisticX"));
+        gate.setStatisticY(parseStatistic(obj, "statisticY"));
         if (obj.has("thresholdIsZScore"))
             gate.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
 
-        if (gate instanceof PolygonGate pg) {
-            if (obj.has("vertices")) {
-                List<double[]> verts = new ArrayList<>();
-                for (JsonElement elem : obj.getAsJsonArray("vertices")) {
-                    JsonArray pt = elem.getAsJsonArray();
-                    verts.add(new double[]{pt.get(0).getAsDouble(), pt.get(1).getAsDouble()});
+        // A genuine per-type dispatch over Region2DGate's sealed permits: exhaustive with no
+        // default, so a new region shape fails to compile here instead of silently loading
+        // with none of its own fields set.
+        switch (gate) {
+            case PolygonGate pg -> {
+                if (obj.has("vertices")) {
+                    List<double[]> verts = new ArrayList<>();
+                    for (JsonElement elem : obj.getAsJsonArray("vertices")) {
+                        JsonArray pt = elem.getAsJsonArray();
+                        verts.add(new double[]{pt.get(0).getAsDouble(), pt.get(1).getAsDouble()});
+                    }
+                    pg.setVertices(verts);
                 }
-                pg.setVertices(verts);
             }
-        } else if (gate instanceof RectangleGate rg) {
-            if (obj.has("minX")) rg.setMinX(obj.get("minX").getAsDouble());
-            if (obj.has("maxX")) rg.setMaxX(obj.get("maxX").getAsDouble());
-            if (obj.has("minY")) rg.setMinY(obj.get("minY").getAsDouble());
-            if (obj.has("maxY")) rg.setMaxY(obj.get("maxY").getAsDouble());
-        } else if (gate instanceof EllipseGate eg) {
-            if (obj.has("centerX")) eg.setCenterX(obj.get("centerX").getAsDouble());
-            if (obj.has("centerY")) eg.setCenterY(obj.get("centerY").getAsDouble());
-            if (obj.has("radiusX")) eg.setRadiusX(obj.get("radiusX").getAsDouble());
-            if (obj.has("radiusY")) eg.setRadiusY(obj.get("radiusY").getAsDouble());
+            case RectangleGate rg -> {
+                if (obj.has("minX")) rg.setMinX(obj.get("minX").getAsDouble());
+                if (obj.has("maxX")) rg.setMaxX(obj.get("maxX").getAsDouble());
+                if (obj.has("minY")) rg.setMinY(obj.get("minY").getAsDouble());
+                if (obj.has("maxY")) rg.setMaxY(obj.get("maxY").getAsDouble());
+            }
+            case EllipseGate eg -> {
+                if (obj.has("centerX")) eg.setCenterX(obj.get("centerX").getAsDouble());
+                if (obj.has("centerY")) eg.setCenterY(obj.get("centerY").getAsDouble());
+                if (obj.has("radiusX")) eg.setRadiusX(obj.get("radiusX").getAsDouble());
+                if (obj.has("radiusY")) eg.setRadiusY(obj.get("radiusY").getAsDouble());
+            }
         }
 
         // Deserialize branches

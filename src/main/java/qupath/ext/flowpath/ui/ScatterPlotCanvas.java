@@ -203,14 +203,17 @@ public class ScatterPlotCanvas extends Canvas {
      * zero-size rectangle at the origin would only mislead.
      */
     private boolean hasDrawableShape() {
-        if (overlayGate instanceof PolygonGate g) return g.getVertices().size() >= 3;
-        if (overlayGate instanceof RectangleGate g) {
-            return g.getMaxX() - g.getMinX() > Region2DGate.MIN_DRAWABLE_EXTENT
-                    && g.getMaxY() - g.getMinY() > Region2DGate.MIN_DRAWABLE_EXTENT;
-        }
-        if (overlayGate instanceof EllipseGate g) {
-            return g.getRadiusX() > Region2DGate.MIN_DRAWABLE_EXTENT
-                    && g.getRadiusY() > Region2DGate.MIN_DRAWABLE_EXTENT;
+        if (overlayGate instanceof Region2DGate region) {
+            // A genuine per-type dispatch over Region2DGate's sealed permits: exhaustive
+            // with no default, so a new region shape fails to compile here rather than
+            // silently falling through to "always drawable".
+            return switch (region) {
+                case PolygonGate g -> g.getVertices().size() >= 3;
+                case RectangleGate g -> g.getMaxX() - g.getMinX() > Region2DGate.MIN_DRAWABLE_EXTENT
+                        && g.getMaxY() - g.getMinY() > Region2DGate.MIN_DRAWABLE_EXTENT;
+                case EllipseGate g -> g.getRadiusX() > Region2DGate.MIN_DRAWABLE_EXTENT
+                        && g.getRadiusY() > Region2DGate.MIN_DRAWABLE_EXTENT;
+            };
         }
         return overlayGate != null;
     }

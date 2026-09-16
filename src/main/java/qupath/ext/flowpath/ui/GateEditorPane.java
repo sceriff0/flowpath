@@ -530,22 +530,18 @@ public class GateEditorPane extends VBox {
         ellipseBtn.setToggleGroup(toolGroup);
         Button clearShapeBtn = new Button("Clear Shape");
         clearShapeBtn.setOnAction(e -> {
-            if (node instanceof PolygonGate pg) {
-                pg.setVertices(List.of());
-            } else if (node instanceof RectangleGate rg) {
-                rg.setMinX(0); rg.setMaxX(0); rg.setMinY(0); rg.setMaxY(0);
-            } else if (node instanceof EllipseGate eg) {
-                eg.setCenterX(0); eg.setCenterY(0); eg.setRadiusX(0); eg.setRadiusY(0);
-            }
+            node.clearShape();
             // Rebuild the editor to show fresh scatter (no overlay)
             setGateNode(node);
             fireNodeChanged();
         });
         HBox drawToolbar = new HBox(4, polygonBtn, rectBtn, ellipseBtn, clearShapeBtn);
 
-        if (node instanceof PolygonGate) polygonBtn.setSelected(true);
-        else if (node instanceof RectangleGate) rectBtn.setSelected(true);
-        else if (node instanceof EllipseGate) ellipseBtn.setSelected(true);
+        switch (node) {
+            case PolygonGate _ -> polygonBtn.setSelected(true);
+            case RectangleGate _ -> rectBtn.setSelected(true);
+            case EllipseGate _ -> ellipseBtn.setSelected(true);
+        }
 
         syncModeSelection(node);
 
@@ -660,9 +656,11 @@ public class GateEditorPane extends VBox {
                     }
                 });
 
-                if (node instanceof PolygonGate) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.POLYGON);
-                else if (node instanceof RectangleGate) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.RECTANGLE);
-                else if (node instanceof EllipseGate) scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
+                switch (node) {
+                    case PolygonGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.POLYGON);
+                    case RectangleGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.RECTANGLE);
+                    case EllipseGate _ -> scatter.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
+                }
 
                 gateSpecificArea.getChildren().add(scatter);
 
@@ -885,39 +883,15 @@ public class GateEditorPane extends VBox {
      * each coordinate to the same percentile of its axis' new column, so the shape keeps
      * enclosing a comparable population instead of landing off-plot.
      * <p>
-     * Degenerate (cleared) shapes are left alone — remapping a placeholder zero would
-     * plant a real region at the new column's minimum. The ellipse is remapped through
-     * its bounding box: percentile mapping is not linear, so an exact ellipse cannot be
-     * preserved, and the box is the sensible approximation.
+     * The per-shape mechanics (degenerate-shape guard, rectangle bound re-sorting, ellipse
+     * bounding-box round trip) live on {@link Region2DGate#remapCoordinates} now; this method
+     * only supplies the two axis functions.
      */
     private void remapRegionShape(Region2DGate gate, MeasuredColumn oldX, MeasuredColumn newX,
                                   MeasuredColumn oldY, MeasuredColumn newY) {
-        if (gate instanceof PolygonGate pg) {
-            if (pg.getVertices().isEmpty()) return;
-            List<double[]> out = new ArrayList<>();
-            for (double[] v : pg.getVertices()) {
-                out.add(new double[]{
-                        remapRawThreshold(oldX, newX, v[0]),
-                        remapRawThreshold(oldY, newY, v[1])});
-            }
-            pg.setVertices(out);
-        } else if (gate instanceof RectangleGate rg) {
-            if (rg.getMaxX() - rg.getMinX() <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
-            rg.setMinX(remapRawThreshold(oldX, newX, rg.getMinX()));
-            rg.setMaxX(remapRawThreshold(oldX, newX, rg.getMaxX()));
-            rg.setMinY(remapRawThreshold(oldY, newY, rg.getMinY()));
-            rg.setMaxY(remapRawThreshold(oldY, newY, rg.getMaxY()));
-        } else if (gate instanceof EllipseGate eg) {
-            if (eg.getRadiusX() <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
-            double loX = remapRawThreshold(oldX, newX, eg.getCenterX() - eg.getRadiusX());
-            double hiX = remapRawThreshold(oldX, newX, eg.getCenterX() + eg.getRadiusX());
-            double loY = remapRawThreshold(oldY, newY, eg.getCenterY() - eg.getRadiusY());
-            double hiY = remapRawThreshold(oldY, newY, eg.getCenterY() + eg.getRadiusY());
-            eg.setCenterX((loX + hiX) / 2);
-            eg.setRadiusX(Math.abs(hiX - loX) / 2);
-            eg.setCenterY((loY + hiY) / 2);
-            eg.setRadiusY(Math.abs(hiY - loY) / 2);
-        }
+        gate.remapCoordinates(
+                v -> remapRawThreshold(oldX, newX, v),
+                v -> remapRawThreshold(oldY, newY, v));
     }
 
     /**

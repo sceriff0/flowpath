@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleUnaryOperator;
 
 /**
  * Shared base for the 2D region gates — {@link PolygonGate}, {@link RectangleGate}
@@ -82,6 +83,31 @@ public abstract sealed class Region2DGate extends GateNode
      * boundary. Each shape's own {@code contains} documents how it applies this rule.
      */
     public abstract boolean contains(double x, double y);
+
+    /**
+     * Reset this shape to the zero-extent "no shape" state {@link #contains} treats as
+     * enclosing nothing -- an empty polygon, a rectangle collapsed to a point, an ellipse
+     * with zero radii. The "Clear Shape" action in the 2D editor is the sole caller; each
+     * subclass implements this against its own fields rather than the editor branching on
+     * gate type.
+     */
+    public abstract void clearShape();
+
+    /**
+     * Remap every coordinate of this shape through {@code fx} (the X axis) and {@code fy}
+     * (the Y axis).
+     * <p>
+     * Used to carry a drawn region across a raw-mode compartment/statistic switch that
+     * changes what a coordinate on an axis means (the editor supplies a percentile-preserving
+     * map), and by {@code LegacyZScoreMigration} to move a legacy shape out of the retired
+     * computed z-score (a linear map). A shape with no genuine extent is left alone --
+     * remapping a placeholder zero would plant a real region at the new axis' minimum where
+     * there was none. Rectangle re-sorts its bounds afterward so a non-monotone map cannot
+     * leave {@code minX > maxX}; ellipse remaps its bounding box and recomputes centre/radii,
+     * since percentile mapping is not linear and an exact ellipse cannot otherwise be
+     * preserved.
+     */
+    public abstract void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy);
 
     /** Branch 0 is inside the region, branch 1 outside. */
     @Override
