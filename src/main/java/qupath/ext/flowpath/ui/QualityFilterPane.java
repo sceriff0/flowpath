@@ -5,7 +5,10 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TitledPane;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MorphologyField;
@@ -64,11 +67,11 @@ public class QualityFilterPane extends TitledPane {
         setCollapsible(true);
         setExpanded(true);
 
-        grid.setHgap(8);
+        grid.setHgap(4);
         grid.setVgap(4);
         grid.setPadding(new Insets(6));
 
-        emptyLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 10;");
+        emptyLabel.setStyle("-fx-font-size: 10; -fx-opacity: 0.7;");
         emptyLabel.setWrapText(true);
 
         Button reset = new Button("Reset");
@@ -112,15 +115,27 @@ public class QualityFilterPane extends TitledPane {
             double lo = Double.isFinite(current.min()) ? clamp(current.min(), bounds) : bounds[0];
             double hi = Double.isFinite(current.max()) ? clamp(current.max(), bounds) : bounds[1];
 
-            Label name = new Label(field.label() + ":");
-            name.setStyle("-fx-text-fill: white; -fx-font-size: 10;");
+            // The name gets a row of its own. It used to sit in a column beside two
+            // 110px sliders inside a 280px pane, hard-coded white on that pane's light
+            // background — so what the user saw was the bars and nothing saying what they
+            // filtered. No text fill is set anywhere here: the theme decides, so the label
+            // reads on QuPath's light and dark styles alike.
+            Label name = new Label(field.label());
+            name.setStyle("-fx-font-size: 10; -fx-font-weight: bold;");
+            name.setMinWidth(Region.USE_PREF_SIZE);
+            name.setTooltip(new Tooltip(field.key() + "\nObserved " + fmt(bounds[0]) + " to " + fmt(bounds[1])));
 
             Slider minSlider = slider(bounds, lo);
             Slider maxSlider = slider(bounds, hi);
             Label minLabel = new Label(fmt(lo));
             Label maxLabel = new Label(Double.isFinite(current.max()) ? fmt(hi) : "off");
-            minLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
-            maxLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
+            minLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
+            maxLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
+            // Fixed width, so a value growing a digit does not shove the sliders mid-drag.
+            minLabel.setMinWidth(36);
+            maxLabel.setMinWidth(36);
+            minSlider.setTooltip(new Tooltip(field.label() + " minimum"));
+            maxSlider.setTooltip(new Tooltip(field.label() + " maximum"));
 
             Row r = new Row(field, minSlider, maxSlider, minLabel, maxLabel);
             rows.put(field.slug(), r);
@@ -128,11 +143,14 @@ public class QualityFilterPane extends TitledPane {
             minSlider.valueProperty().addListener((o, a, b) -> onSliderMoved(r));
             maxSlider.valueProperty().addListener((o, a, b) -> onSliderMoved(r));
 
-            grid.add(name, 0, row);
-            grid.add(minSlider, 1, row);
-            grid.add(minLabel, 2, row);
-            grid.add(maxSlider, 3, row);
-            grid.add(maxLabel, 4, row);
+            grid.add(name, 0, row, 4, 1);
+            row++;
+            grid.add(minSlider, 0, row);
+            grid.add(minLabel, 1, row);
+            grid.add(maxSlider, 2, row);
+            grid.add(maxLabel, 3, row);
+            GridPane.setHgrow(minSlider, Priority.ALWAYS);
+            GridPane.setHgrow(maxSlider, Priority.ALWAYS);
             row++;
         }
     }
@@ -162,7 +180,8 @@ public class QualityFilterPane extends TitledPane {
 
     private static Slider slider(double[] bounds, double value) {
         Slider s = new Slider(bounds[0], bounds[1], clamp(value, bounds));
-        s.setPrefWidth(110);
+        s.setPrefWidth(90);
+        s.setMinWidth(40);
         SliderUtils.makeRangeFriendly(s);
         return s;
     }

@@ -395,11 +395,18 @@ class GateEditorAxisChangeTest {
         gate.setCompartmentY(Compartment.NUCLEAR);
         Fixture f = editorFor(gate);
 
-        double[] nuclearX = GateAxis.of(gate, 0).columnIn(f.index(), f.stats()).values();
-        double expectedMin = Arrays.stream(nuclearX).min().orElseThrow();
-        double expectedMax = Arrays.stream(nuclearX).max().orElseThrow();
-        assertNotEquals(expectedMin, Arrays.stream(bareValues(f, "CD3")).min().orElseThrow(),
+        var nuclearCol = GateAxis.of(gate, 0).columnIn(f.index(), f.stats());
+        double[] nuclearX = nuclearCol.values();
+        assertNotEquals(Arrays.stream(nuclearX).min().orElseThrow(),
+                Arrays.stream(bareValues(f, "CD3")).min().orElseThrow(),
                 "the fixture must make the two candidate columns distinguishable");
+        // Travel is that column's clip window (what the scatter shows), widened to hold the
+        // threshold -- see QuadrantSliderSpanTest.
+        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{
+                nuclearCol.percentile(gate.getClipPercentileLow()),
+                nuclearCol.percentile(gate.getClipPercentileHigh())}, gate.getThresholdX());
+        double expectedMin = expected[0];
+        double expectedMax = expected[1];
 
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);
@@ -464,12 +471,19 @@ class GateEditorAxisChangeTest {
         select(compartmentCombos(f.pane()).get(0), Compartment.NUCLEAR);
 
         assertEquals(Compartment.NUCLEAR, gate.getCompartmentX());
-        double[] nuclear = GateAxis.of(gate, 0).columnIn(f.index(), f.stats()).values();
+        var nuclear = GateAxis.of(gate, 0).columnIn(f.index(), f.stats());
+        double lo = nuclear.percentile(gate.getClipPercentileLow());
+        double hi = nuclear.percentile(gate.getClipPercentileHigh());
+        if (gate.isThresholdIsZScore()) {
+            lo = nuclear.toZScore(lo);
+            hi = nuclear.toZScore(hi);
+        }
+        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);
-        assertEquals(Arrays.stream(nuclear).min().orElseThrow(), sliders.get(0).getMin(), 1e-9,
+        assertEquals(expected[0], sliders.get(0).getMin(), 1e-9,
                 "the sliders must be rebuilt against the newly selected column");
-        assertEquals(Arrays.stream(nuclear).max().orElseThrow(), sliders.get(0).getMax(), 1e-9);
+        assertEquals(expected[1], sliders.get(0).getMax(), 1e-9);
     }
 
     // ---- a picker from a superseded build owns nothing -----------------------

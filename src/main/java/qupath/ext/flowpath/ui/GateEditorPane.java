@@ -7,6 +7,7 @@ import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
@@ -98,6 +99,8 @@ public class GateEditorPane extends VBox {
     private HistogramCanvas currentHistogram;
     private Slider currentThresholdSlider;
     private TextField currentThresholdField;
+    /** Re-ranges the quadrant editor's sliders after a clip change; null for other gates. */
+    private Runnable currentQuadrantRerange;
     private Label currentPopulationLabel;
     private Label clipInfoLabel;
 
@@ -156,6 +159,7 @@ public class GateEditorPane extends VBox {
                 if (currentScatter != null && markerStats != null) {
                     applyAxisRangeFor(currentScatter, currentNode);
                 }
+                if (currentQuadrantRerange != null) currentQuadrantRerange.run();
                 fireNodeChanged();
             }
         });
@@ -168,6 +172,7 @@ public class GateEditorPane extends VBox {
                 if (currentScatter != null && markerStats != null) {
                     applyAxisRangeFor(currentScatter, currentNode);
                 }
+                if (currentQuadrantRerange != null) currentQuadrantRerange.run();
                 fireNodeChanged();
             }
         });
@@ -355,6 +360,7 @@ public class GateEditorPane extends VBox {
         this.currentThresholdSlider = null;
         this.currentThresholdField = null;
         this.currentPopulationLabel = null;
+        this.currentQuadrantRerange = null;
         if (node == null) {
             withSuppressedEvents(() -> setDisabled(true));
             gateTypeLabel.setText("No gate selected");
@@ -510,40 +516,40 @@ public class GateEditorPane extends VBox {
         wireChannelCombo(chXCombo, gate, 0);
         wireChannelCombo(chYCombo, gate, 1);
 
-        // Compute slider ranges from data (z-score or raw).
-        // For child gates with ancestor mask, use the filtered data range for proper centering.
-        double sliderMinX = -5, sliderMaxX = 5, sliderMinY = -5, sliderMaxY = 5;
-        if (hasPlottableAxes(gate)) {
-            double[][] fData = plotData(gate);
-            if (fData[0].length > 0) {
-                double dMinX = Double.MAX_VALUE, dMaxX = -Double.MAX_VALUE;
-                double dMinY = Double.MAX_VALUE, dMaxY = -Double.MAX_VALUE;
-                for (int i = 0; i < fData[0].length; i++) {
-                    if (!Double.isNaN(fData[0][i]) && !Double.isNaN(fData[1][i])) {
-                        dMinX = Math.min(dMinX, fData[0][i]);
-                        dMaxX = Math.max(dMaxX, fData[0][i]);
-                        dMinY = Math.min(dMinY, fData[1][i]);
-                        dMaxY = Math.max(dMaxY, fData[1][i]);
-                    }
-                }
-                if (dMaxX > dMinX) { sliderMinX = dMinX; sliderMaxX = dMaxX; }
-                if (dMaxY > dMinY) { sliderMinY = dMinY; sliderMaxY = dMaxY; }
-            }
-        }
-        if (sliderMinX >= sliderMaxX) { sliderMinX = -5; sliderMaxX = 5; }
-        if (sliderMinY >= sliderMaxY) { sliderMinY = -5; sliderMaxY = 5; }
-
-        Slider sliderX = new Slider(sliderMinX, sliderMaxX, Math.max(sliderMinX, Math.min(sliderMaxX, gate.getThresholdX())));
-        SliderUtils.makeRangeFriendly(sliderX);
-        Label valX = new Label(String.format(Locale.US, "%.3f", gate.getThresholdX()));
-        valX.setStyle("-fx-text-fill: white; -fx-font-family: monospace;");
-
-        Slider sliderY = new Slider(sliderMinY, sliderMaxY, Math.max(sliderMinY, Math.min(sliderMaxY, gate.getThresholdY())));
-        SliderUtils.makeRangeFriendly(sliderY);
-        Label valY = new Label(String.format(Locale.US, "%.3f", gate.getThresholdY()));
-        valY.setStyle("-fx-text-fill: white; -fx-font-family: monospace;");
+        // Slider travel is the SAME window the scatter plot's axes show: each axis' clip
+        // percentiles, in the gate's coordinate space. It used to be the raw data min to
+        // max, every outlier included, so on a skewed marker the part of the plot a user
+        // can actually see was a few pixels of slider — the thumb raced across the visible
+        // population, and its position said nothing about where the line was drawn.
+        Slider sliderX = new Slider(-5, 5, 0);
+        Slider sliderY = new Slider(-5, 5, 0);
+        sliderX.setPrefWidth(300);
+        sliderY.setPrefWidth(300);
+        SliderUtils.enableScrollControl(sliderX);
+        SliderUtils.enableScrollControl(sliderY);
+        TextField valX = thresholdField(gate.getThresholdX());
+        TextField valY = thresholdField(gate.getThresholdY());
 
         final ScatterPlotCanvas[] scatterRef = {null};
+
+        Runnable rerange = () -> withSuppressedEvents(() -> {
+            double[] spanX = quadrantSliderSpan(clipSpan(columnX(gate), gate), gate.getThresholdX());
+            double[] spanY = quadrantSliderSpan(clipSpan(columnY(gate), gate), gate.getThresholdY());
+            // Widen before narrowing so setMin never crosses the current max, and re-pin the
+            // value afterwards: Slider clamps silently on a range move.
+            sliderX.setMin(Math.min(sliderX.getMin(), spanX[0]));
+            sliderX.setMax(spanX[1]);
+            sliderX.setMin(spanX[0]);
+            sliderX.setValue(gate.getThresholdX());
+            sliderY.setMin(Math.min(sliderY.getMin(), spanY[0]));
+            sliderY.setMax(spanY[1]);
+            sliderY.setMin(spanY[0]);
+            sliderY.setValue(gate.getThresholdY());
+            SliderUtils.applyRangeStep(sliderX);
+            SliderUtils.applyRangeStep(sliderY);
+        });
+        rerange.run();
+        currentQuadrantRerange = rerange;
 
         sliderX.valueProperty().addListener((obs, old, val) -> {
             if (!suppressEvents) {
@@ -563,6 +569,11 @@ public class GateEditorPane extends VBox {
             }
         });
 
+        // Typed entry, for a threshold the slider's resolution cannot land on exactly.
+        // A value outside the visible window is honoured and the slider widens to show it.
+        wireQuadrantField(valX, gate, true, rerange, scatterRef);
+        wireQuadrantField(valY, gate, false, rerange, scatterRef);
+
         syncModeSelection(gate);
 
         HBox rowX = new HBox(8, chXLabel, chXCombo);
@@ -573,8 +584,8 @@ public class GateEditorPane extends VBox {
         gateSpecificArea.getChildren().addAll(
             rowX, rowY,
             modeRow,
-            createSectionHeader("Threshold X"), new HBox(8, sliderX, valX),
-            createSectionHeader("Threshold Y"), new HBox(8, sliderY, valY)
+            createSectionHeader("Threshold X"), growRow(sliderX, valX),
+            createSectionHeader("Threshold Y"), growRow(sliderY, valY)
         );
 
         // Add scatter plot if data is available
@@ -1648,26 +1659,98 @@ public class GateEditorPane extends VBox {
      */
     private void applyClipAxisRange(ScatterPlotCanvas scatter, MeasuredColumn colX, MeasuredColumn colY,
                                     GateNode node, boolean zScore) {
-        if (colX == null || colY == null) {
+        double[] x = clipSpan(colX, node, zScore);
+        double[] y = clipSpan(colY, node, zScore);
+        if (x == null || y == null) {
             scatter.clearAxisRange();
             return;
         }
-        double loX = colX.percentile(node.getClipPercentileLow());
-        double hiX = colX.percentile(node.getClipPercentileHigh());
-        double loY = colY.percentile(node.getClipPercentileLow());
-        double hiY = colY.percentile(node.getClipPercentileHigh());
+        scatter.setAxisRange(x[0], x[1], y[0], y[1]);
+    }
+
+    /**
+     * One axis' visible window: {@code col}'s clip percentiles, in the gate's coordinate
+     * space, or {@code null} when they do not make a usable range. The scatter plot's axes
+     * and the quadrant editor's slider travel both come from here, so what the slider spans
+     * is what the plot shows.
+     */
+    private double[] clipSpan(MeasuredColumn col, GateNode node) {
+        return clipSpan(col, node, node.isThresholdIsZScore());
+    }
+
+    private static double[] clipSpan(MeasuredColumn col, GateNode node, boolean zScore) {
+        if (col == null) return null;
+        double lo = col.percentile(node.getClipPercentileLow());
+        double hi = col.percentile(node.getClipPercentileHigh());
         if (zScore) {
-            loX = colX.toZScore(loX);
-            hiX = colX.toZScore(hiX);
-            loY = colY.toZScore(loY);
-            hiY = colY.toZScore(hiY);
+            lo = col.toZScore(lo);
+            hi = col.toZScore(hi);
         }
-        if (Double.isNaN(loX) || Double.isNaN(hiX) || Double.isNaN(loY) || Double.isNaN(hiY)
-                || !(hiX > loX) || !(hiY > loY)) {
-            scatter.clearAxisRange();
-            return;
+        if (Double.isNaN(lo) || Double.isNaN(hi) || !(hi > lo)) return null;
+        return new double[]{lo, hi};
+    }
+
+    /**
+     * The travel for a quadrant threshold slider: the axis' visible window, widened just
+     * enough to contain the gate's current threshold so the thumb never lies about it by
+     * pinning to an end. Falls back to {@code [-5, 5]} (the z-score default the threshold
+     * editor also starts from) when there is no window. Pure, so it is table-testable
+     * without a toolkit.
+     */
+    static double[] quadrantSliderSpan(double[] window, double threshold) {
+        double lo = window != null ? window[0] : -5;
+        double hi = window != null ? window[1] : 5;
+        if (Double.isFinite(threshold)) {
+            lo = Math.min(lo, threshold);
+            hi = Math.max(hi, threshold);
         }
-        scatter.setAxisRange(loX, hiX, loY, hiY);
+        if (!(hi > lo)) hi = lo + 1;
+        return new double[]{lo, hi};
+    }
+
+    private static TextField thresholdField(double value) {
+        TextField field = new TextField(String.format(Locale.US, "%.3f", value));
+        field.setPrefWidth(80);
+        field.setMinWidth(Region.USE_PREF_SIZE);
+        field.setStyle("-fx-text-fill: white; -fx-font-family: monospace; -fx-background-color: #3a3a3a;");
+        return field;
+    }
+
+    private static HBox growRow(Slider slider, TextField field) {
+        HBox row = new HBox(8, slider, field);
+        HBox.setHgrow(slider, Priority.ALWAYS);
+        slider.setMaxWidth(Double.MAX_VALUE);
+        return row;
+    }
+
+    /** Commit a typed quadrant threshold on Enter or focus loss; revert on a bad number. */
+    private void wireQuadrantField(TextField field, QuadrantGate gate, boolean xAxis,
+                                   Runnable rerange, ScatterPlotCanvas[] scatterRef) {
+        Runnable commit = () -> {
+            if (suppressEvents || currentNode != gate) return;
+            double current = xAxis ? gate.getThresholdX() : gate.getThresholdY();
+            double val;
+            try {
+                val = parseThreshold(field.getText());
+            } catch (NumberFormatException ex) {
+                field.setText(String.format(Locale.US, "%.3f", current));
+                return;
+            }
+            if (!Double.isFinite(val)) {
+                field.setText(String.format(Locale.US, "%.3f", current));
+                return;
+            }
+            if (val == current) return;
+            if (xAxis) gate.setThresholdX(val); else gate.setThresholdY(val);
+            rerange.run();
+            field.setText(String.format(Locale.US, "%.3f", val));
+            if (scatterRef[0] != null) scatterRef[0].setGateOverlay(gate);
+            fireNodeChanged();
+        };
+        field.setOnAction(e -> commit.run());
+        field.focusedProperty().addListener((obs, old, focused) -> {
+            if (!focused) commit.run();
+        });
     }
 
     /** Re-anchor {@code scatter}'s axes for {@code node}'s current axis selection. */
