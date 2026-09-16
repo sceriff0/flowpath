@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.LongSupplier;
 import java.util.function.UnaryOperator;
@@ -39,6 +40,11 @@ public final class UndoHistory<T> {
     private final Deque<T> undoStack = new ArrayDeque<>();
     private final Deque<T> redoStack = new ArrayDeque<>();
     private long lastRecordTime = 0;
+    /** Which source the current coalescing burst belongs to; see {@link #recordCoalesced(Object, Object)}. */
+    private Object lastSource = NO_BURST;
+
+    /** Sentinel for "no burst in progress", distinct from every caller's source, null included. */
+    private static final Object NO_BURST = new Object();
 
     public UndoHistory(int maxDepth, UnaryOperator<T> snapshotFn, LongSupplier clock) {
         this.maxDepth = maxDepth;
@@ -57,18 +63,36 @@ public final class UndoHistory<T> {
             undoStack.removeLast();
         }
         redoStack.clear();
+        // A discrete edit ends whatever burst was in progress, so the next coalesced edit
+        // is a step of its own rather than folded into one that started before it.
+        lastSource = NO_BURST;
     }
 
     /**
      * Like {@link #record}, but coalesces bursts of rapid edits (e.g. dragging a
      * slider) into a single undo step: only records if at least 500ms have elapsed
      * since the last recorded snapshot.
+     * <p>
+     * Equivalent to {@link #recordCoalesced(Object, Object)} with a {@code null} source.
      */
     public void recordCoalesced(T current) {
+        recordCoalesced(current, null);
+    }
+
+    /**
+     * Coalesce a burst of rapid edits from one {@code source} into a single undo step.
+     * <p>
+     * Records when the previous record was more than 500ms ago <em>or</em> came from a
+     * different source (compared with {@link Objects#equals}). Without the source, a
+     * quality-filter drag started just after a gate edit would fold into the gate edit's
+     * step, and one undo would revert both.
+     */
+    public void recordCoalesced(T current, Object source) {
         long now = clock.getAsLong();
-        if (now - lastRecordTime > 500) {
+        if (now - lastRecordTime > 500 || !Objects.equals(source, lastSource)) {
             record(current);
             lastRecordTime = now;
+            lastSource = source;
         }
     }
 
@@ -81,6 +105,7 @@ public final class UndoHistory<T> {
         redoStack.push(snapshotFn.apply(current));
         T previous = undoStack.pop();
         lastRecordTime = 0;
+        lastSource = NO_BURST;
         return Optional.of(previous);
     }
 
@@ -93,6 +118,7 @@ public final class UndoHistory<T> {
         undoStack.push(snapshotFn.apply(current));
         T next = redoStack.pop();
         lastRecordTime = 0;
+        lastSource = NO_BURST;
         return Optional.of(next);
     }
 
@@ -109,5 +135,6 @@ public final class UndoHistory<T> {
         undoStack.clear();
         redoStack.clear();
         lastRecordTime = 0;
+        lastSource = NO_BURST;
     }
 }

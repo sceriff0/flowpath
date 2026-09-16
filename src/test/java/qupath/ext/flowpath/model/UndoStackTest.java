@@ -149,6 +149,55 @@ class UndoStackTest {
             "undo() must reset the coalescing window so a near-simultaneous edit still records");
     }
 
+    /**
+     * A burst coalesces only with itself. A quality-filter drag that starts 100ms after a
+     * gate edit is a different action, and folding it into the gate edit's step would make
+     * one Ctrl+Z revert both.
+     */
+    @Test
+    void aBurstFromADifferentSourceStartsItsOwnStep() {
+        AtomicLong clock = new AtomicLong();
+        UndoHistory<GateTree> history = newHistory(clock);
+        GateTree tree = new GateTree();
+
+        clock.set(1000);
+        history.recordCoalesced(tree, "gate");     // records
+        clock.set(1100);
+        history.recordCoalesced(tree, "gate");     // same burst -> coalesced away
+        clock.set(1200);
+        history.recordCoalesced(tree, "filter");   // different source -> records
+        clock.set(1300);
+        history.recordCoalesced(tree, "filter");   // same burst -> coalesced away
+
+        assertEquals(2, undoDepth(history, tree), "one step per source burst");
+    }
+
+    /** A discrete edit ends a burst: the next coalesced edit is a step of its own. */
+    @Test
+    void aDiscreteRecordEndsTheBurst() {
+        AtomicLong clock = new AtomicLong();
+        UndoHistory<GateTree> history = newHistory(clock);
+        GateTree tree = new GateTree();
+
+        clock.set(1000);
+        history.recordCoalesced(tree, "filter");   // records
+        clock.set(1050);
+        history.record(tree);                      // e.g. the ROI checkbox
+        clock.set(1100);
+        history.recordCoalesced(tree, "filter");   // must record again
+
+        assertEquals(3, undoDepth(history, tree));
+    }
+
+    private static int undoDepth(UndoHistory<GateTree> history, GateTree current) {
+        int depth = 0;
+        while (history.canUndo()) {
+            current = history.undo(current).orElseThrow();
+            depth++;
+        }
+        return depth;
+    }
+
     @Test
     void deepCopyPreservesQualityFilter() {
         GateTree tree = new GateTree();
