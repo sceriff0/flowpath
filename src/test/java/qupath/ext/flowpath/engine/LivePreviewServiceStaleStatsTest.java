@@ -3,19 +3,29 @@ package qupath.ext.flowpath.engine;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
+import qupath.lib.images.ImageData;
+import qupath.lib.images.servers.WrappedBufferedImageServer;
 
+import java.awt.image.BufferedImage;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A background statistics recompute must not overwrite statistics that were set after it
@@ -43,9 +53,13 @@ class LivePreviewServiceStaleStatsTest {
         private final Deque<Runnable> queue = new ArrayDeque<>();
         private boolean shutdown;
 
-        @Override public void execute(Runnable command) { queue.add(command); }
-        void runAll() { while (!queue.isEmpty()) queue.poll().run(); }
-        int pending() { return queue.size(); }
+        @Override public synchronized void execute(Runnable command) { queue.add(command); }
+        void runAll() {
+            Runnable next;
+            while ((next = poll()) != null) next.run();
+        }
+        private synchronized Runnable poll() { return queue.poll(); }
+        synchronized int pending() { return queue.size(); }
         @Override public void shutdown() { shutdown = true; }
         @Override public List<Runnable> shutdownNow() { shutdown = true; return List.copyOf(queue); }
         @Override public boolean isShutdown() { return shutdown; }
@@ -97,6 +111,78 @@ class LivePreviewServiceStaleStatsTest {
             executor.runAll();
             org.junit.jupiter.api.Assertions.assertNotSame(before, service.getMarkerStats(),
                     "an undisturbed recompute still publishes its result");
+        } finally {
+            service.shutdown();
+        }
+    }
+
+    /**
+     * A gating pass walked on one index must not publish after the index was replaced — a
+     * detection re-read that keeps the gate tree. The tree check alone let it through, and
+     * {@code FlowPathPane.buildSnapshot} checks only the length, so a same-size re-read would
+     * hand the UMAP the old cells' phenotypes positioned against the new cells. Two passes,
+     * two roots on the same channel; the executor is driven by hand.
+     */
+    @Test
+    void aPassWalkedOnAReplacedIndexIsDiscarded() throws Exception {
+        // Same size, different cells: A is CD3 1..10, B is 100 on the first five and 0 after.
+        CellIndex a = Cells.of(10).marker("CD3", i -> i + 1.0).build();
+        CellIndex b = Cells.of(10).marker("CD3", i -> i < 5 ? 100.0 : 0.0).build();
+        GateNode low = new GateNode("CD3", 3.5);
+        low.setStatistic(Statistic.MEAN);
+        GateNode high = new GateNode("CD3", 7.5);
+        high.setStatistic(Statistic.MEAN);
+        GateTree tree = new GateTree();
+        tree.addRoot(low);
+        tree.addRoot(high);
+        ImageData<?> imageData = new ImageData<>(new WrappedBufferedImageServer(
+                "live-preview-stale-index", new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB)));
+
+        ManualExecutor executor = new ManualExecutor();
+        LivePreviewService service = new LivePreviewService(executor);
+        try {
+            service.setCellIndex(a);
+            service.setMarkerStats(MarkerStats.compute(a, null));
+            service.setImageData(imageData);
+            service.setGateTree(tree);
+            AtomicInteger published = new AtomicInteger();
+            service.setOnUpdateComplete(published::incrementAndGet);
+
+            // Pass 1 is queued on A; the re-read of B lands (on the FX thread, tree kept)
+            // before the walk runs. onUpdateStarted is posted just before the submit, so the
+            // work is already queued when it runs.
+            CountDownLatch started = new CountDownLatch(1);
+            service.setOnUpdateStarted(() -> {
+                service.setCellIndex(b);
+                service.setMarkerStats(MarkerStats.compute(b, null));
+                started.countDown();
+            });
+            service.requestUpdate();
+            assertTrue(started.await(10, TimeUnit.SECONDS), "the first pass never started");
+            assertEquals(1, executor.pending());
+            executor.runAll();
+            FxTestSupport.onFxRun(() -> { });      // drain the publish the walk queued
+
+            assertNull(service.getLastResult(), "a pass walked on A must not publish once B is the index");
+            assertEquals(0, published.get());
+            assertNull(a.getObject(0).getPathClass(), "A's cells were not classified by the stale pass");
+
+            // Pass 2 walks B and publishes, per branch, on both roots.
+            CountDownLatch secondStarted = new CountDownLatch(1);
+            service.setOnUpdateStarted(secondStarted::countDown);
+            service.requestUpdate();
+            assertTrue(secondStarted.await(10, TimeUnit.SECONDS), "the second pass never started");
+            executor.runAll();
+            FxTestSupport.onFxRun(() -> { });
+
+            GatingEngine.AssignmentResult result = service.getLastResult();
+            assertNotNull(result);
+            assertEquals(1, published.get());
+            assertEquals(5, result.getTally().total(low.getBranches().get(0)), "B: CD3 100 on five cells");
+            assertEquals(5, result.getTally().total(low.getBranches().get(1)));
+            assertEquals(5, result.getTally().total(high.getBranches().get(0)));
+            assertEquals(5, result.getTally().total(high.getBranches().get(1)));
+            assertEquals(low.getBranches().get(0).getCount(), result.getTally().total(low.getBranches().get(0)));
         } finally {
             service.shutdown();
         }

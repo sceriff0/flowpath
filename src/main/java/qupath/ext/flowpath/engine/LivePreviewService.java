@@ -309,6 +309,12 @@ public class LivePreviewService {
                 Platform.runLater(() -> {
                     // Discard result if the live tree changed (e.g. undo/redo) while we were computing
                     if (this.gateTree != originalTree) return;
+                    // ...or the index did: a detection re-read keeps the tree, and this pass's
+                    // phenotypes are positional against the cells it walked. Published, a
+                    // same-size re-read passed buildSnapshot's length check and the UMAP
+                    // handoff labelled the new cells with the old cells' phenotypes. The
+                    // resync that installed the new index has queued its own pass.
+                    if (this.cellIndex != index) return;
                     // Transfer counts from the snapshot back to the live tree for UI display
                     GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
 
