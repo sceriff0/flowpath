@@ -239,6 +239,11 @@ public class ScatterPlotCanvas extends Canvas {
 
     // ---- Effective axis bounds (override if set, otherwise auto-computed) ----
 
+    /** The axis window drawn, {@code {minX, maxX, minY, maxY}}. For tests. */
+    double[] axisWindow() {
+        return new double[]{effectiveMinX(), effectiveMaxX(), effectiveMinY(), effectiveMaxY()};
+    }
+
     private double effectiveMinX() {
         return overrideMinX != null ? overrideMinX : minX;
     }

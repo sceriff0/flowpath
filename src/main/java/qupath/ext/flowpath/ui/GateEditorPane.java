@@ -954,25 +954,31 @@ public class GateEditorPane extends VBox {
     public void setCellIndex(CellIndex index) { this.cellIndex = index; }
     public void setMarkerStats(MarkerStats stats) {
         this.markerStats = stats;
-        if (currentNode != null) {
-            updateHistogram();
-            refreshScatterPlot();
-        }
+        refreshForNewData();
     }
     public void setRoiMask(boolean[] mask) {
         this.roiMask = mask;
-        if (currentNode != null) {
-            updateHistogram();
-            refreshScatterPlot();
-        }
+        refreshForNewData();
     }
     public void setAncestorMask(boolean[] mask) {
         this.ancestorMask = mask;
         if (clipInfoLabel != null) clipInfoLabel.setVisible(mask != null);
-        if (currentNode != null) {
-            updateHistogram();
-            refreshScatterPlot();
-        }
+        refreshForNewData();
+    }
+
+    /**
+     * Bring every data-driven control of the gate on screen in line with new statistics or
+     * masks, without rebuilding the editor (a rebuild discards a half-drawn polygon, so the
+     * pane skips it when only the data changed). The histogram and threshold slider, the
+     * scatter plot's clip-anchored axes, and the quadrant sliders — whose travel is the same
+     * clip window as those axes. Leaving the quadrant sliders out re-anchored the plot while
+     * the sliders kept the old span, the slider/plot mismatch 0.9.3 fixed.
+     */
+    private void refreshForNewData() {
+        if (currentNode == null) return;
+        updateHistogram();
+        refreshScatterPlot();
+        if (currentQuadrantRerange != null) currentQuadrantRerange.run();
     }
     public void setOnNodeChanged(Consumer<GateNode> callback) { this.onNodeChanged = callback; }
     public void setOnAddToPositive(Runnable callback) { this.onAddToPositive = callback; }
