@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+A post-release review round of the gating half: ten tasks, each reviewed against the diff
+behind it. The computed z-score is gone for good, every change to the tree, a filter or the
+image now ends in one resync, detection reads and CSV export leave the FX thread, and the
+gate editor is split into one editor per gate type. UMAP and the Analysis window remain
+held back, as in 0.9.3.
+
+### Fixed
+
+- **Undo left filters, masks and statistics behind.** Undo, redo, loading a tree, switching
+  images, toggling the annotation filter and editing annotations each ran their own list of
+  steps, and the lists had drifted: undo restored the gate tree but not the quality filter's
+  mask, the ROI mask or the column statistics, so the restored gates were counted against
+  the filter they were undone away from. Every one of them now goes through a single resync
+  (ROI mask, quality mask, statistics from the *incoming* tree's filters, legacy conversion,
+  gating pass).
+- **Switching images did not gate the new cells.** Opening another image installed its
+  cells but requested no pass, so counts stayed stale until the first edit. The new image
+  is now gated as soon as its cells land.
+- **The first undo after a gate edit did nothing.** The editor writes into a gate before
+  reporting the change, so the undo step captured the already-edited tree. An edit is now
+  undone to the tree as it stood before that edit.
+- **A long drag took several undos.** The 500 ms coalescing window was measured from the
+  first tick, so a slow drag split into several steps. The window now slides with every
+  tick, and a quality-filter drag no longer merges into a gate edit made just before it.
+- **Quality-filter and annotation-filter changes could not be undone.** Both are now undo
+  steps; a slider drag is one.
+- **A cell reaching a gate on a channel the image lacks was not flagged.** The walk
+  stopped there silently, so nothing in the CSV said why the cell went no deeper. Such a
+  cell is now flagged `Unmeasured` (it keeps its ancestors' phenotype and descends no
+  further), exactly as for a NaN value.
+- **Polygon edges and vertices were half Outside.** Ray-casting put the left and bottom
+  edges Inside and the right and top edges (and three of four vertices) Outside, while
+  rectangles and ellipses included their whole boundary. Edges and vertices now count
+  Inside for all three shapes, including a self-intersecting polygon's crossing segments.
+- **A marker present only past the first 100 cells went unresolved.** Measurement keys
+  were sampled from the head of the detection list, three times over with different
+  depths. One sample now reads the first 100 cells plus a fixed stride across the whole
+  slide (at most 1000), and the panel, the index and the compartment scan share it. The
+  "literal 0.0" note now counts over that sample, so its numbers are larger on big slides.
+- **Cells positioned from their ROI centroid were not reported.** The ingest report now
+  counts them. It is a finding when the export carries centroid µm columns and more than
+  half the cells lack them; otherwise (including plain QuPath detections with no centroid
+  columns at all) a note, worded for the coordinate space actually used.
+- **Opening a gate could fold a silent write into your next undo step.** When a gate's
+  stored statistic is absent from the export, the editor pins it to one the export carries.
+  That write is now reported as its own change and re-gated at once, without an undo step.
+- **Quadrant sliders opened with a `[-5, 5]` travel** on a gate whose stored statistic was
+  absent from the export, until the next data change. They are now ranged after the axis
+  signal is pinned, and re-ranged when only the statistics change (an annotation edit, a
+  filter drag).
+- **The region Values row hid MIRAGE's z column** on first opening a gate saved on a
+  statistic the export lacks. It is now derived from the pinned signal.
+- **Controls of a previously shown gate kept writing to it.** Switching gates left the old
+  quadrant slider, threshold slider or channel picker wired, and they wrote into their old
+  gate or into whichever gate was shown next. A disposed editor now writes to nothing.
+- **Text vanished on one of QuPath's themes.** Labels, headers, hints and numeric fields
+  used hard-coded colours (white text, dark panels). They now follow QuPath's light and
+  dark themes through a stylesheet; the gate bars, compartment badges, branch pills and the
+  UMAP button keep their fixed swatches on purpose.
+
+### Changed
+
+- **Legacy z-score gate trees are converted as soon as they meet cells.** Conversion used
+  to happen only when the editor opened a gate, so a gate never opened — or a tree exported
+  straight away — was gated on z-values as if raw. On image open, load and undo every gate
+  is now converted into its column's own units, and a notification names any that could not
+  be: a column with no spread keeps its numbers; a channel this image lacks keeps the gate
+  in z-score units (flag kept) until the tree meets an image that has it. A tree saved
+  before any image was opened keeps the flag too. Gates compare only against columns the
+  export carries.
+- **Detections are read off the FX thread**, and read again automatically (debounced, gate
+  tree kept, re-gated) when detections are added, removed or re-measured while FlowPath is
+  open. An annotation edit under the ROI filter re-derives masks and statistics in the
+  background; an image switch drops the old cells at once, so a slow read can never land
+  over a newer image.
+- **CSV export runs in the background** from a snapshot of the tree, so editing can continue
+  while it writes. The export button is disabled, and Ctrl+E ignored, until it finishes.
+- **`_sign` is blank, not `-`, when no gate on the column could judge the cell** (for
+  example a quadrant X column when only the Y value is missing). It is computed by the
+  same predicate the gating uses.
+- A saved gate without `thresholdIsZScore` now loads as raw; FlowPath has always written
+  the field, so only hand-edited files are affected. Raw gates no longer write it.
+- The gate editor is one editor per gate type, with its axis arithmetic in a toolkit-free
+  `AxisMath`; region shapes clear and remap themselves. No behaviour change beyond the
+  fixes above.
+
+### Removed
+
+- **The `_zscore` column of `gate_pheno.csv`.** It reported the retired computed z-score,
+  not a value any gate compared against. `_raw` and `_sign` remain.
+- Dead code: `onAddToPositive`/`onAddToNegative`, the deprecated
+  `QualityFilter.passes(double...)` overload and its unused legacy getters,
+  `Statistic.isStandardised()`.
+
 ## [0.9.3] - 16/09/2026
 
 Gating correctness and quality-filter fixes, found by a UI bug report and an edge-case
