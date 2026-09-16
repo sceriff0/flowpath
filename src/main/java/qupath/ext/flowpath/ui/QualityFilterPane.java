@@ -73,7 +73,8 @@ public class QualityFilterPane extends TitledPane {
         grid.setVgap(4);
         grid.setPadding(new Insets(6));
 
-        emptyLabel.setStyle("-fx-font-size: 10; -fx-opacity: 0.7;");
+        emptyLabel.getStyleClass().add("fp-hint");
+        emptyLabel.setStyle("-fx-font-size: 10;");
         emptyLabel.setWrapText(true);
 
         Button reset = new Button("Reset");
@@ -131,8 +132,10 @@ public class QualityFilterPane extends TitledPane {
             Slider maxSlider = slider(bounds, hi);
             Label minLabel = new Label(fmt(lo));
             Label maxLabel = new Label(Double.isFinite(current.max()) ? fmt(hi) : "off");
-            minLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
-            maxLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
+            minLabel.getStyleClass().add("fp-muted");
+            maxLabel.getStyleClass().add("fp-muted");
+            minLabel.setStyle("-fx-font-size: 9;");
+            maxLabel.setStyle("-fx-font-size: 9;");
             // Fixed width, so a value growing a digit does not shove the sliders mid-drag.
             minLabel.setMinWidth(36);
             maxLabel.setMinWidth(36);

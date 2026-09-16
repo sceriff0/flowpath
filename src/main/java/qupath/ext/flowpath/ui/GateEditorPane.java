@@ -106,11 +106,12 @@ public class GateEditorPane extends VBox {
     public GateEditorPane() {
         setSpacing(8);
         setPadding(new Insets(10));
-        setStyle("-fx-background-color: #2a2a2a;");
+        getStyleClass().add("fp-panel");
 
         // Gate type indicator
         gateTypeLabel = new Label("No gate selected");
-        gateTypeLabel.setStyle("-fx-text-fill: #80b0d0; -fx-font-size: 11; -fx-font-weight: bold;");
+        gateTypeLabel.getStyleClass().add("fp-section-header");
+        gateTypeLabel.setStyle("-fx-font-size: 11;");
 
         // --- Threshold-specific controls (always created, shown/hidden as needed) ---
         channelCombo = new ComboBox<>();
@@ -119,7 +120,7 @@ public class GateEditorPane extends VBox {
 
         modeGroup = new ToggleGroup();
         // Built empty; syncModeSelection fills it from what the file turns out to carry.
-        modeRow = new HBox(12, new Label("Values:") {{ setStyle("-fx-text-fill: white;"); }});
+        modeRow = new HBox(12, new Label("Values:") {{ getStyleClass().add("fp-primary-text"); }});
         modeRow.setAlignment(Pos.CENTER_LEFT);
         modeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
             if (suppressEvents || currentNode == null || val == null) return;
@@ -134,7 +135,7 @@ public class GateEditorPane extends VBox {
         clipHighSpinner.setPrefWidth(75);
         clipHighSpinner.setEditable(true);
         excludeOutliersBox = new CheckBox("Exclude outliers");
-        excludeOutliersBox.setStyle("-fx-text-fill: white;");
+        excludeOutliersBox.getStyleClass().add("fp-primary-text");
         excludeOutliersBox.setTooltip(new Tooltip(
             "When enabled, cells with marker values outside the clip percentile range\n" +
             "are classified as 'Excluded' in QuPath and flagged Outlier=True in the CSV.\n" +
@@ -176,15 +177,16 @@ public class GateEditorPane extends VBox {
         });
 
         Label clipInfoLabel = new Label("Percentiles based on all cells, not this gate's population");
-        clipInfoLabel.setStyle("-fx-text-fill: #666666; -fx-font-size: 9; -fx-font-style: italic;");
+        clipInfoLabel.getStyleClass().add("fp-hint");
+        clipInfoLabel.setStyle("-fx-font-size: 9;");
         clipInfoLabel.setVisible(false);
         clipInfoLabel.managedProperty().bind(clipInfoLabel.visibleProperty());
         this.clipInfoLabel = clipInfoLabel;
 
         HBox clipRow = new HBox(6,
-            new Label("Clip:") {{ setStyle("-fx-text-fill: white;"); }},
-            clipLowSpinner, new Label("% to") {{ setStyle("-fx-text-fill: white;"); }},
-            clipHighSpinner, new Label("%") {{ setStyle("-fx-text-fill: white;"); }},
+            new Label("Clip:") {{ getStyleClass().add("fp-primary-text"); }},
+            clipLowSpinner, new Label("% to") {{ getStyleClass().add("fp-primary-text"); }},
+            clipHighSpinner, new Label("%") {{ getStyleClass().add("fp-primary-text"); }},
             excludeOutliersBox);
 
         // Swappable areas
@@ -259,7 +261,8 @@ public class GateEditorPane extends VBox {
             gateTypeLabel.setText("No gate selected");
             gateSpecificArea.getChildren().clear();
             Label hint = new Label("Select a gate from the tree to edit it,\nor click '+ Add Root Gate' to create one.");
-            hint.setStyle("-fx-text-fill: #888888; -fx-font-size: 11;");
+            hint.getStyleClass().add("fp-hint");
+            hint.setStyle("-fx-font-size: 11;");
             hint.setWrapText(true);
             gateSpecificArea.getChildren().add(hint);
             branchNamesArea.getChildren().clear();
@@ -311,7 +314,7 @@ public class GateEditorPane extends VBox {
 
     private void buildThresholdEditor(GateNode node) {
         Label chLabel = new Label("Channel:");
-        chLabel.setStyle("-fx-text-fill: white;");
+        chLabel.getStyleClass().add("fp-primary-text");
         HBox channelRow = new HBox(8, chLabel, channelCombo);
         channelCombo.setValue(node.getChannel());
         addSignalControls(channelRow, GateAxis.of(node, 0));
@@ -322,7 +325,8 @@ public class GateEditorPane extends VBox {
         // Create fresh controls for this gate (local-creation pattern, like quadrant editor)
         HistogramCanvas histogram = new HistogramCanvas();
         Label hoverLabel = new Label(" ");
-        hoverLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
+        hoverLabel.getStyleClass().add("fp-muted");
+        hoverLabel.setStyle("-fx-font-size: 9;");
         histogram.setOnMouseHover(val -> hoverLabel.setText(String.format(Locale.US, "Value: %.4f", val)));
 
         Slider slider = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, node.getThreshold());
@@ -330,10 +334,11 @@ public class GateEditorPane extends VBox {
         SliderUtils.makeRangeFriendly(slider);
         TextField valueField = new TextField(String.format(Locale.US, "%.4f", node.getThreshold()));
         valueField.setPrefWidth(80);
-        valueField.setStyle("-fx-text-fill: white; -fx-font-family: monospace; -fx-background-color: #3a3a3a;");
+        valueField.getStyleClass().add("fp-mono-field");
 
         Label populationLabel = new Label("Positive: -- | Negative: --");
-        populationLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+        populationLabel.getStyleClass().add("fp-muted");
+        populationLabel.setStyle("-fx-font-size: 10;");
 
         histogram.setGate(node);
         histogram.setPosColor(ColorUtils.intToColor(node.getPositiveColor()));
@@ -374,7 +379,7 @@ public class GateEditorPane extends VBox {
         });
 
         HBox threshRow = new HBox(8,
-            new Label("Threshold:") {{ setStyle("-fx-text-fill: white;"); }},
+            new Label("Threshold:") {{ getStyleClass().add("fp-primary-text"); }},
             slider, valueField);
         HBox.setHgrow(slider, Priority.ALWAYS);
 
@@ -391,13 +396,13 @@ public class GateEditorPane extends VBox {
         currentThresholdField = null;
         currentPopulationLabel = null;
         Label chXLabel = new Label("Channel X:");
-        chXLabel.setStyle("-fx-text-fill: white;");
+        chXLabel.getStyleClass().add("fp-primary-text");
         ComboBox<String> chXCombo = new ComboBox<>(channelCombo.getItems());
         chXCombo.setValue(gate.getChannelX());
         chXCombo.setPrefWidth(150);
 
         Label chYLabel = new Label("Channel Y:");
-        chYLabel.setStyle("-fx-text-fill: white;");
+        chYLabel.getStyleClass().add("fp-primary-text");
         ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
         chYCombo.setValue(gate.getChannelY());
         chYCombo.setPrefWidth(150);
@@ -504,11 +509,11 @@ public class GateEditorPane extends VBox {
         currentPopulationLabel = null;
         // Channel pickers
         Label chXLabel = new Label("Channel X:");
-        chXLabel.setStyle("-fx-text-fill: white;");
+        chXLabel.getStyleClass().add("fp-primary-text");
         ComboBox<String> chXCombo = new ComboBox<>(channelCombo.getItems());
         chXCombo.setPrefWidth(150);
         Label chYLabel = new Label("Channel Y:");
-        chYLabel.setStyle("-fx-text-fill: white;");
+        chYLabel.getStyleClass().add("fp-primary-text");
         ComboBox<String> chYCombo = new ComboBox<>(channelCombo.getItems());
         chYCombo.setPrefWidth(150);
 
@@ -666,7 +671,7 @@ public class GateEditorPane extends VBox {
         }
 
         Label noData = new Label("Load an image to see the scatter plot");
-        noData.setStyle("-fx-text-fill: #888888;");
+        noData.getStyleClass().add("fp-hint");
         gateSpecificArea.getChildren().add(noData);
     }
 
@@ -735,7 +740,8 @@ public class GateEditorPane extends VBox {
             });
 
             Label countLabel = new Label(String.format("%,d", branch.getCount()));
-            countLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 10;");
+            countLabel.getStyleClass().add("fp-muted");
+            countLabel.setStyle("-fx-font-size: 10;");
 
             grid.add(label, 0, i);
             grid.add(nameField, 1, i);
@@ -822,7 +828,7 @@ public class GateEditorPane extends VBox {
             }
         });
         Label sigLabel = new Label("Signal:");
-        sigLabel.setStyle("-fx-text-fill: white;");
+        sigLabel.getStyleClass().add("fp-primary-text");
         row.getChildren().addAll(sigLabel, compCombo);
 
         if (!choices.offersStatistic()) return;
@@ -1365,7 +1371,7 @@ public class GateEditorPane extends VBox {
                 RadioButton button = new RadioButton(mode.label());
                 button.setToggleGroup(modeGroup);
                 button.setUserData(mode);
-                button.setStyle("-fx-text-fill: white;");
+                button.getStyleClass().add("fp-primary-text");
                 button.setTooltip(new Tooltip(mode.tooltip()));
                 if (mode.equals(selected)) button.setSelected(true);
                 modeRow.getChildren().add(button);
@@ -1436,7 +1442,8 @@ public class GateEditorPane extends VBox {
 
     private static Label createSectionHeader(String text) {
         Label header = new Label(text);
-        header.setStyle("-fx-text-fill: #888888; -fx-font-size: 10; -fx-font-weight: bold;");
+        header.getStyleClass().add("fp-section-header");
+        header.setStyle("-fx-font-size: 10;");
         header.setPadding(new Insets(4, 0, 0, 0));
         return header;
     }
@@ -1494,7 +1501,7 @@ public class GateEditorPane extends VBox {
         TextField field = new TextField(String.format(Locale.US, "%.3f", value));
         field.setPrefWidth(80);
         field.setMinWidth(Region.USE_PREF_SIZE);
-        field.setStyle("-fx-text-fill: white; -fx-font-family: monospace; -fx-background-color: #3a3a3a;");
+        field.getStyleClass().add("fp-mono-field");
         return field;
     }
 

@@ -38,9 +38,11 @@ import java.util.function.Consumer;
  */
 public class FlowPathCell extends TreeCell<Object> {
 
-    private static final Color GATE_BAR_COLOR = Color.web("#3a4a5a");
-    private static final Color GATE_BAR_DISABLED_COLOR = Color.web("#2a2a2a");
-    private static final CornerRadii BAR_RADII = new CornerRadii(6);
+    // Bar/badge/pill colours live in flowpath.css (fp-bar, fp-bar-disabled, fp-badge-*,
+    // fp-pill-text) rather than here: they are fixed swatches on this cell's own
+    // self-painted chips, not text sitting on the surrounding theme's background, so they
+    // stay literal on purpose (see the stylesheet's file header). Centralising them in CSS
+    // is what keeps them in one place instead of a dozen setStyle(...) calls.
     private static final CornerRadii PILL_RADII = new CornerRadii(10);
     private static final Insets BAR_PADDING = new Insets(5, 10, 5, 10);
     private static final Insets PILL_PADDING = new Insets(2, 10, 2, 10);
@@ -127,15 +129,15 @@ public class FlowPathCell extends TreeCell<Object> {
         if (!Statistic.MEAN.equals(stat)) text += "·" + stat.displayName().substring(0, 3).toLowerCase();
         Label badge = new Label(text);
         badge.setFont(Font.font(null, FontWeight.BOLD, 9));
-        badge.setTextFill(Color.WHITE);
         // Not a switch: the compartment vocabulary is open, so a badge has to have a
         // colour for one FlowPath has never seen rather than failing to compile against it.
-        Color bg;
-        if (Compartment.NUCLEAR.equals(comp)) bg = Color.web("#3a6ea5");
-        else if (Compartment.CYTOPLASMIC.equals(comp)) bg = Color.web("#4a9a5a");
-        else if (Compartment.WHOLE_CELL.equals(comp)) bg = Color.web("#777777");
-        else bg = Color.web("#8a6ea5");
-        badge.setBackground(new Background(new BackgroundFill(bg, new CornerRadii(4), Insets.EMPTY)));
+        // The four swatches themselves live in flowpath.css (fp-badge-*).
+        String styleClass;
+        if (Compartment.NUCLEAR.equals(comp)) styleClass = "fp-badge-nuclear";
+        else if (Compartment.CYTOPLASMIC.equals(comp)) styleClass = "fp-badge-cytoplasmic";
+        else if (Compartment.WHOLE_CELL.equals(comp)) styleClass = "fp-badge-wholecell";
+        else styleClass = "fp-badge-other";
+        badge.getStyleClass().add(styleClass);
         badge.setPadding(new Insets(0, 4, 0, 4));
         badge.setTooltip(new Tooltip(comp.displayName() + " · " + stat.displayName()));
         return badge;
@@ -145,7 +147,7 @@ public class FlowPathCell extends TreeCell<Object> {
     private static Label channelLabel(String name) {
         Label label = new Label(name);
         label.setFont(Font.font(null, FontWeight.BOLD, 13));
-        label.setTextFill(Color.WHITE);
+        label.getStyleClass().add("fp-bar-text");
         return label;
     }
 
@@ -153,7 +155,7 @@ public class FlowPathCell extends TreeCell<Object> {
     private static Label detailLabel(String text, int size) {
         Label label = new Label(text);
         label.setFont(Font.font(null, FontWeight.NORMAL, size));
-        label.setTextFill(Color.web("#a0b0c0"));
+        label.getStyleClass().add("fp-bar-muted");
         return label;
     }
 
@@ -175,7 +177,7 @@ public class FlowPathCell extends TreeCell<Object> {
         Label badgeX = compartmentBadge(compX, statX);
         Label badgeY = compartmentBadge(compY, statY);
         Label sep = new Label("/");
-        sep.setTextFill(Color.web("#a0b0c0"));
+        sep.getStyleClass().add("fp-bar-muted");
 
         bar.getChildren().add(channelLabel(channelX));
         if (badgeX != null) bar.getChildren().add(badgeX);
@@ -188,8 +190,7 @@ public class FlowPathCell extends TreeCell<Object> {
         HBox bar = new HBox(6);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(BAR_PADDING);
-        Color barColor = node.isEnabled() ? GATE_BAR_COLOR : GATE_BAR_DISABLED_COLOR;
-        bar.setBackground(new Background(new BackgroundFill(barColor, BAR_RADII, Insets.EMPTY)));
+        bar.getStyleClass().add(node.isEnabled() ? "fp-bar" : "fp-bar-disabled");
         bar.setMaxWidth(Double.MAX_VALUE);
         bar.setOpacity(node.isEnabled() ? 1.0 : 0.5);
         HBox.setHgrow(bar, Priority.ALWAYS);
@@ -201,8 +202,7 @@ public class FlowPathCell extends TreeCell<Object> {
             node.setEnabled(val);
             // Update visual immediately
             bar.setOpacity(val ? 1.0 : 0.5);
-            bar.setBackground(new Background(new BackgroundFill(
-                val ? GATE_BAR_COLOR : GATE_BAR_DISABLED_COLOR, BAR_RADII, Insets.EMPTY)));
+            bar.getStyleClass().setAll(val ? "fp-bar" : "fp-bar-disabled");
             if (onEnabledToggled != null) onEnabledToggled.accept(node);
         });
 
@@ -260,7 +260,7 @@ public class FlowPathCell extends TreeCell<Object> {
 
         String displayName = isLeaf ? (STAR + " " + name) : name;
         Label nameLabel = new Label(displayName);
-        nameLabel.setTextFill(Color.WHITE);
+        nameLabel.getStyleClass().add("fp-pill-text");
         nameLabel.setFont(Font.font(null, isLeaf ? FontWeight.BOLD : FontWeight.NORMAL, 12));
 
         pill.getChildren().add(nameLabel);
@@ -278,7 +278,7 @@ public class FlowPathCell extends TreeCell<Object> {
             : String.format("%,d", count);
         Label countLabel = new Label(countText);
         countLabel.setFont(Font.font(null, FontWeight.NORMAL, 11));
-        countLabel.setTextFill(Color.web("#888888"));
+        countLabel.getStyleClass().add("fp-muted");
 
         row.getChildren().addAll(pill, spacer, countLabel);
         return row;

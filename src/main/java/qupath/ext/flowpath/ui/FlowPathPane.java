@@ -203,12 +203,14 @@ public class FlowPathPane extends BorderPane {
 
         // ROI filter
         roiFilterCheckBox = new CheckBox("Filter by annotations");
-        roiFilterCheckBox.setStyle("-fx-text-fill: black; -fx-font-size: 10;");
+        roiFilterCheckBox.getStyleClass().add("fp-primary-text");
+        roiFilterCheckBox.setStyle("-fx-font-size: 10;");
         roiFilterCheckBox.setOnAction(e -> { if (!suppressRoiFilterEvents) onRoiFilterToggled(); });
 
         // Auto-sync the QuPath viewer's visible channels to the selected gate's channel(s)
         syncViewerChannelsToggle = new CheckBox("Sync viewer channels");
-        syncViewerChannelsToggle.setStyle("-fx-text-fill: black; -fx-font-size: 10;");
+        syncViewerChannelsToggle.getStyleClass().add("fp-primary-text");
+        syncViewerChannelsToggle.setStyle("-fx-font-size: 10;");
         syncViewerChannelsToggle.setSelected(true);
         syncViewerChannelsToggle.setTooltip(new Tooltip(
             "Show only the selected gate's channel(s) in the QuPath viewer."));
@@ -262,7 +264,8 @@ public class FlowPathPane extends BorderPane {
 
         // --- Status bar ---
         statusBar = new Label("Total: 0 cells | Excluded: 0 | Gates: 0");
-        statusBar.setStyle("-fx-font-size: 11; -fx-text-fill: #aaaaaa; -fx-padding: 2 6 2 6;");
+        statusBar.getStyleClass().add("fp-muted");
+        statusBar.setStyle("-fx-font-size: 11; -fx-padding: 2 6 2 6;");
         spinner = new ProgressIndicator();
         spinner.setPrefSize(14, 14);
         spinner.setMaxSize(14, 14);
@@ -359,8 +362,8 @@ public class FlowPathPane extends BorderPane {
             }
         });
 
-        // Style
-        setStyle("-fx-background-color: #1e1e1e;");
+        // Style — follows the active QuPath theme's base colour instead of forcing dark.
+        getStyleClass().add("fp-panel");
 
         // Detections are read on backgroundExecutor and applied on the FX thread. FlowPath's own
         // classification writes fire hierarchy events too; the coordinator ignores those.
@@ -1079,7 +1082,7 @@ public class FlowPathPane extends BorderPane {
             // Styled as the primary action on this toolbar because it is the one step
             // that is not file I/O: everything else here saves or loads the gating,
             // this one takes it somewhere new.
-            button.setStyle("-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;");
+            button.getStyleClass().add("fp-cta-button");
             button.setTooltip(new Tooltip(
                 "Embed these cells in a UMAP, coloured by the phenotypes above (Ctrl+U).\n"
                 + "Opens pre-configured on the markers your gates use.\n"
