@@ -100,7 +100,7 @@ class UndoStackTest {
     }
 
     @Test
-    void recordCoalescedSkipsWithinWindowAndRecordsAfter() {
+    void recordCoalescedSkipsWithinWindowAndRecordsAfterAQuietGap() {
         AtomicLong clock = new AtomicLong();
         UndoHistory<GateTree> history = newHistory(clock);
 
@@ -108,23 +108,39 @@ class UndoStackTest {
         tree.addRoot(new GateNode("CD45", 0.0));
 
         clock.set(1000);
-        history.recordCoalesced(tree); // 1000 - 0 > 500 -> records; lastRecordTime = 1000
+        history.recordCoalesced(tree); // records; the window now runs from 1000
 
         clock.set(1400);
-        history.recordCoalesced(tree); // 400ms since last -> coalesced away
+        history.recordCoalesced(tree); // 400ms since the last call -> coalesced, window slides to 1400
 
-        clock.set(1500);
-        history.recordCoalesced(tree); // exactly 500ms since last -> still coalesced away (needs > 500, not >=)
+        clock.set(1900);
+        history.recordCoalesced(tree); // exactly 500ms since the last call -> still coalesced (needs > 500)
 
-        clock.set(1501);
-        history.recordCoalesced(tree); // 501ms since last -> records a second entry
+        clock.set(2401);
+        history.recordCoalesced(tree); // 501ms of quiet -> a new burst, records a second entry
 
-        // Exactly two entries should have made it through the four calls above.
         assertTrue(history.canUndo(), "expected the first coalesced entry");
         tree = history.undo(tree).orElseThrow();
-        assertTrue(history.canUndo(), "expected the second coalesced entry (501ms case)");
+        assertTrue(history.canUndo(), "expected the second entry after 501ms of quiet");
         history.undo(tree);
         assertFalse(history.canUndo(), "expected exactly two coalesced entries, no more");
+    }
+
+    /**
+     * The window slides with every call, so a drag lasting longer than 500ms is still one
+     * step. It used to be measured from the burst's first tick: a 1.5s drag became three.
+     */
+    @Test
+    void aBurstLongerThanTheWindowIsStillOneStep() {
+        AtomicLong clock = new AtomicLong(1000);
+        UndoHistory<GateTree> history = newHistory(clock);
+        GateTree tree = new GateTree();
+
+        for (int tick = 0; tick < 10; tick++) {       // 900ms of drag, 100ms apart
+            history.recordCoalesced(tree, "filter");
+            clock.addAndGet(100);
+        }
+        assertEquals(1, undoDepth(history, tree));
     }
 
     @Test

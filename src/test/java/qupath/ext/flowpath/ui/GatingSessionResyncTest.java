@@ -136,8 +136,8 @@ class GatingSessionResyncTest {
 
         // A gate edit...
         clock.addAndGet(1_000);
-        session.recordEditCoalesced(GatingSession.EditSource.GATE);
         session.tree().getRoots().get(0).setThreshold(4.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
 
         // ...then, 100ms later, a quality-filter drag of three ticks: one undo step.
         for (double min : new double[]{25, 35, 45}) {
@@ -177,6 +177,120 @@ class GatingSessionResyncTest {
         // And a second undo reverts the gate edit, not the filter again.
         assertTrue(session.undo());
         session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    // ---- gate edits are reported after the write --------------------------------------
+
+    /**
+     * The editor writes into a gate and only then tells the pane. Recording the tree at that
+     * point snapshots the edited value, so undo restored nothing. The session records the
+     * tree as it was when the previous edit settled instead.
+     */
+    @Test
+    void oneDiscreteGateEditIsUndoneByOneUndo() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+        int[] root1Before = counts(pass.last(), session.tree().getRoots().get(1));
+
+        // A typed threshold: written, then reported.
+        clock.addAndGet(5_000);
+        session.tree().getRoots().get(0).setThreshold(8.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{2, 8}, counts(pass.last(), session.tree().getRoots().get(0)),
+                "CD3 9 and 10 at or above 8.5");
+
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertEquals(5.5, session.tree().getRoots().get(0).getThreshold(), "the pre-edit value");
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+        assertArrayEquals(root1Before, counts(pass.last(), session.tree().getRoots().get(1)));
+    }
+
+    /** A channel change is written and reported the same way. */
+    @Test
+    void aChannelChangeIsUndoneByOneUndo() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(Cells.of(N).marker("CD3", i -> i + 1.0).marker("CD8", i -> 10.0 - i)
+                .area(i -> 10.0 * (i + 1)).at(i -> i * 10.0, i -> 0.0).build());
+        session.resync(NO_ANNOTATIONS);
+
+        clock.addAndGet(5_000);
+        session.tree().getRoots().get(1).setChannel("CD8");
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.resync(NO_ANNOTATIONS);
+
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertEquals("CD3", session.tree().getRoots().get(1).getChannel());
+        assertArrayEquals(expectedCounts(session.tree(), 1, session.index(), null, null),
+                counts(pass.last(), session.tree().getRoots().get(1)));
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    /** A threshold drag lasting well over the 500ms window is one step back to the pre-drag value. */
+    @Test
+    void aLongGateDragIsOneStepBackToThePreDragValue() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+
+        clock.addAndGet(5_000);
+        for (int tick = 1; tick <= 10; tick++) {       // 1s of drag, 100ms apart
+            session.tree().getRoots().get(0).setThreshold(5.5 + tick * 0.3);
+            session.recordAppliedEdit(GatingSession.EditSource.GATE);
+            session.settle();                           // the pane requests a pass per tick
+            clock.addAndGet(100);
+        }
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{2, 8}, counts(pass.last(), session.tree().getRoots().get(0)),
+                "threshold 8.5 after the drag");
+
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertEquals(5.5, session.tree().getRoots().get(0).getThreshold(), "one undo: the pre-drag value");
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        assertTrue(session.undo());
+        assertTrue(session.tree().getRoots().isEmpty(), "the next step back is the load, not a drag tick");
+    }
+
+    /**
+     * An edit recorded before its write (adding a gate) settles when the pane requests its
+     * pass, so a gate edit after it undoes only itself.
+     */
+    @Test
+    void aGateEditAfterAnAddUndoesOnlyItself() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+
+        session.recordEdit();
+        session.tree().addRoot(new GateNode("CD3", 1.5));
+        session.settle();
+
+        clock.addAndGet(100);
+        session.tree().getRoots().get(0).setThreshold(9.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertEquals(3, session.tree().getRoots().size(), "the added gate stays");
+        assertEquals(5.5, session.tree().getRoots().get(0).getThreshold());
         assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
     }
 

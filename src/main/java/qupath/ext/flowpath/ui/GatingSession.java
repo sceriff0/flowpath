@@ -62,6 +62,8 @@ final class GatingSession {
     private final GatingPass gatingPass;
 
     private GateTree tree = new GateTree();
+    /** A copy of {@link #tree} as of the last {@link #settle()}; see {@link #recordAppliedEdit}. */
+    private GateTree settled = tree.deepCopy();
     private CellIndex index;
     private boolean[] roiMask;
     private RegionMask regions;
@@ -122,6 +124,7 @@ final class GatingSession {
             stats = MarkerStats.compute(index, combinedMask());
             notice = migrateLegacyZScores();
         }
+        settle();
         gatingPass.request(new PassInput(tree, index, stats, roiMask, regions));
         return notice;
     }
@@ -164,12 +167,50 @@ final class GatingSession {
         return undoHistory.redo(tree).map(next -> { tree = next; return true; }).orElse(false);
     }
 
-    /** Record the tree as it is now, before a discrete edit, as one undo step. */
+    /**
+     * Record the tree as it is now, before a discrete edit, as one undo step. The caller
+     * {@linkplain #settle settles} once the edit is written.
+     */
     void recordEdit() {
         undoHistory.record(tree);
     }
 
-    /** Record the tree before an edit that arrives in bursts (a slider drag). */
+    /**
+     * Record an edit that has <em>already been written</em> into the tree, as the gate
+     * editor reports its edits: it writes into the gate, then notifies. Recording the tree
+     * at that point snapshots the edited value, so undo restored nothing. What is recorded
+     * instead is the tree as it was when the previous edit {@linkplain #settle settled},
+     * which is the tree just before this one. Coalesced by source, so a drag is one step.
+     */
+    void recordAppliedEdit(EditSource source) {
+        undoHistory.recordCoalesced(settled, source);
+        settle();
+    }
+
+    /**
+     * Record a discrete edit that has already been written (a gate's enabled checkbox), from
+     * the settled tree, as one uncoalesced step.
+     */
+    void recordAppliedDiscreteEdit() {
+        undoHistory.record(settled);
+        settle();
+    }
+
+    /**
+     * The tree's current state is complete: the pre-state for the next
+     * {@link #recordAppliedEdit}. Every {@link #resync} settles; the pane settles whenever
+     * it requests a gating pass after an edit, and on every quality-filter tick. An edit
+     * that changes the tree without ever settling would be folded into the next applied
+     * edit's undo step.
+     */
+    void settle() {
+        settled = tree.deepCopy();
+    }
+
+    /**
+     * Record the tree <em>before</em> an edit that arrives in bursts and is announced before
+     * its write (the quality-filter panel's before-change hook).
+     */
     void recordEditCoalesced(EditSource source) {
         undoHistory.recordCoalesced(tree, source);
     }

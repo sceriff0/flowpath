@@ -815,7 +815,8 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void onGateEnabledToggled(GateNode node) {
-        pushUndoCoalesced();
+        // The cell has already written the flag, so record from the settled tree.
+        session.recordAppliedDiscreteEdit();
         requestPreviewUpdate();
     }
 
@@ -908,6 +909,7 @@ public class FlowPathPane extends BorderPane {
      * in the service's {@code onStatsRecomputed} callback.
      */
     private void onQualityFilterChanged() {
+        session.settle();
         if (session.index() == null) return;
         session.recomputeQualityMask();
         refreshAncestorMask();
@@ -917,7 +919,12 @@ public class FlowPathPane extends BorderPane {
 
 
 
+    /**
+     * Every edit ends here, or in {@link #resyncToTree()}: the edit is complete, so it is
+     * settled as the pre-state for the next gate edit's undo step, and a pass is requested.
+     */
     private void requestPreviewUpdate() {
+        session.settle();
         previewService.setGateTree(session.tree());
         previewService.requestUpdate();
     }
@@ -1549,8 +1556,13 @@ public class FlowPathPane extends BorderPane {
         session.recordEdit();
     }
 
+    /**
+     * Record a gate edit the editor has already written (it writes, then fires
+     * {@code onNodeChanged}), from the tree as it stood before, coalesced with the rest of
+     * its drag.
+     */
     private void pushUndoCoalesced() {
-        session.recordEditCoalesced(GatingSession.EditSource.GATE);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
     }
 
     private void undo() {

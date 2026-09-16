@@ -70,8 +70,8 @@ public final class UndoHistory<T> {
 
     /**
      * Like {@link #record}, but coalesces bursts of rapid edits (e.g. dragging a
-     * slider) into a single undo step: only records if at least 500ms have elapsed
-     * since the last recorded snapshot.
+     * slider) into a single undo step: only records after more than 500ms of quiet
+     * since the previous call.
      * <p>
      * Equivalent to {@link #recordCoalesced(Object, Object)} with a {@code null} source.
      */
@@ -82,18 +82,21 @@ public final class UndoHistory<T> {
     /**
      * Coalesce a burst of rapid edits from one {@code source} into a single undo step.
      * <p>
-     * Records when the previous record was more than 500ms ago <em>or</em> came from a
+     * Records when the previous call was more than 500ms ago <em>or</em> came from a
      * different source (compared with {@link Objects#equals}). Without the source, a
      * quality-filter drag started just after a gate edit would fold into the gate edit's
      * step, and one undo would revert both.
+     * <p>
+     * The window <b>slides</b>: every call, coalesced or not, restarts it. Measured from the
+     * burst's first tick instead, a slider drag lasting 1.5s became three undo steps.
      */
     public void recordCoalesced(T current, Object source) {
         long now = clock.getAsLong();
         if (now - lastRecordTime > 500 || !Objects.equals(source, lastSource)) {
             record(current);
-            lastRecordTime = now;
             lastSource = source;
         }
+        lastRecordTime = now;
     }
 
     /**
