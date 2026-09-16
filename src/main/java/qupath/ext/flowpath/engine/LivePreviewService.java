@@ -38,6 +38,10 @@ public class LivePreviewService {
     private volatile GateTree gateTree;
     private volatile CellIndex cellIndex;
     private volatile MarkerStats markerStats;
+    /** Guards {@link #markerStats} against a background recompute that an explicit set superseded. */
+    private final Object statsLock = new Object();
+    /** Bumped by every {@link #setMarkerStats}; a recompute publishes only if it is unchanged. */
+    private long statsGeneration;
     private volatile ImageData<?> imageData;
     private volatile boolean[] roiMask;
     /** Per-cell annotated-region index (from {@code RegionMask.regionOf()}), or {@code null}. */
@@ -73,11 +77,19 @@ public class LivePreviewService {
     private volatile boolean firingHierarchyEvent;
 
     public LivePreviewService() {
-        this.executor = Executors.newSingleThreadExecutor(r -> {
+        this(Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "flowpath-preview");
             t.setDaemon(true);
             return t;
-        });
+        }));
+    }
+
+    /**
+     * Run background work on {@code executor}. Package-private so a test can drive the
+     * work by hand and choose an ordering, rather than hope a scheduler produces it.
+     */
+    LivePreviewService(ExecutorService executor) {
+        this.executor = executor;
         this.debounce = new PauseTransition(Duration.millis(DEBOUNCE_MS));
         this.debounce.setOnFinished(e -> submitGatingWork());
     }
@@ -92,8 +104,19 @@ public class LivePreviewService {
         this.cellIndex = index;
     }
 
+    /**
+     * Adopt {@code stats} as the statistics gating runs against.
+     * <p>
+     * This supersedes any {@link #recomputeStats()} still in flight: that recompute was
+     * submitted against an older filter, and letting it land afterwards would put
+     * statistics back that the caller has just replaced (an undo during a quality-filter
+     * drag was exactly that).
+     */
     public void setMarkerStats(MarkerStats stats) {
-        this.markerStats = stats;
+        synchronized (statsLock) {
+            this.markerStats = stats;
+            statsGeneration++;
+        }
     }
 
     public MarkerStats getMarkerStats() {
@@ -209,6 +232,10 @@ public class LivePreviewService {
             return;
         }
         final QualityFilter qf = rawQf.deepCopy();
+        final long generation;
+        synchronized (statsLock) {
+            generation = statsGeneration;
+        }
         executor.submit(() -> {
             // As in submitGatingWork: the Future is discarded, so a throw here would
             // otherwise vanish -- combineMasks rejects a length mismatch, and silently
@@ -217,7 +244,12 @@ public class LivePreviewService {
                 boolean[] qualityMask = GatingEngine.computeQualityMask(idx, qf);
                 boolean[] mask = roi != null ? GatingEngine.combineMasks(qualityMask, roi) : qualityMask;
                 MarkerStats recomputed = MarkerStats.compute(idx, mask);
-                this.markerStats = recomputed;
+                synchronized (statsLock) {
+                    // Someone set statistics explicitly after this was submitted -- a resync
+                    // under a restored filter. Those are newer than anything computed here.
+                    if (generation != statsGeneration) return;
+                    this.markerStats = recomputed;
+                }
                 if (onStatsRecomputed != null) {
                     Platform.runLater(onStatsRecomputed);
                 }
