@@ -194,7 +194,9 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
      * When the gate's own combination is not on offer — a saved gate pinned to a column this
      * file does not carry — {@link ValueMode#selectedIn} falls back to raw, and that fallback
      * is <b>written back onto the gate</b>, so the engine never reads a column the editor has
-     * stopped drawing.
+     * stopped drawing. During a build that write is not a user edit: {@code GateEditorPane}
+     * notices the gate's signals changed and reports it through {@code onNodeNormalised}, so it
+     * is settled on its own rather than folded into the next edit's undo step.
      */
     final void syncModeSelection() {
         List<ValueMode> modes = ValueMode.availableFor(gate, context.capability());

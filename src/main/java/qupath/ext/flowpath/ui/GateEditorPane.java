@@ -71,6 +71,7 @@ public class GateEditorPane extends VBox {
     private boolean suppressEvents = false;
 
     private Consumer<GateNode> onNodeChanged;
+    private Consumer<GateNode> onNodeNormalised;
     private IntConsumer onAddToBranch;
     private Runnable onRemoveGate;
     private BiConsumer<GateNode, GateNode> onReplaceGate;
@@ -181,6 +182,8 @@ public class GateEditorPane extends VBox {
             actionButtonArea.getChildren().clear();
             return;
         }
+        // Building pins each axis to a signal the export carries, which can write to the gate.
+        List<GateAxis.Signal> storedSignals = signalsOf(node);
         withSuppressedEvents(() -> {
             setDisabled(false);
 
@@ -205,6 +208,15 @@ public class GateEditorPane extends VBox {
             buildBranchNamesEditor(node);
             buildActionButtons(node);
         });
+        // Reported as its own change, after the build and outside suppression, and only when
+        // something was actually written — reopening a gate already pinned reports nothing.
+        if (currentNode == node && !signalsOf(node).equals(storedSignals) && onNodeNormalised != null) {
+            onNodeNormalised.accept(node);
+        }
+    }
+
+    private static List<GateAxis.Signal> signalsOf(GateNode node) {
+        return GateAxis.axesOf(node).stream().map(GateAxis::signal).toList();
     }
 
     // ---- Branch names/colors editor (generic for any gate type) ----
@@ -348,6 +360,14 @@ public class GateEditorPane extends VBox {
     }
 
     public void setOnNodeChanged(Consumer<GateNode> callback) { this.onNodeChanged = callback; }
+    /**
+     * Called when <em>opening</em> a gate wrote to it: the gate's stored signal is not one the
+     * export carries, so the editor pinned it to one that is (see
+     * {@code AbstractGateTypeEditor.syncModeSelection}). Not a user edit, so not an undo step —
+     * but the tree did change, so the pane settles it and re-gates. Reported separately from
+     * {@link #setOnNodeChanged} so the write is never folded into the next user edit's undo step.
+     */
+    public void setOnNodeNormalised(Consumer<GateNode> callback) { this.onNodeNormalised = callback; }
     public void setOnAddToBranch(IntConsumer callback) { this.onAddToBranch = callback; }
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }

@@ -212,6 +212,38 @@ class GatingSessionResyncTest {
         assertArrayEquals(root1Before, counts(pass.last(), session.tree().getRoots().get(1)));
     }
 
+    /**
+     * The editor's build-time write-back (a stored signal the export lacks, pinned to one it
+     * carries) is settled without an undo step, which is what {@code FlowPathPane} does when
+     * the editor reports it through {@code onNodeNormalised}. The next edit's undo step then
+     * restores only that edit: the tree keeps the column the editor draws. Unsettled, the undo
+     * step reverted the pin along with the edit and the gate went back to an unreadable column.
+     */
+    @Test
+    void anEditAfterABuildTimeWriteBackUndoesOnlyTheEdit() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        GateTree tree = twoRootsOnCd3();
+        tree.getRoots().get(0).setStatistic(Statistic.MEDIAN);   // not in a bare-mean export
+        session.replaceTree(tree);
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+
+        // Opening the gate pins it, and the pane settles that write.
+        session.tree().getRoots().get(0).setStatistic(Statistic.MEAN);
+        session.settle();
+
+        clock.addAndGet(5_000);
+        session.tree().getRoots().get(0).setThreshold(8.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+
+        assertTrue(session.undo());
+        GateNode undone = session.tree().getRoots().get(0);
+        assertEquals(5.5, undone.getThreshold(), "the edit is undone");
+        assertEquals(Statistic.MEAN, undone.getStatistic(), "the pin is not");
+    }
+
     /** A channel change is written and reported the same way. */
     @Test
     void aChannelChangeIsUndoneByOneUndo() {

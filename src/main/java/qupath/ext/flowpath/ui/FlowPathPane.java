@@ -249,6 +249,7 @@ public class FlowPathPane extends BorderPane {
         // --- Right side: Gate Editor ---
         editorPane = new GateEditorPane();
         editorPane.setOnNodeChanged(node -> onGateNodeChanged());
+        editorPane.setOnNodeNormalised(node -> onGateNodeNormalised());
         editorPane.setOnAddToBranch(this::addChildGate);
         editorPane.setOnRemoveGate(this::removeSelectedGate);
         editorPane.setOnReplaceGate(this::replaceGateNode);
@@ -893,6 +894,18 @@ public class FlowPathPane extends BorderPane {
         treeView.refresh();
         requestPreviewUpdate();
         syncViewerChannels(currentNode);
+    }
+
+    /**
+     * Opening a gate pinned it to a signal the export carries. No undo step — the user did not
+     * edit anything, and undoing it would only have the editor write it again on the next
+     * opening — but the tree changed, so it is settled as the pre-state for the next edit's
+     * undo step (otherwise that step would silently revert the pin too) and gated, so the
+     * counts describe the column the editor now draws.
+     */
+    private void onGateNodeNormalised() {
+        treeView.refresh();
+        requestPreviewUpdate();
     }
 
     private void onGateEnabledToggled(GateNode node) {
