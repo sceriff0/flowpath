@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ui;
 import qupath.ext.flowpath.io.CsvExportJob;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 
@@ -37,17 +38,29 @@ final class CsvExportCoordinator {
         void failed(Throwable error);
     }
 
+    /** Gates and writes one snapshot: {@link CsvExportJob#run}, injectable for tests. */
+    @FunctionalInterface
+    interface Job {
+        void run(CsvExportJob.Snapshot snapshot) throws IOException;
+    }
+
     private final Executor background;
     private final Executor fxThread;
     private final Host host;
+    private final Job job;
 
     /** Set on the FX thread when a job is submitted; cleared there once it lands. */
     private boolean exporting;
 
     CsvExportCoordinator(Executor background, Executor fxThread, Host host) {
+        this(background, fxThread, host, CsvExportJob::run);
+    }
+
+    CsvExportCoordinator(Executor background, Executor fxThread, Host host, Job job) {
         this.background = Objects.requireNonNull(background, "background");
         this.fxThread = Objects.requireNonNull(fxThread, "fxThread");
         this.host = Objects.requireNonNull(host, "host");
+        this.job = Objects.requireNonNull(job, "job");
     }
 
     /** An export is running: the caller should keep the export button and Ctrl+E disabled. */
@@ -67,9 +80,16 @@ final class CsvExportCoordinator {
         exporting = true;
         background.execute(() -> {
             try {
-                CsvExportJob.run(snapshot);
+                job.run(snapshot);
                 fxThread.execute(() -> land(() -> host.exported(snapshot.file())));
-            } catch (Exception ex) {
+            } catch (Exception | Error ex) {
+                // Error too: CsvExportJob.run walks and serializes the full cell population,
+                // so a million-cell export is exactly where an OutOfMemoryError is plausible.
+                // Catching only Exception let it escape the executor's Runnable uncaught,
+                // which left `exporting` stuck true forever -- the export button and Ctrl+E
+                // disabled until QuPath restarted, with no dialog to explain why. Matches
+                // IngestCoordinator's submit(), which catches the same pair for the same
+                // reason.
                 fxThread.execute(() -> land(() -> host.failed(ex)));
             }
         });

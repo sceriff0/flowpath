@@ -118,6 +118,35 @@ class CsvExportCoordinatorTest {
         assertNotNull(host.failures.get(0));
     }
 
+    /**
+     * {@code CsvExportJob.run} walks and serializes the full cell population, so a
+     * million-cell export is exactly where an {@code OutOfMemoryError} is plausible. Catching
+     * only {@code Exception} let an {@code Error} escape the executor's {@code Runnable}
+     * uncaught: {@code exporting} was never reset, {@code land()} never ran, and the export
+     * button/Ctrl+E stayed disabled until QuPath restarted. A {@link CsvExportCoordinator.Job}
+     * is injected here (rather than actually exhausting the heap) purely so the test can throw
+     * an {@code Error} deterministically.
+     */
+    @Test
+    void anErrorThrownByTheJobSurfacesAsAFailureAndResetsTheFlag() {
+        ManualExecutor background = new ManualExecutor();
+        ManualExecutor fxThread = new ManualExecutor();
+        RecordingHost host = new RecordingHost();
+        OutOfMemoryError thrown = new OutOfMemoryError("simulated: exporting a huge population");
+        CsvExportCoordinator coordinator = new CsvExportCoordinator(background, fxThread, host,
+                snapshot -> { throw thrown; });
+
+        coordinator.export(snapshotFor(tempDir.resolve("oom.csv").toFile()));
+        assertTrue(coordinator.exporting());
+
+        background.runAll();
+        fxThread.runAll();
+
+        assertFalse(coordinator.exporting(), "the flag must not get stuck on an Error");
+        assertTrue(host.exported.isEmpty());
+        assertEquals(List.of(thrown), host.failures, "the Error itself reaches the failure callback");
+    }
+
     @Test
     void aSecondExportWhileOneIsRunningIsIgnored() {
         ManualExecutor background = new ManualExecutor();
