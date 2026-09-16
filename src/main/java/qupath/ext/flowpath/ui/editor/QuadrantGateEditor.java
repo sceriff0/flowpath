@@ -12,6 +12,7 @@ import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.ui.SliderUtils;
 
+import java.util.List;
 import java.util.Locale;
 
 /** A quadrant gate: two channels, a threshold slider and typed threshold per axis, a scatter plot. */
@@ -31,22 +32,13 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
         valY = thresholdField(gate.getThresholdY());
     }
 
+    /**
+     * Both axes are pinned before this runs (see {@link AbstractGateTypeEditor#build}). The
+     * slider span below is the pinned column's clip window; ranged before the pin, a gate whose
+     * stored statistic the file lacks resolved to no column and opened on [-5, 5].
+     */
     @Override
-    public Node build() {
-        ComboBox<String> chXCombo = channelCombo(gate.getChannelX(), 150);
-        ComboBox<String> chYCombo = channelCombo(gate.getChannelY(), 150);
-        // One handler per axis, wired before the plot is built.
-        wireChannelCombo(chXCombo, 0);
-        wireChannelCombo(chYCombo, 1);
-
-        // Pin both axes to a signal the export carries BEFORE anything reads a column. The
-        // slider span below is that column's clip window; ranged first, a gate whose stored
-        // statistic the file lacks (a default MEDIAN gate over bare mean columns) resolved to
-        // no column at all and opened on the [-5, 5] default until the next data change.
-        HBox rowX = channelRow("Channel X:", chXCombo, 0);
-        HBox rowY = channelRow("Channel Y:", chYCombo, 1);
-        syncModeSelection();
-
+    Node buildControls(List<HBox> channelRows, List<ComboBox<String>> channelCombos) {
         sliderX.setPrefWidth(300);
         sliderY.setPrefWidth(300);
         SliderUtils.enableScrollControl(sliderX);
@@ -75,7 +67,7 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
         wireField(valY, false);
 
         VBox root = new VBox(4,
-                rowX, rowY,
+                channelRows.get(0), channelRows.get(1),
                 modeRow,
                 sectionHeader("Threshold X"), growRow(sliderX, valX),
                 sectionHeader("Threshold Y"), growRow(sliderY, valY));

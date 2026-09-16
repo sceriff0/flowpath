@@ -17,6 +17,7 @@ import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.ui.ScatterPlotCanvas;
 
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A polygon, rectangle or ellipse gate: two channels, a shape toolbar and a scatter plot the
@@ -24,17 +25,14 @@ import java.util.ArrayList;
  */
 final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
 
-    private ComboBox<String> chXCombo;
-    private ComboBox<String> chYCombo;
-
     Region2DGateEditor(Region2DGate gate, EditorContext context) {
         super(gate, context);
     }
 
     @Override
-    public Node build() {
-        chXCombo = channelCombo(gate.getChannelX(), 150);
-        chYCombo = channelCombo(gate.getChannelY(), 150);
+    Node buildControls(List<HBox> channelRows, List<ComboBox<String>> channelCombos) {
+        ComboBox<String> chXCombo = channelCombos.get(0);
+        ComboBox<String> chYCombo = channelCombos.get(1);
 
         ToggleGroup toolGroup = new ToggleGroup();
         ToggleButton polygonBtn = new ToggleButton("Polygon");
@@ -59,19 +57,12 @@ final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
             case EllipseGate _ -> ellipseBtn.setSelected(true);
         }
 
-        syncModeSelection();
-
-        HBox rowX = channelRow("Channel X:", chXCombo, 0);
-        HBox rowY = channelRow("Channel Y:", chYCombo, 1);
-
-        // Wired before the plot is built: a gate whose channels this image does not carry
-        // still has to accept a channel change — that is the only way to point it at one the
-        // image does carry.
-        wireChannelCombo(chXCombo, 0);
-        wireChannelCombo(chYCombo, 1);
+        // The channel pickers are wired before the plot is built: a gate whose channels this
+        // image does not carry still has to accept a channel change — that is the only way to
+        // point it at one the image does carry.
 
         VBox root = new VBox(4,
-                rowX, rowY,
+                channelRows.get(0), channelRows.get(1),
                 modeRow,
                 sectionHeader("Shape"), drawToolbar);
 

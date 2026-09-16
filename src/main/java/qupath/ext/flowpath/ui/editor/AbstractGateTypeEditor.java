@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ui.editor;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
@@ -17,6 +18,7 @@ import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.ValueMode;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -89,10 +91,46 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
         return AxisMath.clipSpan(col, gate.getClipPercentileLow(), gate.getClipPercentileHigh());
     }
 
+    // ---- the build ----------------------------------------------------------------------------
+
+    /**
+     * Build the editor in the one order that reads no column before it is pinned: a channel row
+     * per axis (which pins that axis to a signal the export carries), then the Values row
+     * (derived from the pinned signals), then the type's own controls (which read the pinned
+     * columns). Each type used to sequence these by hand, and two of three got it wrong at some
+     * point: the quadrant ranged its sliders on the stored signal, and the region derived its
+     * Values row from it, hiding a MIRAGE z column the pinned signal offers.
+     */
+    @Override
+    public final Node build() {
+        int axes = GateAxis.axisCount(gate);
+        List<HBox> rows = new ArrayList<>(axes);
+        List<ComboBox<String>> combos = new ArrayList<>(axes);
+        for (int slot = 0; slot < axes; slot++) {
+            ComboBox<String> combo = channelCombo(GateAxis.of(gate, slot).channel(), axes == 1 ? 200 : 150);
+            if (axes == 1) combo.setTooltip(new Tooltip("Select the marker channel for this gate"));
+            String label = axes == 1 ? "Channel:" : (slot == 0 ? "Channel X:" : "Channel Y:");
+            rows.add(channelRow(label, combo, slot));
+            wireChannelCombo(combo, slot);
+            combos.add(combo);
+        }
+        syncModeSelection();
+        return buildControls(rows, combos);
+    }
+
+    /**
+     * The type's own controls, laid out with {@code channelRows} and {@link #modeRow}. Every
+     * axis is already pinned and the Values row already derived when this runs.
+     *
+     * @param channelRows   one row per axis, in slot order
+     * @param channelCombos the channel picker in each row, in slot order
+     */
+    abstract Node buildControls(List<HBox> channelRows, List<ComboBox<String>> channelCombos);
+
     // ---- channel and signal controls ------------------------------------------------------
 
     /** A channel picker over the pane's live channel list, showing {@code value}. */
-    final ComboBox<String> channelCombo(String value, double prefWidth) {
+    private ComboBox<String> channelCombo(String value, double prefWidth) {
         ComboBox<String> combo = new ComboBox<>(context.channelNames());
         combo.setPrefWidth(prefWidth);
         combo.setValue(value);
@@ -111,7 +149,7 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
      * so the rebuild draws the right thing the first time, and a second drawing path is one
      * more place for the two to disagree.
      */
-    final void wireChannelCombo(ComboBox<String> combo, int slot) {
+    private void wireChannelCombo(ComboBox<String> combo, int slot) {
         combo.setOnAction(e -> {
             if (!accepting()) return;
             if (!GateAxis.of(gate, slot).retarget(combo.getValue(), context.capability())) return;
@@ -122,7 +160,7 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
     }
 
     /** A row holding a styled label and a channel picker, followed by that axis' signal controls. */
-    final HBox channelRow(String labelText, ComboBox<String> combo, int slot) {
+    private HBox channelRow(String labelText, ComboBox<String> combo, int slot) {
         Label label = new Label(labelText);
         label.getStyleClass().add("fp-primary-text");
         HBox row = new HBox(8, label, combo);
@@ -198,7 +236,7 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
      * notices the gate's signals changed and reports it through {@code onNodeNormalised}, so it
      * is settled on its own rather than folded into the next edit's undo step.
      */
-    final void syncModeSelection() {
+    private void syncModeSelection() {
         List<ValueMode> modes = ValueMode.availableFor(gate, context.capability());
         ValueMode selected = ValueMode.selectedIn(modes, gate);
 

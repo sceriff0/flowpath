@@ -35,14 +35,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
     }
 
     @Override
-    public Node build() {
-        ComboBox<String> channelCombo = channelCombo(gate.getChannel(), 200);
-        channelCombo.setTooltip(new javafx.scene.control.Tooltip("Select the marker channel for this gate"));
-        HBox channelRow = channelRow("Channel:", channelCombo, 0);
-        wireChannelCombo(channelCombo, 0);
-
-        syncModeSelection();
-
+    Node buildControls(List<HBox> channelRows, List<ComboBox<String>> channelCombos) {
         Label hoverLabel = new Label(" ");
         hoverLabel.getStyleClass().add("fp-muted");
         hoverLabel.setStyle("-fx-font-size: 9;");
@@ -86,7 +79,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         HBox.setHgrow(slider, Priority.ALWAYS);
 
         VBox root = new VBox(4,
-                channelRow, modeRow,
+                channelRows.get(0), modeRow,
                 sectionHeader("Histogram"), histogram, hoverLabel,
                 sectionHeader("Threshold"), threshRow, populationLabel);
         refresh();
