@@ -37,6 +37,16 @@ package qupath.ext.flowpath.model;
  */
 public final class MeasuredColumn {
 
+    /**
+     * Below this standard deviation (or, in {@link MarkerStats}' histogram binning, this
+     * value range), a column counts as having no spread at all rather than a merely small
+     * one. Guards a divide-by-zero in {@link #toZScore} and a zero-width histogram bin in
+     * {@link MarkerStats#compute}: both are "this column doesn't vary enough to treat as
+     * continuous," the same judgment call against the same threshold, just read off two
+     * different statistics of the column.
+     */
+    static final double DEGENERATE_SPREAD_EPSILON = 1e-10;
+
     private final String key;
     private final double[] values;
     private final MarkerStats stats;
@@ -95,10 +105,10 @@ public final class MeasuredColumn {
 
     /**
      * Standardise a raw value against this column's own mean and standard deviation.
-     * A degenerate column (std below 1e-10) yields 0.0.
+     * A degenerate column (std below {@link #DEGENERATE_SPREAD_EPSILON}) yields 0.0.
      */
     public double toZScore(double raw) {
-        if (std < 1e-10) return 0.0;
+        if (std < DEGENERATE_SPREAD_EPSILON) return 0.0;
         return (raw - mean) / std;
     }
 
@@ -142,7 +152,7 @@ public final class MeasuredColumn {
      * z-score transform is meaningful.
      */
     public boolean hasSpread() {
-        return std > 1e-10;
+        return std > DEGENERATE_SPREAD_EPSILON;
     }
 
     /** Histogram bin edges for this column (length {@code bins + 1}). */

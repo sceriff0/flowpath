@@ -123,7 +123,7 @@ public class MarkerStats {
         double[] bins = new double[HISTOGRAM_BINS + 1];
         double[] counts = new double[HISTOGRAM_BINS];
         double range = max - min;
-        if (range < 1e-10) range = 1.0;
+        if (range < MeasuredColumn.DEGENERATE_SPREAD_EPSILON) range = 1.0;
         double binWidth = range / HISTOGRAM_BINS;
 
         for (int b = 0; b <= HISTOGRAM_BINS; b++) {

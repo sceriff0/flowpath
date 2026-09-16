@@ -19,6 +19,19 @@ public abstract sealed class Region2DGate extends GateNode
     private static final int GREEN = (0 << 16) | (200 << 8) | 0;
     private static final int GRAY = (128 << 16) | (128 << 8) | 128;
 
+    /**
+     * Below this width/height/radius, a rectangle or ellipse gate's extent counts as zero
+     * rather than a genuine (if tiny) shape. Floating-point drag arithmetic — a "Clear
+     * Shape" reset, or a screen-to-data conversion during an in-progress drag — can leave a
+     * span at {@code 1e-13} rather than exactly {@code 0}, so callers asking "is there
+     * really a shape here" (draw an outline, offer edit handles, remap onto a new axis)
+     * compare against this epsilon instead of a bare {@code > 0}. {@link RectangleGate#contains}
+     * and {@link EllipseGate#contains} deliberately do not use it: their strict {@code > 0}
+     * guard must reject an exactly-degenerate gate on its own, without depending on whether
+     * a caller checked drawability first.
+     */
+    public static final double MIN_DRAWABLE_EXTENT = 1e-10;
+
     private String channelX;
     private String channelY;
     private Compartment compartmentX = Compartment.WHOLE_CELL;

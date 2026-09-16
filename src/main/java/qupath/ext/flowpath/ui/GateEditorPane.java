@@ -46,6 +46,15 @@ public class GateEditorPane extends VBox {
     private static final org.slf4j.Logger logger =
             org.slf4j.LoggerFactory.getLogger(GateEditorPane.class);
 
+    /**
+     * The default axis window a threshold or quadrant slider starts from before real column
+     * statistics (clip percentiles) narrow it — a holdover from the retired z-score space,
+     * where {@code [-5, 5]} covered essentially every cell. {@link #quadrantSliderSpan} falls
+     * back to this same window when there is no clip-derived one to widen instead.
+     */
+    private static final double DEFAULT_AXIS_LO = -5;
+    private static final double DEFAULT_AXIS_HI = 5;
+
     // --- Shared controls ---
     private final Label gateTypeLabel;
     private final Spinner<Double> clipLowSpinner;
@@ -316,7 +325,7 @@ public class GateEditorPane extends VBox {
         hoverLabel.setStyle("-fx-text-fill: #aaaaaa; -fx-font-size: 9;");
         histogram.setOnMouseHover(val -> hoverLabel.setText(String.format(Locale.US, "Value: %.4f", val)));
 
-        Slider slider = new Slider(-5, 5, node.getThreshold());
+        Slider slider = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, node.getThreshold());
         slider.setPrefWidth(300);
         SliderUtils.makeRangeFriendly(slider);
         TextField valueField = new TextField(String.format(Locale.US, "%.4f", node.getThreshold()));
@@ -405,8 +414,8 @@ public class GateEditorPane extends VBox {
         // max, every outlier included, so on a skewed marker the part of the plot a user
         // can actually see was a few pixels of slider — the thumb raced across the visible
         // population, and its position said nothing about where the line was drawn.
-        Slider sliderX = new Slider(-5, 5, 0);
-        Slider sliderY = new Slider(-5, 5, 0);
+        Slider sliderX = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, 0);
+        Slider sliderY = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, 0);
         sliderX.setPrefWidth(300);
         sliderY.setPrefWidth(300);
         SliderUtils.enableScrollControl(sliderX);
@@ -887,13 +896,13 @@ public class GateEditorPane extends VBox {
             }
             pg.setVertices(out);
         } else if (gate instanceof RectangleGate rg) {
-            if (rg.getMaxX() - rg.getMinX() <= 1e-10) return;
+            if (rg.getMaxX() - rg.getMinX() <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
             rg.setMinX(remapRawThreshold(oldX, newX, rg.getMinX()));
             rg.setMaxX(remapRawThreshold(oldX, newX, rg.getMaxX()));
             rg.setMinY(remapRawThreshold(oldY, newY, rg.getMinY()));
             rg.setMaxY(remapRawThreshold(oldY, newY, rg.getMaxY()));
         } else if (gate instanceof EllipseGate eg) {
-            if (eg.getRadiusX() <= 1e-10) return;
+            if (eg.getRadiusX() <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
             double loX = remapRawThreshold(oldX, newX, eg.getCenterX() - eg.getRadiusX());
             double hiX = remapRawThreshold(oldX, newX, eg.getCenterX() + eg.getRadiusX());
             double loY = remapRawThreshold(oldY, newY, eg.getCenterY() - eg.getRadiusY());
@@ -1471,8 +1480,8 @@ public class GateEditorPane extends VBox {
      * without a toolkit.
      */
     static double[] quadrantSliderSpan(double[] window, double threshold) {
-        double lo = window != null ? window[0] : -5;
-        double hi = window != null ? window[1] : 5;
+        double lo = window != null ? window[0] : DEFAULT_AXIS_LO;
+        double hi = window != null ? window[1] : DEFAULT_AXIS_HI;
         if (Double.isFinite(threshold)) {
             lo = Math.min(lo, threshold);
             hi = Math.max(hi, threshold);

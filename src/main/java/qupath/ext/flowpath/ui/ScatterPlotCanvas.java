@@ -10,6 +10,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.Region2DGate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -204,10 +205,12 @@ public class ScatterPlotCanvas extends Canvas {
     private boolean hasDrawableShape() {
         if (overlayGate instanceof PolygonGate g) return g.getVertices().size() >= 3;
         if (overlayGate instanceof RectangleGate g) {
-            return g.getMaxX() - g.getMinX() > 1e-10 && g.getMaxY() - g.getMinY() > 1e-10;
+            return g.getMaxX() - g.getMinX() > Region2DGate.MIN_DRAWABLE_EXTENT
+                    && g.getMaxY() - g.getMinY() > Region2DGate.MIN_DRAWABLE_EXTENT;
         }
         if (overlayGate instanceof EllipseGate g) {
-            return g.getRadiusX() > 1e-10 && g.getRadiusY() > 1e-10;
+            return g.getRadiusX() > Region2DGate.MIN_DRAWABLE_EXTENT
+                    && g.getRadiusY() > Region2DGate.MIN_DRAWABLE_EXTENT;
         }
         return overlayGate != null;
     }
@@ -392,7 +395,8 @@ public class ScatterPlotCanvas extends Canvas {
             double y2 = screenYToDataY(sy);
             double rMinX = Math.min(x1, x2), rMaxX = Math.max(x1, x2);
             double rMinY = Math.min(y1, y2), rMaxY = Math.max(y1, y2);
-            if (rMaxX - rMinX > 1e-10 && rMaxY - rMinY > 1e-10 && onRectangleDrawn != null) {
+            if (rMaxX - rMinX > Region2DGate.MIN_DRAWABLE_EXTENT
+                    && rMaxY - rMinY > Region2DGate.MIN_DRAWABLE_EXTENT && onRectangleDrawn != null) {
                 onRectangleDrawn.accept(new double[]{rMinX, rMaxX, rMinY, rMaxY});
             }
             dragStart = null;
@@ -407,7 +411,8 @@ public class ScatterPlotCanvas extends Canvas {
             double cy = (y1 + y2) / 2.0;
             double rx = Math.abs(x2 - x1) / 2.0;
             double ry = Math.abs(y2 - y1) / 2.0;
-            if (rx > 1e-10 && ry > 1e-10 && onEllipseDrawn != null) {
+            if (rx > Region2DGate.MIN_DRAWABLE_EXTENT && ry > Region2DGate.MIN_DRAWABLE_EXTENT
+                    && onEllipseDrawn != null) {
                 onEllipseDrawn.accept(new double[]{cx, cy, rx, ry});
             }
             dragStart = null;
