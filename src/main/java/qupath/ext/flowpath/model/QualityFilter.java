@@ -98,23 +98,6 @@ public class QualityFilter {
         return true;
     }
 
-    /**
-     * The legacy positional form, kept for the two call sites that already hold these five
-     * numbers and for the tests that pin them.
-     *
-     * @deprecated prefer {@link #passes(CellIndex, int)}, which consults every field the
-     *             export carries rather than the five FlowPath used to know about.
-     */
-    @Deprecated
-    public boolean passes(double area, double eccentricity, double solidity,
-                          double totalIntensity, double perimeter) {
-        return range(AREA).accepts(area)
-                && range(ECCENTRICITY).accepts(eccentricity)
-                && range(SOLIDITY).accepts(solidity)
-                && range(TOTAL_INTENSITY).accepts(totalIntensity)
-                && range(PERIMETER).accepts(perimeter);
-    }
-
     // ---- legacy named accessors -------------------------------------------------
     //
     // The serializer and the older tests address these five by name. They are thin views
