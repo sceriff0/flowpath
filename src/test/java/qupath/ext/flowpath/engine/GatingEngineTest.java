@@ -247,7 +247,91 @@ class GatingEngineTest {
         for (int i = 0; i < 5; i++) {
             assertEquals("Unclassified", result.getPhenotypes()[i],
                     "Cell " + i + " should be Unclassified when channel is missing");
+            assertTrue(result.getUnmeasured()[i],
+                    "Cell " + i + " reached a gate with no column to judge it on");
+            assertFalse(result.getExcluded()[i], "unmeasured is not exclusion");
         }
+        for (Branch b : gate.getBranches()) {
+            assertEquals(0, b.getCount(), "a gate with no column counts nothing");
+        }
+    }
+
+    /**
+     * A gate whose channel is absent from the index is the second cause of
+     * {@code UNMEASURED}, and must get exactly the NaN case's semantics: the walk used to
+     * return before even asking, so the cells that reached it were silently left looking
+     * measured. Pinned under two enabled roots -- on different channels and on the same
+     * channel -- because per-root bookkeeping is where this codebase keeps going wrong.
+     */
+    @Test
+    void aMissingChannelChildGateFlagsItsCellsUnmeasuredUnderTwoRoots() {
+        for (String secondRootChannel : List.of("CD3", "CD45")) {
+            CellIndex index = Cells.of(8)
+                    .marker("CD45", i -> i * 10.0)        // 0..70
+                    .marker("CD3", i -> 70.0 - i * 10.0)  // 70..0
+                    .area(100.0)
+                    .build();
+            MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(8));
+
+            GateTree without = twoRootTree(secondRootChannel, false);
+            AssignmentResult baseline = GatingEngine.assignAll(without, index, stats);
+            GateTree with = twoRootTree(secondRootChannel, true);
+            AssignmentResult result = GatingEngine.assignAll(with, index, stats);
+
+            GateNode rootA = with.getRoots().get(0);
+            GateNode rootB = with.getRoots().get(1);
+            Branch parentBranch = rootA.getBranches().get(0);
+            GateNode missing = parentBranch.getChildren().get(0);
+            String where = "second root on " + secondRootChannel + ": ";
+
+            for (int i = 0; i < 8; i++) {
+                boolean reachedMissingGate = i * 10.0 >= 35.0;
+                assertEquals(reachedMissingGate, result.getUnmeasured()[i],
+                        where + "cell " + i + " unmeasured iff it reached the missing-channel gate");
+                assertFalse(result.getExcluded()[i], where + "unmeasured is not exclusion");
+                assertEquals(baseline.getPhenotypes()[i], result.getPhenotypes()[i],
+                        where + "cell " + i + " keeps its ancestors' phenotype");
+            }
+            for (Branch b : missing.getBranches()) {
+                assertEquals(0, b.getCount(), where + "the missing-channel gate counts nothing");
+                assertEquals(0, result.getTally().total(b), where + "nor does its tally");
+            }
+            for (int r = 0; r < 2; r++) {
+                GateNode live = with.getRoots().get(r);
+                GateNode base = without.getRoots().get(r);
+                for (int b = 0; b < live.getBranches().size(); b++) {
+                    assertEquals(base.getBranches().get(b).getCount(),
+                            live.getBranches().get(b).getCount(),
+                            where + "root " + r + " branch " + b + " count unchanged");
+                    assertEquals(baseline.getTally().total(base.getBranches().get(b)),
+                            result.getTally().total(live.getBranches().get(b)),
+                            where + "root " + r + " branch " + b + " tally unchanged");
+                }
+            }
+            assertEquals(4, parentBranch.getCount(), where + "CD45+ still counts its four cells");
+            assertTrue(rootB.getBranches().get(0).getCount() > 0, where + "second root still gates");
+        }
+    }
+
+    private static GateTree twoRootTree(String secondRootChannel, boolean withMissingChild) {
+        GateNode rootA = new GateNode("CD45", 35.0);
+        rootA.setStatistic(Statistic.MEAN);
+        if (withMissingChild) {
+            GateNode missing = new GateNode("NONEXISTENT", 1.0);
+            missing.setStatistic(Statistic.MEAN);
+            rootA.getBranches().get(0).getChildren().add(missing);
+        }
+        GateNode rootB = new GateNode(secondRootChannel, 25.0);
+        rootB.setStatistic(Statistic.MEAN);
+        // Same channel, distinct leaf names: the engine keys nothing on names, and identical
+        // ones would only add GatingEngine's duplicate-leaf-name warning to the test output.
+        rootB.getBranches().get(0).setName(secondRootChannel + " hi");
+        rootB.getBranches().get(1).setName(secondRootChannel + " lo");
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(rootA);
+        tree.addRoot(rootB);
+        return tree;
     }
 
     @Test

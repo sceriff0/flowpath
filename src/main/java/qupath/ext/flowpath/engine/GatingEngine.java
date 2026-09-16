@@ -121,7 +121,13 @@ public final class GatingEngine {
             return unmeasured;
         }
 
-        /** Packed RGB color per cell (default: last root's color), 0 for excluded cells. */
+        /**
+         * Packed RGB color per cell: the colour of the last branch the cell landed in (for
+         * a multi-root tree, the last contributing root's). Excluded cells are coloured
+         * too, since the walk still labels them for the CSV. The value is {@code 0} only
+         * for a cell that never reached any branch -- every root disabled or empty, or
+         * unmeasured at every root gate it met.
+         */
         public int[] getColors() {
             return colors;
         }
@@ -639,7 +645,10 @@ public final class GatingEngine {
      */
     private static void walkNode(ResolvedGate rg, int cellIdx, WalkContext ctx) {
         if (!rg.node.isEnabled()) return;
-        if (!rg.usable) return;
+        // No early return for an unusable gate (a channel absent from the index): branchOf
+        // answers UNMEASURED for it, and it must be handled exactly like a NaN axis below.
+        // Returning here before asking left every cell that reached such a gate looking
+        // measured, while the predicate the display path uses said "no data".
 
         boolean[] excluded = ctx.excluded();
         boolean[] unmeasured = ctx.unmeasured();
@@ -648,7 +657,8 @@ public final class GatingEngine {
         int branchIdx = rg.branchOf(cellIdx);
 
         if (branchIdx == ResolvedGate.UNMEASURED) {
-            // This gate has no value for this cell, so it gets no opinion about it. The
+            // This gate has no value for this cell -- the axis reads NaN, or the gate's
+            // channel is not in the index at all -- so it gets no opinion about it. The
             // cell keeps the phenotype its ancestors gave it, is counted in none of this
             // gate's branches, and the walk stops here rather than descending into a
             // subtree that would be judging it on the same absent data.

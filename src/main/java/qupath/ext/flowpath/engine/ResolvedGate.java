@@ -28,8 +28,10 @@ import java.util.Map;
  * could be — and repeatedly was — forgotten. Here it is not a step you can skip: the walk
  * has nothing to read from unless the gate was compiled.
  * <p>
- * Gates whose channels are absent from the index compile to {@code usable == false}; the
- * walk skips them exactly as it used to skip a negative marker index.
+ * Gates whose channels are absent from the index compile to {@code usable == false}, and
+ * {@link #branchOf} answers {@link #UNMEASURED} for every cell they are asked about. The
+ * walk treats that exactly like a NaN axis: the cell is flagged unmeasured, keeps its
+ * ancestors' phenotype, and counts in none of this gate's branches.
  */
 final class ResolvedGate {
 
@@ -42,7 +44,7 @@ final class ResolvedGate {
     /** Axis 1 column (Y of a 2D gate); null for 1D gates and unusable gates. */
     final MeasuredColumn y;
 
-    /** False when a channel is missing from the index — the walk contributes nothing. */
+    /** False when a channel is missing from the index — every cell reads {@link #UNMEASURED}. */
     final boolean usable;
 
     /** True for gates with a Y axis (quadrant and 2D region gates). */

@@ -154,6 +154,51 @@ class SinglePredicateTest {
         assertTrue(clipped > 0, "the 20-80 clip range should have rejected some cells");
     }
 
+    /**
+     * A gate whose channel is absent from the index compiles unusable, and
+     * {@code branchOf} answers {@code UNMEASURED} for every cell. The walk used to return
+     * before asking, so it flagged nothing while the predicate said "no data" -- two
+     * answers to one question. Both must now say the same thing, for every gate type, and
+     * a gate below it must be reached by no cell on either path.
+     */
+    @Test
+    void theWalkAgreesWithBranchOfForAGateWhoseChannelIsAbsent() {
+        CellIndex index = randomIndex(200, 11L);
+        List<GateNode> absent = new ArrayList<>();
+        absent.add(new GateNode("ABSENT", 0.25));
+        absent.add(new QuadrantGate("A", "ABSENT", 0.5, -0.5));
+        absent.add(new RectangleGate("ABSENT", "B", -1, 1, -1, 1));
+        absent.add(new EllipseGate("ABSENT", "ABSENT", 0, 0, 1.5, 0.75));
+
+        for (GateNode gate : absent) {
+            prepare(gate, false);
+            GateNode child = prepare(new GateNode("A", 0.0), false);
+            gate.getBranches().get(0).getChildren().add(child);
+            GateTree tree = new GateTree();
+            tree.setQualityFilter(null);
+            tree.addRoot(gate);
+            MarkerStats stats = MarkerStats.compute(index);
+
+            ResolvedGate rg = ResolvedGate.compile(tree.getRoots(), index, stats, null).get(0);
+            GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+            boolean[] reachesChild = GatingEngine.computeAncestorMask(tree, child, index, stats, null);
+
+            for (int i = 0; i < index.size(); i++) {
+                String where = gate.getGateType() + " cell " + i;
+                assertEquals(ResolvedGate.UNMEASURED, rg.branchOf(i), where + ": predicate");
+                assertTrue(result.getUnmeasured()[i], where + ": walk flags it unmeasured");
+                assertEquals("Unclassified", result.getPhenotypes()[i], where + ": phenotype");
+                assertEquals(false, reachesChild[i], where + ": no cell reaches the child");
+            }
+            for (Branch b : gate.getBranches()) {
+                assertEquals(0, b.getCount(), gate.getGateType() + " counts nothing");
+            }
+            for (Branch b : child.getBranches()) {
+                assertEquals(0, b.getCount(), gate.getGateType() + " child counts nothing");
+            }
+        }
+    }
+
     // ---- the CSV sign column ----
 
     @Test
