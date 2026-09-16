@@ -29,6 +29,7 @@ import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.ValueMode;
+import qupath.ext.flowpath.ui.editor.AxisMath;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,15 +46,6 @@ public class GateEditorPane extends VBox {
 
     private static final org.slf4j.Logger logger =
             org.slf4j.LoggerFactory.getLogger(GateEditorPane.class);
-
-    /**
-     * The default axis window a threshold or quadrant slider starts from before real column
-     * statistics (clip percentiles) narrow it — a holdover from the retired z-score space,
-     * where {@code [-5, 5]} covered essentially every cell. {@link #quadrantSliderSpan} falls
-     * back to this same window when there is no clip-derived one to widen instead.
-     */
-    private static final double DEFAULT_AXIS_LO = -5;
-    private static final double DEFAULT_AXIS_HI = 5;
 
     // --- Shared controls ---
     private final Label gateTypeLabel;
@@ -329,7 +321,7 @@ public class GateEditorPane extends VBox {
         hoverLabel.setStyle("-fx-font-size: 9;");
         histogram.setOnMouseHover(val -> hoverLabel.setText(String.format(Locale.US, "Value: %.4f", val)));
 
-        Slider slider = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, node.getThreshold());
+        Slider slider = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, node.getThreshold());
         slider.setPrefWidth(300);
         SliderUtils.makeRangeFriendly(slider);
         TextField valueField = new TextField(String.format(Locale.US, "%.4f", node.getThreshold()));
@@ -419,8 +411,8 @@ public class GateEditorPane extends VBox {
         // max, every outlier included, so on a skewed marker the part of the plot a user
         // can actually see was a few pixels of slider — the thumb raced across the visible
         // population, and its position said nothing about where the line was drawn.
-        Slider sliderX = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, 0);
-        Slider sliderY = new Slider(DEFAULT_AXIS_LO, DEFAULT_AXIS_HI, 0);
+        Slider sliderX = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, 0);
+        Slider sliderY = new Slider(AxisMath.DEFAULT_AXIS_LO, AxisMath.DEFAULT_AXIS_HI, 0);
         sliderX.setPrefWidth(300);
         sliderY.setPrefWidth(300);
         SliderUtils.enableScrollControl(sliderX);
@@ -431,8 +423,8 @@ public class GateEditorPane extends VBox {
         final ScatterPlotCanvas[] scatterRef = {null};
 
         Runnable rerange = () -> withSuppressedEvents(() -> {
-            double[] spanX = quadrantSliderSpan(clipSpan(columnX(gate), gate), gate.getThresholdX());
-            double[] spanY = quadrantSliderSpan(clipSpan(columnY(gate), gate), gate.getThresholdY());
+            double[] spanX = AxisMath.quadrantSliderSpan(AxisMath.clipSpan(columnX(gate), gate.getClipPercentileLow(), gate.getClipPercentileHigh()), gate.getThresholdX());
+            double[] spanY = AxisMath.quadrantSliderSpan(AxisMath.clipSpan(columnY(gate), gate.getClipPercentileLow(), gate.getClipPercentileHigh()), gate.getThresholdY());
             // Widen before narrowing so setMin never crosses the current max, and re-pin the
             // value afterwards: Slider clamps silently on a range move.
             sliderX.setMin(Math.min(sliderX.getMin(), spanX[0]));
@@ -890,8 +882,8 @@ public class GateEditorPane extends VBox {
     private void remapRegionShape(Region2DGate gate, MeasuredColumn oldX, MeasuredColumn newX,
                                   MeasuredColumn oldY, MeasuredColumn newY) {
         gate.remapCoordinates(
-                v -> remapRawThreshold(oldX, newX, v),
-                v -> remapRawThreshold(oldY, newY, v));
+                v -> AxisMath.remapRawThreshold(oldX, newX, v),
+                v -> AxisMath.remapRawThreshold(oldY, newY, v));
     }
 
     /**
@@ -918,10 +910,10 @@ public class GateEditorPane extends VBox {
         mutation.run();
 
         if (threshold) {
-            node.setThreshold(remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
+            node.setThreshold(AxisMath.remapRawThreshold(oldCol, thresholdColumn(node), oldThreshold));
         } else if (node instanceof QuadrantGate qg) {
-            qg.setThresholdX(remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
-            qg.setThresholdY(remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
+            qg.setThresholdX(AxisMath.remapRawThreshold(oldColX, columnX(node), qg.getThresholdX()));
+            qg.setThresholdY(AxisMath.remapRawThreshold(oldColY, columnY(node), qg.getThresholdY()));
         } else if (node instanceof Region2DGate region) {
             remapRegionShape(region, oldColX, columnX(node), oldColY, columnY(node));
         }
@@ -1081,20 +1073,6 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * A raw threshold remapped to the same percentile of {@code newCol}, so a
-     * compartment/statistic switch keeps the gate splitting the population the same
-     * way instead of leaving a number that means nothing in the new column. Returns
-     * {@code value} unchanged when the column is unchanged or the remap is not possible.
-     */
-    private double remapRawThreshold(MeasuredColumn oldCol, MeasuredColumn newCol, double value) {
-        if (oldCol == null || newCol == null || newCol.key().equals(oldCol.key())) return value;
-        double pct = oldCol.percentileRankOf(value);
-        if (Double.isNaN(pct)) return value;
-        double mapped = newCol.percentile(pct);
-        return Double.isNaN(mapped) ? value : mapped;
-    }
-
-    /**
      * True when both of {@code node}'s axes name a channel the loaded index carries, so
      * there is something to plot.
      */
@@ -1173,62 +1151,18 @@ public class GateEditorPane extends VBox {
         // histogram shows exactly what GatingEngine compares against.
         MeasuredColumn col = thresholdColumn(currentNode);
         if (col == null) return;
-        double[] allValues = col.values();
-        // Filter by ROI mask and ancestor mask, excluding NaN channel values
-        // so downstream percentile/clip logic cannot produce NaN bounds.
-        boolean hasMask = roiMask != null || ancestorMask != null;
-        double[] rawValues;
-        if (hasMask) {
-            int count = 0;
-            for (int i = 0; i < allValues.length; i++) {
-                if (passesMasks(i) && !Double.isNaN(allValues[i])) count++;
-            }
-            rawValues = new double[count];
-            int j = 0;
-            for (int i = 0; i < allValues.length; i++) {
-                if (passesMasks(i) && !Double.isNaN(allValues[i])) rawValues[j++] = allValues[i];
-            }
-        } else {
-            int count = 0;
-            for (double v : allValues) if (!Double.isNaN(v)) count++;
-            if (count == allValues.length) {
-                rawValues = allValues;
-            } else {
-                rawValues = new double[count];
-                int j = 0;
-                for (double v : allValues) if (!Double.isNaN(v)) rawValues[j++] = v;
-            }
-        }
-        double[] displayValues = rawValues;
-
-        // Anchor the histogram clip range on global per-marker percentiles so
-        // the same axis is used for this channel everywhere it appears in the
-        // gate tree. When the parent-filtered cells sit outside this range
-        // (e.g. a 0.5% tail population on a correlated child marker), the
-        // histogram's "X cells outside clip range" message at
-        // HistogramCanvas:184-198 informs the user — they can widen the clip
-        // percentiles if they want to gate inside the tail.
-        double pctLo = currentNode.getClipPercentileLow();
-        double pctHi = currentNode.getClipPercentileHigh();
-        // Global per-column percentiles, so the same channel+compartment+statistic
-        // uses one axis everywhere it appears in the gate tree.
-        double clipLo = col.percentile(pctLo);
-        double clipHi = col.percentile(pctHi);
-
-        // Defensive fallback only when the global percentile is unusable
-        // (column constant in the full population, or absent from markerStats).
-        boolean badGlobal = Double.isNaN(clipLo) || Double.isNaN(clipHi) || !(clipHi > clipLo);
-        if (badGlobal && displayValues.length > 0) {
-            double dataMin = percentileOf(displayValues, 0);
-            double dataMax = percentileOf(displayValues, 100);
-            clipLo = dataMin;
-            clipHi = dataMax > dataMin ? dataMax : dataMin + 1;
-        } else if (badGlobal) {
-            clipLo = 0;
-            clipHi = 1;
-        }
-        final double clipMin = clipLo;
-        final double clipMax = clipHi;
+        // Cells in the current population with a measured value, so no percentile or clip
+        // computed from them can come out NaN.
+        double[] displayValues = AxisMath.measuredValues(col.values(), roiMask, ancestorMask);
+        // Global per-column clip percentiles, so the same channel+compartment+statistic uses
+        // one axis everywhere it appears in the gate tree. When the parent-filtered cells sit
+        // outside it, the histogram's "X cells outside clip range" message says so.
+        double[] window = AxisMath.thresholdWindow(
+                col.percentile(currentNode.getClipPercentileLow()),
+                col.percentile(currentNode.getClipPercentileHigh()),
+                displayValues);
+        final double clipMin = window[0];
+        final double clipMax = window[1];
 
         currentHistogram.setData(displayValues, clipMin, clipMax);
         currentHistogram.setThreshold(currentNode.getThreshold());
@@ -1250,29 +1184,6 @@ public class GateEditorPane extends VBox {
             }
         });
         updatePopulationCounts();
-    }
-
-    /**
-     * Linear-interpolated percentile of an array (NaNs ignored). Returns NaN for
-     * an empty/all-NaN input so the caller's badGlobal fallback engages.
-     * Package-private so PercentileOfTest (same package) can call it directly.
-     * @param pct percentile in [0,100]
-     */
-    static double percentileOf(double[] values, double pct) {
-        if (values == null || values.length == 0) return Double.NaN;
-        double[] sorted = new double[values.length];
-        int n = 0;
-        for (double v : values) if (!Double.isNaN(v)) sorted[n++] = v;
-        if (n == 0) return Double.NaN;
-        sorted = java.util.Arrays.copyOf(sorted, n);
-        java.util.Arrays.sort(sorted);
-        if (n == 1) return sorted[0];
-        double rank = (pct / 100.0) * (n - 1);
-        int lo = (int) Math.floor(rank);
-        int hi = (int) Math.ceil(rank);
-        if (lo == hi) return sorted[lo];
-        double frac = rank - lo;
-        return sorted[lo] * (1 - frac) + sorted[hi] * frac;
     }
 
     private boolean isThresholdGate(GateNode node) {
@@ -1384,7 +1295,7 @@ public class GateEditorPane extends VBox {
     private void applyThresholdFromField() {
         if (suppressEvents || currentNode == null || currentThresholdField == null) return;
         try {
-            double val = parseThreshold(currentThresholdField.getText());
+            double val = AxisMath.parseThreshold(currentThresholdField.getText());
             withSuppressedEvents(() -> {
                 currentNode.setThreshold(val);
                 if (currentThresholdSlider != null) currentThresholdSlider.setValue(val);
@@ -1395,18 +1306,6 @@ public class GateEditorPane extends VBox {
         } catch (NumberFormatException ex) {
             currentThresholdField.setText(String.format(Locale.US, "%.4f", currentNode.getThreshold()));
         }
-    }
-
-    /**
-     * Parse a typed threshold. The field is rendered with {@link Locale#US} so that
-     * {@link Double#parseDouble} — which only accepts {@code '.'} — can read it back,
-     * but a user on a comma-decimal locale will naturally type {@code "0,33"}, so
-     * accept that too. No thousands separator is ever emitted, making the swap safe.
-     * Package-private so tests in the same package can exercise it directly.
-     */
-    static double parseThreshold(String text) {
-        if (text == null) throw new NumberFormatException("null");
-        return Double.parseDouble(text.trim().replace(',', '.'));
     }
 
     private static String toWebColor(Color c) {
@@ -1430,45 +1329,13 @@ public class GateEditorPane extends VBox {
      */
     private void applyClipAxisRange(ScatterPlotCanvas scatter, MeasuredColumn colX, MeasuredColumn colY,
                                     GateNode node) {
-        double[] x = clipSpan(colX, node);
-        double[] y = clipSpan(colY, node);
+        double[] x = AxisMath.clipSpan(colX, node.getClipPercentileLow(), node.getClipPercentileHigh());
+        double[] y = AxisMath.clipSpan(colY, node.getClipPercentileLow(), node.getClipPercentileHigh());
         if (x == null || y == null) {
             scatter.clearAxisRange();
             return;
         }
         scatter.setAxisRange(x[0], x[1], y[0], y[1]);
-    }
-
-    /**
-     * One axis' visible window: {@code col}'s clip percentiles, or {@code null} when they do
-     * not make a usable range. The scatter plot's axes
-     * and the quadrant editor's slider travel both come from here, so what the slider spans
-     * is what the plot shows.
-     */
-    private static double[] clipSpan(MeasuredColumn col, GateNode node) {
-        if (col == null) return null;
-        double lo = col.percentile(node.getClipPercentileLow());
-        double hi = col.percentile(node.getClipPercentileHigh());
-        if (Double.isNaN(lo) || Double.isNaN(hi) || !(hi > lo)) return null;
-        return new double[]{lo, hi};
-    }
-
-    /**
-     * The travel for a quadrant threshold slider: the axis' visible window, widened just
-     * enough to contain the gate's current threshold so the thumb never lies about it by
-     * pinning to an end. Falls back to {@code [-5, 5]} (the default window the threshold
-     * editor also starts from) when there is no window. Pure, so it is table-testable
-     * without a toolkit.
-     */
-    static double[] quadrantSliderSpan(double[] window, double threshold) {
-        double lo = window != null ? window[0] : DEFAULT_AXIS_LO;
-        double hi = window != null ? window[1] : DEFAULT_AXIS_HI;
-        if (Double.isFinite(threshold)) {
-            lo = Math.min(lo, threshold);
-            hi = Math.max(hi, threshold);
-        }
-        if (!(hi > lo)) hi = lo + 1;
-        return new double[]{lo, hi};
     }
 
     private static TextField thresholdField(double value) {
@@ -1494,7 +1361,7 @@ public class GateEditorPane extends VBox {
             double current = xAxis ? gate.getThresholdX() : gate.getThresholdY();
             double val;
             try {
-                val = parseThreshold(field.getText());
+                val = AxisMath.parseThreshold(field.getText());
             } catch (NumberFormatException ex) {
                 field.setText(String.format(Locale.US, "%.3f", current));
                 return;

@@ -1,5 +1,7 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.ui.editor.AxisMath;
+
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ComboBox;
@@ -369,7 +371,7 @@ class GateEditorSignalTest {
             Fixture f = editorFor(gate);
 
             String shown = thresholdField(f.pane()).getText();
-            assertEquals(0.3303, GateEditorPane.parseThreshold(shown), 1e-9,
+            assertEquals(0.3303, AxisMath.parseThreshold(shown), 1e-9,
                     "what the field renders must be what the field can parse back");
         } finally {
             Locale.setDefault(original);
@@ -379,10 +381,10 @@ class GateEditorSignalTest {
     @Test
     void thresholdFieldAcceptsCommaTypedByUser() {
         // Pure parsing, no toolkit interaction beyond class load.
-        assertEquals(1.5, GateEditorPane.parseThreshold("1,5"), 1e-9);
-        assertEquals(1.5, GateEditorPane.parseThreshold(" 1.5 "), 1e-9);
-        assertEquals(-2.25, GateEditorPane.parseThreshold("-2,25"), 1e-9);
-        assertThrows(NumberFormatException.class, () -> GateEditorPane.parseThreshold("abc"));
+        assertEquals(1.5, AxisMath.parseThreshold("1,5"), 1e-9);
+        assertEquals(1.5, AxisMath.parseThreshold(" 1.5 "), 1e-9);
+        assertEquals(-2.25, AxisMath.parseThreshold("-2,25"), 1e-9);
+        assertThrows(NumberFormatException.class, () -> AxisMath.parseThreshold("abc"));
     }
 
     // ---- compartment change keeps the gate meaningful in raw mode -----------

@@ -1,5 +1,7 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.ui.editor.AxisMath;
+
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ComboBox;
@@ -397,7 +399,7 @@ class GateEditorAxisChangeTest {
                 "the fixture must make the two candidate columns distinguishable");
         // Travel is that column's clip window (what the scatter shows), widened to hold the
         // threshold -- see QuadrantSliderSpanTest.
-        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{
+        double[] expected = AxisMath.quadrantSliderSpan(new double[]{
                 nuclearCol.percentile(gate.getClipPercentileLow()),
                 nuclearCol.percentile(gate.getClipPercentileHigh())}, gate.getThresholdX());
         double expectedMin = expected[0];
@@ -470,7 +472,7 @@ class GateEditorAxisChangeTest {
         double lo = nuclear.percentile(gate.getClipPercentileLow());
         double hi = nuclear.percentile(gate.getClipPercentileHigh());
         assertFalse(gate.isThresholdIsZScore(), "a new gate reads its columns as measured");
-        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
+        double[] expected = AxisMath.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);
         assertEquals(expected[0], sliders.get(0).getMin(), 1e-9,
