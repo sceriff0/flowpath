@@ -168,11 +168,13 @@ public final class CellTable {
 
     /**
      * Escape a value for CSV output: wrapped in double quotes if it contains a comma,
-     * a double quote, or a newline.
+     * a double quote, or a line break. A bare {@code \r} counts: pandas and Python's
+     * {@code csv} both end a row on it, so an unquoted one split a cell into two rows.
      */
     public static String escape(String value) {
         if (value == null) return "";
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")
+                || value.contains("\r")) {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;
