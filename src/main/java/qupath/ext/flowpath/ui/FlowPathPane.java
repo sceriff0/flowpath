@@ -1684,15 +1684,13 @@ public class FlowPathPane extends BorderPane {
         suppressTreeSelection = true;
         try {
             rebuildTreeView();
-            if (currentNode != null && findTreeItem(treeView.getRoot(), currentNode) == null) {
-                currentNode = null;
-            }
+            currentNode = EditorRebuild.surviving(currentNode, tree);
             if (currentNode != null) selectNodeInTree(currentNode);
         } finally {
             suppressTreeSelection = false;
         }
         editorPane.setAncestorMask(currentNode != null ? computeAncestorMask(currentNode) : null);
-        if (newIndex || notice.isPresent() || editorPane.getGateNode() != currentNode) {
+        if (EditorRebuild.needed(newIndex, notice.isPresent(), editorPane.getGateNode(), currentNode)) {
             editorPane.setGateNode(currentNode);
         }
 
