@@ -451,8 +451,10 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
     Gate trees saved under the old mode still load: as soon as the tree meets an image's
   cells, every gate's thresholds and shapes are converted back into the column's own units,
   so each gate keeps the cells it had — including gates you never open and trees you export
-  straight away. A notification says how many gates were converted, and names any that
-  could not be (a column with no spread, or a channel the image does not carry).
+  straight away. A notification says how many gates were converted and names any that
+  could not be: a gate on a column with no spread keeps its old numbers, and a gate on a
+  channel this image does not carry stays in z-score units until the tree is opened on an
+  image that has it.
 
 - **Quality filters** — pre-gating QC with a min + max per morphology measurement
   **your export actually carries**. A MIRAGE run gives you area, eccentricity, perimeter,

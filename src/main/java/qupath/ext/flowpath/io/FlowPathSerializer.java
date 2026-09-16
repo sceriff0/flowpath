@@ -354,6 +354,7 @@ public class FlowPathSerializer {
             obj.addProperty("channelY", qg.getChannelY());
             obj.addProperty("thresholdX", qg.getThresholdX());
             obj.addProperty("thresholdY", qg.getThresholdY());
+            writeLegacyZScoreFlag(obj, qg);
             obj.addProperty("compartmentX", qg.getCompartmentX().name());
             obj.addProperty("compartmentY", qg.getCompartmentY().name());
             obj.addProperty("statisticX", qg.getStatisticX().token());
@@ -377,6 +378,7 @@ public class FlowPathSerializer {
             // user's work was already on disk. See the refusal below.
             obj.addProperty("channel", node.getChannel());
             obj.addProperty("threshold", node.getThreshold());
+            writeLegacyZScoreFlag(obj, node);
             obj.addProperty("compartment", node.getCompartment().name());
             obj.addProperty("statistic", node.getStatistic().token());
             obj.addProperty("positiveName", node.getPositiveName());
@@ -403,10 +405,25 @@ public class FlowPathSerializer {
         return obj;
     }
 
+    /**
+     * Write {@code "thresholdIsZScore": true} for a gate still holding numbers in the retired
+     * computed z-space, and nothing otherwise.
+     * <p>
+     * New gates never carry the flag, so a raw gate's file omits it. But a legacy tree can be
+     * saved before it has met an index -- saving needs no image open -- and a gate whose
+     * channel the current image lacks keeps the flag through migration. Dropping the flag on
+     * either would write thresholds like 1.5 into a file that reloads as raw, where no
+     * migration ever fires again.
+     */
+    private static void writeLegacyZScoreFlag(JsonObject obj, GateNode gate) {
+        if (gate.isThresholdIsZScore()) obj.addProperty("thresholdIsZScore", true);
+    }
+
     /** Write the axis block shared by every 2D region gate (polygon / rectangle / ellipse). */
     private static void serializeRegionAxes(JsonObject obj, Region2DGate gate) {
         obj.addProperty("channelX", gate.getChannelX());
         obj.addProperty("channelY", gate.getChannelY());
+        writeLegacyZScoreFlag(obj, gate);
         obj.addProperty("compartmentX", gate.getCompartmentX().name());
         obj.addProperty("compartmentY", gate.getCompartmentY().name());
         obj.addProperty("statisticX", gate.getStatisticX().token());
@@ -538,9 +555,9 @@ public class FlowPathSerializer {
         node.setChannel(optString(obj, "channel"));
         if (obj.has("threshold"))
             node.setThreshold(obj.get("threshold").getAsDouble());
-        // Read, never written: a file saved before the computed z-score was retired holds
-        // this threshold in standard deviations, and LegacyZScoreMigration needs the flag to
-        // know to convert it. An absent flag means raw -- every file written since.
+        // A file saved before the computed z-score was retired holds this threshold in
+        // standard deviations, and LegacyZScoreMigration needs the flag to know to convert
+        // it. Written back only while still set (see writeLegacyZScoreFlag); absent means raw.
         if (obj.has("thresholdIsZScore"))
             node.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
         node.setCompartment(parseCompartment(obj, "compartment"));

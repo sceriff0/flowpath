@@ -333,6 +333,7 @@ public class FlowPathPane extends BorderPane {
      */
     private void initializeFromImage() {
         detachHierarchyListener();
+        lastUnchangedMigrationNotice = null;
 
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) {
@@ -1664,9 +1665,19 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
+     * The last migration notice shown while the tree changed nothing, so the same "these gates
+     * read a channel this image does not carry" warning is not repeated on every undo, redo
+     * and load. Cleared when a new image is initialised.
+     */
+    private String lastUnchangedMigrationNotice;
+
+    /**
      * Convert a tree saved under the retired computed z-score onto raw values, now that it
      * has an index to convert against, and say so when anything changed. A no-op without an
      * index (the conversion waits for one) or when no gate carries the flag.
+     * <p>
+     * Gates whose channel this image lacks keep the flag and are found again on every call;
+     * their notice is shown once per image unless the set of such gates changes.
      */
     private void migrateLegacyZScores(MarkerStats stats) {
         if (cellIndex == null || stats == null || !LegacyZScoreMigration.needsMigration(gateTree)) {
@@ -1674,10 +1685,15 @@ public class FlowPathPane extends BorderPane {
         }
         LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(gateTree, cellIndex, stats);
         if (result.isEmpty()) return;
-        if (result.unconvertible().isEmpty()) {
-            Dialogs.showInfoNotification("FlowPath", result.message());
+        String message = result.message();
+        if (!result.changedTree()) {
+            if (message.equals(lastUnchangedMigrationNotice)) return;
+            lastUnchangedMigrationNotice = message;
+        }
+        if (result.unconvertible().isEmpty() && result.missingChannel().isEmpty()) {
+            Dialogs.showInfoNotification("FlowPath", message);
         } else {
-            Dialogs.showWarningNotification("FlowPath", result.message());
+            Dialogs.showWarningNotification("FlowPath", message);
         }
     }
 

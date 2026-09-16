@@ -213,6 +213,42 @@ class LegacyZScoreTreeTest {
         }
     }
 
+    /**
+     * Saving needs no image open, so a legacy tree can be written back before it has ever met
+     * an index. The flag must survive that save, or thresholds like 0.13 reload as raw values
+     * and no migration ever fires.
+     */
+    @Test
+    void aLegacyTreeSavedBeforeMigrationStillNeedsMigrationOnReload() throws IOException {
+        GateTree tree = loadLegacy();
+        File out = tempDir.resolve("resaved.json").toFile();
+        FlowPathSerializer.save(tree, out);
+
+        GateTree reloaded = FlowPathSerializer.load(out);
+
+        assertTrue(LegacyZScoreMigration.needsMigration(reloaded));
+        List<GateNode> gates = allGates(reloaded);
+        assertEquals(6, gates.size());
+        assertTrue(gates.stream().allMatch(GateNode::isThresholdIsZScore),
+                "every gate of every type keeps the flag through save and reload");
+
+        // And the reloaded tree migrates to exactly what the original would have.
+        CellIndex index = index();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(N));
+        GateTree original = loadLegacy();
+        LegacyZScoreMigration.migrate(original, index, stats);
+        LegacyZScoreMigration.migrate(reloaded, index, stats);
+        GateReadout a = GateReadout.compile(original, index, stats);
+        GateReadout b = GateReadout.compile(reloaded, index, stats);
+        List<GateNode> ga = allGates(original);
+        for (int g = 0; g < ga.size(); g++) {
+            for (int i = 0; i < N; i++) {
+                assertEquals(a.branchIgnoringClip(ga.get(g), i), b.branchIgnoringClip(gates.get(g), i),
+                        "gate " + g + ", cell " + i);
+            }
+        }
+    }
+
     @Test
     void aMigratedTreeSavesWithoutTheRetiredFlag() throws IOException {
         CellIndex index = index();

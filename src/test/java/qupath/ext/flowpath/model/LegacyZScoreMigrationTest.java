@@ -110,20 +110,50 @@ class LegacyZScoreMigrationTest {
         assertTrue(message.contains("FLAT") && message.contains("A/FLAT"), message);
     }
 
+    /**
+     * A channel this image lacks keeps the flag: the engine cannot use the gate here anyway,
+     * and clearing it would make the saved tree gate on standard deviations as intensities on
+     * a slide that does carry the channel. Opened against such an index, it converts.
+     */
     @Test
-    void aChannelThisImageDoesNotCarryIsReportedNotConverted() {
+    void aChannelThisImageDoesNotCarryKeepsTheFlagAndConvertsWhereItExists() {
         CellIndex index = index();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(N));
         GateNode missing = legacyThreshold("CD99", 1.5);
+        QuadrantGate halfMissing = new QuadrantGate("FLAT", "CD99", 0.5, 0.5);
+        halfMissing.setThresholdIsZScore(true);
         GateTree tree = new GateTree();
         tree.addRoot(missing);
+        tree.addRoot(halfMissing);
 
         LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(tree, index, stats);
 
         assertEquals(0, result.converted());
-        assertEquals(List.of(missing), result.unconvertible());
+        assertTrue(result.unconvertible().isEmpty(),
+                "a missing channel wins over a flat column on the other axis");
+        assertEquals(List.of(missing, halfMissing), result.missingChannel());
+        assertFalse(result.changedTree());
         assertEquals(1.5, missing.getThreshold());
+        assertTrue(missing.isThresholdIsZScore(), "the flag survives on this image");
+        assertTrue(halfMissing.isThresholdIsZScore());
+        assertTrue(LegacyZScoreMigration.needsMigration(tree));
+        assertTrue(result.message().contains("CD99"), result.message());
+
+        // Found again, unchanged, on a repeat call against the same image.
+        LegacyZScoreMigration.Result again = LegacyZScoreMigration.migrate(tree, index, stats);
+        assertEquals(result.message(), again.message());
+        assertFalse(again.changedTree());
+
+        // Another slide carries CD99: now it converts through that column.
+        CellIndex other = Cells.of(N).marker("CD99", i -> 2.0 * i).area(100.0).build();
+        MarkerStats otherStats = MarkerStats.compute(other, Cells.allTrue(N));
+        MeasuredColumn cd99 = other.column("CD99", Compartment.WHOLE_CELL, Statistic.MEAN, otherStats);
+        GateTree single = new GateTree();
+        single.addRoot(missing);
+        LegacyZScoreMigration.Result there = LegacyZScoreMigration.migrate(single, other, otherStats);
+        assertEquals(1, there.converted());
         assertFalse(missing.isThresholdIsZScore());
+        assertEquals(1.5 * cd99.std() + cd99.mean(), missing.getThreshold(), 1e-9);
     }
 
     @Test
@@ -157,6 +187,7 @@ class LegacyZScoreMigrationTest {
         LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(tree, index, stats);
 
         assertTrue(result.isEmpty());
+        assertFalse(result.changedTree());
         assertNull(result.message());
         assertEquals(3.0, tree.getRoots().get(0).getThreshold());
     }

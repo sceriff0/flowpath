@@ -24,11 +24,20 @@ import java.util.Objects;
  * <p>
  * <b>How.</b> Each axis is converted through the column the engine resolves for it
  * ({@link CellIndex#column(GateNode, int, MarkerStats)}), with {@link MeasuredColumn#fromZScore}
- * — the same arithmetic the editor applied. An axis whose column has no spread (or whose
- * channel this image does not carry) cannot be converted: a zero standard deviation maps
- * every z-value onto the mean. Such a gate keeps its numbers, loses the flag like every other
- * gate — the engine no longer has a z-space to read it in — and is reported in
- * {@link Result#unconvertible()} so the caller can say so. A region gate with no shape to
+ * — the same arithmetic the editor applied. Two kinds of gate cannot be converted, and they
+ * are handled differently on purpose:
+ * <ul>
+ *   <li><b>A column with no spread.</b> A zero standard deviation maps every z-value onto the
+ *       mean, so there is nothing to convert through on any image. The gate keeps its
+ *       numbers, loses the flag — the engine has no z-space to read it in — and is reported
+ *       in {@link Result#unconvertible()}.</li>
+ *   <li><b>A channel this image does not carry.</b> The engine already compiles such a gate
+ *       as unusable here, so keeping the flag costs nothing on this image — and clearing it
+ *       would make the tree, saved and opened on a slide that <em>does</em> carry the
+ *       channel, gate on standard deviations as if they were intensities. The flag stays,
+ *       and the gate is reported in {@link Result#missingChannel()}; a later migration
+ *       against an index that has the channel converts it.</li>
+ * </ul> A region gate with no shape to
  * convert (an empty polygon, a cleared rectangle, a zero-radius ellipse) encloses nothing in
  * either space and migrates without needing a column.
  * <p>
@@ -43,20 +52,33 @@ public final class LegacyZScoreMigration {
     /**
      * What a migration did.
      *
-     * @param converted     gates whose numbers were rewritten into raw space (or had no shape
-     *                      to rewrite) and whose flag was cleared
-     * @param unconvertible gates whose flag was cleared but whose numbers could not be
-     *                      converted, because an axis column has no spread or is absent
+     * @param converted      gates whose numbers were rewritten into raw space (or had no
+     *                       shape to rewrite) and whose flag was cleared
+     * @param unconvertible  gates whose flag was cleared but whose numbers could not be
+     *                       converted, because an axis column has no spread
+     * @param missingChannel gates left untouched, flag kept, because an axis channel is not
+     *                       in this index; they convert when the tree meets one that has it
      */
-    public record Result(int converted, List<GateNode> unconvertible) {
+    public record Result(int converted, List<GateNode> unconvertible, List<GateNode> missingChannel) {
 
         public Result {
             unconvertible = List.copyOf(Objects.requireNonNull(unconvertible, "unconvertible"));
+            missingChannel = List.copyOf(Objects.requireNonNull(missingChannel, "missingChannel"));
         }
 
-        /** Nothing carried the flag, so nothing changed. */
+        /** Nothing carried the flag, so nothing changed and nothing is pending. */
         public boolean isEmpty() {
-            return converted == 0 && unconvertible.isEmpty();
+            return converted == 0 && unconvertible.isEmpty() && missingChannel.isEmpty();
+        }
+
+        /**
+         * Whether this migration changed the tree. A result holding only
+         * {@link #missingChannel()} gates changed nothing — the same gates are found again on
+         * every later call against the same image — so a caller can use this to avoid
+         * repeating the same notification on every undo, redo or load.
+         */
+        public boolean changedTree() {
+            return converted > 0 || !unconvertible.isEmpty();
         }
 
         /**
@@ -74,19 +96,32 @@ public final class LegacyZScoreMigration {
             }
             if (!unconvertible.isEmpty()) {
                 if (!sb.isEmpty()) sb.append(' ');
-                List<String> names = new ArrayList<>();
-                for (GateNode gate : unconvertible) {
-                    List<String> channels = gate.getChannels();
-                    names.add(channels.isEmpty() ? gate.getGateType() : String.join("/", channels));
-                }
                 sb.append(unconvertible.size())
                         .append(unconvertible.size() == 1 ? " gate" : " gates")
-                        .append(" could not be converted (a column with no spread, or not in "
-                                + "this image) and keep their old numbers: ")
-                        .append(String.join(", ", names))
+                        .append(" could not be converted (a column with no spread) and keep "
+                                + "their old numbers: ")
+                        .append(names(unconvertible))
+                        .append('.');
+            }
+            if (!missingChannel.isEmpty()) {
+                if (!sb.isEmpty()) sb.append(' ');
+                sb.append(missingChannel.size())
+                        .append(missingChannel.size() == 1 ? " gate reads" : " gates read")
+                        .append(" a channel this image does not carry and stay in z-score "
+                                + "units until opened on an image that does: ")
+                        .append(names(missingChannel))
                         .append('.');
             }
             return sb.toString();
+        }
+
+        private static String names(List<GateNode> gates) {
+            List<String> names = new ArrayList<>();
+            for (GateNode gate : gates) {
+                List<String> channels = gate.getChannels();
+                names.add(channels.isEmpty() ? gate.getGateType() : String.join("/", channels));
+            }
+            return String.join(", ", names);
         }
     }
 
@@ -121,38 +156,59 @@ public final class LegacyZScoreMigration {
         Objects.requireNonNull(stats, "stats");
         int[] converted = {0};
         List<GateNode> unconvertible = new ArrayList<>();
+        List<GateNode> missingChannel = new ArrayList<>();
         if (tree != null) {
             for (GateNode root : tree.getRoots()) {
-                migrateRecursive(root, index, stats, converted, unconvertible);
+                migrateRecursive(root, index, stats, converted, unconvertible, missingChannel);
             }
         }
-        return new Result(converted[0], unconvertible);
+        return new Result(converted[0], unconvertible, missingChannel);
     }
 
+    private enum Outcome { CONVERTED, NO_SPREAD, MISSING_CHANNEL }
+
     private static void migrateRecursive(GateNode node, CellIndex index, MarkerStats stats,
-                                         int[] converted, List<GateNode> unconvertible) {
+                                         int[] converted, List<GateNode> unconvertible,
+                                         List<GateNode> missingChannel) {
         if (node.isThresholdIsZScore()) {
-            if (convert(node, index, stats)) converted[0]++;
-            else unconvertible.add(node);
-            node.setThresholdIsZScore(false);
+            switch (convert(node, index, stats)) {
+                case CONVERTED -> {
+                    converted[0]++;
+                    node.setThresholdIsZScore(false);
+                }
+                case NO_SPREAD -> {
+                    unconvertible.add(node);
+                    node.setThresholdIsZScore(false);
+                }
+                // Flag kept: this image cannot convert it, but one carrying the channel can.
+                case MISSING_CHANNEL -> missingChannel.add(node);
+            }
         }
         for (Branch branch : node.getBranches()) {
             for (GateNode child : branch.getChildren()) {
-                migrateRecursive(child, index, stats, converted, unconvertible);
+                migrateRecursive(child, index, stats, converted, unconvertible, missingChannel);
             }
         }
     }
 
-    /** Rewrite {@code node}'s numbers into raw space; false when an axis cannot be. */
-    private static boolean convert(GateNode node, CellIndex index, MarkerStats stats) {
-        if (node instanceof Region2DGate region && hasNoShape(region)) return true;
+    /** Rewrite {@code node}'s numbers into raw space, or say why that is not possible here. */
+    private static Outcome convert(GateNode node, CellIndex index, MarkerStats stats) {
+        if (node instanceof Region2DGate region && hasNoShape(region)) return Outcome.CONVERTED;
 
         int axes = (node instanceof QuadrantGate || node instanceof Region2DGate) ? 2 : 1;
+        // A missing channel is checked on every axis first: it is the one case that must keep
+        // the flag, so it wins over a flat column on the other axis.
+        List<String> channels = node.getChannels();
+        for (int axis = 0; axis < axes; axis++) {
+            if (axis >= channels.size() || index.getMarkerIndex(channels.get(axis)) < 0) {
+                return Outcome.MISSING_CHANNEL;
+            }
+        }
         MeasuredColumn x = convertible(node, 0, index, stats);
         MeasuredColumn y = axes == 2 ? convertible(node, 1, index, stats) : null;
         // All or nothing, as the editor did: converting one axis of a 2D gate and not the
         // other would leave a shape half in each space.
-        if (x == null || (axes == 2 && y == null)) return false;
+        if (x == null || (axes == 2 && y == null)) return Outcome.NO_SPREAD;
 
         switch (node) {
             case QuadrantGate qg -> {
@@ -184,14 +240,12 @@ public final class LegacyZScoreMigration {
             }
             default -> node.setThreshold(x.fromZScore(node.getThreshold()));
         }
-        return true;
+        return Outcome.CONVERTED;
     }
 
-    /** The axis column, when it exists on this image and has spread to convert through. */
+    /** The axis column, when it has spread to convert through (the channel is known present). */
     private static MeasuredColumn convertible(GateNode node, int axis, CellIndex index,
                                               MarkerStats stats) {
-        List<String> channels = node.getChannels();
-        if (axis >= channels.size() || index.getMarkerIndex(channels.get(axis)) < 0) return null;
         MeasuredColumn column = index.column(node, axis, stats);
         return column != null && column.hasSpread() ? column : null;
     }
