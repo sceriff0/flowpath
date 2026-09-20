@@ -51,6 +51,22 @@ class MeasurementKeySampleTest {
         }
     }
 
+    /**
+     * {@code CellIndex.build} hoists the stride out of its per-cell loop and calls the
+     * three-argument overload with it; the two forms must agree for every {@code i}, or the
+     * hoist would be an observable behaviour change rather than a pure optimisation.
+     */
+    @Test
+    void theStrideOverloadAgreesWithTheStrideComputingOne() {
+        for (int n : new int[]{0, 1, 99, 100, 101, 600, 1000, 1001, 1901, 5000}) {
+            int stride = MeasurementKeySample.stride(n);
+            for (int i = -1; i <= n; i++) {
+                assertEquals(MeasurementKeySample.includes(i, n), MeasurementKeySample.includes(i, n, stride),
+                        "n=" + n + " i=" + i);
+            }
+        }
+    }
+
     @Test
     void aKeyOnlyOnCell500Of600IsDiscovered() {
         List<PathObject> cells = Cells.of(600).marker("CD3", 1.0)

@@ -60,8 +60,18 @@ public final class MeasurementKeySample {
 
     /** True when detection {@code i} of a collection of {@code n} is in the sample. */
     public static boolean includes(int i, int n) {
+        return includes(i, n, stride(n));
+    }
+
+    /**
+     * Same as {@link #includes(int, int)}, but with {@link #stride} already computed by the
+     * caller. {@code CellIndex.build}'s per-cell loop calls this once per cell with {@code n}
+     * fixed for the whole loop, so recomputing the stride -- a division -- inside it on every
+     * cell would be loop-invariant work repeated needlessly on the hot path.
+     */
+    static boolean includes(int i, int n, int stride) {
         if (i < 0 || i >= n) return false;
-        return i < HEAD || (i - HEAD) % stride(n) == 0;
+        return i < HEAD || (i - HEAD) % stride == 0;
     }
 
     /** How many detections a collection of {@code n} contributes to the sample. */

@@ -215,6 +215,9 @@ public class CellIndex {
         // Segmentation label, when the export carries one. Resolved the same way and for
         // the same reason as the morphology keys — once, not per cell.
         String labelKey = resolveMeasurementKey(sampleKeys, "label");
+        // Loop-invariant: n is fixed for the whole build, so the sample's stride is computed
+        // once here rather than recomputed (a division) inside the per-cell loop below.
+        int keySampleStride = MeasurementKeySample.stride(n);
 
         int i = 0;
         for (PathObject obj : objects) {
@@ -259,7 +262,7 @@ public class CellIndex {
             // Bounded to the key sample: a literal-zero census over every cell would put
             // an extra compare on the m x n inner loop, and a scale error or a failed
             // upstream join is uniform enough that the sample settles it.
-            boolean census = MeasurementKeySample.includes(i, n);
+            boolean census = MeasurementKeySample.includes(i, n, keySampleStride);
 
             double totalIntensity = 0;
             for (int j = 0; j < m; j++) {
