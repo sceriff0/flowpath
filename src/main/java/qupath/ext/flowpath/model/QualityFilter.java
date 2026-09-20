@@ -33,9 +33,25 @@ public class QualityFilter {
         /** Accepts everything. */
         public static final Range OPEN = new Range(Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
 
-        /** True when {@code v} is inside, or is NaN — see the class note on NaN. */
+        /**
+         * True when {@code v} is inside, or is NaN — see the class note on NaN.
+         * <p>
+         * Compared at {@code float} precision, not {@code double}. QuPath backs a detection's
+         * measurement list with {@code float} storage, and {@code CellIndex} widens each value
+         * to {@code double} to compute with, which cannot recover precision the value never
+         * had. A bound typed as an exact-looking number like {@code 0.7} is a {@code double}
+         * literal that rounds to a different bit pattern than the {@code float} {@code 0.7f} a
+         * stored measurement of "0.7" actually widens to — so comparing at {@code double}
+         * precision could reject a value one ulp short of a bound the user meant it to meet
+         * exactly, or accept one one ulp past it, depending on which way the two roundings
+         * fell. Casting both sides to {@code float} compares them at the precision the
+         * underlying data actually carries, which is lossless for {@code v} here (it can only
+         * discard bits {@code double} widening manufactured) and loses at most the last bit of
+         * a bound typed with more precision than a {@code float} measurement could ever match
+         * anyway.
+         */
         public boolean accepts(double v) {
-            return Double.isNaN(v) || (v >= min && v <= max);
+            return Double.isNaN(v) || ((float) v >= (float) min && (float) v <= (float) max);
         }
 
         /** True when this range excludes nothing and so need not be stored or shown as set. */

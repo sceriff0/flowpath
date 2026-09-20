@@ -109,17 +109,20 @@ class QualityFilterTest {
         var qf = new QualityFilter();
         qf.setMinArea(50);
         qf.setMaxArea(200);
-        // 0.75/0.5 rather than 0.7/0.8: PathObject's measurement list stores floats, and
-        // an exact-boundary double that is not exactly representable in float32 (0.8, 0.7)
-        // rounds on the way in, so an inclusive boundary check against it can miss by an
-        // ulp. 0.75 and 0.5 are exact in both precisions.
-        qf.setMaxEccentricity(0.75);
-        qf.setMinSolidity(0.5);
+        // 0.8/0.7: PathObject's measurement list stores floats, and neither is exactly
+        // representable in float32, so the double literal here and the float32 value
+        // CellIndex reads back round to different bit patterns. This used to miss the
+        // boundary by an ulp when Range.accepts compared at double precision; it now
+        // compares at float precision (see its javadoc) for exactly this reason, so the
+        // values that used to have to be dodged (0.75/0.5, exact in both precisions) are
+        // usable here directly.
+        qf.setMaxEccentricity(0.8);
+        qf.setMinSolidity(0.7);
         qf.setMinTotalIntensity(1000);
         CellIndex idx = index(
                 new double[]{50, 200},
-                new double[]{0.75, 0.0},
-                new double[]{0.5, 1.0},
+                new double[]{0.8, 0.0},
+                new double[]{0.7, 1.0},
                 new double[]{0.0, 0.0},
                 new double[]{1000, 9999});
         assertTrue(qf.passes(idx, 0));
@@ -184,18 +187,38 @@ class QualityFilterTest {
     @Test
     void boundaryValuesIncludeNewFields() {
         var qf = new QualityFilter();
-        // 0.25/0.75 rather than 0.2/0.9 for the same float32-representability reason as
-        // boundaryValuesPass above.
-        qf.setMinEccentricity(0.25);
-        qf.setMaxSolidity(0.75);
+        // 0.2/0.9: exercises the same float-precision comparison as boundaryValuesPass above,
+        // with values that are not exact in float32.
+        qf.setMinEccentricity(0.2);
+        qf.setMaxSolidity(0.9);
         qf.setMaxTotalIntensity(5000);
         qf.setMinPerimeter(10);
         qf.setMaxPerimeter(200);
         CellIndex idx = index(
-                new double[]{100, 100}, new double[]{0.25, 1.0}, new double[]{0.75, 0.0},
+                new double[]{100, 100}, new double[]{0.2, 1.0}, new double[]{0.9, 0.0},
                 new double[]{10, 200}, new double[]{5000, 0});
         assertTrue(qf.passes(idx, 0));
         assertTrue(qf.passes(idx, 1));
+    }
+
+    /**
+     * Directly pins {@link QualityFilter.Range#accepts} against the ulp mismatch the fixture
+     * comments above describe: 0.7 is not exactly representable in float32, so a stored
+     * measurement of "0.7" -- a float32 value widened to double by {@code CellIndex} -- is a
+     * different double than the literal {@code 0.7} an inclusive bound is typed as. Comparing
+     * at double precision (the last assertion) is exactly the bug; {@code accepts} must not
+     * reproduce it.
+     */
+    @Test
+    void anInclusiveBoundMatchesAFloat32ValueAtThatBoundExactly() {
+        double storedAsFloat = (double) 0.7f;
+        QualityFilter.Range min = new QualityFilter.Range(0.7, Double.POSITIVE_INFINITY);
+        QualityFilter.Range max = new QualityFilter.Range(Double.NEGATIVE_INFINITY, 0.7);
+
+        assertTrue(min.accepts(storedAsFloat), "an inclusive min of 0.7 must match a float32 0.7");
+        assertTrue(max.accepts(storedAsFloat), "an inclusive max of 0.7 must match a float32 0.7");
+        assertFalse(storedAsFloat >= 0.7,
+                "sanity: comparing at double precision is the exact failure this guards against");
     }
 
     @Test
