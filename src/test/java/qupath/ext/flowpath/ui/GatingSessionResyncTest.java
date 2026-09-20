@@ -144,13 +144,24 @@ class GatingSessionResyncTest {
         session.recordAppliedEdit(GatingSession.EditSource.GATE);
 
         // ...then, 100ms later, a quality-filter drag of three ticks: one undo step.
+        //
+        // Each tick drives the exact production computation LivePreviewService#recomputeStats()
+        // runs on its background executor -- GatingEngine.recomputeStats(index, filter, roi),
+        // factored out for this reason -- rather than an ad-hoc MarkerStats.compute call this
+        // test could get subtly wrong without noticing. What is NOT driven here is the async
+        // plumbing around it (the debounced executor submit, the generation guard, the
+        // Platform.runLater hop to onStatsRecomputed): this class is deliberately toolkit-free
+        // (see class javadoc) so it runs on any machine, including headless CI with no display,
+        // and LivePreviewService's constructor touches a JavaFX PauseTransition. That async
+        // ordering is pinned separately, with a real toolkit, by LivePreviewServiceStaleStatsTest.
         for (double min : new double[]{25, 35, 45}) {
             clock.addAndGet(100);
             session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
             session.tree().getQualityFilter().setRange("area",
                     new QualityFilter.Range(min, Double.POSITIVE_INFINITY));
             session.recomputeQualityMask();
-            session.adoptStats(MarkerStats.compute(index, session.combinedMask()));
+            session.adoptStats(GatingEngine.recomputeStats(
+                    index, session.tree().getQualityFilter(), session.roiMask()));
         }
         session.resync(NO_ANNOTATIONS);
         // Pass 2: area >= 45 keeps cells 4..9 (CD3 5..10).
@@ -316,6 +327,52 @@ class GatingSessionResyncTest {
         assertEquals(5.5, session.tree().getRoots().get(0).getThreshold(), "the pre-edit value");
         assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
         assertArrayEquals(root1Before, counts(pass.last(), session.tree().getRoots().get(1)));
+    }
+
+    /**
+     * A gate's enabled checkbox is toggled straight in the tree cell, then reported through
+     * {@link GatingSession#recordAppliedDiscreteEdit()} -- {@code FlowPathPane#onGateEnabledToggled}'s
+     * path. Unlike {@link GatingSession#recordAppliedEdit}, this is never coalesced: two
+     * toggles a moment apart are two separate undo steps, not one merged into a no-op.
+     */
+    @Test
+    void enabledCheckboxToggleIsItsOwnUndoStepNeverCoalescedWithTheNext() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+        int[] root1Enabled = counts(pass.last(), session.tree().getRoots().get(1));
+        assertTrue(session.tree().getRoots().get(1).isEnabled());
+
+        // The cell has already flipped the flag before the handler runs; recordAppliedDiscreteEdit
+        // records the settled (pre-toggle) tree, same as recordAppliedEdit, but as its own
+        // uncoalesced step.
+        clock.addAndGet(1_000);
+        session.tree().getRoots().get(1).setEnabled(false);
+        session.recordAppliedDiscreteEdit();
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{0, 0}, counts(pass.last(), session.tree().getRoots().get(1)),
+                "a disabled root contributes nothing -- resetCounts zeroed it and the walk skipped it");
+
+        // A second toggle 50ms later -- well inside a drag's coalescing window -- is still its
+        // own step: recordAppliedDiscreteEdit takes no EditSource to coalesce by.
+        clock.addAndGet(50);
+        session.tree().getRoots().get(1).setEnabled(true);
+        session.recordAppliedDiscreteEdit();
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(root1Enabled, counts(pass.last(), session.tree().getRoots().get(1)));
+
+        assertTrue(session.undo(), "undo #1 reverts only the re-enable");
+        session.resync(NO_ANNOTATIONS);
+        assertFalse(session.tree().getRoots().get(1).isEnabled(), "back to disabled");
+        assertArrayEquals(new int[]{0, 0}, counts(pass.last(), session.tree().getRoots().get(1)));
+
+        assertTrue(session.undo(), "undo #2 reverts the disable -- a second, separate step");
+        session.resync(NO_ANNOTATIONS);
+        assertTrue(session.tree().getRoots().get(1).isEnabled(), "back to enabled");
+        assertArrayEquals(root1Enabled, counts(pass.last(), session.tree().getRoots().get(1)));
     }
 
     /**

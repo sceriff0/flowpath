@@ -444,6 +444,21 @@ public final class GatingEngine {
     }
 
     /**
+     * Statistics over the quality-filtered, ROI-filtered population: {@code computeQualityMask}
+     * then {@code combineMasks} with {@code roi} (when present) then {@code MarkerStats.compute}.
+     * <p>
+     * This is the exact three-step sequence {@code LivePreviewService#recomputeStats()} runs on
+     * its background executor for a quality-filter drag; it is factored out here so a test can
+     * call the one production computation directly rather than trusting that an ad-hoc
+     * reimplementation agrees with it. {@code roi} may be {@code null} (no ROI filter active).
+     */
+    public static MarkerStats recomputeStats(CellIndex index, QualityFilter filter, boolean[] roi) {
+        boolean[] qualityMask = computeQualityMask(index, filter);
+        boolean[] mask = roi != null ? combineMasks(qualityMask, roi) : qualityMask;
+        return MarkerStats.compute(index, mask);
+    }
+
+    /**
      * Compute a boolean mask indicating which cells would reach a specific gate node
      * by passing through all ancestor gates/branches in the tree hierarchy.
      * Root gates get all non-excluded cells. Child gates only get cells that passed

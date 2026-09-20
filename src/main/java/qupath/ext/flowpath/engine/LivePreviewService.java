@@ -241,9 +241,7 @@ public class LivePreviewService {
             // otherwise vanish -- combineMasks rejects a length mismatch, and silently
             // never recomputing the statistics would surface only as stale sliders.
             try {
-                boolean[] qualityMask = GatingEngine.computeQualityMask(idx, qf);
-                boolean[] mask = roi != null ? GatingEngine.combineMasks(qualityMask, roi) : qualityMask;
-                MarkerStats recomputed = MarkerStats.compute(idx, mask);
+                MarkerStats recomputed = GatingEngine.recomputeStats(idx, qf, roi);
                 synchronized (statsLock) {
                     // Someone set statistics explicitly after this was submitted -- a resync
                     // under a restored filter. Those are newer than anything computed here.

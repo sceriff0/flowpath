@@ -1,12 +1,17 @@
 package qupath.ext.flowpath.ui;
 
+import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.scene.control.Control;
 import javafx.scene.control.Label;
+import javafx.scene.control.Labeled;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.Background;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.Paint;
+import javafx.scene.text.Text;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
@@ -73,12 +78,11 @@ class FlowpathStylesheetContrastTest {
             root.getStyleClass().add("fp-panel");
             root.setStyle("-fx-base: " + base + ";");
 
-            Label[] labels = new Label[styleClasses.size()];
+            Control[] controls = new Control[styleClasses.size()];
             for (int i = 0; i < styleClasses.size(); i++) {
-                Label label = new Label("Sample text");
-                label.getStyleClass().add(styleClasses.get(i));
-                labels[i] = label;
-                root.getChildren().add(label);
+                Control control = sampleControlFor(styleClasses.get(i));
+                controls[i] = control;
+                root.getChildren().add(control);
             }
 
             Scene scene = new Scene(root, 400, 300);
@@ -87,16 +91,14 @@ class FlowpathStylesheetContrastTest {
             root.layout();
 
             Color panelBg = resolvedBackground(root);
-            assertNotGray(panelBg, base);
+            assertStylesheetApplied(panelBg, base);
 
-            for (int i = 0; i < labels.length; i++) {
+            for (int i = 0; i < controls.length; i++) {
                 String styleClass = styleClasses.get(i);
-                Label label = labels[i];
-                Paint fillPaint = label.getTextFill();
-                assertTrue(fillPaint instanceof Color,
-                        styleClass + ": resolved text fill is not a solid Color: " + fillPaint);
-                Color fg = (Color) fillPaint;
-                Color bg = ownBackgroundOr(label, panelBg);
+                Control control = controls[i];
+                Color fg = resolvedTextFill(control);
+                assertTrue(fg != null, styleClass + ": resolved text fill is not a solid Color");
+                Color bg = ownBackgroundOr(control, panelBg);
                 double ratio = contrastRatio(fg, bg);
                 assertTrue(ratio >= minRatio,
                         String.format("%s on base=%s: contrast %.2f < required %.2f (fg=%s, bg=%s)",
@@ -105,8 +107,35 @@ class FlowpathStylesheetContrastTest {
         });
     }
 
+    /**
+     * {@code fp-mono-field} is only ever applied to a real {@link TextField} in production
+     * (see {@code QuadrantGateEditor}/{@code ThresholdGateEditor}); a {@code Label} does not
+     * exercise the same skin, so it gets a real field here instead of the generic sample.
+     */
+    private static Control sampleControlFor(String styleClass) {
+        Control control = "fp-mono-field".equals(styleClass) ? new TextField("123.4") : new Label("Sample text");
+        control.getStyleClass().add(styleClass);
+        return control;
+    }
+
+    /**
+     * {@link Labeled#getTextFill()} answers directly for a {@code Label}; {@link TextField}
+     * has no such property; its skin routes {@code -fx-text-fill} to the internal
+     * {@code .text} node instead, so that node's resolved fill is read via lookup.
+     */
+    private static Color resolvedTextFill(Control control) {
+        Paint fillPaint;
+        if (control instanceof Labeled labeled) {
+            fillPaint = labeled.getTextFill();
+        } else {
+            Node textNode = control.lookup(".text");
+            fillPaint = textNode instanceof Text text ? text.getFill() : null;
+        }
+        return fillPaint instanceof Color color ? color : null;
+    }
+
     /** Fails loudly rather than silently passing if the stylesheet did not apply at all. */
-    private static void assertNotGray(Color panelBg, String base) {
+    private static void assertStylesheetApplied(Color panelBg, String base) {
         assertTrue(panelBg != null, "Panel background did not resolve at all for base " + base);
     }
 

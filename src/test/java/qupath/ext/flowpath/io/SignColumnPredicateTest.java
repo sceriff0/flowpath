@@ -171,4 +171,74 @@ class SignColumnPredicateTest {
         assertEquals("", lines.get(11).split(",", -1)[cd3]);
         assertTrue(result.getUnmeasured()[10]);
     }
+
+    /**
+     * A minimal single-root quadrant fixture, checked against literal per-axis positivity
+     * spelled out by hand ({@code >= threshold}) rather than re-derived through
+     * {@link GateReadout}, so this test cannot pass merely because the same engine machinery
+     * agrees with itself.
+     */
+    @Test
+    void quadrantSignsMatchLiteralPerAxisThresholds() throws IOException {
+        CellIndex index = Cells.of(2)
+                .marker("CD8", 18.5, 3.0)   // cell 0 >= 9 (X+), cell 1 < 9 (X-)
+                .marker("CD3", 12.0, 25.0)  // cell 0 < 20 (Y-), cell 1 >= 20 (Y+)
+                .area(100.0).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
+        QuadrantGate quad = mean(new QuadrantGate("CD8", "CD3", 9.0, 20.0));
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(quad);
+
+        GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+        File csv = tempDir.resolve("quadrant.csv").toFile();
+        PhenotypeCsvExporter.export(csv, index, result, tree, stats);
+        List<String> lines = Files.readAllLines(csv.toPath(), StandardCharsets.UTF_8);
+        List<String> header = List.of(lines.get(0).split(",", -1));
+        int cd8 = header.indexOf("CD8_sign");
+        int cd3 = header.indexOf("CD3_sign");
+
+        // Cell 0: CD8 = 18.5 >= 9 -> "+"; CD3 = 12.0 < 20 -> "-". Literal comparisons,
+        // not a branch index read back through the engine.
+        assertEquals("+", lines.get(1).split(",", -1)[cd8], "cell 0 CD8: 18.5 >= 9.0");
+        assertEquals("-", lines.get(1).split(",", -1)[cd3], "cell 0 CD3: 12.0 < 20.0");
+        // Cell 1: CD8 = 3.0 < 9 -> "-"; CD3 = 25.0 >= 20 -> "+".
+        assertEquals("-", lines.get(2).split(",", -1)[cd8], "cell 1 CD8: 3.0 < 9.0");
+        assertEquals("+", lines.get(2).split(",", -1)[cd3], "cell 1 CD3: 25.0 >= 20.0");
+    }
+
+    /**
+     * A minimal single-root rectangle fixture, checked against a literal inside/outside
+     * test spelled out by hand rather than re-derived through {@link GateReadout}. A
+     * region gate has no per-axis cut ({@link Region2DGate#isPositiveAt} throws), so both
+     * columns must agree with plain containment.
+     */
+    @Test
+    void rectangleSignsMatchLiteralContainment() throws IOException {
+        CellIndex index = Cells.of(2)
+                .marker("CD3", 16.0, 40.0)  // cell 0 inside [5, 25]; cell 1 outside
+                .marker("CD8", 4.5, 4.5)    // both inside [2, 12]
+                .area(100.0).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(2));
+        RectangleGate rect = mean(new RectangleGate("CD3", "CD8", 5.0, 25.0, 2.0, 12.0));
+        GateTree tree = new GateTree();
+        tree.setQualityFilter(null);
+        tree.addRoot(rect);
+
+        GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+        File csv = tempDir.resolve("rectangle.csv").toFile();
+        PhenotypeCsvExporter.export(csv, index, result, tree, stats);
+        List<String> lines = Files.readAllLines(csv.toPath(), StandardCharsets.UTF_8);
+        List<String> header = List.of(lines.get(0).split(",", -1));
+        int cd3 = header.indexOf("CD3_sign");
+        int cd8 = header.indexOf("CD8_sign");
+
+        // Cell 0: (16.0, 4.5) is inside [5,25]x[2,12] -> both columns "+" (inside counts
+        // as positive on both axes for a region gate, never per-axis).
+        assertEquals("+", lines.get(1).split(",", -1)[cd3], "cell 0 CD3: 16.0 in [5,25]");
+        assertEquals("+", lines.get(1).split(",", -1)[cd8], "cell 0 CD8: 4.5 in [2,12]");
+        // Cell 1: CD3 = 40.0 is outside [5,25] -> outside the rectangle -> both "-".
+        assertEquals("-", lines.get(2).split(",", -1)[cd3], "cell 1 CD3: 40.0 not in [5,25]");
+        assertEquals("-", lines.get(2).split(",", -1)[cd8], "cell 1 CD8: 4.5 in [2,12] but CD3 fails");
+    }
 }
