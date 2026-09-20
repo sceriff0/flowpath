@@ -1704,6 +1704,12 @@ public class FlowPathPane extends BorderPane {
     private void showTreeContextMenu(double screenX, double screenY) {
         GateNode selected = getSelectedGateNode();
         ContextMenu menu = new ContextMenu();
+        // Same predicate as addRootBtn's own setDisable: there is no index yet to add a gate
+        // against, so "Add Root Gate..." and "Add child to..." are disabled while loading,
+        // exactly as the toolbar button already is -- the tree view offered them regardless,
+        // whether or not the tree is currently editable (Duplicate/Remove need no index and
+        // stay enabled).
+        boolean loading = busyState().loading();
 
         if (selected != null) {
             // Add child gate to each branch
@@ -1712,6 +1718,7 @@ public class FlowPathPane extends BorderPane {
                 int branchIdx = i;
                 MenuItem addItem = new MenuItem("Add child to '" + branch.getName() + "'");
                 addItem.setOnAction(e -> addChildGate(branchIdx));
+                addItem.setDisable(loading);
                 menu.getItems().add(addItem);
             }
             menu.getItems().add(new SeparatorMenuItem());
@@ -1726,6 +1733,7 @@ public class FlowPathPane extends BorderPane {
         } else {
             MenuItem addRoot = new MenuItem("Add Root Gate...");
             addRoot.setOnAction(e -> addRootGate());
+            addRoot.setDisable(loading);
             menu.getItems().add(addRoot);
         }
 
