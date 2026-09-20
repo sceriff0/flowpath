@@ -49,4 +49,22 @@ class ErrorMessagesTest {
         assertFalse(ErrorMessages.describe(anonymous).isBlank());
         assertEquals("Unknown error", ErrorMessages.describe(null));
     }
+
+    /**
+     * A direct self-loop (cause == error) was already guarded; a longer cycle was not, and
+     * would have recursed until the stack overflowed. Three messageless throwables whose
+     * causes point around in a circle must still terminate, describing each exactly once.
+     */
+    @Test
+    void aMultiLevelCauseCycleTerminatesInsteadOfRecursingForever() {
+        RuntimeException a = new RuntimeException((String) null);
+        RuntimeException b = new RuntimeException((String) null);
+        RuntimeException c = new RuntimeException((String) null);
+        a.initCause(b);
+        b.initCause(c);
+        c.initCause(a);
+
+        assertEquals("RuntimeException: RuntimeException: RuntimeException",
+                ErrorMessages.describe(a));
+    }
 }
