@@ -60,15 +60,19 @@ public final class EllipseGate extends Region2DGate {
     }
 
     /**
-     * {@inheritDoc} A zero (or near-zero) X radius is left alone. The bounding box on each
-     * axis is remapped and the centre/radius recomputed from it: for a linear {@code fx}/
-     * {@code fy} (as {@code LegacyZScoreMigration} uses) this reduces exactly to mapping the
-     * centre directly and scaling each radius by the map's slope magnitude, which is the
-     * correct behaviour for a radius -- it has no position to shift.
+     * {@inheritDoc} A zero (or near-zero) radius on either axis is left alone -- checking X
+     * alone would let an ellipse that is degenerate on Y (a real X radius but none on Y)
+     * still get remapped, the same hazard {@link RectangleGate#remapCoordinates} guards
+     * against. The bounding box on each axis is remapped and the centre/radius recomputed
+     * from it: for a linear {@code fx}/{@code fy} (as {@code LegacyZScoreMigration} uses)
+     * this reduces exactly to mapping the centre directly and scaling each radius by the
+     * map's slope magnitude, which is the correct behaviour for a radius -- it has no
+     * position to shift.
      */
     @Override
     public void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy) {
-        if (radiusX <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
+        if (radiusX <= Region2DGate.MIN_DRAWABLE_EXTENT
+                || radiusY <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
         double loX = fx.applyAsDouble(centerX - radiusX);
         double hiX = fx.applyAsDouble(centerX + radiusX);
         double loY = fy.applyAsDouble(centerY - radiusY);

@@ -59,14 +59,18 @@ public final class RectangleGate extends Region2DGate {
     }
 
     /**
-     * {@inheritDoc} A rectangle with (near-)zero X extent is left alone, matching the guard
-     * {@code contains} itself does not apply -- see the class note on why "Clear Shape"
-     * needs the epsilon there. Bounds are re-sorted after mapping so a non-monotone
-     * {@code fx}/{@code fy} cannot leave {@code minX > maxX} or {@code minY > maxY}.
+     * {@inheritDoc} A rectangle with (near-)zero extent on either axis is left alone, matching
+     * the guard {@code contains} itself does not apply -- see the class note on why
+     * "Clear Shape" needs the epsilon there. Checking only X would let a rectangle that is
+     * degenerate on Y alone (a real width but no height) still get remapped, which does
+     * nothing useful and, under a non-linear map, could give it a spurious extent it never
+     * had. Bounds are re-sorted after mapping so a non-monotone {@code fx}/{@code fy} cannot
+     * leave {@code minX > maxX} or {@code minY > maxY}.
      */
     @Override
     public void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy) {
-        if (maxX - minX <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
+        if (maxX - minX <= Region2DGate.MIN_DRAWABLE_EXTENT
+                || maxY - minY <= Region2DGate.MIN_DRAWABLE_EXTENT) return;
         double x0 = fx.applyAsDouble(minX);
         double x1 = fx.applyAsDouble(maxX);
         double y0 = fy.applyAsDouble(minY);
