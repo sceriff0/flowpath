@@ -156,6 +156,13 @@ public class FlowPathPane extends BorderPane {
     /** Reads the open image's detections in the background, and again whenever they change. */
     private final IngestCoordinator ingest;
 
+    /**
+     * Recomputes the masks and statistics in the background for the edits that change them —
+     * the annotation-filter toggle, an undo or redo across a filter change, and a load. See
+     * {@link #resyncToTree()}.
+     */
+    private final DerivationCoordinator derivations;
+
     /** Gates the export snapshot and writes the CSV in the background. */
     private final CsvExportCoordinator csvExport;
 
@@ -376,6 +383,11 @@ public class FlowPathPane extends BorderPane {
         ingest = new IngestCoordinator(session, backgroundExecutor, this::scheduleOnBackground,
                 Platform::runLater, previewService::isFiringHierarchyEvent, new IngestHost());
 
+        // The same executor: a derivation and a re-ingest queue behind each other rather than
+        // racing for the session's inputs.
+        derivations = new DerivationCoordinator(session, backgroundExecutor, Platform::runLater,
+                new DerivationHost());
+
         // A CSV export's snapshot is gated and written on the same single-threaded executor,
         // so it never races an ingest for the session's inputs.
         csvExport = new CsvExportCoordinator(backgroundExecutor, Platform::runLater, new CsvExportHost());
@@ -473,7 +485,7 @@ public class FlowPathPane extends BorderPane {
 
         @Override
         public void busyChanged(IngestCoordinator.Busy state) {
-            onIngestBusyChanged(state);
+            updateBusyControls();
         }
 
         @Override
@@ -481,6 +493,39 @@ public class FlowPathPane extends BorderPane {
             logger.error("Reading the image's detections failed", error);
             Dialogs.showErrorNotification("FlowPath",
                     "Could not read the detections: " + ErrorMessages.describe(error));
+        }
+    }
+
+    /** What {@link #derivations} asks of this pane. Every call arrives on the FX thread. */
+    private final class DerivationHost implements DerivationCoordinator.Host {
+
+        @Override
+        public List<PathObject> annotations() {
+            return annotationsForRoiFilter();
+        }
+
+        @Override
+        public void resynced(Optional<GatingSession.MigrationNotice> notice) {
+            render(notice, false);
+        }
+
+        @Override
+        public void busyChanged(boolean deriving) {
+            updateBusyControls();
+        }
+
+        /**
+         * Nothing was adopted, so the session still holds the masks and statistics it had. The
+         * tree edit that asked for the derivation stands — it was taken on the FX thread before
+         * the work was submitted — so the widgets are rendered against what the session actually
+         * holds rather than left showing the tree before it.
+         */
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Recomputing the masks and statistics failed", error);
+            render(Optional.empty(), false);
+            Dialogs.showErrorNotification("FlowPath",
+                    "Could not recompute the statistics: " + ErrorMessages.describe(error));
         }
     }
 
@@ -501,11 +546,19 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
+     * The one place that decides what the panel offers while heavy work is running — an
+     * {@link #ingest} reading a new image's cells, or a {@link #derivations} recomputing the
+     * masks and statistics. Both coordinators report their state here rather than each
+     * disabling its own set of controls, so "what is available while busy" is answered once.
+     * <p>
      * While a new image is read the session has no cells, so the controls that need them wait
-     * for it; a refresh of cells the session still holds disables nothing.
+     * for it; a refresh of cells the session still holds disables nothing. A derivation
+     * disables nothing either: the tree edit that asked for it has already been taken, and a
+     * second one supersedes the first rather than being queued or refused (see
+     * {@link DerivationCoordinator}). It shows in the spinner and the status bar.
      */
-    private void onIngestBusyChanged(IngestCoordinator.Busy state) {
-        boolean loading = state == IngestCoordinator.Busy.LOADING;
+    private void updateBusyControls() {
+        boolean loading = ingest.busy() == IngestCoordinator.Busy.LOADING;
         addRootBtn.setDisable(loading);
         editorPane.setDisable(loading);
         umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
@@ -526,7 +579,8 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void updateSpinner() {
-        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE || csvExport.exporting());
+        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE
+                || derivations.deriving() || csvExport.exporting());
     }
 
     /**
@@ -1685,13 +1739,17 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * Bring every widget and the gating pass in line with the session's current tree and
-     * index, synchronously: the path for a load, an undo or redo and an ROI toggle. An image
-     * switch and a hierarchy change take the same resync through {@link #ingest}, which
-     * computes its heavy half in the background and renders here through {@link #render}.
+     * index: the path for a load, an undo or redo and an ROI toggle. An image switch and a
+     * hierarchy change take the same resync through {@link #ingest}; these take it through
+     * {@link #derivations}. Either way the masks and statistics are computed on
+     * {@link #backgroundExecutor} and the result is rendered here through {@link #render} —
+     * a changed mask re-sorts every marker column over every cell, which on a million-cell
+     * slide froze QuPath for seconds when it ran here.
      * <p>
-     * These three stay synchronous on purpose: each is a single user action whose undo
-     * baseline, legacy migration and next gating pass must see the resync completed before the
-     * next edit, and the tests pinning undo (see {@code GatingSessionResyncTest}) rely on it.
+     * What is <em>not</em> deferred is the tree edit itself: the undo, redo, load or toggle
+     * has already been applied to {@link #session} on this thread before this is called, so the
+     * undo stack, its coalescing window and the baseline the next edit records are untouched.
+     * A second edit while a derivation is in flight is taken at once and supersedes it.
      * <p>
      * {@link GatingSession#resync} recomputes the ROI mask, quality mask and statistics from
      * this tree's own filters, migrates a legacy z-score tree through those statistics, and
@@ -1705,7 +1763,7 @@ public class FlowPathPane extends BorderPane {
      * at a caller.
      */
     private void resyncToTree() {
-        render(session.resync(this::annotationsForRoiFilter), false);
+        derivations.request();
     }
 
     /**
@@ -1790,6 +1848,7 @@ public class FlowPathPane extends BorderPane {
      */
     public void shutdown() {
         ingest.close();
+        derivations.close();
         umapWindow.close();
         analysisWindow.dispose();
         previewService.shutdown();

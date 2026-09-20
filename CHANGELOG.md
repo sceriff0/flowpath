@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 A post-release review round of the gating half: ten tasks, each reviewed against the diff
 behind it. The computed z-score is gone for good, every change to the tree, a filter or the
-image now ends in one resync, detection reads and CSV export leave the FX thread, and the
-gate editor is split into one editor per gate type. UMAP and the Analysis window remain
-held back, as in 0.9.3.
+image now ends in one resync, detection reads, statistics recomputes and CSV export leave
+the FX thread, and the gate editor is split into one editor per gate type. UMAP and the
+Analysis window remain held back, as in 0.9.3.
 
 ### Fixed
 
@@ -92,6 +92,14 @@ held back, as in 0.9.3.
   open. An annotation edit under the ROI filter re-derives masks and statistics in the
   background; an image switch drops the old cells at once, so a slow read can never land
   over a newer image.
+- **Toggling the annotation filter, undoing across a filter change and loading a tree no
+  longer freeze QuPath.** Each of those changes the set of cells the statistics describe, so
+  every marker column is sorted again — seconds on a million-cell slide, and it used to run
+  on the UI thread. They now recompute on the same background thread as the detection read
+  and land when they are done; the spinner shows while they run. Undo and redo are never
+  queued or refused meanwhile: each Ctrl+Z is taken at once and simply supersedes the
+  recompute still in flight, so only the newest result is ever applied. A recompute that
+  fails says so and leaves the previous statistics in place.
 - **CSV export runs in the background** from a snapshot of the tree, so editing can continue
   while it writes. The export button is disabled, and Ctrl+E ignored, until it finishes.
 - **`_sign` is blank, not `-`, when no gate on the column could judge the cell** (for

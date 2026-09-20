@@ -119,8 +119,11 @@ final class GatingSession {
      * <p>
      * The masks are always recomputed, but the statistics — which sort every marker column
      * over every cell, seconds on a large slide — only when the index or the combined mask
-     * they were computed over changed. Undo, redo, load and the ROI toggle run this on the FX
-     * thread, and a gate-only undo changes neither.
+     * they were computed over changed, and a gate-only undo changes neither. Every path that
+     * can change a mask (undo, redo, load, the ROI toggle, an image read) derives off the FX
+     * thread and adopts through {@link #resync(Derived, Supplier)}; this overload is the
+     * fallback for a derivation the session has moved past, and for the cheap cases — no
+     * cells at all — where there is nothing heavy to defer.
      *
      * @param annotations the annotations the ROI filter should use; only asked for when the
      *                    tree's filter is on and there are cells to filter
@@ -128,8 +131,7 @@ final class GatingSession {
      */
     Optional<MigrationNotice> resync(Supplier<List<PathObject>> annotations) {
         if (index == null) return adopt(Derived.NONE);
-        return adopt(derive(derivationInputs(index, annotations), statsIndex == index ? statsMask : null,
-                statsIndex == index ? stats : null));
+        return adopt(derive(derivationInputs(index, annotations), reusableStats()));
     }
 
     /**
@@ -145,12 +147,26 @@ final class GatingSession {
     Optional<MigrationNotice> resync(Derived derived, Supplier<List<PathObject>> annotations) {
         Objects.requireNonNull(derived, "derived");
         if (index == null) return adopt(Derived.NONE);
-        if (derived.index() != index
-                || derived.roiFilterEnabled() != tree.isRoiFilterEnabled()
-                || !Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()))) {
-            return resync(annotations);
-        }
+        if (!stillDescribes(derived)) return resync(annotations);
         return adopt(derived);
+    }
+
+    /**
+     * Whether {@code derived} still describes this session — the same index, the same ROI flag
+     * and a quality filter that selects the same cells — so that
+     * {@link #resync(Derived, Supplier)} would adopt it rather than derive again.
+     * <p>
+     * Cheap: a mask comparison and one pass over the filtered columns, never a sort. A caller
+     * that can re-derive off the FX thread asks this first, so the synchronous fallback inside
+     * {@code resync} stays the safety net it is rather than the way a slide gets re-sorted on
+     * the FX thread after all.
+     */
+    boolean stillDescribes(Derived derived) {
+        Objects.requireNonNull(derived, "derived");
+        return index != null
+                && derived.index() == index
+                && derived.roiFilterEnabled() == tree.isRoiFilterEnabled()
+                && Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()));
     }
 
     private Optional<MigrationNotice> adopt(Derived derived) {
@@ -205,11 +221,38 @@ final class GatingSession {
     }
 
     /**
+     * The statistics a derivation may keep instead of sorting every column again, captured on
+     * the thread that owns the session beside its {@link DerivationInputs}: the index and
+     * combined mask {@link #stats} describes, or {@code null} for both when that is not known
+     * (statistics {@link #adoptStats} handed in, which are never reused).
+     */
+    record ReusableStats(CellIndex index, boolean[] mask, MarkerStats stats) {
+        static final ReusableStats NONE = new ReusableStats(null, null, null);
+    }
+
+    /** What {@link #stats} may be reused for; see {@link ReusableStats}. */
+    ReusableStats reusableStats() {
+        return statsIndex == null ? ReusableStats.NONE : new ReusableStats(statsIndex, statsMask, stats);
+    }
+
+    /**
      * The expensive half of a resync — region mask, quality mask, statistics — as a pure
      * function of captured inputs, so it can run off the FX thread. Touches no session state.
      */
     static Derived derive(DerivationInputs in) {
         return derive(in, null, null);
+    }
+
+    /**
+     * {@link #derive(DerivationInputs)}, keeping {@code reusable}'s statistics when they
+     * describe the same index and the same combined mask this derivation computes — the
+     * background path's version of the reuse {@link #resync(Supplier)} does, so moving a
+     * gate-only undo off the FX thread does not turn it into a full re-sort.
+     */
+    static Derived derive(DerivationInputs in, ReusableStats reusable) {
+        return reusable != null && reusable.index() != null && reusable.index() == in.index()
+                ? derive(in, reusable.mask(), reusable.stats())
+                : derive(in, null, null);
     }
 
     /**
