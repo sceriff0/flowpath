@@ -304,6 +304,89 @@ class DerivationCoordinatorTest {
                 counts(rig, rig.root(1)));
     }
 
+    // ---- the undo baseline while a derivation is in flight ---------------------------------
+
+    /**
+     * A gate edit made <em>while</em> the derivation for an undo is still running records the
+     * tree that undo produced as its undo step — not the one the undo moved away from.
+     * <p>
+     * The request settles the tree, which is what says "this edit is complete, and it is the
+     * pre-state for the next one". Leaving that to the landing meant {@code settled} still held
+     * the abandoned tree, so the editor's next {@code recordAppliedEdit} pushed it: the
+     * following Ctrl+Z moved <em>forward</em> onto the very change the user had just reverted,
+     * bringing its quality filter back with it.
+     */
+    @Test
+    void anEditDuringADerivationRecordsTheUndoneTreeAsItsBaseline() {
+        Rig rig = new Rig(slideA());
+        rig.requestAndRun();
+
+        // A quality-filter change: one undo step, and one that changes a mask.
+        rig.clock.addAndGet(5_000);
+        rig.session.recordEdit();
+        rig.session.tree().getQualityFilter().setRange("area",
+                new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        rig.requestAndRun();
+        assertEquals(6, countTrue(rig.session.qualityMask()));
+
+        // Undo it, and edit a gate before the recompute lands.
+        assertTrue(rig.session.undo());
+        rig.coordinator.request();
+        rig.clock.addAndGet(5_000);
+        rig.session.tree().getRoots().get(0).setThreshold(8.5);
+        rig.session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        rig.background.runAll();
+
+        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(), "the undo stands");
+        assertEquals(N, countTrue(rig.session.qualityMask()), "recomputed for the restored filter");
+
+        // One Ctrl+Z: back to the undone tree, not forward to the filtered one.
+        assertTrue(rig.session.undo());
+        rig.requestAndRun();
+        assertEquals(5.5, rig.session.tree().getRoots().get(0).getThreshold(), "the gate edit is undone");
+        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(),
+                "and the filter change does not come back with it");
+        assertEquals(N, countTrue(rig.session.qualityMask()));
+        assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
+        assertArrayEquals(expectedCounts(rig.session.tree(), 1, rig.session.index(), null, null),
+                counts(rig, rig.root(1)));
+    }
+
+    /**
+     * The same window, on the path where it used to be permanent: a derivation that throws
+     * never lands, so nothing settles there at all.
+     */
+    @Test
+    void anEditAfterAFailedDerivationRecordsTheRightBaseline() {
+        Rig rig = new Rig(slideA());
+        rig.requestAndRun();
+
+        rig.clock.addAndGet(5_000);
+        rig.session.recordEdit();
+        rig.session.tree().getQualityFilter().setRange("area",
+                new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        rig.requestAndRun();
+
+        assertTrue(rig.session.undo());
+        rig.failWith = new IllegalStateException("sort failed");
+        rig.requestAndRun();
+        assertEquals(1, rig.host.failures.size());
+
+        rig.failWith = null;
+        rig.clock.addAndGet(5_000);
+        rig.session.tree().getRoots().get(0).setThreshold(8.5);
+        rig.session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        rig.requestAndRun();
+        assertArrayEquals(new int[]{2, 8}, counts(rig, rig.root(0)));
+
+        assertTrue(rig.session.undo());
+        rig.requestAndRun();
+        assertEquals(5.5, rig.session.tree().getRoots().get(0).getThreshold());
+        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(),
+                "the failed derivation did not leave the abandoned tree as the baseline");
+        assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
+    }
+
     // ---- the stale-derivation guard ------------------------------------------------------
 
     /** Two rapid toggles: the newer derivation is the one that lands, whichever finishes first. */

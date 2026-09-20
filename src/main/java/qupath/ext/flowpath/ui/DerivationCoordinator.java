@@ -112,11 +112,22 @@ final class DerivationCoordinator {
      * Bring the derived state in line with the session's current tree, deriving the masks and
      * statistics in the background. Anything already in flight is superseded.
      * <p>
+     * <b>The tree is settled first, here, on the FX thread.</b> The edit that asked for this
+     * derivation — an undo, a redo, a load, a toggle — is complete the moment it is requested,
+     * and {@link GatingSession#settle()} is what says so: it is the pre-state the <em>next</em>
+     * edit's undo step is recorded from. Leaving it to {@link GatingSession#resync}, which
+     * settles at the landing, opened a window in which the session's tree was already the
+     * undone one while {@code settled} still held the tree it was undone away from — a gate
+     * edit in that window recorded the abandoned tree as its undo step, so the next Ctrl+Z
+     * moved <em>forward</em> onto the edit the user had just reverted. A derivation that fails
+     * never lands at all, which made that state permanent.
+     * <p>
      * With no cells there is nothing heavy to compute, so that resync happens here and now:
      * a round trip would leave the tree view showing the tree the user just left.
      */
     void request() {
         if (closed) return;
+        session.settle();
         supersede();
         CellIndex index = session.index();
         if (index == null) {

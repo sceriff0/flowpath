@@ -96,10 +96,13 @@ Analysis window remain held back, as in 0.9.3.
   longer freeze QuPath.** Each of those changes the set of cells the statistics describe, so
   every marker column is sorted again — seconds on a million-cell slide, and it used to run
   on the UI thread. They now recompute on the same background thread as the detection read
-  and land when they are done; the spinner shows while they run. Undo and redo are never
-  queued or refused meanwhile: each Ctrl+Z is taken at once and simply supersedes the
-  recompute still in flight, so only the newest result is ever applied. A recompute that
-  fails says so and leaves the previous statistics in place.
+  and land when they are done; the tree and the panel show the change immediately, and the
+  status bar reads "Recomputing statistics…" until the numbers beside it are the new ones.
+  Undo and redo are never queued or refused meanwhile: each Ctrl+Z is taken at once and
+  simply supersedes the recompute still in flight, so only the newest result is ever applied.
+  The gate editor and CSV export wait for it — an export started mid-recompute would have
+  written a file gating one tree against another tree's statistics. A recompute that fails
+  says so and leaves the previous statistics in place.
 - **CSV export runs in the background** from a snapshot of the tree, so editing can continue
   while it writes. The export button is disabled, and Ctrl+E ignored, until it finishes.
 - **`_sign` is blank, not `-`, when no gate on the column could judge the cell** (for

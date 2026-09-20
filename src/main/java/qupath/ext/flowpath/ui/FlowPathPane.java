@@ -546,35 +546,45 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * The one place that decides what the panel offers while heavy work is running — an
-     * {@link #ingest} reading a new image's cells, or a {@link #derivations} recomputing the
-     * masks and statistics. Both coordinators report their state here rather than each
-     * disabling its own set of controls, so "what is available while busy" is answered once.
+     * The one place that applies {@link BusyState} to the widgets — every background worker
+     * reports its state here rather than each disabling its own set of controls, and the rule
+     * itself (what each state blocks, what the status bar says) lives in {@code BusyState},
+     * where it is table-tested.
      * <p>
      * While a new image is read the session has no cells, so the controls that need them wait
-     * for it; a refresh of cells the session still holds disables nothing. A derivation
-     * disables nothing either: the tree edit that asked for it has already been taken, and a
-     * second one supersedes the first rather than being queued or refused (see
-     * {@link DerivationCoordinator}). It shows in the spinner and the status bar.
+     * for it; a refresh of cells the session still holds disables nothing. While a derivation
+     * is in flight the editor waits too — the tree edit that asked for it has already been
+     * taken and shown, but the statistics beside it are being replaced, and an editor write
+     * lands in the gate before it is reported, which is one place the old values must not
+     * reach. Undo, redo, the toggle and the quality filter stay live: a second edit supersedes
+     * the derivation in flight rather than being queued or refused (see
+     * {@link DerivationCoordinator}).
      */
     private void updateBusyControls() {
-        boolean loading = ingest.busy() == IngestCoordinator.Busy.LOADING;
-        addRootBtn.setDisable(loading);
-        editorPane.setDisable(loading);
+        BusyState busy = busyState();
+        addRootBtn.setDisable(busy.loading());
+        editorPane.setDisable(busy.editingBlocked());
         umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
         analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
         updateExportControlsDisabled();
         updateStatusBar();
     }
 
+    /** What the three background workers are doing right now; see {@link BusyState}. */
+    private BusyState busyState() {
+        return new BusyState(ingest.busy() == IngestCoordinator.Busy.LOADING,
+                derivations.deriving(), csvExport.exporting());
+    }
+
     /**
-     * Export CSV (and, through {@link #exportCsv()}'s own guard, Ctrl+E) is disabled while
-     * ingest is loading -- there are no cells to export yet -- or while {@link #csvExport}
-     * is already running one. One guard, checked from both places that can end either state,
-     * rather than a second parallel disable mechanism.
+     * Export CSV (and, through {@link #exportCsv()}'s own guard, Ctrl+E) is disabled whenever
+     * {@link BusyState#exportBlocked()} says so: no cells read yet, an export already running,
+     * or a derivation in flight, whose statistics and masks would otherwise be snapshotted
+     * beside a tree they do not describe. One guard, checked from both places that can end any
+     * of those states, rather than a second parallel disable mechanism.
      */
     private void updateExportControlsDisabled() {
-        exportBtn.setDisable(ingest.busy() == IngestCoordinator.Busy.LOADING || csvExport.exporting());
+        exportBtn.setDisable(busyState().exportBlocked());
         updateSpinner();
     }
 
@@ -1490,8 +1500,9 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void updateStatusBar() {
-        if (ingest.busy() == IngestCoordinator.Busy.LOADING) {
-            statusBar.setText(String.format("Reading detections\u2026 | Gates: %d",
+        Optional<String> busyMessage = busyState().message();
+        if (busyMessage.isPresent()) {
+            statusBar.setText(String.format("%s | Gates: %d", busyMessage.get(),
                 countGates(session.tree().getRoots())));
             statusBar.setTooltip(null);
             return;
@@ -1629,11 +1640,14 @@ public class FlowPathPane extends BorderPane {
      * Snapshot the tree, cells, statistics, ROI mask and regions at this moment and hand them
      * to {@link #csvExport}, which gates and writes them on {@link #backgroundExecutor}. The
      * snapshot -- not the live session -- is what reaches the file, so a gate edited while the
-     * export is running never leaks into it. A second call while one is already running (a
-     * stray Ctrl+E; the button is disabled but the accelerator is not tied to it) is a no-op.
+     * export is running never leaks into it. A stray Ctrl+E while the export button is
+     * disabled -- the accelerator is not tied to it -- is a no-op: an export already running,
+     * cells still being read, or a derivation in flight, in which case the statistics and ROI
+     * mask beside the tree are the ones it is replacing and the file would not describe any
+     * state the session was ever in.
      */
     private void exportCsv() {
-        if (csvExport.exporting()) return;
+        if (busyState().exportBlocked()) return;
         if (session.index() == null || session.stats() == null || session.tree().getRoots().isEmpty()) {
             Dialogs.showWarningNotification("FlowPath", "No gates defined or no cells loaded.");
             return;
@@ -1751,6 +1765,14 @@ public class FlowPathPane extends BorderPane {
      * undo stack, its coalescing window and the baseline the next edit records are untouched.
      * A second edit while a derivation is in flight is taken at once and supersedes it.
      * <p>
+     * Nor is <em>showing</em> that edit deferred. The widgets are rendered here, against the
+     * derived state the session still holds, and again when the derivation lands. Rendering
+     * only at the landing left the tree view and the editor holding {@code GateNode}s an undo
+     * or a load had already replaced — an edit made in that window was written into a node no
+     * longer in the tree and silently dropped, while still costing an undo step. The counts
+     * shown meanwhile are the previous pass's, exactly as they are for any edit whose gating
+     * pass has not finished.
+     * <p>
      * {@link GatingSession#resync} recomputes the ROI mask, quality mask and statistics from
      * this tree's own filters, migrates a legacy z-score tree through those statistics, and
      * requests the gating pass (see {@link #requestGatingPass}). This method then renders the
@@ -1763,12 +1785,16 @@ public class FlowPathPane extends BorderPane {
      * at a caller.
      */
     private void resyncToTree() {
+        // Show the edit, then ask for its derivation: requesting first would render twice on
+        // the no-cells path, where the request resyncs and renders on this very thread.
+        render(Optional.empty(), false);
         derivations.request();
     }
 
     /**
-     * Render a resync's result — the synchronous one above, or one {@link #ingest} finished in
-     * the background.
+     * Render what the session holds — a resync's result, from {@link #ingest} or from
+     * {@link #derivations}, or the tree as an edit has just left it, before its derivation has
+     * been asked for (see {@link #resyncToTree()}).
      * <p>
      * The editor is rebuilt only when it has to be: the cells changed ({@code newIndex}), a
      * migration rewrote gates in place, or the selected gate is not the one it shows (an undo
