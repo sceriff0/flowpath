@@ -1,7 +1,6 @@
 package qupath.ext.flowpath.ui.editor;
 
 import javafx.collections.FXCollections;
-import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.ComboBox;
@@ -62,6 +61,16 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
         disposed = true;
     }
 
+    /**
+     * Only the disposed flag -- narrower than {@link #accepting()}, which also requires the
+     * pane to still be showing {@link #gate} and no programmatic control set to be in
+     * progress. Most control handlers want the full guard; {@code Region2DGateEditor
+     * #onShapeDrawn} deliberately uses this one alone, because it acts on whatever gate
+     * {@code context.shownGate()} currently is (possibly a replacement it creates right
+     * there), not on {@link #gate} specifically, so the {@code shownGate() == gate} half of
+     * {@link #accepting()} would be the wrong question for it to ask. Both share one
+     * definition of "disposed"; they differ in how much else they additionally require.
+     */
     final boolean isDisposed() {
         return disposed;
     }
@@ -327,16 +336,10 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
     // ---- layout helpers ---------------------------------------------------------------------
 
     static Label sectionHeader(String text) {
-        Label header = new Label(text);
-        header.getStyleClass().add("fp-section-header");
-        header.setStyle("-fx-font-size: 10;");
-        header.setPadding(new Insets(4, 0, 0, 0));
-        return header;
+        return EditorLabels.sectionHeader(text);
     }
 
     static Label styledLabel(String text, String styleClass) {
-        Label label = new Label(text);
-        label.getStyleClass().add(styleClass);
-        return label;
+        return EditorLabels.styledLabel(text, styleClass);
     }
 }

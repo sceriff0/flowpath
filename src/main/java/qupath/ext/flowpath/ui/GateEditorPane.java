@@ -26,6 +26,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.ui.editor.EditorContext;
+import qupath.ext.flowpath.ui.editor.EditorLabels;
 import qupath.ext.flowpath.ui.editor.GateTypeEditor;
 import qupath.ext.flowpath.ui.editor.GateTypeEditors;
 
@@ -444,18 +445,16 @@ public class GateEditorPane extends VBox {
             (int)(c.getRed() * 255), (int)(c.getGreen() * 255), (int)(c.getBlue() * 255));
     }
 
+    // primaryLabel/createSectionHeader used to keep their own copy of these two builders;
+    // both now delegate to EditorLabels, the one copy every ui.editor gate-type editor
+    // already shares (ui already depends one-way on ui.editor -- see
+    // UiPackageDependencyDirectionTest -- so this pane can too).
     private static Label primaryLabel(String text) {
-        Label label = new Label(text);
-        label.getStyleClass().add("fp-primary-text");
-        return label;
+        return EditorLabels.styledLabel(text, "fp-primary-text");
     }
 
     private static Label createSectionHeader(String text) {
-        Label header = new Label(text);
-        header.getStyleClass().add("fp-section-header");
-        header.setStyle("-fx-font-size: 10;");
-        header.setPadding(new Insets(4, 0, 0, 0));
-        return header;
+        return EditorLabels.sectionHeader(text);
     }
 
     /** What the type editor sees of this pane. */

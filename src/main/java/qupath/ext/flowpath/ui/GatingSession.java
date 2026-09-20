@@ -38,6 +38,25 @@ import java.util.function.Supplier;
  * <p>
  * Toolkit-free, like {@code UmapSession} and {@code AnalysisSession}: the pane renders what
  * this holds and decides nothing, and every sequence is table-tested without JavaFX.
+ * <p>
+ * <b>Why this stays in {@code ui} rather than moving to a {@code ui.session} package,
+ * unlike {@code analysis.session}/{@code umap.session}.</b> Those two are each consumed
+ * across a real package boundary through a handful of public entry points ({@code
+ * analysis.ui} and {@code umap.ui} respectively), so making them public classes with public
+ * methods costs nothing that was not already the intended surface. This class is the
+ * opposite shape: every member below is deliberately package-private, callable only by
+ * {@code FlowPathPane} and its sibling coordinators in this same package ({@code
+ * DerivationCoordinator}, {@code GateDragCoordinator}, {@code IngestCoordinator}, {@code
+ * CsvExportCoordinator}) — a dozen-plus methods (`adoptStats`, `recomputeQualityMask`,
+ * `recordAppliedEdit`, `recordAppliedDiscreteEdit`, `settle`, and more) that read as a tight,
+ * mutable, "friends only" API precisely because nothing outside this package can reach them.
+ * Moving this one class across a package line would force every one of those methods public
+ * to keep compiling, trading a real encapsulation boundary for a naming convention. The
+ * property the {@code session} subpackages actually buy — constructible and table-tested
+ * without a JavaFX toolkit — already holds here without moving anything; see
+ * {@code GatingSessionResyncTest}'s own javadoc, which says so explicitly. {@code
+ * IngestCoordinator} and {@code CsvExportCoordinator} are the same shape for the same
+ * reason and stay put alongside it.
  */
 final class GatingSession {
 

@@ -58,18 +58,8 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
         double[] allY = index.getResolvedColumn(y.channel(), y.compartment(), y.statistic());
         boolean[] roi = context.roiMask();
         boolean[] ancestor = context.ancestorMask();
-        if (roi == null && ancestor == null) {
-            scatter.setData(allX, allY, x.channel(), y.channel());
-        } else {
-            int count = 0;
-            for (int i = 0; i < allX.length; i++) if (AxisMath.passes(i, roi, ancestor)) count++;
-            double[] fx = new double[count], fy = new double[count];
-            int j = 0;
-            for (int i = 0; i < allX.length; i++) {
-                if (AxisMath.passes(i, roi, ancestor)) { fx[j] = allX[i]; fy[j] = allY[i]; j++; }
-            }
-            scatter.setData(fx, fy, x.channel(), y.channel());
-        }
+        double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, roi, ancestor);
+        scatter.setData(filtered[0], filtered[1], x.channel(), y.channel());
         if (context.markerStats() != null) applyAxisRange();
     }
 

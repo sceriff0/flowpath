@@ -26,6 +26,9 @@ import java.util.concurrent.Executor;
  * Toolkit-free: both executors are injected, so a test drives the background job and the
  * FX-thread landing by hand, the same pattern {@link IngestCoordinatorTest} uses for
  * {@link IngestCoordinator}.
+ * <p>
+ * Stays in {@code ui}, alongside {@link GatingSession} and {@link IngestCoordinator} for the
+ * same reason — see {@link GatingSession}'s javadoc.
  */
 final class CsvExportCoordinator {
 

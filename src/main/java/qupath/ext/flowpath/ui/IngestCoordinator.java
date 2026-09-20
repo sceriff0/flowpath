@@ -59,6 +59,11 @@ import java.util.function.Supplier;
  * <p>
  * Toolkit-free: the executors and the timer are injected, so every ordering above is a test
  * the suite drives by hand. Every method except the listener must be called on the FX thread.
+ * <p>
+ * Stays in {@code ui}, alongside {@link GatingSession} and {@code CsvExportCoordinator} for
+ * the same reason — see {@link GatingSession}'s javadoc for why moving to a {@code
+ * ui.session} package would only widen this class's deliberately package-private surface,
+ * not buy back anything the {@code session} subpackages exist to provide.
  */
 final class IngestCoordinator {
 

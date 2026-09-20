@@ -136,6 +136,9 @@ final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
                               java.util.function.Supplier<Region2DGate> create,
                               java.util.function.Consumer<GateNode> apply,
                               boolean applyAlways) {
+        // isDisposed(), not accepting(): this writes to context.shownGate(), which need not
+        // be gate, so accepting()'s "shownGate() == gate" half asks the wrong question here.
+        // See AbstractGateTypeEditor#isDisposed for the full asymmetry.
         if (isDisposed()) return;
         GateNode target = context.shownGate();
         if (target == null) return;

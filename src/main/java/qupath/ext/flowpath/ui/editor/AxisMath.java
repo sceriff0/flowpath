@@ -108,6 +108,32 @@ public final class AxisMath {
     }
 
     /**
+     * {@code allX}/{@code allY} filtered together by both masks, in lockstep -- a 2D
+     * scatter's two axes, which must keep the same cell at the same position in each output
+     * array. Unlike {@link #measuredValues}, NaN is not dropped: a scatter draws (or skips)
+     * a NaN point on its own, and dropping it independently per axis here would desynchronise
+     * the pair. Returns {@code {allX, allY}} themselves, unfiltered, when both masks are
+     * {@code null} -- the common case, and one allocation avoided on every redraw.
+     */
+    public static double[][] pairedMaskedValues(double[] allX, double[] allY,
+                                                boolean[] roiMask, boolean[] ancestorMask) {
+        if (roiMask == null && ancestorMask == null) return new double[][]{allX, allY};
+        int count = 0;
+        for (int i = 0; i < allX.length; i++) if (passes(i, roiMask, ancestorMask)) count++;
+        double[] fx = new double[count];
+        double[] fy = new double[count];
+        int j = 0;
+        for (int i = 0; i < allX.length; i++) {
+            if (passes(i, roiMask, ancestorMask)) {
+                fx[j] = allX[i];
+                fy[j] = allY[i];
+                j++;
+            }
+        }
+        return new double[][]{fx, fy};
+    }
+
+    /**
      * A raw threshold remapped to the same percentile of {@code newCol}, so a
      * compartment/statistic switch keeps the gate splitting the population the same way
      * instead of leaving a number that means nothing in the new column (a Sum is ~100x the
