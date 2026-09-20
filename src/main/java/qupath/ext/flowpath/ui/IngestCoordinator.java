@@ -235,8 +235,12 @@ final class IngestCoordinator {
         if (firingOwnEvent.getAsBoolean() || event.isChanging()) return;
         Change change = classify(event);
         if (change == Change.NONE) return;
+        // Pure facts about the event itself, safe to read off the FX thread like classify()
+        // and touchesDetection() already are -- unlike the ROI-filter check in noteChange,
+        // which reads FlowPath's own mutable session state and so must stay on the FX thread.
+        boolean namedObjectsExcludeDetections = namedObjectsExcludeDetections(event);
         PathObjectHierarchy hierarchy = event.getHierarchy();
-        fxThread.execute(() -> noteChange(hierarchy, change));
+        fxThread.execute(() -> noteChange(hierarchy, change, namedObjectsExcludeDetections));
     }
 
     /** How {@code event} bears on the cells; see {@link Change}. */
@@ -256,9 +260,36 @@ final class IngestCoordinator {
         return false;
     }
 
-    private void noteChange(PathObjectHierarchy hierarchy, Change change) {
+    /**
+     * Whether {@code event} names at least one changed object and none of them is a detection
+     * -- an annotation-only edit, as far as the event can say. {@code false} both when a named
+     * object is a detection and when the event names none at all (a structure change reported
+     * without an object list): either way {@link #noteChange} cannot rule out that cells were
+     * touched, so it must run the full check.
+     */
+    private static boolean namedObjectsExcludeDetections(PathObjectHierarchyEvent event) {
+        Collection<PathObject> changed = event.getChangedObjects();
+        if (changed.isEmpty()) return false;
+        for (PathObject o : changed) {
+            if (o != null && o.isDetection()) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @param annotationOnly {@link #namedObjectsExcludeDetections}, computed on the thread that
+     *                       raised the event; only meaningful when {@code change == CHECK}
+     */
+    private void noteChange(PathObjectHierarchy hierarchy, Change change, boolean annotationOnly) {
         // An event queued by the previous image's hierarchy just before a switch.
         if (closed || image == null || image.getHierarchy() != hierarchy) return;
+        // An annotation-only edit cannot change the detection set, and with the ROI filter off
+        // there is no annotation mask for it to change either -- nothing downstream of a
+        // refresh (the detection-list snapshot, the busy-state flip the status bar shows) has
+        // anything to do. Every other CHECK still gets the full debounce-and-compare, including
+        // a structure event that names no objects at all: it might be a detection add/remove
+        // the platform simply did not list.
+        if (change == Change.CHECK && annotationOnly && !session.tree().isRoiFilterEnabled()) return;
         if (change == Change.READ) readsRequested++;
         cancelPendingRefresh();
         long token = ++refreshToken;

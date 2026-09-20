@@ -388,6 +388,12 @@ class IngestCoordinatorTest {
         assertEquals(1, rig.host.ingested.size());
     }
 
+    /**
+     * With the ROI filter off, an annotation-only edit cannot change the detection set or any
+     * mask FlowPath keeps, so there is nothing for a refresh to do -- it must never even arm
+     * the debounce timer, let alone copy the detection list or flip the busy state (the
+     * status-bar flicker this is what avoids).
+     */
     @Test
     void anAnnotationOnlyChangeDoesNotReingest() {
         Rig rig = new Rig();
@@ -395,15 +401,39 @@ class IngestCoordinatorTest {
         rig.coordinator.open(image);
         rig.background.runAll();
         CellIndex before = rig.session.index();
+        int busyChangesBefore = rig.host.busy.size();
 
         image.getHierarchy().addObject(PathObjects.createAnnotationObject(
                 ROIs.createRectangleROI(-5, 0, 50, 10, PLANE)));
+
+        assertEquals(0, rig.scheduler.live(), "an annotation-only edit with the filter off arms no refresh");
+        assertEquals(busyChangesBefore, rig.host.busy.size(), "and never flips the busy state");
+        assertEquals(0, rig.background.pending());
+
         rig.scheduler.elapse();
         rig.background.runAll();
 
         assertSame(before, rig.session.index(), "same cells: the index is kept");
         assertEquals(1, rig.host.ingested.size());
         assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
+    }
+
+    /**
+     * A structure event that names no changed objects at all could still be a detection
+     * add/remove the platform reported without an object list, so it must always get the full
+     * debounce-and-compare -- unlike a named-objects-only annotation edit, which the coordinator
+     * can rule out up front.
+     */
+    @Test
+    void aStructureEventNamingNoObjectsAlwaysGetsTheFullCheck() {
+        Rig rig = new Rig();
+        ImageData<BufferedImage> image = imageWith("a", cd3Cells(10));
+        rig.coordinator.open(image);
+        rig.background.runAll();
+
+        image.getHierarchy().fireHierarchyChangedEvent(this);   // OTHER_STRUCTURE_CHANGE, no objects
+
+        assertEquals(1, rig.scheduler.live(), "cannot be ruled out: the debounce timer is armed");
     }
 
     /**
