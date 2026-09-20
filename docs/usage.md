@@ -464,8 +464,13 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   gets a row like any other.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
   zooming to the clipped range.
-- **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++); drag-and-drop
-  to reorder gates between branches.
+- **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++).
+- **Reordering** — drag a gate onto any **branch** row to re-parent it there, subtree and
+  all; drop it on the empty space below the tree to promote it back to a top-level gate.
+  Only branches hold children, so a gate row is not a target, and neither is the branch
+  the gate already hangs off nor any branch inside its own subtree. Those rows are marked
+  as non-droppable while you drag over them and refuse the drop, leaving the tree exactly
+  as it was. A completed move is one undo step.
 
 ### Analysis *(coming in a future release)*
 

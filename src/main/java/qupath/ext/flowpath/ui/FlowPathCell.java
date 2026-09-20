@@ -2,6 +2,9 @@ package qupath.ext.flowpath.ui;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tooltip;
@@ -49,10 +52,133 @@ public class FlowPathCell extends TreeCell<Object> {
     private static final Insets CELL_PADDING = new Insets(2, 0, 2, 0);
     private static final String STAR = "\u2605";
 
+    /** The hover cue on a row that would take the dragged gate; see {@code flowpath.css}. */
+    static final String DROP_TARGET_CLASS = "fp-drop-target";
+    /** The hover cue on a row under the cursor that would <em>not</em> take it. */
+    static final String DROP_INVALID_CLASS = "fp-drop-invalid";
+
     private Consumer<GateNode> onEnabledToggled;
+    private GateDragCoordinator dragCoordinator;
+
+    public FlowPathCell() {
+        installDragHandlers();
+    }
 
     public void setOnEnabledToggled(Consumer<GateNode> callback) {
         this.onEnabledToggled = callback;
+    }
+
+    // ---- drag and drop: reordering gates ---------------------------------------------------
+
+    /**
+     * The shared state of one gate drag; {@code FlowPathPane}'s cell factory hands every cell
+     * the same instance. Without one the cell is inert, which is what keeps this class usable
+     * on its own.
+     */
+    void setDragCoordinator(GateDragCoordinator drag) {
+        this.dragCoordinator = drag;
+    }
+
+    /**
+     * The JavaFX plumbing, and nothing else: each handler translates a {@code DragEvent} into
+     * one of the four package-private decisions below and consumes the event. The decisions
+     * themselves hold no JavaFX types, which is what makes them testable — {@code
+     * startDragAndDrop} needs a real drag gesture from the platform toolkit and cannot be
+     * driven by a synthetic event.
+     * <p>
+     * Every cell consumes {@code DRAG_OVER} and {@code DRAG_DROPPED}, accepted or not, so an
+     * unhandled drop never bubbles up to the {@code TreeView} behind it and get taken somewhere
+     * the cue never pointed at. The empty rows below the last gate are cells too — that is how
+     * "dropped on the tree's background" reaches {@link #dropHere()} as a promotion to a root.
+     */
+    private void installDragHandlers() {
+        setOnDragDetected(event -> {
+            if (!beginDrag()) return;
+            Dragboard board = startDragAndDrop(TransferMode.MOVE);
+            ClipboardContent content = new ClipboardContent();
+            // A label for the platform's benefit only: the gate's identity travels in the
+            // coordinator, because a channel name cannot tell two same-channel gates apart.
+            content.putString(((GateNode) getItem()).getChannel());
+            board.setContent(content);
+            event.consume();
+        });
+        setOnDragOver(event -> {
+            if (dragOver()) event.acceptTransferModes(TransferMode.MOVE);
+            event.consume();
+        });
+        setOnDragExited(event -> {
+            clearDropCue();
+            event.consume();
+        });
+        setOnDragDropped(event -> {
+            boolean moved = dropHere();
+            clearDropCue();
+            event.setDropCompleted(moved);
+            event.consume();
+        });
+        setOnDragDone(event -> {
+            dragFinished();
+            event.consume();
+        });
+    }
+
+    /** A drag may start from this row: {@code true} only for a gate row, and only when free. */
+    boolean beginDrag() {
+        if (dragCoordinator == null || isEmpty()) return false;
+        return getItem() instanceof GateNode gate && dragCoordinator.begin(gate);
+    }
+
+    /**
+     * The cursor is over this row during a gate drag: mark it as a drop target or as visibly
+     * non-droppable, and answer whether a drop here would be taken. One question, asked of
+     * {@link GateDragCoordinator#accepts}, so the row that highlights is the row that accepts.
+     */
+    boolean dragOver() {
+        boolean accepted = acceptsDrop();
+        clearDropCue();
+        if (dragInProgress()) {
+            getStyleClass().add(accepted ? DROP_TARGET_CLASS : DROP_INVALID_CLASS);
+        }
+        return accepted;
+    }
+
+    /** The gate was dropped on this row. {@code false} — changing nothing — when refused. */
+    boolean dropHere() {
+        if (!acceptsDrop()) return false;
+        return dragCoordinator.drop(dropTargetBranch());
+    }
+
+    /** The drag gesture ended, dropped or not. */
+    void dragFinished() {
+        clearDropCue();
+        if (dragCoordinator != null) dragCoordinator.end();
+    }
+
+    /** Remove the hover cue. Also done on {@link #updateItem}: cells are recycled per row. */
+    void clearDropCue() {
+        getStyleClass().removeAll(DROP_TARGET_CLASS, DROP_INVALID_CLASS);
+    }
+
+    private boolean dragInProgress() {
+        return dragCoordinator != null && dragCoordinator.dragged() != null;
+    }
+
+    /**
+     * Whether this row can hold a dropped gate at all: a branch row (branches hold children),
+     * or the empty space below the last gate, which stands for the root list. A gate row is
+     * never a target — a gate's children hang off its branches, not off the gate itself.
+     */
+    private boolean isDropRow() {
+        return isEmpty() || getItem() instanceof BranchItem;
+    }
+
+    /** The branch this row drops onto, or {@code null} for the background — the root list. */
+    private Branch dropTargetBranch() {
+        return getItem() instanceof BranchItem bi ? bi.branch : null;
+    }
+
+    private boolean acceptsDrop() {
+        return dragInProgress() && isDropRow() && dragCoordinator.accepts(dropTargetBranch());
     }
 
     /**
@@ -89,6 +215,10 @@ public class FlowPathCell extends TreeCell<Object> {
     @Override
     protected void updateItem(Object item, boolean empty) {
         super.updateItem(item, empty);
+
+        // A TreeCell is recycled: without this, a row that was highlighted mid-drag carries
+        // the cue into whatever row it is scrolled into becoming.
+        clearDropCue();
 
         if (empty || item == null) {
             setText(null);

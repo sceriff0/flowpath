@@ -13,6 +13,17 @@ image now ends in one resync, detection reads, statistics recomputes and CSV exp
 the FX thread, and the gate editor is split into one editor per gate type. UMAP and the
 Analysis window remain held back, as in 0.9.3.
 
+### Added
+
+- **Drag and drop to reorder gates in the tree.** A gate can now be dragged onto any branch
+  row to become a child of that branch, carrying its whole subtree with it, and dropped on
+  the empty space below the tree to be promoted back to a top-level gate. Rows that cannot
+  take the drop — a gate row (only branches hold children), the branch the gate already
+  hangs off, and any branch inside the gate's own subtree — are marked as non-droppable
+  while you drag over them and refuse the drop, leaving the tree completely untouched: no
+  undo step, no re-count. A completed move is a single undo step, and the gating pass that
+  follows re-counts every branch under the gate's new parent.
+
 ### Fixed
 
 - **Undo left filters, masks and statistics behind.** Undo, redo, loading a tree, switching

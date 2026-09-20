@@ -70,6 +70,8 @@ public class FlowPathPane extends BorderPane {
 
     private final QuPathGUI qupath;
     private final TreeView<Object> treeView;
+    /** One gate drag in {@link #treeView}, shared by every recycled cell; see {@link FlowPathCell}. */
+    private final GateDragCoordinator dragCoordinator;
     private final GateEditorPane editorPane;
     private final QualityFilterPane qualityFilterPane;
     private final CheckBox roiFilterCheckBox;
@@ -181,10 +183,16 @@ public class FlowPathPane extends BorderPane {
         this.session = new GatingSession(System::currentTimeMillis, this::requestGatingPass);
 
         // --- Left side: TreeView + Quality Filter ---
+        // A drop is a tree edit like any other: recorded as one undo step before it is applied,
+        // and refused while a derivation is in flight for the same reason the editor is greyed
+        // out (see BusyState#editingBlocked).
+        this.dragCoordinator = new GateDragCoordinator(session::tree,
+                () -> busyState().editingBlocked(), this::pushUndo, this::onGateMoved);
         treeView = new TreeView<>();
         treeView.setCellFactory(tv -> {
             FlowPathCell cell = new FlowPathCell();
             cell.setOnEnabledToggled(this::onGateEnabledToggled);
+            cell.setDragCoordinator(dragCoordinator);
             return cell;
         });
         treeView.setShowRoot(false);
@@ -664,6 +672,24 @@ public class FlowPathPane extends BorderPane {
         pushUndo();
         selected.getBranches().get(branchIndex).getChildren().add(child);
         rebuildTreeView();
+        requestPreviewUpdate();
+    }
+
+    /**
+     * A gate was dragged onto another branch — or onto the tree's background, which promotes it
+     * back to a root. The structural-edit path, exactly as {@link #addRootGate()} and
+     * {@link #addChildGate(int)} take it: {@link GateDragCoordinator} has already recorded the
+     * undo step and applied the move, and re-parenting a gate changes neither the ROI mask nor
+     * the statistics, so there is nothing for {@link #resyncToTree()} to recompute. What is left
+     * is to redraw the tree, keep the moved gate selected so the editor follows it where it
+     * went, and request the gating pass that recounts every branch under its new parent.
+     * <p>
+     * The selection is deliberately <em>not</em> suppressed: the gate is still in the tree and
+     * the editor should open it, which is what an ordinary selection change does.
+     */
+    private void onGateMoved(GateNode moved) {
+        rebuildTreeView();
+        selectNodeInTree(moved);
         requestPreviewUpdate();
     }
 
