@@ -257,7 +257,7 @@ public final class Statistic {
      * resolves to the bare {@code "CD3"} column, which MIRAGE defines as the whole-cell
      * mean. That is why this is {@link #MEAN} while the gate model's own field default is
      * {@link #MEDIAN}: the two answer different questions. Gates pick their statistic from
-     * {@link CompartmentCapability} via {@code GateEditorPane.chooseStatistic}.
+     * {@link CompartmentCapability} via {@link GateAxis#choicesFrom}.
      */
     public static Statistic defaultStatistic() {
         return MEAN;

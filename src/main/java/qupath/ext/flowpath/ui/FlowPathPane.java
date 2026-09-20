@@ -1915,8 +1915,9 @@ public class FlowPathPane extends BorderPane {
         umapWindow.close();
         analysisWindow.dispose();
         previewService.shutdown();
-        // shutdownNow: a read still queued is for a pane that is gone. Its result could not
-        // land anyway -- the coordinator is closed -- so there is nothing to wait for.
+        // shutdownNow: a read or an export still queued on this executor is for a pane that is
+        // gone. Its result could not land anyway -- ingest is closed above, and a queued export
+        // has no pane left to notify either way -- so there is nothing to wait for.
         backgroundExecutor.shutdownNow();
     }
 }
