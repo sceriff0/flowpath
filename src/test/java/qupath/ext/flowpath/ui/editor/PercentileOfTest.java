@@ -1,6 +1,4 @@
-package qupath.ext.flowpath.ui;
-
-import qupath.ext.flowpath.ui.editor.AxisMath;
+package qupath.ext.flowpath.ui.editor;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;

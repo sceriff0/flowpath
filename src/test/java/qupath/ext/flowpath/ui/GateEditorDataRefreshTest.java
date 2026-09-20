@@ -12,6 +12,7 @@ import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
+import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
 
 import java.util.ArrayList;
 import java.util.Arrays;

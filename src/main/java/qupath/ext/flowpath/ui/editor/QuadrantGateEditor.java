@@ -10,7 +10,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
-import qupath.ext.flowpath.ui.SliderUtils;
+import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.List;
 import java.util.Locale;

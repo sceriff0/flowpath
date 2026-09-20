@@ -44,8 +44,8 @@ import java.util.List;
  * plot floating on a dark theme is merely a cosmetic mismatch, whereas a dark plot on a light
  * theme (the bug this class exists to fix) reads as broken.
  * <p>
- * <b>Analysis-only this release.</b> {@code ui/HistogramCanvas} and {@code
- * ui/ScatterPlotCanvas} — the two 1D/2D gate-editing plots outside the Analysis window — and
+ * <b>Analysis-only this release.</b> {@code ui/widgets/HistogramCanvas} and {@code
+ * ui/widgets/ScatterPlotCanvas} — the two 1D/2D gate-editing plots outside the Analysis window — and
  * {@code umap/ui/UmapCanvas} keep their own existing colours for now. Nothing in this task
  * wires them to {@code PlotTheme}; that is deliberately left to whichever later task touches
  * each of those files, so this change stays reviewable as "one palette, defined" rather than

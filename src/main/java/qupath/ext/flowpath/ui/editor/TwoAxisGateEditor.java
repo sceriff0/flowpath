@@ -6,7 +6,7 @@ import qupath.ext.flowpath.model.ColorUtils;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.QuadrantGate;
-import qupath.ext.flowpath.ui.ScatterPlotCanvas;
+import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
 
 import java.util.List;
 

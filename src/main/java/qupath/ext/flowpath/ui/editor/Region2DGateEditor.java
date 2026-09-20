@@ -14,7 +14,7 @@ import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
-import qupath.ext.flowpath.ui.ScatterPlotCanvas;
+import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
 
 import java.util.ArrayList;
 import java.util.List;

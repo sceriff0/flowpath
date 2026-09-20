@@ -141,7 +141,7 @@ public final class AxisMath {
      *
      * @param pct percentile in [0,100]
      */
-    public static double percentileOf(double[] values, double pct) {
+    static double percentileOf(double[] values, double pct) {
         if (values == null || values.length == 0) return Double.NaN;
         double[] sorted = new double[values.length];
         int n = 0;

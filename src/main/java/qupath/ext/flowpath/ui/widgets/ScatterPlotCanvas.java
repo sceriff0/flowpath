@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
@@ -245,8 +245,12 @@ public class ScatterPlotCanvas extends Canvas {
 
     // ---- Effective axis bounds (override if set, otherwise auto-computed) ----
 
-    /** The axis window drawn, {@code {minX, maxX, minY, maxY}}. For tests. */
-    double[] axisWindow() {
+    /**
+     * The axis window drawn, {@code {minX, maxX, minY, maxY}}. For tests; public because
+     * {@code GateEditorDataRefreshTest} exercises it through the real {@code GateEditorPane}
+     * in {@code ui}, a different package from this leaf widget.
+     */
+    public double[] axisWindow() {
         return new double[]{effectiveMinX(), effectiveMaxX(), effectiveMinY(), effectiveMaxY()};
     }
 
@@ -265,12 +269,12 @@ public class ScatterPlotCanvas extends Canvas {
 
     // ---- Coordinate conversion helpers ----
 
-    public static double valueToPixel(double value, double min, double max, double plotSize) {
+    static double valueToPixel(double value, double min, double max, double plotSize) {
         if (max <= min) return 0;
         return ((value - min) / (max - min)) * plotSize;
     }
 
-    public static double pixelToValue(double pixel, double min, double max, double plotSize) {
+    static double pixelToValue(double pixel, double min, double max, double plotSize) {
         if (plotSize <= 0) return min;
         return min + (pixel / plotSize) * (max - min);
     }

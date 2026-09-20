@@ -13,6 +13,7 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

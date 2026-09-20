@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;

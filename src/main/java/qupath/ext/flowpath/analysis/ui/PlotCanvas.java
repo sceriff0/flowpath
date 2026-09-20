@@ -50,8 +50,8 @@ import java.util.function.Consumer;
  * plot whose SVG truncated its labels at different places than the canvas would be a visible
  * instance of the divergence the paragraph above exists to rule out.
  * <p>
- * Hand-drawn on {@link Canvas}, matching {@code ui.HistogramCanvas}, {@code
- * ui.ScatterPlotCanvas} and {@code umap.ui.UmapCanvas} — <b>not</b> JavaFX's {@code
+ * Hand-drawn on {@link Canvas}, matching {@code ui.widgets.HistogramCanvas}, {@code
+ * ui.widgets.ScatterPlotCanvas} and {@code umap.ui.UmapCanvas} — <b>not</b> JavaFX's {@code
  * BarChart}/{@code PieChart}, which are light-themed by default and styled through CSS, so
  * they would not match the canvases beside them.
  */

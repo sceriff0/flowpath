@@ -13,8 +13,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MeasuredColumn;
-import qupath.ext.flowpath.ui.HistogramCanvas;
-import qupath.ext.flowpath.ui.SliderUtils;
+import qupath.ext.flowpath.ui.widgets.HistogramCanvas;
+import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.List;
 import java.util.Locale;

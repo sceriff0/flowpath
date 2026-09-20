@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.ui;
 
 import qupath.ext.flowpath.ui.editor.AxisMath;
+import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
 
 import javafx.scene.Node;
 import javafx.scene.Parent;

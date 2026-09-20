@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
