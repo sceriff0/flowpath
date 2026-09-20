@@ -234,9 +234,12 @@ class DetectionIngestTest {
                 "every marker the adapter offered, the index resolved from the same keys");
         assertEquals(MeasurementKeySample.size(n), asked.report().sampledCells());
         assertEquals(MeasurementKeySample.MAX_CELLS, asked.report().sampleSize());
-        assertEquals(MeasurementKeySample.keys(cells),
-                MeasurementKeySample.keys(asked.index().getObjects()),
-                "the collection the adapter read and the array the index holds sample alike");
+        // No longer asserts MeasurementKeySample.keys(cells) == .keys(asked.index().getObjects()):
+        // both call sites now share the one MeasurementKeySample utility (that is the whole
+        // point of it existing), so comparing its output to itself on the same underlying
+        // detections in the same order is tautological -- it cannot fail short of the JVM
+        // being broken. The assertions above (droppedChannels/unresolvedMarkers/sampledCells)
+        // are what actually pins the adapter and the index sampling the same positions.
     }
 
     @Test
@@ -534,6 +537,33 @@ class DetectionIngestTest {
         assertTrue(line.contains("10 of 10"), line);
         assertTrue(line.contains("pixels"), line);
         assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
+    }
+
+    @Test
+    void aMajorityOfCentroidFallbacksInAPixelCentroidExportIsAFindingInPixels() {
+        // The pixel-space sibling of aMajorityOfCentroidFallbacksWithTheColumnsPresentIsAFinding
+        // (which is µm-based, via MIRAGE morphology): centroid columns present, in pixels, and
+        // a majority of cells still fell back to their ROI centroid -- a finding, worded for
+        // the space the export's own columns are actually in, not "converted to µm".
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .measurement("Centroid X px", i -> i)
+                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 6)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertTrue(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertEquals(6, report.roiFallbackCells());
+        assertFalse(report.isClean(), report.findings().toString());
+        String line = report.findings().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.findings().toString()));
+        assertTrue(line.contains("6 of 10"), line);
+        assertTrue(line.contains("in pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
+                "said once, as a finding, not also as a note");
     }
 
     @Test

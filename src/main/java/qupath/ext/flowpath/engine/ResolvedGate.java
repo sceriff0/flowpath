@@ -28,10 +28,13 @@ import java.util.Map;
  * could be — and repeatedly was — forgotten. Here it is not a step you can skip: the walk
  * has nothing to read from unless the gate was compiled.
  * <p>
- * Gates whose channels are absent from the index compile to {@code usable == false}, and
- * {@link #branchOf} answers {@link #UNMEASURED} for every cell they are asked about. The
- * walk treats that exactly like a NaN axis: the cell is flagged unmeasured, keeps its
- * ancestors' phenotype, and counts in none of this gate's branches.
+ * A gate compiles to {@code usable == false} for either of two reasons: a channel it names
+ * is absent from the index, or the gate itself is not configured with enough channels to
+ * judge anything on — fewer than its arity (a 2D gate needs two; a threshold gate needs
+ * one), including a null or empty channel list. Either way {@link #branchOf} answers
+ * {@link #UNMEASURED} for every cell it is asked about, and the walk treats that exactly
+ * like a NaN axis: the cell is flagged unmeasured, keeps its ancestors' phenotype, and
+ * counts in none of this gate's branches.
  */
 final class ResolvedGate {
 
@@ -44,7 +47,11 @@ final class ResolvedGate {
     /** Axis 1 column (Y of a 2D gate); null for 1D gates and unusable gates. */
     final MeasuredColumn y;
 
-    /** False when a channel is missing from the index — every cell reads {@link #UNMEASURED}. */
+    /**
+     * False when a channel is missing from the index, or the gate has fewer channels than
+     * its arity requires (including a null/empty channel list) — either way every cell
+     * reads {@link #UNMEASURED}.
+     */
     final boolean usable;
 
     /** True for gates with a Y axis (quadrant and 2D region gates). */

@@ -323,10 +323,13 @@ class GatingEngineTest {
         }
         GateNode rootB = new GateNode(secondRootChannel, 25.0);
         rootB.setStatistic(Statistic.MEAN);
-        // Same channel, distinct leaf names: the engine keys nothing on names, and identical
-        // ones would only add GatingEngine's duplicate-leaf-name warning to the test output.
-        rootB.getBranches().get(0).setName(secondRootChannel + " hi");
-        rootB.getBranches().get(1).setName(secondRootChannel + " lo");
+        // Left at its default branch names on purpose: when secondRootChannel is "CD45",
+        // rootA and rootB's branches are byte-identical in name, which is exactly the
+        // same-channel case BranchTally must key on identity rather than name to get right
+        // (see AnalysisFixtures.twoRootsSameChannelInput, used unsuppressed all over this
+        // suite). GatingEngine logs a duplicate-leaf-name warning for that case; this test
+        // does not suppress it either, rather than hide the one place this file exercises
+        // the identity-keyed path.
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(rootA);
