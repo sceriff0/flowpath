@@ -184,6 +184,108 @@ class GatingSessionResyncTest {
         assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
     }
 
+    // ---- counts are carried across an undo/redo/load until the next pass lands -----------
+
+    /**
+     * {@code GateNode.deepCopy()} does not carry {@code Branch.getCount()} -- counts are
+     * {@code transient}, filled only by a gating walk -- so the tree {@code undo()} swaps in
+     * (a deep copy taken when the edit it undoes was recorded) reads 0/0% until the pass that
+     * follows lands, which runs in the background and can take seconds on a large slide. The
+     * outgoing (post-edit) tree's counts are carried onto it first, so what shows meanwhile is
+     * stale-but-plausible rather than a blank zero -- checked BEFORE {@code resync} is even
+     * called, which is the whole point: this is what the tree view reads before the next pass
+     * exists at all.
+     */
+    @Test
+    void undoCarriesTheOutgoingTreesCountsUntilTheNextPassLands() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        // Same structure, only the threshold changes -- root 0's own edit, so the two trees
+        // pair exactly.
+        clock.addAndGet(1_000);
+        session.tree().getRoots().get(0).setThreshold(8.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{2, 8}, counts(pass.last(), session.tree().getRoots().get(0)),
+                "the post-edit (outgoing) counts, about to be undone away from");
+
+        assertTrue(session.undo());
+        Branch pos = session.tree().getRoots().get(0).getBranches().get(0);
+        Branch neg = session.tree().getRoots().get(0).getBranches().get(1);
+        assertEquals(2, pos.getCount(), "carried over from the outgoing tree, not reset to 0");
+        assertEquals(8, neg.getCount(), "carried over from the outgoing tree, not reset to 0");
+
+        // The pass that follows supplies the actual, correct numbers for the restored gate.
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    /** Redo carries counts the same way undo does. */
+    @Test
+    void redoCarriesTheOutgoingTreesCountsUntilTheNextPassLands() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+
+        clock.addAndGet(1_000);
+        session.tree().getRoots().get(0).setThreshold(8.5);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        session.resync(NO_ANNOTATIONS);
+        assertTrue(session.undo());
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        assertTrue(session.redo());
+        Branch pos = session.tree().getRoots().get(0).getBranches().get(0);
+        Branch neg = session.tree().getRoots().get(0).getBranches().get(1);
+        assertEquals(5, pos.getCount(), "carried over from the tree just undone to, not reset to 0");
+        assertEquals(5, neg.getCount());
+
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{2, 8}, counts(pass.last(), session.tree().getRoots().get(0)));
+    }
+
+    /**
+     * Loading a tree is {@code replaceTree}, the same carry applies to it, and a structural
+     * mismatch (a different number of roots here) must leave the loaded tree's fresh-from-
+     * deserialization zero counts alone rather than transfer a count onto some unrelated branch.
+     */
+    @Test
+    void loadingATreeCarriesCountsOnlyWhenTheStructurePairs() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        // A "load" of the exact same structure (as re-opening the file just saved would be).
+        session.replaceTree(twoRootsOnCd3());
+        assertEquals(5, session.tree().getRoots().get(0).getBranches().get(0).getCount(),
+                "carried over from the tree just replaced");
+        assertEquals(5, session.tree().getRoots().get(0).getBranches().get(1).getCount());
+
+        // A load whose structure does NOT pair (one root instead of two): left at zero.
+        GateTree oneRoot = new GateTree();
+        GateNode single = new GateNode("CD3", 5.5);
+        single.setStatistic(Statistic.MEAN);
+        oneRoot.addRoot(single);
+        session.replaceTree(oneRoot);
+        assertEquals(0, session.tree().getRoots().get(0).getBranches().get(0).getCount(),
+                "no correspondence to borrow: left at deepCopy's own default");
+        assertEquals(0, session.tree().getRoots().get(0).getBranches().get(1).getCount());
+    }
+
     // ---- gate edits are reported after the write --------------------------------------
 
     /**

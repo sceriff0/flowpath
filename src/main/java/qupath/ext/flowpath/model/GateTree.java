@@ -428,6 +428,40 @@ public class GateTree {
     }
 
     /**
+     * Transfer {@code source}'s per-branch counts onto {@code destination} when the two
+     * forests are structurally identical (same number of roots, same branches per gate, same
+     * children per branch, at every depth), and leave {@code destination} untouched otherwise.
+     * <p>
+     * {@link GateNode#deepCopy()} does not carry {@link Branch#getCount()} — counts are
+     * {@code transient} on purpose, filled only by a gating walk — and neither does loading a
+     * tree from JSON. An undo, a redo or a load therefore used to hand the tree view a tree
+     * that reads 0/0% everywhere until the next {@code LivePreviewService} pass lands, which
+     * can be seconds on a large slide since that pass runs in the background. When the
+     * outgoing tree still pairs with the incoming one branch-for-branch — an undo of a
+     * threshold nudge, most loads of the tree just saved — its counts are a much better
+     * stand-in than zero for that whole window; when it does not (a gate was added, removed
+     * or reshaped), there is no correspondence to borrow and the destination is left at its
+     * own default.
+     * <p>
+     * Uses {@link #pairBranches} defensively rather than {@link #transferCounts} directly:
+     * {@code transferCounts} alone stops gracefully at the shorter of two diverged structures,
+     * which could transfer a count onto an unrelated branch under a partial mismatch; checking
+     * the pairing first (which throws on any mismatch, strict) means the transfer that follows
+     * either covers the whole forest correctly or does not run at all.
+     *
+     * @return {@code true} when the transfer happened
+     */
+    public static boolean transferCountsIfStructureMatches(List<GateNode> destination, List<GateNode> source) {
+        try {
+            pairBranches(destination, source);
+        } catch (IllegalArgumentException notPaired) {
+            return false;
+        }
+        transferCounts(destination, source);
+        return true;
+    }
+
+    /**
      * Walk two gate forests in parallel, handing each pair of corresponding branches to
      * {@code action} as {@code (fromA, fromB)}.
      *

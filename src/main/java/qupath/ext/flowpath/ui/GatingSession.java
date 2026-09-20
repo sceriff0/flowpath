@@ -310,20 +310,38 @@ final class GatingSession {
         this.index = newIndex;
     }
 
-    /** Replace the tree (a load), as one undo step. Follow with {@link #resync}. */
+    /**
+     * Replace the tree (a load), as one undo step. Follow with {@link #resync}.
+     * <p>
+     * Carries the outgoing tree's counts onto {@code loaded} first, when their structures
+     * still pair — see {@link GateTree#transferCountsIfStructureMatches}. Loading the tree
+     * just saved is the common case that pairs; without this the tree view would read 0/0%
+     * for the whole background derivation window {@link #resync} kicks off, on a large slide
+     * seconds long.
+     */
     void replaceTree(GateTree loaded) {
+        Objects.requireNonNull(loaded, "loaded");
         undoHistory.record(tree);
-        this.tree = Objects.requireNonNull(loaded, "loaded");
+        GateTree.transferCountsIfStructureMatches(loaded.getRoots(), tree.getRoots());
+        this.tree = loaded;
     }
 
     /** Step back one edit; {@code true} if there was one. Follow with {@link #resync}. */
     boolean undo() {
-        return undoHistory.undo(tree).map(previous -> { tree = previous; return true; }).orElse(false);
+        return undoHistory.undo(tree).map(previous -> {
+            GateTree.transferCountsIfStructureMatches(previous.getRoots(), tree.getRoots());
+            tree = previous;
+            return true;
+        }).orElse(false);
     }
 
     /** Step forward one undone edit; {@code true} if there was one. Follow with {@link #resync}. */
     boolean redo() {
-        return undoHistory.redo(tree).map(next -> { tree = next; return true; }).orElse(false);
+        return undoHistory.redo(tree).map(next -> {
+            GateTree.transferCountsIfStructureMatches(next.getRoots(), tree.getRoots());
+            tree = next;
+            return true;
+        }).orElse(false);
     }
 
     /**
