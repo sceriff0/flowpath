@@ -40,6 +40,9 @@ class NoInlineColorLiteralTest {
             "src/main/java/qupath/ext/flowpath/ui/GateEditorPane.java",
             "src/main/java/qupath/ext/flowpath/ui/QualityFilterPane.java",
             "src/main/java/qupath/ext/flowpath/ui/FlowPathCell.java",
+            // The tree view's drag-and-drop state (Task 4): its hover cue is a style class,
+            // and this file is on the list so it stays one.
+            "src/main/java/qupath/ext/flowpath/ui/GateDragCoordinator.java",
             // The per-gate-type controls GateEditorPane was split into (Task 10).
             "src/main/java/qupath/ext/flowpath/ui/editor/AbstractGateTypeEditor.java",
             "src/main/java/qupath/ext/flowpath/ui/editor/TwoAxisGateEditor.java",
