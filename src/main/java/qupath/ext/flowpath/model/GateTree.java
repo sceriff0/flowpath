@@ -125,7 +125,10 @@ public class GateTree {
      */
     public boolean move(GateNode gate, Branch target) {
         if (!checkMove(gate, target).allowed()) return false;
-        detach(roots, gate);
+        // checkMove already established the gate is somewhere in this tree, so detach should
+        // always succeed here -- checked anyway so "never in two places" is a structural
+        // guarantee of this method rather than resting on that invariant holding elsewhere.
+        if (!detach(roots, gate)) return false;
         if (target == null) roots.add(gate);
         else target.getChildren().add(gate);
         return true;
