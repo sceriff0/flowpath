@@ -60,6 +60,17 @@ public class FlowPathCell extends TreeCell<Object> {
     private Consumer<GateNode> onEnabledToggled;
     private GateDragCoordinator dragCoordinator;
 
+    /**
+     * The row currently showing a hover cue, tracked across every cell so a whole-gesture
+     * cleanup can find it even when it is not {@code this} cell. {@code DRAG_DONE} is
+     * delivered only to the row the drag <em>started</em> on, but the row cued with a
+     * highlight is whichever one the cursor is over — usually a different row — and an
+     * Escape-cancelled drag can end with the cursor still sitting over it, never receiving a
+     * {@code DRAG_EXITED} to clear it itself. Static because the highlight is single, not
+     * per-cell: at most one row is ever cued at a time across the whole tree.
+     */
+    private static FlowPathCell cuedCell;
+
     public FlowPathCell() {
         installDragHandlers();
     }
@@ -111,10 +122,17 @@ public class FlowPathCell extends TreeCell<Object> {
             event.consume();
         });
         setOnDragDropped(event -> {
-            boolean moved = dropHere();
-            clearDropCue();
-            event.setDropCompleted(moved);
+            // Settle the gesture with the platform BEFORE the mutation and the tree-view
+            // rebuild it triggers, not after: dropHere() ends by rebuilding the tree, and an
+            // exception escaping that rebuild used to leave setDropCompleted/consume never
+            // called, which would strand the drag as "never completed" over a model that had
+            // already changed. acceptsDrop() is the same pure check dropHere() makes first, so
+            // computing it here and again inside dropHere() cannot disagree.
+            boolean accepted = acceptsDrop();
+            event.setDropCompleted(accepted);
             event.consume();
+            if (accepted) dropHere();
+            clearDropCue();
         });
         setOnDragDone(event -> {
             dragFinished();
@@ -132,12 +150,23 @@ public class FlowPathCell extends TreeCell<Object> {
      * The cursor is over this row during a gate drag: mark it as a drop target or as visibly
      * non-droppable, and answer whether a drop here would be taken. One question, asked of
      * {@link GateDragCoordinator#accepts}, so the row that highlights is the row that accepts.
+     * <p>
+     * Mutates the style classes only when the wanted cue differs from what is already showing
+     * — {@code DRAG_OVER} fires on every pixel of mouse movement within the same row, and
+     * removing and re-adding the same class on each of those would re-trigger CSS application
+     * for no visible change.
      */
     boolean dragOver() {
         boolean accepted = acceptsDrop();
-        clearDropCue();
-        if (dragInProgress()) {
-            getStyleClass().add(accepted ? DROP_TARGET_CLASS : DROP_INVALID_CLASS);
+        if (!dragInProgress()) {
+            clearDropCue();
+            return accepted;
+        }
+        String wanted = accepted ? DROP_TARGET_CLASS : DROP_INVALID_CLASS;
+        if (!getStyleClass().contains(wanted)) {
+            clearDropCue();
+            getStyleClass().add(wanted);
+            cuedCell = this;
         }
         return accepted;
     }
@@ -148,15 +177,22 @@ public class FlowPathCell extends TreeCell<Object> {
         return dragCoordinator.drop(dropTargetBranch());
     }
 
-    /** The drag gesture ended, dropped or not. */
+    /**
+     * The drag gesture ended, dropped or not. {@code DRAG_DONE} is delivered only to the row
+     * the drag started on, so the row actually showing a cue — usually a different one, and
+     * left uncued by an Escape cancel that never reaches its {@code DRAG_EXITED} — is cleared
+     * through {@link #cuedCell} rather than {@code this}.
+     */
     void dragFinished() {
         clearDropCue();
+        if (cuedCell != null) cuedCell.clearDropCue();
         if (dragCoordinator != null) dragCoordinator.end();
     }
 
     /** Remove the hover cue. Also done on {@link #updateItem}: cells are recycled per row. */
     void clearDropCue() {
         getStyleClass().removeAll(DROP_TARGET_CLASS, DROP_INVALID_CLASS);
+        if (cuedCell == this) cuedCell = null;
     }
 
     private boolean dragInProgress() {

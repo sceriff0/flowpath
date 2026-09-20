@@ -401,6 +401,68 @@ class GateReorderFxTest {
         });
     }
 
+    /**
+     * {@code DRAG_DONE} is delivered only to the row the drag started from, which is not
+     * usually the row showing the hover cue. An Escape-cancelled drag ends the gesture while
+     * the cursor still sits over that other row, so it never receives a {@code DRAG_EXITED} to
+     * clear itself; {@code dragFinished()} — the source row's own {@code DRAG_DONE} handler —
+     * must clear it anyway.
+     */
+    @Test
+    void dragFinishedClearsTheHoverCueOnADifferentRowThanTheSourceRow() {
+        FxTestSupport.onFxRun(() -> {
+            List<GatingSession.PassInput> passes = new ArrayList<>();
+            GatingSession session = session(passes);
+            GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
+                    session::recordEdit, new PaneAfterMove(session));
+
+            FlowPathCell source = gateCell(drag, cd3(session));
+            assertTrue(source.beginDrag());
+            FlowPathCell target = branchCell(drag, rootB(session), 0);
+            target.dragOver();
+            assertTrue(target.getStyleClass().contains(FlowPathCell.DROP_TARGET_CLASS),
+                    "fixture check: the row under the cursor is cued");
+
+            // Cancelled (ESC): the source row's own DRAG_DONE fires; the cursor never left
+            // the target row, so it gets no DRAG_EXITED of its own.
+            source.dragFinished();
+
+            assertFalse(target.getStyleClass().contains(FlowPathCell.DROP_TARGET_CLASS),
+                    "the other row's cue must be cleared too, not just the source row's");
+            assertFalse(target.getStyleClass().contains(FlowPathCell.DROP_INVALID_CLASS));
+        });
+    }
+
+    /**
+     * {@code DRAG_OVER} fires on every pixel of mouse movement within the same row. Calling
+     * {@code dragOver()} again while nothing about the row's accept/refuse state has changed
+     * must not touch the style list at all — removing and re-adding the identical class would
+     * re-trigger CSS application on every mouse-move for no visible change.
+     */
+    @Test
+    void dragOverDoesNotReapplyAnUnchangedCue() {
+        FxTestSupport.onFxRun(() -> {
+            List<GatingSession.PassInput> passes = new ArrayList<>();
+            GatingSession session = session(passes);
+            GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
+                    session::recordEdit, new PaneAfterMove(session));
+            assertTrue(gateCell(drag, cd3(session)).beginDrag());
+
+            FlowPathCell target = branchCell(drag, rootB(session), 0);
+            target.dragOver();
+            assertTrue(target.getStyleClass().contains(FlowPathCell.DROP_TARGET_CLASS));
+
+            int[] mutations = {0};
+            target.getStyleClass().addListener((javafx.collections.ListChangeListener<String>) c -> mutations[0]++);
+
+            target.dragOver();
+            target.dragOver();
+
+            assertEquals(0, mutations[0], "the same accepted state must not touch the style list again");
+            assertTrue(target.getStyleClass().contains(FlowPathCell.DROP_TARGET_CLASS));
+        });
+    }
+
     /** Only gate rows start a drag: a branch row is a target, never a source. */
     @Test
     void onlyAGateRowStartsADrag() {
