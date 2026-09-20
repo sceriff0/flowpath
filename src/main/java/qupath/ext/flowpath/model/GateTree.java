@@ -429,8 +429,17 @@ public class GateTree {
 
     /**
      * Transfer {@code source}'s per-branch counts onto {@code destination} when the two
-     * forests are structurally identical (same number of roots, same branches per gate, same
-     * children per branch, at every depth), and leave {@code destination} untouched otherwise.
+     * forests are structurally identical (same number of roots, same channels and same
+     * branches per gate, same children per branch, at every depth), and leave
+     * {@code destination} untouched otherwise.
+     * <p>
+     * The channel check is what keeps this from being fooled by shape alone: loading an
+     * unrelated tree that happens to have the same number of roots, gates and branches (a
+     * single threshold root, say) used to carry the outgoing tree's counts across with no
+     * staleness cue, because two same-shaped threshold gates on different channels pair just
+     * as readily as the same gate before and after a threshold nudge. Undo and redo — the
+     * motivating case — still carry, because they restore a deep copy of the same tree, whose
+     * gates never change channel.
      * <p>
      * {@link GateNode#deepCopy()} does not carry {@link Branch#getCount()} — counts are
      * {@code transient} on purpose, filled only by a gating walk — and neither does loading a
@@ -481,11 +490,17 @@ public class GateTree {
                     "gate forests differ in size: " + a.size() + " vs " + b.size() + " node(s)");
         }
         for (int i = 0; i < a.size() && i < b.size(); i++) {
-            List<Branch> aBranches = a.get(i).getBranches();
-            List<Branch> bBranches = b.get(i).getBranches();
+            GateNode nodeA = a.get(i);
+            GateNode nodeB = b.get(i);
+            if (strict && !nodeA.getChannels().equals(nodeB.getChannels())) {
+                throw new IllegalArgumentException(
+                        "gate channels differ here: " + nodeA.getChannels() + " vs " + nodeB.getChannels());
+            }
+            List<Branch> aBranches = nodeA.getBranches();
+            List<Branch> bBranches = nodeB.getBranches();
             if (strict && aBranches.size() != bBranches.size()) {
                 throw new IllegalArgumentException(
-                        "gate '" + a.get(i).getChannel() + "' has " + aBranches.size()
+                        "gate '" + nodeA.getChannel() + "' has " + aBranches.size()
                                 + " branch(es) here and " + bBranches.size() + " in the other tree");
             }
             for (int k = 0; k < aBranches.size() && k < bBranches.size(); k++) {

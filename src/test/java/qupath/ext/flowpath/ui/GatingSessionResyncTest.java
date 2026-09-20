@@ -297,6 +297,40 @@ class GatingSessionResyncTest {
         assertEquals(0, session.tree().getRoots().get(0).getBranches().get(1).getCount());
     }
 
+    /**
+     * The controller ruling narrowing {@link GateTree#transferCountsIfStructureMatches}:
+     * pairing by shape alone (same root/branch/child counts) is not enough. Loading an
+     * unrelated tree that happens to be the exact same shape as the one just replaced -- one
+     * root, no children, two branches -- but gated on a different channel must leave the
+     * loaded tree's counts at zero, not show the outgoing tree's numbers under a label that
+     * no longer describes them.
+     */
+    @Test
+    void loadingASameShapeDifferentChannelTreeLeavesCountsAtZero() {
+        AtomicLong clock = new AtomicLong(10_000);
+        RecordingPass pass = new RecordingPass();
+        GatingSession session = new GatingSession(clock::get, pass);
+        GateTree cd3Root = new GateTree();
+        GateNode cd3 = new GateNode("CD3", 5.5);
+        cd3.setStatistic(Statistic.MEAN);
+        cd3Root.addRoot(cd3);
+        session.replaceTree(cd3Root);
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+        assertArrayEquals(new int[]{5, 5}, counts(pass.last(), session.tree().getRoots().get(0)));
+
+        // Same shape (one root, no children, two branches), different channel.
+        GateTree areaRoot = new GateTree();
+        GateNode area = new GateNode("area", 55.0);
+        area.setStatistic(Statistic.MEAN);
+        areaRoot.addRoot(area);
+        session.replaceTree(areaRoot);
+
+        assertEquals(0, session.tree().getRoots().get(0).getBranches().get(0).getCount(),
+                "same shape as the outgoing tree, but a different channel: no correspondence to borrow");
+        assertEquals(0, session.tree().getRoots().get(0).getBranches().get(1).getCount());
+    }
+
     // ---- gate edits are reported after the write --------------------------------------
 
     /**
