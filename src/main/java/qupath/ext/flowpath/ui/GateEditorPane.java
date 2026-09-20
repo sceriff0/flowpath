@@ -260,6 +260,15 @@ public class GateEditorPane extends VBox {
             // Typing writes the name as it goes; Enter or focus loss reports it, once, and
             // only if it differs from the name last reported. An unchanged commit used to
             // report anyway: a no-op undo step that also cleared the redo stack.
+            //
+            // committed[0] is captured once, when this row is built, and never re-read from
+            // elsewhere -- it does not need to be. The one thing that could otherwise move the
+            // ground from under it is a gate replacement (Context#replaceGate, a shape drawn
+            // over this one converting its type mid-edit): copySharedSettings carries the
+            // OLD branch's current name onto the NEW one unchanged, and replaceGate rebuilds
+            // this very row for the replacement immediately (see its javadoc), which replaces
+            // this closure -- and its committed[0] -- wholesale before anything could observe
+            // a stale one.
             String[] committed = {branch.getName()};
             Runnable commitName = () -> {
                 if (currentNode == null || idx >= currentNode.getBranches().size()) return;
@@ -477,6 +486,16 @@ public class GateEditorPane extends VBox {
             copySharedSettings(old, replacement);
             if (onReplaceGate != null) onReplaceGate.accept(old, replacement);
             currentNode = replacement;
+            // Rebuilt for the replacement AT ONCE, unlike showLater's full rebuild (deferred
+            // to the next pulse so it does not tear down the scatter canvas a drag may still
+            // be in progress on): neither of these two areas holds an input gesture of its
+            // own, so nothing is lost by rebuilding them now, and it closes the window in
+            // which the branch-name row's commit baseline would otherwise still belong to the
+            // gate this row was built for rather than the one now shown.
+            GateEditorPane.this.withSuppressedEvents(() -> {
+                buildBranchNamesEditor(replacement);
+                buildActionButtons(replacement);
+            });
         }
     }
 }
