@@ -3,7 +3,8 @@ package qupath.ext.flowpath.ui;
 import java.util.Optional;
 
 /**
- * What heavy work is in flight, and what the panel may offer while it is.
+ * What the panel may offer while these three background workers are busy — not whether
+ * anything is running at all; see the note below on {@code FlowPathPane.updateSpinner}.
  * <p>
  * The pane's three background workers each used to decide for themselves what to disable:
  * {@code IngestCoordinator} greyed the editor and the Add Gate button, {@code CsvExportCoordinator}
@@ -12,6 +13,13 @@ import java.util.Optional;
  * describe, and how the editor stayed live over a gate the session had already replaced. The
  * question "what is available while busy?" is answered here, once, as a pure function of the
  * three states, and {@code FlowPathPane.updateBusyControls} applies the answer.
+ * <p>
+ * This is deliberately not "is anything running?" — a fourth state, an ordinary gating pass
+ * ({@code LivePreviewService}'s own busy flag), is not tracked here at all, because editing
+ * and exporting both stay allowed while one runs; only ingest-loading and stats-deriving
+ * block them. {@code FlowPathPane.updateSpinner} answers the "is anything running?" question
+ * instead, over all four states including the gating pass, for the spinner's own purpose —
+ * it deliberately keeps its own predicate rather than reading one off this record.
  * <p>
  * Toolkit-free and table-tested, like {@code umap/session/ViewState} and
  * {@code analysis/session/AnalysisState}: a disabling rule that can be read off a table is one

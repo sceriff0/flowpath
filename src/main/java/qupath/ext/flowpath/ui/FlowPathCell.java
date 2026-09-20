@@ -128,6 +128,13 @@ public class FlowPathCell extends TreeCell<Object> {
             // called, which would strand the drag as "never completed" over a model that had
             // already changed. acceptsDrop() is the same pure check dropHere() makes first, so
             // computing it here and again inside dropHere() cannot disagree.
+            //
+            // Consequence: setDropCompleted's argument now means "this drop would be taken",
+            // not "this drop was taken" -- it is reported before dropHere() runs the mutation,
+            // not after. That is fine here because dropHere() re-checks the same pure
+            // predicate and cannot come out differently (nothing else runs between the two
+            // calls on this thread), but it is why the two calls are order-sensitive and
+            // must not be reordered to "mutate, then report what happened".
             boolean accepted = acceptsDrop();
             event.setDropCompleted(accepted);
             event.consume();

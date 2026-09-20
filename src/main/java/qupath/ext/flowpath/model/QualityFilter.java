@@ -45,10 +45,19 @@ public class QualityFilter {
          * precision could reject a value one ulp short of a bound the user meant it to meet
          * exactly, or accept one one ulp past it, depending on which way the two roundings
          * fell. Casting both sides to {@code float} compares them at the precision the
-         * underlying data actually carries, which is lossless for {@code v} here (it can only
-         * discard bits {@code double} widening manufactured) and loses at most the last bit of
-         * a bound typed with more precision than a {@code float} measurement could ever match
-         * anyway.
+         * underlying data actually carries, which loses at most the last bit of a bound typed
+         * with more precision than a {@code float} measurement could ever match anyway.
+         * <p>
+         * "Lossless for {@code v}" holds for every field sourced directly from a QuPath
+         * measurement — which is every field this class filters except one. {@code
+         * total_intensity} ({@link CellIndex}) is not a stored measurement but a {@code
+         * double} accumulated by summing several float-widened marker values; that sum
+         * carries real fractional bits at {@code double} precision no single {@code float}
+         * ever held, so casting <em>it</em> to {@code float} can genuinely discard precision,
+         * not merely bits {@code double} widening manufactured. It is compared the same way
+         * as every other field regardless, for one uniform rule rather than a per-field
+         * special case, and the loss is bounded to the last few bits of a running sum over
+         * a marker panel — not a concern at the range widths quality control is set at.
          */
         public boolean accepts(double v) {
             return Double.isNaN(v) || ((float) v >= (float) min && (float) v <= (float) max);
