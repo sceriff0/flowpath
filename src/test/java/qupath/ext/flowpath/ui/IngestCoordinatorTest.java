@@ -258,6 +258,36 @@ class IngestCoordinatorTest {
         assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
     }
 
+    /**
+     * A first-load failure (baseline == null: nothing was ever read for this image) must clear
+     * the editor rather than leave it re-enabled, once the busy state clears, over the previous
+     * image's gate and channel combos with the index still null -- {@link
+     * IngestCoordinator.Cleared#LOADING} deliberately keeps those on screen while a read is in
+     * flight, but there is no read left in flight here to land and replace them.
+     */
+    @Test
+    void aFirstLoadFailureClearsTheEditor() {
+        ManualExecutor background = new ManualExecutor();
+        ManualScheduler scheduler = new ManualScheduler();
+        RecordingPass pass = new RecordingPass();
+        RecordingHost host = new RecordingHost();
+        AtomicBoolean firingOwnEvent = new AtomicBoolean();
+        GatingSession session = new GatingSession(() -> 0L, pass);
+        IngestCoordinator coordinator = new IngestCoordinator(session, background, scheduler,
+                Runnable::run, firingOwnEvent::get, host,
+                (detections, imageData) -> { throw new RuntimeException("boom"); });
+
+        coordinator.open(imageWith("a", cd3Cells(10)));
+        assertEquals(IngestCoordinator.Busy.LOADING, host.lastBusy());
+        background.runAll();
+
+        assertEquals(1, host.failures.size(), "the failure is still reported");
+        assertEquals(List.of(IngestCoordinator.Cleared.LOADING, IngestCoordinator.Cleared.FAILED),
+                host.cleared, "LOADING when the read started, FAILED once it failed");
+        assertNull(session.index());
+        assertEquals(IngestCoordinator.Busy.IDLE, host.lastBusy());
+    }
+
     @Test
     void closingDropsAnInFlightIngestAndStopsListening() {
         Rig rig = new Rig();

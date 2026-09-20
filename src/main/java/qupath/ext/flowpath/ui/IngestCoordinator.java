@@ -78,7 +78,15 @@ final class IngestCoordinator {
         /** The image holds no detections. */
         NO_DETECTIONS,
         /** A new image is being read; the previous image's cells are dropped meanwhile. */
-        LOADING
+        LOADING,
+        /**
+         * The very first read of an image's detections failed. Unlike {@link #LOADING}, which
+         * keeps the previous image's gate/channel combos on screen (disabled) while a read is
+         * in flight, there is no read left in flight to land and re-enable them against: the
+         * editor is dropped in full, exactly as for {@link #NO_DETECTIONS}, or it would be left
+         * showing a gate and channels for cells that do not exist once the busy state clears.
+         */
+        FAILED
     }
 
     /** What the background is doing, for the status bar and the controls that need cells. */
@@ -347,7 +355,15 @@ final class IngestCoordinator {
             }
             case Rederived d -> host.resynced(session.resync(d.derived(), annotations), false);
             case Unchanged u -> { }
-            case Failed f -> host.failed(f.error());
+            case Failed f -> {
+                // A first-load failure (baseline == null) leaves no cells to come and nothing
+                // in flight to land later: clear the editor now, or it would sit re-enabled
+                // over the previous image's gate and channels once the busy state clears. A
+                // failed REFRESH (baseline != null) keeps what the session already has, per
+                // Host#failed's own contract.
+                if (baseline == null) clear(Cleared.FAILED);
+                host.failed(f.error());
+            }
         }
         if (recheckAfterLanding) {
             recheckAfterLanding = false;
