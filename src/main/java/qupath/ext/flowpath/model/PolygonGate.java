@@ -58,8 +58,10 @@ public final class PolygonGate extends Region2DGate {
         boolean inside = false;
 
         for (int i = 0, j = n - 1; i < n; j = i++) {
-            double ax = vertices.get(j)[0], ay = vertices.get(j)[1];
-            double bx = vertices.get(i)[0], by = vertices.get(i)[1];
+            double[] a = vertices.get(j);
+            double[] b = vertices.get(i);
+            double ax = a[0], ay = a[1];
+            double bx = b[0], by = b[1];
 
             // Boundary: exact cross product of the edge vector against the point must be
             // precisely 0.0, and the point must lie within the edge's closed bounding box.
@@ -109,13 +111,26 @@ public final class PolygonGate extends Region2DGate {
     /**
      * {@inheritDoc} Each vertex is mapped independently; an empty polygon has none to map,
      * so no separate degenerate guard is needed here.
+     * <p>
+     * Builds a fresh array per vertex and assigns a fresh list to {@link #vertices}, rather
+     * than overwriting each vertex's coordinates in place, matching {@link RectangleGate} and
+     * {@link EllipseGate}, which reassign their fields instead of mutating shared state. Safe
+     * because {@link #getVertices()} always returns whatever {@link #vertices} currently
+     * holds, read fresh on every call: the one place that mutates a vertex array in place
+     * ({@code ScatterPlotCanvas}'s drag-handle, moving one vertex interactively) does so
+     * between remaps, never during one, and always re-fetches the array through
+     * {@link #getVertices()} first rather than holding one across this call. Mutating in
+     * place instead would let such a caller observe a half-mapped polygon -- some vertices
+     * already in the new coordinate space, the rest still in the old one -- if it ever raced
+     * this method, which reassignment rules out structurally.
      */
     @Override
     public void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy) {
+        List<double[]> remapped = new ArrayList<>(vertices.size());
         for (double[] v : vertices) {
-            v[0] = fx.applyAsDouble(v[0]);
-            v[1] = fy.applyAsDouble(v[1]);
+            remapped.add(new double[]{fx.applyAsDouble(v[0]), fy.applyAsDouble(v[1])});
         }
+        vertices = remapped;
     }
 
     @Override
