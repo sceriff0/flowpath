@@ -34,74 +34,73 @@ public final class PolygonGate extends Region2DGate {
      * self-intersecting polygon's crossing segments -- is Inside per {@link Region2DGate};
      * the interior away from every edge follows the even-odd rule, so a self-intersecting
      * (bowtie) polygon's lobes are Inside and its notches Outside.
+     * <p>
+     * Degeneracy, boundary membership and the even-odd crossing count are all decided in one
+     * pass over the edges rather than three (this method used to call three helpers, each
+     * walking the whole vertex list on its own) -- this is on the live-preview hot path, run
+     * for every cell on every gating pass. Degeneracy is recomputed each call with primitives
+     * only (no boxed {@code Double}, matching every other value here); it is not cached,
+     * because {@link #getVertices()} hands out the backing list, so a caller can mutate a
+     * vertex in place without going through {@link #setVertices} or {@link #remapCoordinates}
+     * -- there is no mutator to hook a cache invalidation to that is provably complete, and an
+     * O(n) primitive recomputation is cheap enough on its own not to need one.
      */
     @Override
     public boolean contains(double x, double y) {
-        if (isDegenerate()) return false;
-        if (onBoundary(x, y)) return true;
-        return insideByEvenOdd(x, y);
-    }
-
-    /** Fewer than 3 vertices, or every vertex lying on one line, encloses no area. */
-    private boolean isDegenerate() {
         int n = vertices.size();
-        if (n < 3) return true;
+        if (n < 3) return false;
+
         double x0 = vertices.get(0)[0], y0 = vertices.get(0)[1];
-        Double dx = null, dy = null;
-        for (int i = 1; i < n; i++) {
-            double dxi = vertices.get(i)[0] - x0;
-            double dyi = vertices.get(i)[1] - y0;
-            if (dxi != 0.0 || dyi != 0.0) {
-                dx = dxi;
-                dy = dyi;
-                break;
-            }
-        }
-        if (dx == null) return true; // every vertex is the same point
-        for (int i = 1; i < n; i++) {
-            double dxi = vertices.get(i)[0] - x0;
-            double dyi = vertices.get(i)[1] - y0;
-            // Exact cross product against the reference direction: zero means collinear.
-            if (dx * dyi - dy * dxi != 0.0) return false;
-        }
-        return true;
-    }
+        double refDx = 0.0, refDy = 0.0;
+        boolean haveRef = false;
+        boolean collinear = true;
+        boolean onEdge = false;
+        boolean inside = false;
 
-    /**
-     * Is (x, y) exactly on one of the polygon's edges (including its vertices)? Exact
-     * arithmetic only: the cross product of the edge vector and the vector to the point must
-     * be precisely {@code 0.0}, and the point must lie within the edge's closed bounding box.
-     */
-    private boolean onBoundary(double x, double y) {
-        int n = vertices.size();
         for (int i = 0, j = n - 1; i < n; j = i++) {
             double ax = vertices.get(j)[0], ay = vertices.get(j)[1];
             double bx = vertices.get(i)[0], by = vertices.get(i)[1];
+
+            // Boundary: exact cross product of the edge vector against the point must be
+            // precisely 0.0, and the point must lie within the edge's closed bounding box.
             double cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
             if (cross == 0.0
                     && x >= Math.min(ax, bx) && x <= Math.max(ax, bx)
                     && y >= Math.min(ay, by) && y <= Math.max(ay, by)) {
-                return true;
+                onEdge = true;
             }
-        }
-        return false;
-    }
 
-    /** Ray-casting interior test; the caller has already handled the boundary. */
-    private boolean insideByEvenOdd(double x, double y) {
-        boolean inside = false;
-        int n = vertices.size();
-        for (int i = 0, j = n - 1; i < n; j = i++) {
-            double xi = vertices.get(i)[0], yi = vertices.get(i)[1];
-            double xj = vertices.get(j)[0], yj = vertices.get(j)[1];
-            if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            // Even-odd ray casting over the same edge.
+            if (((by > y) != (ay > y)) && (x < (ax - bx) * (y - by) / (ay - by) + bx)) {
                 inside = !inside;
             }
+
+            // Degeneracy: is vertex i collinear with vertex 0, along the first direction
+            // found away from it? Vertex 0 itself (i == 0) contributes a zero delta and is
+            // skipped by construction, matching the old two-loop version exactly.
+            if (collinear) {
+                double dxi = bx - x0, dyi = by - y0;
+                if (!haveRef) {
+                    if (dxi != 0.0 || dyi != 0.0) {
+                        refDx = dxi;
+                        refDy = dyi;
+                        haveRef = true;
+                    }
+                } else if (refDx * dyi - refDy * dxi != 0.0) {
+                    collinear = false;
+                }
+            }
         }
+
+        // collinear stays true both when every vertex lies on one line through vertex 0, and
+        // when every vertex IS vertex 0 (haveRef never becomes true) -- the same two cases the
+        // old isDegenerate() folded into one boolean.
+        if (collinear) return false;
+        if (onEdge) return true;
         return inside;
     }
 
-    /** {@inheritDoc} An empty vertex list is already degenerate, per {@link #isDegenerate}. */
+    /** {@inheritDoc} An empty vertex list is already degenerate (fewer than 3 vertices). */
     @Override
     public void clearShape() {
         vertices = new ArrayList<>();
