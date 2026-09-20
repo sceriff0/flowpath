@@ -95,6 +95,37 @@ class AxisMathTest {
                 "the plot hot path must not copy an unfiltered column");
     }
 
+    // ---- pairedMaskedValues ---------------------------------------------------------------
+
+    @Test
+    void pairedMaskedValuesFiltersBothAxesInLockstep() {
+        double[] allX = {1, 2, 3, 4, 5};
+        double[] allY = {10, 20, 30, 40, 50};
+        boolean[] roi = {true, true, true, false, true};
+        boolean[] ancestor = {true, true, false, true, true};
+        double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, roi, ancestor);
+        assertArrayEquals(new double[]{1, 2, 5}, filtered[0], 0);
+        assertArrayEquals(new double[]{10, 20, 50}, filtered[1], 0);
+    }
+
+    @Test
+    void pairedMaskedValuesDoesNotDropNaNUnlikeMeasuredValues() {
+        double[] allX = {1, Double.NaN, 3};
+        double[] allY = {10, 20, Double.NaN};
+        double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, null, null);
+        assertArrayEquals(allX, filtered[0], 0, "NaN kept: the two axes must stay in lockstep");
+        assertArrayEquals(allY, filtered[1], 0);
+    }
+
+    @Test
+    void pairedMaskedValuesReturnsTheColumnsThemselvesWhenBothMasksAreNull() {
+        double[] allX = {1, 2, 3};
+        double[] allY = {4, 5, 6};
+        double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, null, null);
+        assertSame(allX, filtered[0], "the scatter hot path must not copy an unfiltered column");
+        assertSame(allY, filtered[1]);
+    }
+
     // ---- remapRawThreshold ----------------------------------------------------------------
 
     @Test
