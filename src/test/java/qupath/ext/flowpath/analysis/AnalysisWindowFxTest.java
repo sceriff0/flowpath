@@ -47,39 +47,59 @@ class AnalysisWindowFxTest {
         return Preferences.userRoot().node("flowpath-test/" + UUID.randomUUID());
     }
 
+    /**
+     * A real, shown {@code Stage} to own the {@code AnalysisWindow}'s own {@code Stage}.
+     * <p>
+     * Every test here must close its owner in a {@code finally}, alongside the window it
+     * owns: an owner left open leaked past the end of each test (three per full run of this
+     * class, more once other real-Stage tests in the same JVM are counted), which is the
+     * likely cause of this class's flaky Stage-disposal timeouts under
+     * {@code FxTestSupport.onFx}'s 5-second budget -- more live windows for the platform to
+     * track and repaint makes every subsequent open/close in the same JVM session slower,
+     * and a full-suite run accumulates far more of them than this class running alone ever
+     * would (which is also why the flakiness did not reproduce running this class by itself).
+     */
+    private static Stage newShownOwnerStage() {
+        return FxTestSupport.onFx(() -> {
+            Stage s = new Stage();
+            s.show();
+            return s;
+        });
+    }
+
     @Test
     void theSamePaneReparentsIntoAFreshSceneAcrossAClose() throws Exception {
         Preferences node = scratch();
         try {
             AnalysisWindow window = new AnalysisWindow(node);
-            Stage owner = FxTestSupport.onFx(() -> {
-                Stage s = new Stage();
-                s.show();
-                return s;
-            });
-            AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
+            Stage owner = newShownOwnerStage();
+            try {
+                AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
 
-            FxTestSupport.onFxRun(() -> window.open(null, input, owner));
-            assertTrue(FxTestSupport.onFx(window::isShowing));
-            AnalysisPane firstPane = FxTestSupport.onFx(window::paneForTest);
-            assertNotNull(firstPane);
+                FxTestSupport.onFxRun(() -> window.open(null, input, owner));
+                assertTrue(FxTestSupport.onFx(window::isShowing));
+                AnalysisPane firstPane = FxTestSupport.onFx(window::paneForTest);
+                assertNotNull(firstPane);
 
-            FxTestSupport.onFxRun(window::close);
-            assertFalse(FxTestSupport.onFx(window::isShowing));
+                FxTestSupport.onFxRun(window::close);
+                assertFalse(FxTestSupport.onFx(window::isShowing));
 
-            // THE CHECK: a second real Stage/Scene, built while the first Stage's Scene has
-            // already been torn down (window.close() -> Stage.close()). If a Parent could not
-            // actually be re-parented once its old Scene was closed, this throws
-            // IllegalArgumentException from Scene's own root-assignment code.
-            assertDoesNotThrow(() -> FxTestSupport.onFxRun(() -> window.open(null, input, owner)));
-            assertTrue(FxTestSupport.onFx(window::isShowing));
+                // THE CHECK: a second real Stage/Scene, built while the first Stage's Scene has
+                // already been torn down (window.close() -> Stage.close()). If a Parent could not
+                // actually be re-parented once its old Scene was closed, this throws
+                // IllegalArgumentException from Scene's own root-assignment code.
+                assertDoesNotThrow(() -> FxTestSupport.onFxRun(() -> window.open(null, input, owner)));
+                assertTrue(FxTestSupport.onFx(window::isShowing));
 
-            AnalysisPane secondPane = FxTestSupport.onFx(window::paneForTest);
-            assertSame(firstPane, secondPane,
-                    "disposeStage() must not discard the pane -- a fresh AnalysisPane here "
-                            + "would mean the re-parenting claim was never actually tested");
+                AnalysisPane secondPane = FxTestSupport.onFx(window::paneForTest);
+                assertSame(firstPane, secondPane,
+                        "disposeStage() must not discard the pane -- a fresh AnalysisPane here "
+                                + "would mean the re-parenting claim was never actually tested");
 
-            FxTestSupport.onFxRun(window::close);
+                FxTestSupport.onFxRun(window::close);
+            } finally {
+                FxTestSupport.onFxRun(owner::close);
+            }
         } finally {
             node.removeNode();
         }
@@ -109,37 +129,37 @@ class AnalysisWindowFxTest {
                     .save(node);
 
             AnalysisWindow window = new AnalysisWindow(node);
-            Stage owner = FxTestSupport.onFx(() -> {
-                Stage s = new Stage();
-                s.show();
-                return s;
-            });
-            AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
+            Stage owner = newShownOwnerStage();
+            try {
+                AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
 
-            FxTestSupport.onFxRun(() -> window.open(null, input, owner));
-            AnalysisPane pane = FxTestSupport.onFx(window::paneForTest);
-            assertEquals(2, FxTestSupport.onFx(pane::selectedTabIndex),
-                    "the FIRST open should have seeded the tab from the pre-populated prefs");
-            assertEquals(seeded, FxTestSupport.onFx(pane::scaleOptionsByTab),
-                    "all four tabs, not only whichever one is selected, seeded from prefs");
+                FxTestSupport.onFxRun(() -> window.open(null, input, owner));
+                AnalysisPane pane = FxTestSupport.onFx(window::paneForTest);
+                assertEquals(2, FxTestSupport.onFx(pane::selectedTabIndex),
+                        "the FIRST open should have seeded the tab from the pre-populated prefs");
+                assertEquals(seeded, FxTestSupport.onFx(pane::scaleOptionsByTab),
+                        "all four tabs, not only whichever one is selected, seeded from prefs");
 
-            FxTestSupport.onFxRun(window::close);
-            // Simulate preferences being unavailable or corrupted between the close and the
-            // reopen -- every key this class ever wrote is gone.
-            node.clear();
+                FxTestSupport.onFxRun(window::close);
+                // Simulate preferences being unavailable or corrupted between the close and the
+                // reopen -- every key this class ever wrote is gone.
+                node.clear();
 
-            FxTestSupport.onFxRun(() -> window.open(null, input, owner));
-            AnalysisPane paneAfterReopen = FxTestSupport.onFx(window::paneForTest);
+                FxTestSupport.onFxRun(() -> window.open(null, input, owner));
+                AnalysisPane paneAfterReopen = FxTestSupport.onFx(window::paneForTest);
 
-            assertSame(pane, paneAfterReopen, "still the same in-memory pane");
-            assertEquals(2, FxTestSupport.onFx(paneAfterReopen::selectedTabIndex),
-                    "tab 2 survived with an EMPTY preferences node -- it came from the live "
-                            + "pane, not from AnalysisWindowPrefs.load()");
-            assertEquals(seeded, FxTestSupport.onFx(paneAfterReopen::scaleOptionsByTab),
-                    "all four tabs' scale options survived with an EMPTY preferences node, for "
-                            + "the same reason -- not just whichever tab was selected");
+                assertSame(pane, paneAfterReopen, "still the same in-memory pane");
+                assertEquals(2, FxTestSupport.onFx(paneAfterReopen::selectedTabIndex),
+                        "tab 2 survived with an EMPTY preferences node -- it came from the live "
+                                + "pane, not from AnalysisWindowPrefs.load()");
+                assertEquals(seeded, FxTestSupport.onFx(paneAfterReopen::scaleOptionsByTab),
+                        "all four tabs' scale options survived with an EMPTY preferences node, for "
+                                + "the same reason -- not just whichever tab was selected");
 
-            FxTestSupport.onFxRun(window::close);
+                FxTestSupport.onFxRun(window::close);
+            } finally {
+                FxTestSupport.onFxRun(owner::close);
+            }
         } finally {
             node.removeNode();
         }
@@ -155,24 +175,24 @@ class AnalysisWindowFxTest {
         Preferences node = scratch();
         try {
             AnalysisWindow window = new AnalysisWindow(node);
-            Stage owner = FxTestSupport.onFx(() -> {
-                Stage s = new Stage();
-                s.show();
-                return s;
-            });
-            AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
+            Stage owner = newShownOwnerStage();
+            try {
+                AnalysisSession.AnalysisInput input = AnalysisFixtures.simpleInput();
 
-            FxTestSupport.onFxRun(() -> window.open(null, input, owner));
-            assertNotNull(FxTestSupport.onFx(window::paneForTest));
+                FxTestSupport.onFxRun(() -> window.open(null, input, owner));
+                assertNotNull(FxTestSupport.onFx(window::paneForTest));
 
-            FxTestSupport.onFxRun(window::close);
-            assertNotNull(FxTestSupport.onFx(window::paneForTest),
-                    "close() alone must still keep the pane alive");
+                FxTestSupport.onFxRun(window::close);
+                assertNotNull(FxTestSupport.onFx(window::paneForTest),
+                        "close() alone must still keep the pane alive");
 
-            FxTestSupport.onFxRun(window::dispose);
-            assertNull(FxTestSupport.onFx(window::paneForTest),
-                    "dispose() is the real teardown -- it must release the pane, or it is not "
-                            + "distinguishable from close() at all");
+                FxTestSupport.onFxRun(window::dispose);
+                assertNull(FxTestSupport.onFx(window::paneForTest),
+                        "dispose() is the real teardown -- it must release the pane, or it is not "
+                                + "distinguishable from close() at all");
+            } finally {
+                FxTestSupport.onFxRun(owner::close);
+            }
         } finally {
             node.removeNode();
         }
