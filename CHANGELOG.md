@@ -87,6 +87,28 @@ Analysis window remain held back, as in 0.9.3.
   used hard-coded colours (white text, dark panels). They now follow QuPath's light and
   dark themes through a stylesheet; the gate bars, compartment badges, branch pills and the
   UMAP button keep their fixed swatches on purpose.
+- **A first-load failure left the editor showing the previous image's gate and channels.**
+  Once the busy state cleared, the editor re-enabled over an index that stayed null. It is
+  now cleared, exactly as for an image with no detections.
+- **An annotation-only edit flickered the status bar even with the ROI filter off**, though
+  it could not change the detection set or any mask FlowPath keeps. Such an edit is now
+  recognised up front and skipped entirely — no detection-list snapshot, no busy-state flip.
+- **The tree view's right-click menu stayed usable while a new image loaded.** The toolbar's
+  "+ Add Root Gate" button was already disabled during a first load; "Add Root Gate..." and
+  "Add child to..." in the context menu now are too.
+- **A quality-filter bound could miss a value by one ulp.** QuPath's measurement lists are
+  float-backed; a bound typed as an exact-looking number like 0.7 is a double that rounds to
+  a different bit pattern than the float a stored "0.7" measurement actually widens to, so an
+  inclusive bound could reject a value it was meant to match (or accept one past it).
+  Comparisons now happen at float precision, matching the precision the data actually has.
+- **An undone, redone or just-loaded gate tree read 0/0% until the next background pass
+  landed** — up to several seconds on a large slide, where it used to be one UI-thread frame.
+  The outgoing tree's counts are now carried onto the incoming one first, wherever their
+  structures still pair, so what shows meanwhile is stale-but-plausible rather than blank.
+- **A branch rename committed right after converting a region gate's shape (rectangle to
+  ellipse, say) could be judged against the wrong baseline.** The branch-name row is now
+  rebuilt for the replacement gate at once, rather than waiting for the editor's next
+  scheduled rebuild.
 
 ### Changed
 
