@@ -125,6 +125,19 @@ class Region2DGateShapeOperationsTest {
         assertTrue(gate.contains(-2, -4), "the resorted rectangle must still enclose its own centre");
     }
 
+    /** Degenerate on Y alone (real width, no height): the guard must catch this axis too. */
+    @Test
+    void rectangleWithZeroYExtentRemapIsANoOp() {
+        RectangleGate gate = new RectangleGate("CD3", "CD4", 0, 2, 5, 5);
+
+        gate.remapCoordinates(x -> x * 100 + 7, y -> y * 100 + 7);
+
+        assertEquals(0, gate.getMinX());
+        assertEquals(2, gate.getMaxX());
+        assertEquals(5, gate.getMinY());
+        assertEquals(5, gate.getMaxY());
+    }
+
     @Test
     void rectangleClearedShapeRemapIsANoOp() {
         RectangleGate gate = new RectangleGate();
@@ -178,6 +191,19 @@ class Region2DGateShapeOperationsTest {
         assertEquals(6, gate.getRadiusX(), 1e-9, "radius scales by |slope| = 2");
         assertEquals(-6, gate.getCenterY(), 1e-9, "fy(2) = -3*2 = -6");
         assertEquals(12, gate.getRadiusY(), 1e-9, "radius scales by |slope| = 3");
+    }
+
+    /** Degenerate on Y alone (real X radius, none on Y): the guard must catch this axis too. */
+    @Test
+    void ellipseWithZeroYRadiusRemapIsANoOp() {
+        EllipseGate gate = new EllipseGate("CD3", "CD4", 1, 2, 4, 0);
+
+        gate.remapCoordinates(x -> x * 100 + 7, y -> y * 100 + 7);
+
+        assertEquals(1, gate.getCenterX());
+        assertEquals(2, gate.getCenterY());
+        assertEquals(4, gate.getRadiusX());
+        assertEquals(0, gate.getRadiusY());
     }
 
     @Test
