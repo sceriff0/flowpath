@@ -117,6 +117,56 @@ class EditorRebuildTest {
         assertTrue(EditorRebuild.needed(false, false, null, gate), "new selection");
     }
 
+    /**
+     * A gate dragged to another branch is still the same object in the same tree, so it
+     * survives and the editor goes on showing it — no rebuild, because the gate's own
+     * controls (channel, threshold, branch names) are untouched by a re-parenting. What
+     * does change is the ancestor mask, which {@code FlowPathPane.render} re-applies
+     * separately from the rebuild decision.
+     * <p>
+     * This is the rule {@code FlowPathPane.onGateMoved} routes through: it seeds the
+     * selection with the moved gate and renders. Deciding the editor's fate anywhere else
+     * is how a completed move left the tree showing the gate selected and the editor blank.
+     * Replayed over two passes, because staleness only shows on the pass after the edit.
+     */
+    @Test
+    void aMovedGateSurvivesSoTheEditorFollowsItRatherThanBlanking() {
+        GatingSession session = new GatingSession(() -> 0L, input -> { });
+        session.replaceTree(twoRootsOnCd3());
+        GateNode child = new GateNode("CD3", 7.0);
+        child.setStatistic(Statistic.MEAN);
+        session.tree().getRoots().get(0).getBranches().get(0).getChildren().add(child);
+        session.settle();
+
+        Pane pane = new Pane(session);
+        pane.selected = child;
+        pane.shown = child;
+        int rebuilds = pane.rebuilds;
+
+        // The move itself, as GateDragCoordinator applies it.
+        session.recordEdit();
+        assertTrue(session.tree().move(child, session.tree().getRoots().get(1).getBranches().get(0)));
+        session.settle();
+
+        // onGateMoved: the moved gate becomes the selection, then render decides.
+        pane.selected = child;
+        assertFalse(pane.render(Optional.empty(), false), "a re-parented gate needs no rebuild");
+        assertSame(child, pane.selected, "the moved gate is still in the tree");
+        assertSame(child, pane.shown, "so the editor keeps it instead of blanking");
+        assertEquals(rebuilds, pane.rebuilds);
+
+        // The pass after the move: still the same gate, still no rebuild.
+        assertFalse(pane.render(Optional.empty(), false));
+        assertSame(child, pane.shown);
+
+        // And the contrast: one undo swaps in a fresh tree, so the moved node is gone and
+        // the editor MUST let go of it — the case `surviving` exists for.
+        assertTrue(session.undo());
+        assertTrue(pane.render(Optional.empty(), false), "undo swapped the nodes: rebuild");
+        assertNull(pane.selected);
+        assertNull(pane.shown);
+    }
+
     @Test
     void aChildGateSurvivesByIdentity() {
         GateTree tree = twoRootsOnCd3();

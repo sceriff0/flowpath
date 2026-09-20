@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,10 +35,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code cellsTotal()}-style totals that are non-zero either way.
  * <p>
  * <b>What is not exercised here.</b> {@code FlowPathPane} needs a live {@code QuPathGUI} and
- * cannot be built in the suite, so the two-line lambdas that adapt JavaFX's {@code DragEvent}s
- * to the handlers below (and the cell factory that hands each cell the coordinator) are not
- * covered. Everything those lambdas call is: {@code startDragAndDrop} needs a real drag
- * gesture from the platform toolkit, which a synthetic event cannot produce.
+ * cannot be built in the suite, so three things are out of reach: the five lambdas that adapt
+ * JavaFX's {@code DragEvent}s to the handlers below, the cell factory that hands each cell the
+ * coordinator, and the three lines of {@code FlowPathPane.onGateMoved}. Everything those call
+ * is covered — {@code onGateMoved} is {@code currentNode = moved}, {@code render(...)} (whose
+ * editor rule is {@link EditorRebuild}, replayed by {@link PaneAfterMove} here and table-tested
+ * in {@code EditorRebuildTest}) and {@code requestPreviewUpdate()} (whose {@code settle()} is
+ * replayed here too, and pinned by {@link #aMoveSettlesSoTheNextGateEditIsAnUndoStepOfItsOwn}).
+ * {@code startDragAndDrop} needs a real drag gesture from the platform toolkit, which a
+ * synthetic event cannot produce, which is why the seams below are what the handlers call.
  */
 class GateReorderFxTest {
 
@@ -129,6 +135,42 @@ class GateReorderFxTest {
         return session;
     }
 
+    /**
+     * What {@code FlowPathPane.onGateMoved} does once the move is applied, minus the widgets:
+     * <pre>
+     * currentNode = moved;              // the moved gate becomes the selection
+     * render(Optional.empty(), false);  // -> EditorRebuild.surviving / needed
+     * requestPreviewUpdate();           // -> session.settle(), then the gating pass
+     * </pre>
+     * Wired as the coordinator's {@code onMoved} so every test here goes through that
+     * sequence rather than a bare recorder. The settle is not decoration: without it the
+     * NEXT gate edit — which the editor reports after writing, through {@code
+     * recordAppliedEdit} — would be recorded from the tree as it stood before the move, and
+     * the move would stop being an undo step of its own.
+     */
+    private static final class PaneAfterMove implements Consumer<GateNode> {
+        final GatingSession session;
+        final List<GateNode> moved = new ArrayList<>();
+        /** {@code FlowPathPane#currentNode}. */
+        GateNode selected;
+        /** {@code editorPane.getGateNode()}. */
+        GateNode shown;
+        int rebuilds;
+
+        PaneAfterMove(GatingSession session) { this.session = session; }
+
+        @Override
+        public void accept(GateNode gate) {
+            moved.add(gate);
+            selected = EditorRebuild.surviving(gate, session.tree());
+            if (EditorRebuild.needed(false, false, shown, selected)) {
+                shown = selected;
+                rebuilds++;
+            }
+            session.settle();
+        }
+    }
+
     private static GateNode rootA(GatingSession s) { return s.tree().getRoots().get(0); }
     private static GateNode rootB(GatingSession s) { return s.tree().getRoots().get(1); }
     private static GateNode cd3(GatingSession s) { return rootA(s).getPositiveChildren().get(0); }
@@ -157,9 +199,9 @@ class GateReorderFxTest {
         FxTestSupport.onFxRun(() -> {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
-            List<GateNode> moved = new ArrayList<>();
+            PaneAfterMove pane = new PaneAfterMove(session);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, moved::add);
+                    session::recordEdit, pane);
 
             MarkerStats stats = MarkerStats.compute(session.index(), Cells.allTrue(N));
             String before = describe(session.tree());
@@ -179,7 +221,7 @@ class GateReorderFxTest {
             assertSame(gate, session.tree().getRoots().get(1).getBranches().get(0).getChildren().get(0),
                     "the very same gate object now hangs off root 1");
             assertTrue(rootA(session).getPositiveChildren().isEmpty());
-            assertEquals(List.of(gate), moved, "the pane is told which gate to reselect");
+            assertEquals(List.of(gate), pane.moved, "the pane is told which gate to reselect");
 
             Map<String, Integer> countsAfter = countsOf(session.tree(), session.index(), stats);
             assertEquals(0, countsAfter.getOrDefault("0/CD45+/CD3+", 0),
@@ -205,9 +247,9 @@ class GateReorderFxTest {
         FxTestSupport.onFxRun(() -> {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
-            List<GateNode> moved = new ArrayList<>();
+            PaneAfterMove pane = new PaneAfterMove(session);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, moved::add);
+                    session::recordEdit, pane);
             String before = describe(session.tree());
 
             GateNode gate = cd3(session);
@@ -224,7 +266,7 @@ class GateReorderFxTest {
             }
 
             assertEquals(before, describe(session.tree()));
-            assertEquals(List.of(), moved, "no gating pass was asked for");
+            assertEquals(List.of(), pane.moved, "no gating pass was asked for");
             assertFalse(session.undo(), "a refused drop recorded no undo step");
         });
     }
@@ -235,9 +277,9 @@ class GateReorderFxTest {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
             boolean[] blocked = {false};
-            List<GateNode> moved = new ArrayList<>();
+            PaneAfterMove pane = new PaneAfterMove(session);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> blocked[0],
-                    session::recordEdit, moved::add);
+                    session::recordEdit, pane);
             String before = describe(session.tree());
 
             assertTrue(gateCell(drag, cd3(session)).beginDrag());
@@ -263,9 +305,9 @@ class GateReorderFxTest {
         FxTestSupport.onFxRun(() -> {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
-            List<GateNode> moved = new ArrayList<>();
+            PaneAfterMove pane = new PaneAfterMove(session);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, moved::add);
+                    session::recordEdit, pane);
             MarkerStats stats = MarkerStats.compute(session.index(), Cells.allTrue(N));
             String before = describe(session.tree());
             Map<String, Integer> countsBefore = countsOf(session.tree(), session.index(), stats);
@@ -296,7 +338,7 @@ class GateReorderFxTest {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, g -> { });
+                    session::recordEdit, new PaneAfterMove(session));
             String before = describe(session.tree());
 
             assertTrue(gateCell(drag, rootB(session)).beginDrag());
@@ -316,7 +358,7 @@ class GateReorderFxTest {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, g -> { });
+                    session::recordEdit, new PaneAfterMove(session));
 
             GateNode gate = cd3(session);
             assertTrue(gateCell(drag, gate).beginDrag());
@@ -346,7 +388,7 @@ class GateReorderFxTest {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, g -> { });
+                    session::recordEdit, new PaneAfterMove(session));
 
             assertTrue(gateCell(drag, cd3(session)).beginDrag());
             FlowPathCell cell = branchCell(drag, rootB(session), 0);
@@ -366,11 +408,88 @@ class GateReorderFxTest {
             List<GatingSession.PassInput> passes = new ArrayList<>();
             GatingSession session = session(passes);
             GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
-                    session::recordEdit, g -> { });
+                    session::recordEdit, new PaneAfterMove(session));
 
             assertFalse(branchCell(drag, rootA(session), 0).beginDrag());
             assertFalse(cellFor(drag, null, true).beginDrag());
             assertNull(drag.dragged());
+        });
+    }
+
+    // ---- what the pane does after the move ------------------------------------------------
+
+    /**
+     * The editor follows the moved gate rather than going blank. A re-parented gate is the
+     * same object in the same tree, so it survives, and none of its own controls changed —
+     * so the editor keeps it without a rebuild (which would throw away a polygon the user is
+     * halfway through drawing). Asserted over two moves, because the second is where a stale
+     * selection would show.
+     */
+    @Test
+    void theEditorFollowsTheMovedGateAcrossSuccessiveMoves() {
+        FxTestSupport.onFxRun(() -> {
+            List<GatingSession.PassInput> passes = new ArrayList<>();
+            GatingSession session = session(passes);
+            PaneAfterMove pane = new PaneAfterMove(session);
+            GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
+                    session::recordEdit, pane);
+
+            GateNode gate = cd3(session);
+            pane.selected = gate;
+            pane.shown = gate; // the drag's own press selected the row
+            int rebuilds = pane.rebuilds;
+
+            assertTrue(gateCell(drag, gate).beginDrag());
+            assertTrue(branchCell(drag, rootB(session), 0).dropHere());
+            assertSame(gate, pane.selected, "still selected after the move");
+            assertSame(gate, pane.shown, "and the editor still shows it");
+            assertEquals(rebuilds, pane.rebuilds, "a re-parenting rebuilds no controls");
+
+            // Move it again, this time promoting it to a root.
+            assertTrue(gateCell(drag, gate).beginDrag());
+            assertTrue(cellFor(drag, null, true).dropHere());
+            assertSame(gate, session.tree().getRoots().get(2));
+            assertSame(gate, pane.selected);
+            assertSame(gate, pane.shown);
+            assertEquals(rebuilds, pane.rebuilds);
+        });
+    }
+
+    /**
+     * The move's own {@code settle()} — {@code requestPreviewUpdate()}'s first line — is what
+     * makes "one move, one undo step" true in production rather than only in a test. The gate
+     * editor writes into the gate and reports <em>afterwards</em> ({@code recordAppliedEdit}),
+     * so its undo step is taken from the last settled tree. Without the settle, a threshold
+     * nudge after a move would record the tree from BEFORE the move, folding the two into one
+     * step and making the first undo jump straight past the move.
+     */
+    @Test
+    void aMoveSettlesSoTheNextGateEditIsAnUndoStepOfItsOwn() {
+        FxTestSupport.onFxRun(() -> {
+            List<GatingSession.PassInput> passes = new ArrayList<>();
+            GatingSession session = session(passes);
+            PaneAfterMove pane = new PaneAfterMove(session);
+            GateDragCoordinator drag = new GateDragCoordinator(session::tree, () -> false,
+                    session::recordEdit, pane);
+
+            String beforeMove = describe(session.tree());
+            GateNode gate = cd3(session);
+            assertTrue(gateCell(drag, gate).beginDrag());
+            assertTrue(branchCell(drag, rootB(session), 0).dropHere());
+            String afterMove = describe(session.tree());
+
+            // An editor edit, as GateEditorPane makes it: write first, report after.
+            gate.setThreshold(9.0);
+            session.recordAppliedEdit(GatingSession.EditSource.GATE);
+            String afterEdit = describe(session.tree());
+            assertFalse(afterEdit.equals(afterMove));
+
+            assertTrue(session.undo());
+            assertEquals(afterMove, describe(session.tree()),
+                    "the first undo takes back the threshold, leaving the move standing");
+            assertTrue(session.undo());
+            assertEquals(beforeMove, describe(session.tree()), "the second takes back the move");
+            assertFalse(session.undo(), "two edits, two steps");
         });
     }
 }

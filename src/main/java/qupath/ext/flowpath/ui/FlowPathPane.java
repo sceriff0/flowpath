@@ -677,19 +677,30 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * A gate was dragged onto another branch — or onto the tree's background, which promotes it
-     * back to a root. The structural-edit path, exactly as {@link #addRootGate()} and
-     * {@link #addChildGate(int)} take it: {@link GateDragCoordinator} has already recorded the
-     * undo step and applied the move, and re-parenting a gate changes neither the ROI mask nor
-     * the statistics, so there is nothing for {@link #resyncToTree()} to recompute. What is left
-     * is to redraw the tree, keep the moved gate selected so the editor follows it where it
-     * went, and request the gating pass that recounts every branch under its new parent.
+     * back to a root. {@link GateDragCoordinator} has already recorded the undo step and applied
+     * the move; re-parenting a gate changes neither the ROI mask nor the statistics, so there is
+     * nothing for a derivation to recompute and this stops short of {@link #resyncToTree()},
+     * exactly as {@link #addRootGate()} and {@link #addChildGate(int)} do.
      * <p>
-     * The selection is deliberately <em>not</em> suppressed: the gate is still in the tree and
-     * the editor should open it, which is what an ordinary selection change does.
+     * <b>It goes through {@link #render} rather than rebuilding the tree here.</b> A
+     * {@code rebuildTreeView()} call on its own clears the selection — {@code setRoot} does —
+     * which fires the selection listener with {@code null} and blanks the editor, while the
+     * {@link #selectNodeInTree} that follows suppresses the listener and so never restores it.
+     * A completed move then left the tree showing the gate selected and the editor empty, with
+     * the ancestor mask (which genuinely changed: the gate hangs under a different parent now)
+     * never recomputed. {@link #render} is the one place that already does all of this
+     * correctly — suppressed rebuild, {@link EditorRebuild#surviving}, ancestor mask,
+     * {@link EditorRebuild#needed} — so the only decision left here is which gate the editor
+     * should end up on, and that is the one that was just moved.
+     * <p>
+     * Seeding {@link #currentNode} rather than calling {@code setGateNode} outright keeps the
+     * rebuild conditional: a re-parented gate's own controls (channel, threshold, branch names)
+     * are unchanged, so {@link EditorRebuild#needed} says no, and a polygon the user is halfway
+     * through drawing survives the move.
      */
     private void onGateMoved(GateNode moved) {
-        rebuildTreeView();
-        selectNodeInTree(moved);
+        currentNode = moved;
+        render(Optional.empty(), false);
         requestPreviewUpdate();
     }
 
