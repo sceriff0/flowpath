@@ -22,7 +22,8 @@ Analysis window remain held back, as in 0.9.3.
   hangs off, and any branch inside the gate's own subtree — are marked as non-droppable
   while you drag over them and refuse the drop, leaving the tree completely untouched: no
   undo step, no re-count. A completed move is a single undo step, and the gating pass that
-  follows re-counts every branch under the gate's new parent.
+  follows re-counts every branch under the gate's new parent; the editor stays open on the
+  moved gate itself, rather than going blank or following the tree's selection elsewhere.
 
 ### Fixed
 
@@ -104,11 +105,29 @@ Analysis window remain held back, as in 0.9.3.
 - **An undone, redone or just-loaded gate tree read 0/0% until the next background pass
   landed** — up to several seconds on a large slide, where it used to be one UI-thread frame.
   The outgoing tree's counts are now carried onto the incoming one first, wherever their
-  structures still pair, so what shows meanwhile is stale-but-plausible rather than blank.
+  structures still pair — same channels, not merely the same shape, so loading an unrelated
+  tree that happens to have the same number of roots and branches shows zeros rather than
+  another gate's counts — so what shows meanwhile is stale-but-plausible rather than blank.
 - **A branch rename committed right after converting a region gate's shape (rectangle to
   ellipse, say) could be judged against the wrong baseline.** The branch-name row is now
   rebuilt for the replacement gate at once, rather than waiting for the editor's next
   scheduled rebuild.
+- **Drawing a rectangle or ellipse over a gate of another type left an extra, dead undo
+  step** (the first Ctrl+Z did nothing; a polygon left a stray empty-polygon step instead).
+  The replacement is now recorded as one step that the change report that follows folds
+  into, rather than a second step on top of it.
+- **A rectangle or ellipse gate degenerate on only one axis could still be remapped** when
+  its compartment or statistic changed, handing it a spurious extent on that axis under a
+  non-linear percentile map. Both axes are now checked for degeneracy before remapping,
+  matching the check the scatter plot itself already used.
+- **A failed CSV export could leave the Export button and Ctrl+E disabled until QuPath was
+  restarted**, if the failure was an `Error` rather than an `Exception` (an
+  `OutOfMemoryError` walking and serializing a million-cell population is the plausible
+  case) — it escaped the background job uncaught, so the panel never learned the export had
+  finished. Both are now caught, matching how detection reads already handled the pair.
+- Hardened the error-dialog message builder against a pathological multi-level exception
+  cause cycle (A caused by B caused by C caused by A) that would have recursed until the
+  stack overflowed; it now walks iteratively and stops on a cycle instead.
 
 ### Changed
 
