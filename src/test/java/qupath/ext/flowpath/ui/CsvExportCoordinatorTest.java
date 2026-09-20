@@ -4,11 +4,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.model.CellIndex;
-import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
-import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.testing.GateTreeFixtures;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -48,17 +47,12 @@ class CsvExportCoordinatorTest {
         @Override public void failed(Throwable error) { failures.add(error); }
     }
 
-    /** Two enabled roots on two channels, matching the shape {@code CsvExportJobTest} uses. */
+    /**
+     * Two enabled roots on two channels, matching the shape {@code CsvExportJobTest} uses --
+     * shared as {@link GateTreeFixtures#twoRootsOnCd3AndCd8} rather than duplicated.
+     */
     private static GateTree twoRoots() {
-        GateNode cd3Root = new GateNode("CD3", 5.5);
-        cd3Root.setStatistic(Statistic.MEAN);
-        GateNode cd8Root = new GateNode("CD8", 2.5);
-        cd8Root.setStatistic(Statistic.MEAN);
-
-        GateTree tree = new GateTree();
-        tree.addRoot(cd3Root);
-        tree.addRoot(cd8Root);
-        return tree;
+        return GateTreeFixtures.twoRootsOnCd3AndCd8(5.5, 2.5);
     }
 
     private CsvExportJob.Snapshot snapshotFor(File file) {

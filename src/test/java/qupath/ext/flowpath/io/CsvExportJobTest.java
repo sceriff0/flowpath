@@ -6,8 +6,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
-import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.ext.flowpath.testing.GateTreeFixtures;
 
 import java.io.IOException;
 import java.io.File;
@@ -63,18 +63,11 @@ class CsvExportJobTest {
     /**
      * Two enabled roots on two channels, so the snapshot really is exercised across more than
      * a single-root tree. Cell 1 sits right where mutating either threshold after the
-     * snapshot is taken would flip its sign.
+     * snapshot is taken would flip its sign. Shared with {@code CsvExportCoordinatorTest},
+     * which built the same fixture separately -- see {@link GateTreeFixtures}.
      */
     private static GateTree twoRoots(double cd3Threshold, double cd8Threshold) {
-        GateNode cd3Root = new GateNode("CD3", cd3Threshold);
-        cd3Root.setStatistic(Statistic.MEAN);
-        GateNode cd8Root = new GateNode("CD8", cd8Threshold);
-        cd8Root.setStatistic(Statistic.MEAN);
-
-        GateTree tree = new GateTree();
-        tree.addRoot(cd3Root);
-        tree.addRoot(cd8Root);
-        return tree;
+        return GateTreeFixtures.twoRootsOnCd3AndCd8(cd3Threshold, cd8Threshold);
     }
 
     @Test
