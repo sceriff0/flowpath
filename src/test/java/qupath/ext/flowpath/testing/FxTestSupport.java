@@ -35,6 +35,24 @@ import java.util.function.Supplier;
  * right now". A genuinely headless JVM fails the very first attempt with a graphics
  * exception, not a timeout, so it is still detected on the first try and, with
  * {@code FLOWPATH_FX_REQUIRED=true}, still fails loudly (never silently skips).
+ * <p>
+ * <b>A wedged action must not poison the JVM (critical invariant).</b> {@link #onFx} used to
+ * give up on the *calling* thread after a timeout but leave the submitted {@link FutureTask}
+ * sitting in the FX Application Thread's queue forever. If that action was genuinely stuck
+ * (not merely slow), every later {@code onFx}/{@code onFxRun} call in the same JVM — from any
+ * test class — queued up behind it and timed out identically: one stuck action anywhere in a
+ * full-suite run could cascade into every FX test that ran after it (this is exactly what
+ * happened to {@code AnalysisPaneFxTest} in Task 7's round-0.9.4 evidence run: 172 failures
+ * across 33 classes from one wedge). {@code onFx} now calls {@code task.cancel(true)} on a
+ * timeout — a best-effort interrupt that frees the thread when the stuck action is merely slow
+ * or is blocked in something that honours interruption, though not when it is blocked in
+ * native/non-interruptible code — and tracks whether an earlier, still-unresolved action might
+ * still be occupying the thread via {@link #pending}. A later timeout while that marker is
+ * still set is diagnosed as "the FX Application Thread is still busy with an earlier action",
+ * naming that action and how long ago it was submitted, rather than presenting as a fresh,
+ * unrelated timeout. The marker is cleared whenever any {@code onFx} call — successful or not —
+ * actually completes, because the FX queue is strictly FIFO: if our action ran, everything
+ * queued before it must already have finished or been abandoned.
  */
 public final class FxTestSupport {
 
@@ -45,6 +63,23 @@ public final class FxTestSupport {
 
     private static Boolean available;
     private static String unavailableReason;
+
+    /**
+     * Identity of the current earliest {@link #onFx} call whose completion this JVM has not
+     * yet observed. {@code null} means no call is known to be unresolved — the last one either
+     * finished (successfully or not) or none has run yet. Never overwritten while non-null
+     * (see {@link #onFx}), so it names the *original* stuck action across a whole cascade of
+     * later timeouts, not just the most recent caller left waiting behind it.
+     */
+    private static final AtomicReference<PendingAction> pending = new AtomicReference<>();
+
+    /**
+     * One {@link #onFx} call's identity: where it was called from, and when it was submitted.
+     * Package-private (rather than {@code private}) solely so {@code buildTimeoutMessage}'s
+     * decision logic is constructible from a test in this package without wedging a real
+     * toolkit — see {@code FxTestSupportDecisionLogicTest}.
+     */
+    record PendingAction(String description, long submittedAtNanos) {}
 
     /**
      * The shared timeout budget, in seconds, for JavaFX startup, the control probe, and
@@ -196,6 +231,9 @@ public final class FxTestSupport {
                         ? new Attempt(Outcome.AVAILABLE, null)
                         : new Attempt(Outcome.FAILED, "control probe returned false");
             } catch (TimeoutException timedOut) {
+                // Same reasoning as onFx: don't leave a probe FutureTask sitting in the FX
+                // queue behind us forever if the thread eventually frees up.
+                probe.cancel(true);
                 return new Attempt(Outcome.TIMED_OUT,
                         "timed out after " + budget + "s waiting for the control probe");
             }
@@ -205,24 +243,84 @@ public final class FxTestSupport {
         }
     }
 
-    /** Run {@code action} on the FX application thread and block for its result. */
+    /**
+     * Run {@code action} on the FX application thread and block for its result.
+     * <p>
+     * On timeout, cancels the submitted task (best-effort interrupt — see the class javadoc)
+     * so a stuck action cannot keep occupying the FX Application Thread's queue indefinitely
+     * from this call's perspective, and fails only *this* call rather than leaving the caller
+     * to guess. If an earlier, still-unresolved {@code onFx} call's identity is on record (see
+     * {@link #pending}), the failure names it explicitly instead of presenting as a fresh,
+     * unrelated timeout.
+     */
     public static <T> T onFx(Supplier<T> action) {
         if (Platform.isFxApplicationThread()) {
             return action.get();
         }
-        FutureTask<T> task = new FutureTask<>(action::get);
-        Platform.runLater(task);
+        String description = describeCaller();
         int budget = timeoutSeconds();
+        FutureTask<T> task = new FutureTask<>(action::get);
+
+        // Only ever claim the marker while it is empty -- see the field javadoc for why an
+        // already-set marker must survive this call rather than being overwritten by it.
+        PendingAction mine = new PendingAction(description, System.nanoTime());
+        boolean weAreTheOnlyUnresolvedCall = pending.compareAndSet(null, mine);
+        PendingAction blamed = weAreTheOnlyUnresolvedCall ? null : pending.get();
+
+        Platform.runLater(task);
         try {
-            return task.get(budget, TimeUnit.SECONDS);
+            T result = task.get(budget, TimeUnit.SECONDS);
+            // The FX queue is FIFO: if OUR action ran to completion, everything queued before
+            // it (including whatever "blamed" named) is no longer occupying the thread.
+            pending.set(null);
+            return result;
         } catch (TimeoutException timedOut) {
+            task.cancel(true);
             throw new RuntimeException(
-                    "JavaFX action did not complete within " + budget + "s (override with "
-                    + "FLOWPATH_FX_TIMEOUT_SECONDS) -- the FX Application Thread may simply "
-                    + "be behind under load, or the action itself may be stuck", timedOut);
+                    buildTimeoutMessage(description, budget, blamed), timedOut);
         } catch (Exception e) {
+            pending.set(null);
             throw new RuntimeException(e);
         }
+    }
+
+    /** The message an {@link #onFx} timeout fails with. Pure, so it is unit-testable. */
+    static String buildTimeoutMessage(String description, int budgetSeconds, PendingAction blamed) {
+        StringBuilder msg = new StringBuilder("JavaFX action [").append(description)
+                .append("] did not complete within ").append(budgetSeconds)
+                .append("s (override with FLOWPATH_FX_TIMEOUT_SECONDS)");
+        if (blamed == null) {
+            msg.append(" -- cancelling it so later tests are not blocked by it.");
+        } else {
+            double ageSeconds = (System.nanoTime() - blamed.submittedAtNanos()) / 1e9;
+            msg.append(" -- the FX Application Thread is still busy with an earlier action (")
+                    .append(blamed.description()).append(", submitted ")
+                    .append(String.format(java.util.Locale.ROOT, "%.1f", ageSeconds))
+                    .append("s ago) that a previous test's own budget could not wait out "
+                            + "either. This is very likely the SAME stuck action still wedging "
+                            + "the thread, not a fresh, unrelated timeout -- cancelling this "
+                            + "call's task so it does not add a second one to the queue.");
+        }
+        return msg.toString();
+    }
+
+    /**
+     * Names the first stack frame outside this class — the test method (or test helper) that
+     * called {@link #onFx}/{@link #onFxRun} — so a timeout failure identifies *which* action
+     * was waiting, not just that "an" action somewhere did.
+     */
+    private static String describeCaller() {
+        StackWalker walker = StackWalker.getInstance();
+        return walker.walk(frames -> frames
+                        .filter(f -> !FxTestSupport.class.getName().equals(f.getClassName()))
+                        .findFirst()
+                        .map(FxTestSupport::describeFrame))
+                .orElse("<unknown caller>");
+    }
+
+    private static String describeFrame(StackWalker.StackFrame frame) {
+        return frame.getClassName() + "." + frame.getMethodName()
+                + "(" + frame.getFileName() + ":" + frame.getLineNumber() + ")";
     }
 
     /** Run {@code action} on the FX application thread and block until it finishes. */
