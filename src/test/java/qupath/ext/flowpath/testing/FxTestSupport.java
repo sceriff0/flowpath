@@ -43,11 +43,23 @@ import java.util.function.Supplier;
  * test class — queued up behind it and timed out identically: one stuck action anywhere in a
  * full-suite run could cascade into every FX test that ran after it (this is exactly what
  * happened to {@code AnalysisPaneFxTest} in Task 7's round-0.9.4 evidence run: 172 failures
- * across 33 classes from one wedge). {@code onFx} now calls {@code task.cancel(true)} on a
- * timeout — a best-effort interrupt that frees the thread when the stuck action is merely slow
- * or is blocked in something that honours interruption, though not when it is blocked in
- * native/non-interruptible code — and tracks whether an earlier, still-unresolved action might
- * still be occupying the thread via {@link #pending}. A later timeout while that marker is
+ * across 33 classes from one wedge). {@code onFx} now calls {@code task.cancel(false)} on a
+ * timeout, and tracks whether an earlier, still-unresolved action might still be occupying the
+ * thread via {@link #pending}.
+ * <p>
+ * <b>Why {@code cancel(false)} and not {@code cancel(true)}.</b> The cascade this cancel exists
+ * to stop is the <em>queued-but-not-yet-started</em> case: a {@link FutureTask} sitting behind a
+ * wedge in a strictly FIFO queue, which {@code cancel(false)} frees completely — a cancelled
+ * {@code FutureTask} never runs its body, so nothing of ours is left to execute whenever the
+ * thread does free up. {@code cancel(true)} buys nothing beyond that and costs something real:
+ * the thread it interrupts is the <b>FX Application Thread</b>, shared by the whole JVM. An
+ * action already inside {@code FutureTask.run()} is interrupted where it stands, and if it
+ * swallows the {@code InterruptedException} without restoring the flag — or is interrupted
+ * between its own blocking calls — the interrupt status is left <em>set</em> on a thread that
+ * every later test in the JVM uses, so the next unrelated FX operation that blocks throws
+ * immediately. That is the same shape of JVM-wide cascade in different clothing. An action
+ * genuinely stuck in native or non-interruptible code cannot be freed by either call, so the
+ * interrupt's only unique power is over exactly the case where it does the most harm. A later timeout while that marker is
  * still set is diagnosed as "the FX Application Thread is still busy with an earlier action",
  * naming that action and how long ago it was submitted, rather than presenting as a fresh,
  * unrelated timeout. The marker is cleared whenever any {@code onFx} call — successful or not —
@@ -232,8 +244,10 @@ public final class FxTestSupport {
                         : new Attempt(Outcome.FAILED, "control probe returned false");
             } catch (TimeoutException timedOut) {
                 // Same reasoning as onFx: don't leave a probe FutureTask sitting in the FX
-                // queue behind us forever if the thread eventually frees up.
-                probe.cancel(true);
+                // queue behind us forever if the thread eventually frees up. Without an
+                // interrupt, for the reason the class javadoc gives -- the thread this would
+                // interrupt is the one every later test in this JVM shares.
+                probe.cancel(false);
                 return new Attempt(Outcome.TIMED_OUT,
                         "timed out after " + budget + "s waiting for the control probe");
             }
@@ -246,10 +260,10 @@ public final class FxTestSupport {
     /**
      * Run {@code action} on the FX application thread and block for its result.
      * <p>
-     * On timeout, cancels the submitted task (best-effort interrupt — see the class javadoc)
-     * so a stuck action cannot keep occupying the FX Application Thread's queue indefinitely
-     * from this call's perspective, and fails only *this* call rather than leaving the caller
-     * to guess. If an earlier, still-unresolved {@code onFx} call's identity is on record (see
+     * On timeout, cancels the submitted task <em>without</em> interrupting the FX Application
+     * Thread (see the class javadoc for why an interrupt would be a differently-shaped
+     * cascade), so a task that had not started yet can never run behind our back, and fails
+     * only *this* call rather than leaving the caller to guess. If an earlier, still-unresolved {@code onFx} call's identity is on record (see
      * {@link #pending}), the failure names it explicitly instead of presenting as a fresh,
      * unrelated timeout.
      */
@@ -275,7 +289,11 @@ public final class FxTestSupport {
             pending.set(null);
             return result;
         } catch (TimeoutException timedOut) {
-            task.cancel(true);
+            // cancel(false), never cancel(true): see the class javadoc. This frees the case
+            // that caused the 172-failure cascade (a task queued behind a wedge, which a
+            // cancelled FutureTask will now never run) without leaving an interrupt flag set
+            // on the FX Application Thread for every later test in this JVM to trip over.
+            task.cancel(false);
             throw new RuntimeException(
                     buildTimeoutMessage(description, budget, blamed), timedOut);
         } catch (Exception e) {
