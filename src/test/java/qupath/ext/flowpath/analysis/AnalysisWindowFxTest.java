@@ -18,15 +18,31 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * <b>Quarantined (round 2 of Task 7, review round 0.9.4) — see the {@link Disabled} reason.</b>
- * This class hangs non-deterministically on the shared JavaFX Application Thread: Task 7's
- * second evidence run saw
+ * <p>
+ * <b>What the quarantine leaves unguarded.</b> {@code CLAUDE.md}'s "The Analysis window has two
+ * distinct persistence lifetimes" invariant requires the in-memory lifetime (an
+ * {@link AnalysisPane} kept alive across a close and a reopen, carrying its tab, scope, filter,
+ * table selection and every plot's {@link ScaleOptions}) and the {@code Preferences} lifetime to
+ * stay <em>independently</em> tested — in its own words, "or a broken layer can hide behind the
+ * working one". This class is the only test of the in-memory half.
+ * {@code AnalysisWindowPrefsTest} covers the other half and stays enabled. So while this class
+ * is disabled that invariant is <b>not</b> enforced: a regression in the in-memory path is
+ * exactly the kind of break the still-green prefs test would hide.
+ * <p>
+ * <b>Why it is quarantined.</b> This class hangs non-deterministically on the shared JavaFX
+ * Application Thread: Task 7's second evidence run saw
  * {@link #allFourTabsScaleOptionsSurviveACloseReopenEvenWithPreferencesWipedInBetween} time out
  * opening a real {@link Stage} (a single, contained failure that did not cascade that time — the
  * first run instead saw {@code AnalysisPaneFxTest} wedge and cascade into 172 failures across 33
- * classes). This class's own javadoc already names the mechanism: repeatedly opening real
- * {@code Stage}s across a long single-JVM suite measurably slows every later FX operation in
- * that JVM, and a full-suite run accumulates far more of them than this class running alone
- * ever does. The Analysis window is feature-flagged off
+ * classes).
+ * <p>
+ * <b>The mechanism is a hypothesis, not a diagnosis.</b> The one this class's javadoc used to
+ * assert — repeatedly opening real {@code Stage}s across a long single-JVM suite slowing every
+ * later FX operation in that JVM — would explain <em>this</em> class, but it cannot be the
+ * shared cause of both quarantined classes: {@code AnalysisPaneFxTest}, the class run 1 wedged
+ * on, opens no {@code Stage} at all. The actual root cause is unidentified.
+ * <p>
+ * The Analysis window is feature-flagged off
  * ({@code FlowPathPane.ANALYSIS_ENABLED == false}), so this gates nothing a user can reach
  * today — quarantining it, rather than fixing the hang, is what round 2 of Task 7 decided. Full
  * evidence is in {@code .superpowers/sdd/review-round-0.9.4-followups/task-7-report.md}. Must be
@@ -52,15 +68,23 @@ import static org.junit.jupiter.api.Assertions.*;
  * never touches whatever this machine has genuinely saved — the same rule
  * {@code AnalysisWindowPrefsTest} follows for the record's own tests.
  */
-@Disabled("Quarantined (Task 7 round 2, review 0.9.4): this class hangs the shared JavaFX "
-        + "Application Thread non-deterministically once FxTestSupport's timeout is generous "
-        + "enough to stop masking it as \"toolkit unavailable\" -- evidence run 2 saw "
+@Disabled("Quarantined (Task 7 round 2, review 0.9.4). LEAVES UNGUARDED: CLAUDE.md's \"The "
+        + "Analysis window has two distinct persistence lifetimes\" invariant, which requires "
+        + "the in-memory lifetime (an AnalysisPane surviving a close/reopen with its tab, scope, "
+        + "filter, table selection and every plot's ScaleOptions) and the Preferences lifetime "
+        + "to stay INDEPENDENTLY tested, \"or a broken layer can hide behind the working one\". "
+        + "This class is the only test of the in-memory half; AnalysisWindowPrefsTest covers the "
+        + "Preferences half and stays enabled, so a break in the in-memory path is now invisible "
+        + "behind a green prefs test. WHY: this class hangs the shared JavaFX Application Thread "
+        + "non-deterministically once FxTestSupport's timeout is generous enough to stop masking "
+        + "it as \"toolkit unavailable\" -- evidence run 2 saw "
         + "allFourTabsScaleOptionsSurviveACloseReopenEvenWithPreferencesWipedInBetween time out "
         + "opening a real Stage (a single, contained failure), while run 1 of identical code "
         + "instead saw AnalysisPaneFxTest wedge and cascade into 172 failures across 33 "
-        + "unrelated classes -- same root cause (this class's own javadoc already names it: "
-        + "accumulated live Stages slow every later FX operation in a long single-JVM suite), "
-        + "different test hit it. The Analysis window is feature-flagged off "
+        + "unrelated classes. HYPOTHESIS, NOT A DIAGNOSIS: accumulated live Stages slowing every "
+        + "later FX operation in a long single-JVM suite would explain this class, but cannot be "
+        + "the cause shared with AnalysisPaneFxTest -- that class opens no Stage at all. The root "
+        + "cause is unidentified. The Analysis window is feature-flagged off "
         + "(FlowPathPane.ANALYSIS_ENABLED == false), so this gates nothing reachable today. See "
         + ".superpowers/sdd/review-round-0.9.4-followups/task-7-report.md for the full evidence. "
         + "MUST be re-enabled and this hang fixed before the Analysis window ships.")
