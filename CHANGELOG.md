@@ -5,13 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.4] - 21/09/2026
 
-A post-release review round of the gating half: ten tasks, each reviewed against the diff
-behind it. The computed z-score is gone for good, every change to the tree, a filter or the
-image now ends in one resync, detection reads, statistics recomputes and CSV export leave
-the FX thread, and the gate editor is split into one editor per gate type. UMAP and the
-Analysis window remain held back, as in 0.9.3.
+Two post-release review rounds of the gating half — eighteen tasks, each reviewed against
+the diff behind it, each round closed by a whole-branch review and a fix pass. The computed
+z-score is gone for good, every change to the tree, a filter or the image now ends in one
+resync, detection reads, statistics recomputes and CSV export leave the FX thread, gates can
+be reordered by dragging them in the tree, and the gate editor is split into one editor per
+gate type. UMAP and the Analysis window remain held back, as in 0.9.3.
 
 > **Known defect, unfixed: the Analysis window's JavaFX tests hang.** Two test classes —
 > `AnalysisWindowFxTest` and `AnalysisPaneFxTest` — wedge the shared JavaFX Application
