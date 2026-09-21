@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.analysis.ui;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.session.DenominatorRef;
@@ -13,6 +14,33 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * <b>Quarantined (round 2 of Task 7, review round 0.9.4) — see the {@link Disabled} reason.</b>
+ * This class hangs non-deterministically on the shared JavaFX Application Thread: Task 7's
+ * first evidence run saw this class's very first test
+ * ({@code exportMenuItemsOneThroughThreeAreDisabledWithNoDataAtAll}, constructing a plain
+ * {@code new AnalysisPane(new AnalysisSession())} on the FX thread) time out and never
+ * recover, taking all 33 of this class's own tests down with it and then cascading into 172
+ * failures across 33 unrelated classes for the rest of that JVM. A second, identical run of the
+ * same code had zero failures here at all. The root cause is <b>unidentified</b>: whatever it
+ * is, it is not {@code AnalysisWindowFxTest}'s accumulated-{@code Stage} hypothesis, since this
+ * class opens no {@code Stage} at all. The Analysis window is feature-flagged off
+ * ({@code FlowPathPane.ANALYSIS_ENABLED == false}), so this gates nothing a user can reach
+ * today — quarantining it, rather than fixing the hang, is what round 2 of Task 7 decided. Full
+ * evidence is in {@code .superpowers/sdd/review-round-0.9.4-followups/task-7-report.md}. Must be
+ * re-enabled and this hang fixed before the Analysis window ships.
+ */
+@Disabled("Quarantined (Task 7 round 2, review 0.9.4): this class hangs the shared JavaFX "
+        + "Application Thread non-deterministically once FxTestSupport's timeout is generous "
+        + "enough to stop masking it as \"toolkit unavailable\" -- evidence run 1 saw this "
+        + "class's first test wedge the FX thread and never recover (172 failures cascading "
+        + "into 33 unrelated classes), run 2 of identical code had zero failures here. The root "
+        + "cause is UNIDENTIFIED -- in particular it is not AnalysisWindowFxTest's "
+        + "accumulated-Stage hypothesis, since this class opens no Stage at all. The "
+        + "Analysis window is feature-flagged off (FlowPathPane.ANALYSIS_ENABLED == false), so "
+        + "this gates nothing reachable today. See "
+        + ".superpowers/sdd/review-round-0.9.4-followups/task-7-report.md for the full evidence. "
+        + "MUST be re-enabled and this hang fixed before the Analysis window ships.")
 class AnalysisPaneFxTest {
 
     @BeforeAll

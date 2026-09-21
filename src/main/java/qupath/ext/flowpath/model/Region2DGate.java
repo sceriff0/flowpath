@@ -2,6 +2,7 @@ package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleUnaryOperator;
 
 /**
  * Shared base for the 2D region gates — {@link PolygonGate}, {@link RectangleGate}
@@ -18,6 +19,19 @@ public abstract sealed class Region2DGate extends GateNode
 
     private static final int GREEN = (0 << 16) | (200 << 8) | 0;
     private static final int GRAY = (128 << 16) | (128 << 8) | 128;
+
+    /**
+     * Below this width/height/radius, a rectangle or ellipse gate's extent counts as zero
+     * rather than a genuine (if tiny) shape. Floating-point drag arithmetic — a "Clear
+     * Shape" reset, or a screen-to-data conversion during an in-progress drag — can leave a
+     * span at {@code 1e-13} rather than exactly {@code 0}, so callers asking "is there
+     * really a shape here" (draw an outline, offer edit handles, remap onto a new axis)
+     * compare against this epsilon instead of a bare {@code > 0}. {@link RectangleGate#contains}
+     * and {@link EllipseGate#contains} deliberately do not use it: their strict {@code > 0}
+     * guard must reject an exactly-degenerate gate on its own, without depending on whether
+     * a caller checked drawability first.
+     */
+    public static final double MIN_DRAWABLE_EXTENT = 1e-10;
 
     private String channelX;
     private String channelY;
@@ -59,13 +73,52 @@ public abstract sealed class Region2DGate extends GateNode
                 channelX + "/" + channelY + " (out)");
     }
 
-    /** Does the point fall inside this gate's region, in the gate's own coordinate space? */
+    /**
+     * Does the point fall inside this gate's region, in the gate's own coordinate space?
+     * <p>
+     * The one boundary rule for every shape: a point exactly on the region's edge or a
+     * vertex counts as Inside, not Outside. A shape with no usable extent (a cleared
+     * rectangle or ellipse, a polygon with fewer than 3 vertices or with every vertex
+     * collinear) encloses nothing, including points that would otherwise sit on its
+     * boundary. Each shape's own {@code contains} documents how it applies this rule.
+     */
     public abstract boolean contains(double x, double y);
+
+    /**
+     * Reset this shape to the zero-extent "no shape" state {@link #contains} treats as
+     * enclosing nothing -- an empty polygon, a rectangle collapsed to a point, an ellipse
+     * with zero radii. The "Clear Shape" action in the 2D editor is the sole caller; each
+     * subclass implements this against its own fields rather than the editor branching on
+     * gate type.
+     */
+    public abstract void clearShape();
+
+    /**
+     * Remap every coordinate of this shape through {@code fx} (the X axis) and {@code fy}
+     * (the Y axis).
+     * <p>
+     * Used to carry a drawn region across a raw-mode compartment/statistic switch that
+     * changes what a coordinate on an axis means (the editor supplies a percentile-preserving
+     * map), and by {@code LegacyZScoreMigration} to move a legacy shape out of the retired
+     * computed z-score (a linear map). A shape with no genuine extent is left alone --
+     * remapping a placeholder zero would plant a real region at the new axis' minimum where
+     * there was none. Rectangle re-sorts its bounds afterward so a non-monotone map cannot
+     * leave {@code minX > maxX}; ellipse remaps its bounding box and recomputes centre/radii,
+     * since percentile mapping is not linear and an exact ellipse cannot otherwise be
+     * preserved.
+     */
+    public abstract void remapCoordinates(DoubleUnaryOperator fx, DoubleUnaryOperator fy);
 
     /** Branch 0 is inside the region, branch 1 outside. */
     @Override
     public int branchFor(double x, double y) {
         return contains(x, y) ? 0 : 1;
+    }
+
+    /** Inside (branch 0) counts as positive on both of the region's axis columns. */
+    @Override
+    public boolean branchIsPositiveOn(int branch, int axis) {
+        return branch == 0;
     }
 
     /**

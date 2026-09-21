@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import javafx.scene.control.Slider;
 
@@ -13,7 +13,7 @@ import javafx.scene.control.Slider;
  * range" consistent across the QC pane and the gate editors, where increments
  * were previously either a stale {@code range/100} or a fixed {@code 0.01}.
  */
-final class SliderUtils {
+public final class SliderUtils {
 
     private SliderUtils() {}
 
@@ -62,7 +62,7 @@ final class SliderUtils {
      * Set the block increment to a fixed fraction of the current range.
      * Call again after changing {@code min}/{@code max} so the step tracks the new range.
      */
-    static void applyRangeStep(Slider slider) {
+    public static void applyRangeStep(Slider slider) {
         double step = stepFor(slider.getMin(), slider.getMax());
         if (step > 0) {
             slider.setBlockIncrement(step);
@@ -70,7 +70,7 @@ final class SliderUtils {
     }
 
     /** Enable scroll-wheel adjustment: one notch moves the value by one range step. */
-    static void enableScrollControl(Slider slider) {
+    public static void enableScrollControl(Slider slider) {
         slider.setOnScroll(e -> {
             if (slider.isDisabled()) return;
             double delta = e.getDeltaY() != 0 ? e.getDeltaY() : e.getDeltaX();
@@ -83,7 +83,7 @@ final class SliderUtils {
     }
 
     /** Apply both range-proportional stepping and scroll-wheel control to a slider. */
-    static void makeRangeFriendly(Slider slider) {
+    public static void makeRangeFriendly(Slider slider) {
         applyRangeStep(slider);
         enableScrollControl(slider);
     }

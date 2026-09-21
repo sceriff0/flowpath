@@ -150,17 +150,15 @@ public record ValueMode(Kind kind, String normalisation, String label, String to
 
     /**
      * Put {@code gate} into this mode: point every axis at its own sibling column for this
-     * normalisation, and clear the retired standardise-here flag.
+     * normalisation.
      * <p>
-     * <b>One writer.</b> Selecting a mode changes what each axis reads, and the flag that
-     * used to mean "standardise it again on the way past" must come down with it. A caller
-     * that set one without the other would leave the engine standardising a column the
-     * editor is drawing as measured -- the display/classification split this repository
-     * has shipped before. Doing it here means no caller can spell it half-way.
+     * The retired standardise-here flag is not touched. Clearing it without converting the
+     * numbers it describes would leave a threshold in standard deviations compared against
+     * raw intensities; {@link LegacyZScoreMigration} is the one writer that does both.
      * <p>
      * Note this does <em>not</em> convert the threshold. Moving between columns is a
      * change of scale, and only a caller holding the index can re-map it; see
-     * {@code GateEditorPane.onModeSelected}.
+     * {@code AbstractGateTypeEditor.onModeSelected}.
      */
     public void applyTo(GateNode gate) {
         if (gate == null) return;
@@ -170,24 +168,19 @@ public record ValueMode(Kind kind, String normalisation, String label, String to
             axis.apply(new GateAxis.Signal(axis.compartment(),
                     statistic.withNormalisation(normalisation)));
         }
-        gate.setThresholdIsZScore(false);
     }
 
     /**
      * The mode {@code gate} is currently in, as one of {@code modes}.
      * <p>
      * Falls back to raw when the gate's combination is not on offer -- a saved gate pinned
-     * to a column this file does not carry, or one still carrying the retired
-     * standardise-here flag. The caller must write that fallback back with
+     * to a column this file does not carry. The caller must write that fallback back with
      * {@link #applyTo} <em>and convert the threshold with it</em>, or the gate keeps
      * comparing a standardised number against a column of raw intensities.
      */
     public static ValueMode selectedIn(List<ValueMode> modes, GateNode gate) {
         if (modes == null || modes.isEmpty()) return null;
         if (gate == null) return modes.get(0);
-        // A gate still carrying the retired flag is in no offered mode: the number it
-        // compares against is one FlowPath derived, which is what is no longer on the menu.
-        if (gate.isThresholdIsZScore()) return modes.get(0);
 
         String norm = normalisationOf(gate);
         if (norm != null) {

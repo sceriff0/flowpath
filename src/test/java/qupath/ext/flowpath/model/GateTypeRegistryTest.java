@@ -56,7 +56,8 @@ class GateTypeRegistryTest {
                 "A gate type was added under GateNode. Also add: a case in "
                 + "FlowPathSerializer.serializeNode, a branch in "
                 + "FlowPathSerializer.deserializeNode, a display name in "
-                + "FlowPathCell.regionTypeName and in GateEditorPane's label switch, and "
+                + "FlowPathCell.regionTypeName and in GateEditorPane's label switch, an editor in "
+                + "GateTypeEditors.forGate, and "
                 + "a factory in ScatterPlotCanvas.");
 
         assertTrue(Region2DGate.class.isSealed(), "Region2DGate must stay sealed");

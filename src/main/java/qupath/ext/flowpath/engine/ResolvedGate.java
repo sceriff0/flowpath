@@ -28,12 +28,17 @@ import java.util.Map;
  * could be — and repeatedly was — forgotten. Here it is not a step you can skip: the walk
  * has nothing to read from unless the gate was compiled.
  * <p>
- * Gates whose channels are absent from the index compile to {@code usable == false}; the
- * walk skips them exactly as it used to skip a negative marker index.
+ * A gate compiles to {@code usable == false} for either of two reasons: a channel it names
+ * is absent from the index, or the gate itself is not configured with enough channels to
+ * judge anything on — fewer than its arity (a 2D gate needs two; a threshold gate needs
+ * one), including a null or empty channel list. Either way {@link #branchOf} answers
+ * {@link #UNMEASURED} for every cell it is asked about, and the walk treats that exactly
+ * like a NaN axis: the cell is flagged unmeasured, keeps its ancestors' phenotype, and
+ * counts in none of this gate's branches.
  */
 final class ResolvedGate {
 
-    /** The gate itself. Live properties (threshold, enabled, z-score flag) are read from here. */
+    /** The gate itself. Live properties (threshold, enabled) are read from here. */
     final GateNode node;
 
     /** Axis 0 column (the only axis of a threshold gate, X of a 2D gate); null if unusable. */
@@ -42,18 +47,15 @@ final class ResolvedGate {
     /** Axis 1 column (Y of a 2D gate); null for 1D gates and unusable gates. */
     final MeasuredColumn y;
 
-    /** False when a channel is missing from the index — the walk contributes nothing. */
+    /**
+     * False when a channel is missing from the index, or the gate has fewer channels than
+     * its arity requires (including a null/empty channel list) — either way every cell
+     * reads {@link #UNMEASURED}.
+     */
     final boolean usable;
 
     /** True for gates with a Y axis (quadrant and 2D region gates). */
     final boolean twoAxis;
-
-    /**
-     * The gate's z-score flag, snapshotted with the clip bounds. Reading it once per pass
-     * rather than once per cell also means a toggle landing mid-walk cannot split one pass
-     * across two coordinate spaces.
-     */
-    final boolean zScore;
 
     /** Percentile clip bounds per axis, NaN when outlier exclusion is off or unavailable. */
     final double clipLoX;
@@ -76,7 +78,6 @@ final class ResolvedGate {
         this.y = y;
         this.usable = usable;
         this.twoAxis = twoAxis;
-        this.zScore = node.isThresholdIsZScore();
         this.clipLoX = clipLoX;
         this.clipHiX = clipHiX;
         this.clipLoY = clipLoY;
@@ -165,7 +166,7 @@ final class ResolvedGate {
      * measured" and handled both as clipping -- which forces a branch anyway. An unmeasured
      * cell therefore landed in the negative branch and was <em>counted</em> there: a cell
      * with no CD3 stain reported as CD3-negative. The CSV knew better and left
-     * {@code CD3_raw}, {@code CD3_zscore} and {@code CD3_sign} blank on the same row, so
+     * {@code CD3_raw} and {@code CD3_sign} blank on the same row, so
      * one exported line asserted both things at once.
      */
     static final int UNMEASURED = -2;
@@ -181,8 +182,8 @@ final class ResolvedGate {
      * <b>The</b> predicate: which branch does cell {@code cellIdx} fall into?
      * <p>
      * Two steps, and only two. <i>Sample resolution</i> lives here — read the axis columns
-     * this gate compiled to, drop the cell if it is outside the percentile clip, and put
-     * the values in the gate's own coordinate space (raw or z-scored). <i>Geometry</i>
+     * this gate compiled to, and drop the cell if it is unmeasured or outside the
+     * percentile clip; the values are compared as measured. <i>Geometry</i>
      * lives on the gate: {@link GateNode#branchFor}, the same method
      * {@code ScatterPlotCanvas} colours its dots with. Nothing else in the codebase
      * decides which branch a cell lands in.
@@ -237,11 +238,10 @@ final class ResolvedGate {
         // Step 2: the cell has a real value on every axis, so now it can be merely extreme.
         if (honourClip && (clipsX(rawX) || (twoAxis && clipsY(rawY)))) return CLIPPED;
 
-        // Step 3: geometry, in the gate's own coordinate space.
-        double vx = zScore ? x.toZScore(rawX) : rawX;
-        if (!twoAxis) return node.branchFor(vx, 0.0);
-        double vy = zScore ? y.toZScore(rawY) : rawY;
-        return node.branchFor(vx, vy);
+        // Step 3: geometry, on the values as measured. There is no second coordinate space:
+        // FlowPath's computed z-score is retired, and a legacy gate still carrying the flag
+        // is converted by LegacyZScoreMigration before it gets here, not honoured here.
+        return node.branchFor(rawX, rawY);
     }
 
     /** True when {@code raw} falls outside this gate's X clip bounds. */

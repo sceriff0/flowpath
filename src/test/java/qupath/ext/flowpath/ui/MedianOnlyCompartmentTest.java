@@ -64,7 +64,7 @@ class MedianOnlyCompartmentTest {
     private static Fixture editorFor(GateNode gate) {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3"));
@@ -114,7 +114,7 @@ class MedianOnlyCompartmentTest {
     void defaultQuantificationAdvertisesMedianOnly() {
         CellIndex idx = index();
         CompartmentCapability cap =
-                CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
 
         assertTrue(cap.isRich(), "per-compartment keys are present, so this is rich data");
         assertEquals(
@@ -168,7 +168,7 @@ class MedianOnlyCompartmentTest {
     void resolveStatisticNeverReturnsOneTheExportLacks() {
         CellIndex idx = index();
         CompartmentCapability cap =
-                CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
 
         // Asking for Mean on a Median-only export must not hand back Mean.
         assertEquals(Statistic.MEDIAN, cap.resolveStatistic("CD3", Statistic.MEAN));
@@ -211,7 +211,7 @@ class MedianOnlyCompartmentTest {
     void newGateOnLegacyDataIsPinnedToWholeCellMeanUpFront() {
         CellIndex idx = legacyIndex();
         CompartmentCapability cap =
-                CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         assertFalse(cap.isRich(), "bare-marker export carries no compartment keys");
 
         GateNode gate = new GateNode("CD3", 10.0);
@@ -228,7 +228,7 @@ class MedianOnlyCompartmentTest {
     void newGateOnMedianOnlyDataStaysOnMedian() {
         CellIndex idx = index();
         CompartmentCapability cap =
-                CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
 
         GateNode gate = new GateNode("CD3", 10.0);
         GateAxis.pinAll(gate, cap);
@@ -245,13 +245,12 @@ class MedianOnlyCompartmentTest {
     void nuclearGateOnMedianOnlyDataSplitsThePopulation() {
         CellIndex idx = index();
         CompartmentCapability cap =
-                CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
 
         GateNode gate = new GateNode("CD3", 0.0);
         gate.setChannel("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
         GateAxis.pinAll(gate, cap);
-        gate.setThresholdIsZScore(false);
         // Nuclear medians run 500..1500; split them down the middle.
         gate.setThreshold(1000.0);
 

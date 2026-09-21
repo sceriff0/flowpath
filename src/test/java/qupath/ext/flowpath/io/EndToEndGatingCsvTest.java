@@ -100,7 +100,6 @@ class EndToEndGatingCsvTest {
 
         GateNode gate = new GateNode("CD45", 7.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -142,10 +141,8 @@ class EndToEndGatingCsvTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateNode child = new GateNode("CD3", 3.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         root.getPositiveChildren().add(child);
 
         GateTree tree = new GateTree();
@@ -189,7 +186,6 @@ class EndToEndGatingCsvTest {
         gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(5.0);
         gate.setThresholdY(5.0);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -232,7 +228,6 @@ class EndToEndGatingCsvTest {
         PolygonGate gate = new PolygonGate("CD45", "CD3");
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{10, 0}, new double[]{5, 10}));
 
         GateTree tree = new GateTree();
@@ -272,7 +267,6 @@ class EndToEndGatingCsvTest {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -303,7 +297,6 @@ class EndToEndGatingCsvTest {
         EllipseGate gate = new EllipseGate("CD45", "CD3", 5, 5, 3, 3);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -331,7 +324,6 @@ class EndToEndGatingCsvTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -361,12 +353,10 @@ class EndToEndGatingCsvTest {
 
         GateNode gate1 = new GateNode("CD45", 5.0);
         gate1.setStatistic(Statistic.MEAN);
-        gate1.setThresholdIsZScore(false);
         gate1.setEnabled(true);
 
         GateNode gate2 = new GateNode("CD3", 5.0);
         gate2.setStatistic(Statistic.MEAN);
-        gate2.setThresholdIsZScore(false);
         gate2.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -403,7 +393,6 @@ class EndToEndGatingCsvTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -440,13 +429,10 @@ class EndToEndGatingCsvTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateNode level2 = new GateNode("CD3", 3.0);
         level2.setStatistic(Statistic.MEAN);
-        level2.setThresholdIsZScore(false);
         GateNode level3 = new GateNode("CD8", 4.0);
         level3.setStatistic(Statistic.MEAN);
-        level3.setThresholdIsZScore(false);
 
         root.getPositiveChildren().add(level2);
         level2.getPositiveChildren().add(level3);
@@ -501,11 +487,9 @@ class EndToEndGatingCsvTest {
         qgate.setStatisticY(Statistic.MEAN);
         qgate.setThresholdX(5.0);
         qgate.setThresholdY(5.0);
-        qgate.setThresholdIsZScore(false);
 
         GateNode cd8child = new GateNode("CD8", 4.0);
         cd8child.setStatistic(Statistic.MEAN);
-        cd8child.setThresholdIsZScore(false);
         // Add CD8 child to the first branch (Q1 = ++)
         qgate.getBranches().get(0).getChildren().add(cd8child);
 
@@ -559,17 +543,14 @@ class EndToEndGatingCsvTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateNode cd3Gate = new GateNode("CD3", 3.0);
         cd3Gate.setStatistic(Statistic.MEAN);
-        cd3Gate.setThresholdIsZScore(false);
         root.getPositiveChildren().add(cd3Gate);
 
         RectangleGate rectGate = new RectangleGate("CD8", "CD4", 4, 10, 4, 10);
         rectGate.setStatisticX(Statistic.MEAN);
         rectGate.setStatisticY(Statistic.MEAN);
-        rectGate.setThresholdIsZScore(false);  // region is in raw marker units
         cd3Gate.getPositiveChildren().add(rectGate);
 
         GateTree tree = new GateTree();
@@ -606,10 +587,8 @@ class EndToEndGatingCsvTest {
 
         GateNode root1 = new GateNode("CD45", 5.0);
         root1.setStatistic(Statistic.MEAN);
-        root1.setThresholdIsZScore(false);
         GateNode root2 = new GateNode("PANCK", 5.0);
         root2.setStatistic(Statistic.MEAN);
-        root2.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);

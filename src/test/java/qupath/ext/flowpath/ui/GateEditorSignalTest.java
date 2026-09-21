@@ -1,5 +1,7 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.ui.editor.AxisMath;
+
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ComboBox;
@@ -11,6 +13,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
+import qupath.ext.flowpath.model.LegacyZScoreMigration;
+import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Statistic;
@@ -78,7 +82,7 @@ class GateEditorSignalTest {
     private static Fixture editorFor(GateNode gate) {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "CD8"));
@@ -94,6 +98,36 @@ class GateEditorSignalTest {
     private static void flushFx() {
         FxTestSupport.onFxRun(() -> { });
         FxTestSupport.onFxRun(() -> { });
+    }
+
+    /**
+     * Runs {@code action}, capturing (instead of printing) any exception the FX Application
+     * Thread's default handler would otherwise report during it -- see the call site for why
+     * one is expected here. Asserts exactly one arrived and that it is the specific known
+     * {@code ParentTraversalEngine} NPE, not some other failure this would otherwise hide.
+     */
+    private static void assertNpeSuppressed(Runnable action) {
+        Thread fxThread = FxTestSupport.onFx(Thread::currentThread);
+        Thread.UncaughtExceptionHandler previous = fxThread.getUncaughtExceptionHandler();
+        List<Throwable> caught = new ArrayList<>();
+        fxThread.setUncaughtExceptionHandler((t, ex) -> caught.add(ex));
+        try {
+            action.run();
+        } finally {
+            fxThread.setUncaughtExceptionHandler(previous);
+        }
+        // Selecting a RadioButton fires the ToggleGroup's traversal-engine follow-up once for
+        // the toggle losing selection and once for the one gaining it, so this is 2 on the
+        // JavaFX version this suite currently builds against, not 1 -- asserted at-least-one
+        // and all-matching, so the count is not load-bearing, only the exception's identity.
+        assertFalse(caught.isEmpty(), "expected the known off-Scene ToggleButton NPE to fire "
+                + "at least once (it may have been fixed in this JavaFX version -- remove "
+                + "this suppression if so)");
+        for (Throwable ex : caught) {
+            assertTrue(ex instanceof NullPointerException, "unexpected exception type: " + ex);
+            assertTrue(ex.getMessage() != null && ex.getMessage().contains("ParentTraversalEngine"),
+                    "unexpected exception, not the known ToggleButton/traversal-engine NPE: " + ex);
+        }
     }
 
     // ---- scene-graph lookup (no production test seams) -----------------------
@@ -299,7 +333,6 @@ class GateEditorSignalTest {
     void regionGateEditorOffersACompartmentSelectorPerAxis() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 100, 0, 100);
-        rg.setThresholdIsZScore(false);
         Fixture f = editorFor(rg);
 
         // One per axis, in X-then-Y order.
@@ -320,7 +353,6 @@ class GateEditorSignalTest {
     void rawModeRegionShapeIsRemappedOnCompartmentChange() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 0, 0, 0);
-        rg.setThresholdIsZScore(false);
         rg.setStatisticX(Statistic.MEAN);             // percentiles below are bare-column values
         rg.setStatisticY(Statistic.MEAN);
         Fixture f = editorFor(rg);
@@ -341,7 +373,6 @@ class GateEditorSignalTest {
     void clearedRegionShapeIsNotResurrectedByACompartmentChange() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         RectangleGate rg = new RectangleGate("CD3", "CD8", 0, 0, 0, 0);
-        rg.setThresholdIsZScore(false);
         Fixture f = editorFor(rg);
 
         select(compartmentCombo(f.pane(), 0), Compartment.NUCLEAR);
@@ -366,12 +397,11 @@ class GateEditorSignalTest {
         try {
             Locale.setDefault(Locale.ITALY);
             GateNode gate = new GateNode("CD3");
-            gate.setThresholdIsZScore(false);
             gate.setThreshold(0.3303);
             Fixture f = editorFor(gate);
 
             String shown = thresholdField(f.pane()).getText();
-            assertEquals(0.3303, GateEditorPane.parseThreshold(shown), 1e-9,
+            assertEquals(0.3303, AxisMath.parseThreshold(shown), 1e-9,
                     "what the field renders must be what the field can parse back");
         } finally {
             Locale.setDefault(original);
@@ -381,10 +411,10 @@ class GateEditorSignalTest {
     @Test
     void thresholdFieldAcceptsCommaTypedByUser() {
         // Pure parsing, no toolkit interaction beyond class load.
-        assertEquals(1.5, GateEditorPane.parseThreshold("1,5"), 1e-9);
-        assertEquals(1.5, GateEditorPane.parseThreshold(" 1.5 "), 1e-9);
-        assertEquals(-2.25, GateEditorPane.parseThreshold("-2,25"), 1e-9);
-        assertThrows(NumberFormatException.class, () -> GateEditorPane.parseThreshold("abc"));
+        assertEquals(1.5, AxisMath.parseThreshold("1,5"), 1e-9);
+        assertEquals(1.5, AxisMath.parseThreshold(" 1.5 "), 1e-9);
+        assertEquals(-2.25, AxisMath.parseThreshold("-2,25"), 1e-9);
+        assertThrows(NumberFormatException.class, () -> AxisMath.parseThreshold("abc"));
     }
 
     // ---- compartment change keeps the gate meaningful in raw mode -----------
@@ -393,7 +423,6 @@ class GateEditorSignalTest {
     void rawModeCompartmentChangeRemapsThresholdByPercentile() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
         gate.setStatistic(Statistic.MEAN);            // raw threshold is a bare-column value
         Fixture f = editorFor(gate);
         double raw = f.index().column("CD3", null, null, f.stats()).percentile(70.0);
@@ -427,7 +456,7 @@ class GateEditorSignalTest {
                 .area(100.0)
                 .build();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()), 100);
+        CompartmentCapability cap = CompartmentCapability.scan(Arrays.asList(idx.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "FLAT"));
@@ -462,8 +491,23 @@ class GateEditorSignalTest {
                 "the label must name who computed the number");
         assertFalse(mirage.isDisable(), "the file carries CD3: Cell: Median Z");
 
-        FxTestSupport.onFxRun(() -> mirage.setSelected(true));
-        flushFx();
+        // Selecting a RadioButton in a ToggleGroup, on a pane that was never attached to a
+        // shown Stage, trips a JavaFX-internal NPE: ToggleButton schedules a follow-up
+        // Platform.runLater to override focus-traversability on its parent's
+        // ParentTraversalEngine, and that engine is only ever created once a Scene has a
+        // Window (a real display, which the rest of this toolkit-free suite deliberately
+        // avoids -- see the flakiness a shown Stage causes elsewhere, e.g. AnalysisWindowFxTest).
+        // The selection itself still lands correctly (asserted below); only that unrelated,
+        // internally-scheduled follow-up throws, and it does so on the FX Application Thread,
+        // independent of this test's own call frame, which is why a plain try/catch here
+        // cannot see it. Genuinely outside FlowPath's control -- verified reproducing on the
+        // base commit -- so it is asserted and suppressed instead, to keep the suite's output
+        // pristine without hiding a real regression: if a future JavaFX drops this bug, the
+        // assertion below fails loudly and this workaround should come out.
+        assertNpeSuppressed(() -> {
+            FxTestSupport.onFxRun(() -> mirage.setSelected(true));
+            flushFx();
+        });
 
         assertEquals(Statistic.of("Median Z"), gate.getStatistic(),
                 "the gate must now read MIRAGE's own standardised column");
@@ -521,9 +565,13 @@ class GateEditorSignalTest {
      * around 1 — compared against a column whose values run to hundreds, so every cell
      * reads negative: no error, and a gate tree that still looks right. The threshold must
      * come back to the column's own units, landing on the same cells it did before.
+     * <p>
+     * The conversion is {@link LegacyZScoreMigration}'s, run when the tree meets the index —
+     * not the editor's, which only reached the gates a user happened to open. Opening the
+     * migrated gate must then leave its threshold exactly where the migration put it.
      */
     @Test
-    void aGateSavedInTheRetiredZScoreModeIsConvertedNotJustCleared() {
+    void aGateSavedInTheRetiredZScoreModeIsConvertedBeforeTheEditorSeesIt() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         GateNode gate = new GateNode("CD3");
         gate.setStatistic(Statistic.MEDIAN);
@@ -536,8 +584,14 @@ class GateEditorSignalTest {
         double rawAtP60 = col.percentile(60.0);
         double savedZ = col.toZScore(rawAtP60);
         gate.setThreshold(savedZ);
+        GateTree tree = new GateTree();
+        tree.addRoot(gate);
 
-        Fixture f = editorForZScore(gate);
+        LegacyZScoreMigration.Result result =
+                LegacyZScoreMigration.migrate(tree, probe.index(), probe.stats());
+        assertEquals(1, result.converted());
+
+        editorForZScore(gate);
         flushFx();
 
         assertFalse(gate.isThresholdIsZScore(), "the retired flag must be cleared");

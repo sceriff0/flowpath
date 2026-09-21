@@ -1,0 +1,164 @@
+/*
+ * FlowPath gating UI stylesheet.
+ *
+ * QuPath themes build on Modena, so every colour here is a looked-up token
+ * (-fx-text-base-color, -fx-text-background-color, -fx-background, derive(...))
+ * rather than a fixed hex literal. That is the whole point of this file: a
+ * hard-coded "-fx-text-fill: white" reads fine on QuPath's dark theme and
+ * disappears on the light one (or vice-versa for black) because the literal
+ * cannot see what background it is actually sitting on. A token can.
+ *
+ * Semantic classes, applied from ui/*.java instead of a per-node setStyle(...):
+ *   fp-panel            - a panel background that follows the active theme's
+ *                          base colour, replacing a fixed dark/light literal.
+ *   fp-primary-text      - ordinary label/checkbox/radio text at full contrast.
+ *   fp-section-header    - a bold, slightly de-emphasised heading inside a panel
+ *                          (also used for the gate-type indicator).
+ *   fp-muted             - secondary/de-emphasised text: counts, status lines,
+ *                          hover read-outs. Held to a 3:1 floor rather than
+ *                          4.5:1 because it is explicitly non-essential text
+ *                          that always has a fully-contrasted label next to it
+ *                          (the count beside a name, the hover value beside the
+ *                          histogram) -- see task-8-report.md.
+ *   fp-hint              - instructional/placeholder text (empty-state
+ *                          messages, "percentiles are computed from..."),
+ *                          italic, same 3:1 floor as fp-muted for the same
+ *                          reason: it is supplementary, not the only text on
+ *                          screen.
+ *   fp-mono-field        - an editable numeric field: monospace, full-contrast
+ *                          text on the theme's own control-inner background.
+ *
+ * fp-bar-*, fp-badge-*, fp-pill-text are FlowPathCell's own fixed-colour chips
+ * (gate bars, compartment badges, branch pills). Their background is a
+ * deliberately fixed swatch, not the surrounding theme, so white text on them
+ * is a permanent, self-contained contrast pair -- the same reasoning that
+ * keeps ScatterPlotCanvas/HistogramCanvas out of scope for this file. They are
+ * moved into CSS classes anyway so the colour lives in one place instead of a
+ * dozen setStyle(...) calls, and stay literal hex on purpose.
+ */
+
+.fp-panel {
+    -fx-background-color: -fx-background;
+}
+
+.fp-primary-text {
+    -fx-text-fill: -fx-text-background-color;
+}
+
+.fp-section-header {
+    -fx-text-fill: -fx-text-background-color;
+    -fx-font-weight: bold;
+}
+
+.fp-muted {
+    /* derive() darkens/lightens -fx-text-background-color toward the opposite
+       end of the palette depending on whether the active theme is light or
+       dark, which is what keeps this at >= 3:1 in both. */
+    -fx-text-fill: derive(-fx-text-background-color, 40%);
+}
+
+.fp-hint {
+    -fx-text-fill: derive(-fx-text-background-color, 40%);
+    -fx-font-style: italic;
+}
+
+.fp-mono-field {
+    /* -fx-text-inner-color, not -fx-text-background-color: Modena's own modena.css names
+       it explicitly as "text on top of -fx-control-inner-color" (read: the field's own
+       background), and the two are not on the same lightness axis -- on the dark theme
+       -fx-control-inner-background is deliberately *lighter* than -fx-background (so a
+       field reads as a field), while -fx-text-background-color stays tuned for the darker
+       -fx-background. White-on-white-ish was exactly the 3.16:1 failure this class existed
+       to prevent. */
+    -fx-text-fill: -fx-text-inner-color;
+    -fx-background-color: -fx-control-inner-background;
+    -fx-font-family: monospace;
+}
+
+.fp-cta-button {
+    /* The one deliberately branded control on this toolbar (see
+       FlowPathPane#createUmapControl): a fixed accent, not theme-derived,
+       because it is meant to stand out from the panel around it the same way
+       in both themes. */
+    -fx-base: #2563eb;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+
+/* ---- FlowPathCell: fixed-colour chips (see file header note) ---- */
+
+.fp-bar {
+    -fx-background-color: #3a4a5a;
+    -fx-background-radius: 6;
+}
+
+.fp-bar-disabled {
+    -fx-background-color: #2a2a2a;
+    -fx-background-radius: 6;
+}
+
+.fp-bar-text {
+    -fx-text-fill: white;
+}
+
+.fp-bar-muted {
+    -fx-text-fill: #a0b0c0;
+}
+
+.fp-badge-nuclear {
+    -fx-background-color: #3a6ea5;
+    -fx-background-radius: 4;
+    -fx-text-fill: white;
+}
+
+.fp-badge-cytoplasmic {
+    -fx-background-color: #4a9a5a;
+    -fx-background-radius: 4;
+    -fx-text-fill: white;
+}
+
+.fp-badge-wholecell {
+    -fx-background-color: #777777;
+    -fx-background-radius: 4;
+    -fx-text-fill: white;
+}
+
+.fp-badge-other {
+    -fx-background-color: #8a6ea5;
+    -fx-background-radius: 4;
+    -fx-text-fill: white;
+}
+
+.fp-pill-text {
+    -fx-text-fill: white;
+}
+
+/* ---- FlowPathCell: the drag-and-drop hover cue ---- */
+
+/*
+ * These two are theme-derived rather than fixed swatches (unlike the chips above):
+ * they outline the tree ROW, which is painted by the active theme, not by a chip of
+ * FlowPath's own. -fx-accent is what Modena already uses to say "this is the thing
+ * you are acting on", so a drop target reads the same way a selection does in either
+ * theme.
+ */
+.fp-drop-target {
+    -fx-border-color: -fx-accent;
+    -fx-border-width: 2;
+    -fx-border-radius: 6;
+    -fx-border-insets: 1;
+}
+
+/*
+ * A row the drag cannot land on. Dashed and de-emphasised so it is visibly a refusal
+ * rather than a second kind of target; the platform's own no-drop cursor says the same
+ * thing, because the handler never accepts the transfer mode for such a row.
+ */
+.fp-drop-invalid {
+    -fx-border-color: derive(-fx-text-background-color, 40%);
+    -fx-border-width: 1;
+    -fx-border-style: dashed;
+    -fx-border-radius: 6;
+    -fx-border-insets: 1;
+    -fx-opacity: 0.55;
+}

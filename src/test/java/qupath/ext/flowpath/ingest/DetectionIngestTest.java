@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
+import qupath.ext.flowpath.model.CoordinateSpace;
+import qupath.ext.flowpath.model.MeasurementKeySample;
 import qupath.ext.flowpath.model.ScaleVerdict;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
@@ -180,10 +182,7 @@ class DetectionIngestTest {
     void aMarkerFirstAppearingAfterCellTwentyStillResolves() {
         // The 2.0.1 drift: CellIndex sampled 20 keys while the capability scan sampled
         // 100, so a marker whose keys first appeared at cell 50 was OFFERED in the gate
-        // editor and resolved to nothing. The two depths are now the same constant.
-        assertEquals(CompartmentCapability.DEFAULT_SAMPLE_SIZE, CellIndex.KEY_SAMPLE_SIZE,
-                "the resolution sample and the capability scan must share one depth");
-
+        // editor and resolved to nothing. There is now one sample, MeasurementKeySample.
         var cells = new ArrayList<>(mirageExport(50, "CD3"));
         cells.addAll(mirageExport(50, "CD3", "LateMarker"));
 
@@ -198,20 +197,49 @@ class DetectionIngestTest {
     }
 
     @Test
-    void aMarkerPresentOnlyBeyondTheKeySampleIsReportedAsUnresolvable() {
-        // Past the sample the resolution has to give up — that is the deliberate v2.0.1
-        // tradeoff. What is new is that giving up is now stated instead of producing a
-        // silently empty histogram.
-        var cells = new ArrayList<>(mirageExport(CellIndex.KEY_SAMPLE_SIZE + 10, "CD3"));
-        cells.addAll(mirageExport(5, "CD3", "VeryLateMarker"));
+    void aKeyOnlyOnCell500Of600IsDiscoveredAndResolved() {
+        // Past the old 100-cell head: a merged export whose second field of view carries
+        // a marker the first did not.
+        var cells = mirageExportCells(600, "CD3")
+                .measurement("Late", i -> 7.0).absentOn(i -> i != 500)
+                .detections();
 
-        IngestResult r = DetectionIngest.read(cells,
-                IngestOptions.none().withChannelNames(List.of("CD3", "VeryLateMarker")));
+        IngestResult r = DetectionIngest.read(cells, IngestOptions.none());
+        assertTrue(r.markerNames().contains("Late"), "discovered: " + r.markerNames());
+        assertFalse(r.report().unresolvedMarkers().contains("Late"), "and resolved by the index");
+        assertEquals(7.0, r.index().getMarkerValues(r.index().getMarkerIndex("Late"))[500], 1e-9);
+        assertEquals(600, r.report().sampledCells());
+    }
 
-        assertEquals(List.of("CD3"), r.markerNames(),
-                "beyond the sample the channel cannot be validated, so it is dropped");
-        assertEquals(List.of("VeryLateMarker"), r.report().droppedChannels());
-        assertFalse(r.report().isClean());
+    @Test
+    void thePanelSampleAndTheIndexSampleAreTheSameSample() {
+        // The adapter's discovery and CellIndex.build's key resolution used to be two loops
+        // that merely happened to share a depth. On a collection large enough to be
+        // strided, a key on one strided cell must be both offered (the adapter's sample)
+        // and resolved (the index's sample) -- and one off the stride must be neither.
+        int n = 3000;   // stride ceil(2900 / 900) = 4
+        var cells = mirageExportCells(n, "CD3")
+                .measurement("OnStride", i -> 3.0).absentOn(i -> i != 2900)
+                .measurement("OffStride", i -> 3.0).absentOn(i -> i != 2901)
+                .detections();
+
+        IngestResult offered = DetectionIngest.read(cells, IngestOptions.none());
+        assertTrue(offered.markerNames().contains("OnStride"), offered.markerNames().toString());
+        assertFalse(offered.markerNames().contains("OffStride"), offered.markerNames().toString());
+
+        IngestResult asked = DetectionIngest.read(cells,
+                IngestOptions.none().withChannelNames(List.of("CD3", "OnStride", "OffStride")));
+        assertEquals(List.of("OffStride"), asked.report().droppedChannels());
+        assertEquals(List.of(), asked.report().unresolvedMarkers(),
+                "every marker the adapter offered, the index resolved from the same keys");
+        assertEquals(MeasurementKeySample.size(n), asked.report().sampledCells());
+        assertEquals(MeasurementKeySample.MAX_CELLS, asked.report().sampleSize());
+        // No longer asserts MeasurementKeySample.keys(cells) == .keys(asked.index().getObjects()):
+        // both call sites now share the one MeasurementKeySample utility (that is the whole
+        // point of it existing), so comparing its output to itself on the same underlying
+        // detections in the same order is tautological -- it cannot fail short of the JVM
+        // being broken. The assertions above (droppedChannels/unresolvedMarkers/sampledCells)
+        // are what actually pins the adapter and the index sampling the same positions.
     }
 
     @Test
@@ -439,5 +467,122 @@ class DetectionIngestTest {
         assertTrue(DetectionIngest.isMorphologyName("Centroid X µm"));
         assertFalse(DetectionIngest.isMorphologyName("YAP1"),
                 "prefix-matching x/y must not swallow real markers");
+    }
+    // ---- ROI-centroid fallback ----------------------------------------------------
+
+    /** A MIRAGE export whose centroid pair is absent on the first {@code missing} cells. */
+    private static IngestReport reportWithCentroidsMissingOn(int n, int missing) {
+        var cells = Cells.of(n).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .centroidsMicronsFromRoi(1.0).absentOn(i -> i < missing)
+                .detections();
+        return read(cells, "CD3").report();
+    }
+
+    @Test
+    void noCentroidFallbackSaysNothing() {
+        IngestReport report = reportWithCentroidsMissingOn(10, 0);
+        assertEquals(0, report.roiFallbackCells());
+        assertTrue(report.centroidColumnsPresent());
+        assertTrue(report.isClean(), report.findings().toString());
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")), report.notes().toString());
+    }
+
+    @Test
+    void aMinorityOfCentroidFallbacksIsANoteConvertedToMicrons() {
+        for (int missing : new int[]{1, 5}) {
+            IngestReport report = reportWithCentroidsMissingOn(10, missing);
+            assertEquals(missing, report.roiFallbackCells());
+            assertEquals(CoordinateSpace.MICRONS, report.positionSpace());
+            assertTrue(report.isClean(), "at most half is not a finding: " + report.findings());
+            String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                    .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+            assertTrue(line.contains(missing + " of 10"), line);
+            assertTrue(line.contains("converted to µm"), "a micrometre index converts: " + line);
+            assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
+        }
+    }
+
+    @Test
+    void aMajorityOfCentroidFallbacksWithTheColumnsPresentIsAFinding() {
+        IngestReport report = reportWithCentroidsMissingOn(10, 6);
+        assertEquals(6, report.roiFallbackCells());
+        assertTrue(report.centroidColumnsPresent());
+        assertFalse(report.isClean());
+        assertTrue(report.findings().stream().anyMatch(s -> s.contains("6 of 10")
+                && s.contains("ROI centroid")), report.findings().toString());
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
+                "said once, as a finding, not also as a note");
+        assertTrue(report.describe().contains("ROI centroid"), "reaches the tooltip text");
+    }
+
+    @Test
+    void anExportWithNoCentroidColumnsAtAllIsANoteInPixels() {
+        // Plain QuPath detections: no Centroid X/Y measurement anywhere, so every cell is
+        // positioned from its ROI. That is how such data is meant to be read, not a defect,
+        // and it must not put a warning in the status bar on every load.
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertEquals(10, report.roiFallbackCells());
+        assertFalse(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertTrue(report.isClean(), report.findings().toString());
+        String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+        assertTrue(line.contains("10 of 10"), line);
+        assertTrue(line.contains("pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
+    }
+
+    @Test
+    void aMajorityOfCentroidFallbacksInAPixelCentroidExportIsAFindingInPixels() {
+        // The pixel-space sibling of aMajorityOfCentroidFallbacksWithTheColumnsPresentIsAFinding
+        // (which is µm-based, via MIRAGE morphology): centroid columns present, in pixels, and
+        // a majority of cells still fell back to their ROI centroid -- a finding, worded for
+        // the space the export's own columns are actually in, not "converted to µm".
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .measurement("Centroid X px", i -> i)
+                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 6)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertTrue(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertEquals(6, report.roiFallbackCells());
+        assertFalse(report.isClean(), report.findings().toString());
+        String line = report.findings().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.findings().toString()));
+        assertTrue(line.contains("6 of 10"), line);
+        assertTrue(line.contains("in pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
+        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
+                "said once, as a finding, not also as a note");
+    }
+
+    @Test
+    void aFallbackInAPixelCentroidExportStaysInPixels() {
+        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
+                .mirageMedianMarker("CD3", i -> 10.0 + i)
+                .mirageMorphology(i -> 42.0, i -> 50.0)
+                .measurement("Centroid X px", i -> i)
+                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 3)
+                .detections();
+        IngestReport report = read(cells, "CD3").report();
+
+        assertTrue(report.centroidColumnsPresent());
+        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
+        assertEquals(3, report.roiFallbackCells());
+        assertTrue(report.isClean(), report.findings().toString());
+        String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
+                .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
+        assertTrue(line.contains("in pixels"), line);
+        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
     }
 }

@@ -145,7 +145,7 @@ class MirageInputFidelityTest {
     @Test
     void capabilityScanReportsExactlyWhatMirageWrote() {
         var cap = CompartmentCapability.scan(
-                mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections(), 10);
+                mirageCells(1).mirageMarker("CD3", 50.0).mirageMorphology(100.0).detections());
 
         assertTrue(cap.isRich(), "a MIRAGE compartment export is a rich GeoJSON");
         assertEquals(java.util.Set.copyOf(Compartment.known()), cap.compartmentsFor("CD3"));
@@ -157,7 +157,7 @@ class MirageInputFidelityTest {
     @Test
     void legacyWholeCellOnlyExportIsNotMistakenForRich() {
         var cap = CompartmentCapability.scan(
-                Cells.of(1).marker("CD3", 50.0).morphology("Area µm²", 100.0).detections(), 10);
+                Cells.of(1).marker("CD3", 50.0).morphology("Area µm²", 100.0).detections());
         assertFalse(cap.isRich(), "no compartment keys -> legacy, selectors stay pinned");
         assertTrue(cap.compartmentsFor("CD3").isEmpty());
     }
@@ -190,7 +190,7 @@ class MirageInputFidelityTest {
                 .morphology("Area µm²", 100.0);
 
         // Discovery advertises exactly Median for the Cell compartment (no Mean/Sum columns).
-        var cap = CompartmentCapability.scan(cells.detections(), 10);
+        var cap = CompartmentCapability.scan(cells.detections());
         assertTrue(cap.isRich(), "a per-compartment Median key makes this a rich export");
         assertEquals(java.util.Set.of(Statistic.MEDIAN), cap.statisticsFor("CD3"),
                 "a default (non-expanded) run exposes only Median");
@@ -239,7 +239,6 @@ class MirageInputFidelityTest {
         GateNode gate = new GateNode("CD3");
         gate.setCompartment(Compartment.NUCLEAR);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setThreshold(50.0);
 
         GateTree tree = new GateTree();
@@ -272,9 +271,8 @@ class MirageInputFidelityTest {
                     "row " + i + ": phenotype and sign must never disagree");
         }
 
-        // DAPI is constant, ungated: raw present, z-score blank (std 0), sign blank.
+        // DAPI is constant, ungated: raw present, sign blank.
         assertEquals(500.0, csv.num(0, "DAPI_raw"), 1e-4);
-        assertEquals("", csv.val(0, "DAPI_zscore"), "zero-variance column has no z-score");
         assertEquals("", csv.val(0, "DAPI_sign"), "an ungated marker has no sign");
     }
 
@@ -294,7 +292,6 @@ class MirageInputFidelityTest {
             MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(2));
 
             GateNode gate = new GateNode("CD3", 3.0);
-            gate.setThresholdIsZScore(false);
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
             tree.addRoot(gate);
@@ -328,7 +325,6 @@ class MirageInputFidelityTest {
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(1));
 
         GateNode gate = new GateNode(marker, 5.0);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);

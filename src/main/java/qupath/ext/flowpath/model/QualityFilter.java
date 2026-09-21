@@ -33,9 +33,34 @@ public class QualityFilter {
         /** Accepts everything. */
         public static final Range OPEN = new Range(Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
 
-        /** True when {@code v} is inside, or is NaN — see the class note on NaN. */
+        /**
+         * True when {@code v} is inside, or is NaN — see the class note on NaN.
+         * <p>
+         * Compared at {@code float} precision, not {@code double}. QuPath backs a detection's
+         * measurement list with {@code float} storage, and {@code CellIndex} widens each value
+         * to {@code double} to compute with, which cannot recover precision the value never
+         * had. A bound typed as an exact-looking number like {@code 0.7} is a {@code double}
+         * literal that rounds to a different bit pattern than the {@code float} {@code 0.7f} a
+         * stored measurement of "0.7" actually widens to — so comparing at {@code double}
+         * precision could reject a value one ulp short of a bound the user meant it to meet
+         * exactly, or accept one one ulp past it, depending on which way the two roundings
+         * fell. Casting both sides to {@code float} compares them at the precision the
+         * underlying data actually carries, which loses at most the last bit of a bound typed
+         * with more precision than a {@code float} measurement could ever match anyway.
+         * <p>
+         * "Lossless for {@code v}" holds for every field sourced directly from a QuPath
+         * measurement — which is every field this class filters except one. {@code
+         * total_intensity} ({@link CellIndex}) is not a stored measurement but a {@code
+         * double} accumulated by summing several float-widened marker values; that sum
+         * carries real fractional bits at {@code double} precision no single {@code float}
+         * ever held, so casting <em>it</em> to {@code float} can genuinely discard precision,
+         * not merely bits {@code double} widening manufactured. It is compared the same way
+         * as every other field regardless, for one uniform rule rather than a per-field
+         * special case, and the loss is bounded to the last few bits of a running sum over
+         * a marker panel — not a concern at the range widths quality control is set at.
+         */
         public boolean accepts(double v) {
-            return Double.isNaN(v) || (v >= min && v <= max);
+            return Double.isNaN(v) || ((float) v >= (float) min && (float) v <= (float) max);
         }
 
         /** True when this range excludes nothing and so need not be stored or shown as set. */
@@ -98,37 +123,14 @@ public class QualityFilter {
         return true;
     }
 
-    /**
-     * The legacy positional form, kept for the two call sites that already hold these five
-     * numbers and for the tests that pin them.
-     *
-     * @deprecated prefer {@link #passes(CellIndex, int)}, which consults every field the
-     *             export carries rather than the five FlowPath used to know about.
-     */
-    @Deprecated
-    public boolean passes(double area, double eccentricity, double solidity,
-                          double totalIntensity, double perimeter) {
-        return range(AREA).accepts(area)
-                && range(ECCENTRICITY).accepts(eccentricity)
-                && range(SOLIDITY).accepts(solidity)
-                && range(TOTAL_INTENSITY).accepts(totalIntensity)
-                && range(PERIMETER).accepts(perimeter);
-    }
-
-    // ---- legacy named accessors -------------------------------------------------
+    // ---- legacy named setters ---------------------------------------------------
     //
-    // The serializer and the older tests address these five by name. They are thin views
-    // onto the map, so there is one representation rather than two that can disagree.
-
-    private double min(String slug, double fallback) {
-        double v = range(slug).min();
-        return v <= Double.NEGATIVE_INFINITY ? fallback : v;
-    }
-
-    private double max(String slug, double fallback) {
-        double v = range(slug).max();
-        return v >= Double.POSITIVE_INFINITY ? fallback : v;
-    }
+    // FlowPathSerializer.deserializeQualityFilter addresses these five by name to load
+    // v1..v3 JSON, which is the only remaining production reason they exist. The getters
+    // that used to sit beside them were removed: nothing in src/main called them, and their
+    // per-field fallback (0 for an unset min, 1.0 for an unset max solidity, and so on) was
+    // a translation only the getter performed -- range(slug) is the one representation now,
+    // and an unset bound reads as the open range it is, not a field-specific guessed number.
 
     private void withMin(String slug, double v) {
         setRange(slug, new Range(v, range(slug).max()));
@@ -138,29 +140,19 @@ public class QualityFilter {
         setRange(slug, new Range(range(slug).min(), v));
     }
 
-    public double getMinArea() { return min(AREA, 0); }
     public void setMinArea(double v) { withMin(AREA, v); }
-    public double getMaxArea() { return max(AREA, Double.MAX_VALUE); }
     public void setMaxArea(double v) { withMax(AREA, v); }
 
-    public double getMinEccentricity() { return min(ECCENTRICITY, 0.0); }
     public void setMinEccentricity(double v) { withMin(ECCENTRICITY, v); }
-    public double getMaxEccentricity() { return max(ECCENTRICITY, 1.0); }
     public void setMaxEccentricity(double v) { withMax(ECCENTRICITY, v); }
 
-    public double getMinSolidity() { return min(SOLIDITY, 0.0); }
     public void setMinSolidity(double v) { withMin(SOLIDITY, v); }
-    public double getMaxSolidity() { return max(SOLIDITY, 1.0); }
     public void setMaxSolidity(double v) { withMax(SOLIDITY, v); }
 
-    public double getMinPerimeter() { return min(PERIMETER, 0); }
     public void setMinPerimeter(double v) { withMin(PERIMETER, v); }
-    public double getMaxPerimeter() { return max(PERIMETER, Double.MAX_VALUE); }
     public void setMaxPerimeter(double v) { withMax(PERIMETER, v); }
 
-    public double getMinTotalIntensity() { return min(TOTAL_INTENSITY, 0); }
     public void setMinTotalIntensity(double v) { withMin(TOTAL_INTENSITY, v); }
-    public double getMaxTotalIntensity() { return max(TOTAL_INTENSITY, Double.MAX_VALUE); }
     public void setMaxTotalIntensity(double v) { withMax(TOTAL_INTENSITY, v); }
 
     /** A deep copy, carrying every range including those for fields FlowPath does not name. */

@@ -354,7 +354,7 @@ public class FlowPathSerializer {
             obj.addProperty("channelY", qg.getChannelY());
             obj.addProperty("thresholdX", qg.getThresholdX());
             obj.addProperty("thresholdY", qg.getThresholdY());
-            obj.addProperty("thresholdIsZScore", qg.isThresholdIsZScore());
+            writeLegacyZScoreFlag(obj, qg);
             obj.addProperty("compartmentX", qg.getCompartmentX().name());
             obj.addProperty("compartmentY", qg.getCompartmentY().name());
             obj.addProperty("statisticX", qg.getStatisticX().token());
@@ -378,7 +378,7 @@ public class FlowPathSerializer {
             // user's work was already on disk. See the refusal below.
             obj.addProperty("channel", node.getChannel());
             obj.addProperty("threshold", node.getThreshold());
-            obj.addProperty("thresholdIsZScore", node.isThresholdIsZScore());
+            writeLegacyZScoreFlag(obj, node);
             obj.addProperty("compartment", node.getCompartment().name());
             obj.addProperty("statistic", node.getStatistic().token());
             obj.addProperty("positiveName", node.getPositiveName());
@@ -399,17 +399,31 @@ public class FlowPathSerializer {
                     + node.getClass().getName() + "). Add one to "
                     + "FlowPathSerializer.serializeNode, a matching branch to "
                     + "deserializeNode, and a display name to FlowPathCell.regionTypeName "
-                    + "and GateEditorPane's label switch.");
+                    + "and GateEditorPane's label switch (the editor itself is chosen in GateTypeEditors.forGate).");
         }
 
         return obj;
+    }
+
+    /**
+     * Write {@code "thresholdIsZScore": true} for a gate still holding numbers in the retired
+     * computed z-space, and nothing otherwise.
+     * <p>
+     * New gates never carry the flag, so a raw gate's file omits it. But a legacy tree can be
+     * saved before it has met an index -- saving needs no image open -- and a gate whose
+     * channel the current image lacks keeps the flag through migration. Dropping the flag on
+     * either would write thresholds like 1.5 into a file that reloads as raw, where no
+     * migration ever fires again.
+     */
+    private static void writeLegacyZScoreFlag(JsonObject obj, GateNode gate) {
+        if (gate.isThresholdIsZScore()) obj.addProperty("thresholdIsZScore", true);
     }
 
     /** Write the axis block shared by every 2D region gate (polygon / rectangle / ellipse). */
     private static void serializeRegionAxes(JsonObject obj, Region2DGate gate) {
         obj.addProperty("channelX", gate.getChannelX());
         obj.addProperty("channelY", gate.getChannelY());
-        obj.addProperty("thresholdIsZScore", gate.isThresholdIsZScore());
+        writeLegacyZScoreFlag(obj, gate);
         obj.addProperty("compartmentX", gate.getCompartmentX().name());
         obj.addProperty("compartmentY", gate.getCompartmentY().name());
         obj.addProperty("statisticX", gate.getStatisticX().token());
@@ -541,6 +555,9 @@ public class FlowPathSerializer {
         node.setChannel(optString(obj, "channel"));
         if (obj.has("threshold"))
             node.setThreshold(obj.get("threshold").getAsDouble());
+        // A file saved before the computed z-score was retired holds this threshold in
+        // standard deviations, and LegacyZScoreMigration needs the flag to know to convert
+        // it. Written back only while still set (see writeLegacyZScoreFlag); absent means raw.
         if (obj.has("thresholdIsZScore"))
             node.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
         node.setCompartment(parseCompartment(obj, "compartment"));
@@ -596,45 +613,50 @@ public class FlowPathSerializer {
         return gate;
     }
 
-    private static GateNode deserialize2DNode(GateNode gate, JsonObject obj,
+    private static Region2DGate deserialize2DNode(Region2DGate gate, JsonObject obj,
                                                 double clipLow, double clipHigh, boolean excludeOutliers) throws IOException {
         gate.setClipPercentileLow(clipLow);
         gate.setClipPercentileHigh(clipHigh);
         gate.setExcludeOutliers(excludeOutliers);
 
-        // Shared axis block for all 2D region gate types: channels, z-score flag,
+        // Shared axis block for all 2D region gate types: channels, the legacy z-score flag,
         // and the per-axis compartment/statistic (absent in v1/v2 files, which then
         // default to whole-cell mean and behave exactly as before).
-        if (gate instanceof Region2DGate region) {
-            region.setChannelX(optString(obj, "channelX"));
-            region.setChannelY(optString(obj, "channelY"));
-            region.setCompartmentX(parseCompartment(obj, "compartmentX"));
-            region.setCompartmentY(parseCompartment(obj, "compartmentY"));
-            region.setStatisticX(parseStatistic(obj, "statisticX"));
-            region.setStatisticY(parseStatistic(obj, "statisticY"));
-        }
+        gate.setChannelX(optString(obj, "channelX"));
+        gate.setChannelY(optString(obj, "channelY"));
+        gate.setCompartmentX(parseCompartment(obj, "compartmentX"));
+        gate.setCompartmentY(parseCompartment(obj, "compartmentY"));
+        gate.setStatisticX(parseStatistic(obj, "statisticX"));
+        gate.setStatisticY(parseStatistic(obj, "statisticY"));
         if (obj.has("thresholdIsZScore"))
             gate.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
 
-        if (gate instanceof PolygonGate pg) {
-            if (obj.has("vertices")) {
-                List<double[]> verts = new ArrayList<>();
-                for (JsonElement elem : obj.getAsJsonArray("vertices")) {
-                    JsonArray pt = elem.getAsJsonArray();
-                    verts.add(new double[]{pt.get(0).getAsDouble(), pt.get(1).getAsDouble()});
+        // A genuine per-type dispatch over Region2DGate's sealed permits: exhaustive with no
+        // default, so a new region shape fails to compile here instead of silently loading
+        // with none of its own fields set.
+        switch (gate) {
+            case PolygonGate pg -> {
+                if (obj.has("vertices")) {
+                    List<double[]> verts = new ArrayList<>();
+                    for (JsonElement elem : obj.getAsJsonArray("vertices")) {
+                        JsonArray pt = elem.getAsJsonArray();
+                        verts.add(new double[]{pt.get(0).getAsDouble(), pt.get(1).getAsDouble()});
+                    }
+                    pg.setVertices(verts);
                 }
-                pg.setVertices(verts);
             }
-        } else if (gate instanceof RectangleGate rg) {
-            if (obj.has("minX")) rg.setMinX(obj.get("minX").getAsDouble());
-            if (obj.has("maxX")) rg.setMaxX(obj.get("maxX").getAsDouble());
-            if (obj.has("minY")) rg.setMinY(obj.get("minY").getAsDouble());
-            if (obj.has("maxY")) rg.setMaxY(obj.get("maxY").getAsDouble());
-        } else if (gate instanceof EllipseGate eg) {
-            if (obj.has("centerX")) eg.setCenterX(obj.get("centerX").getAsDouble());
-            if (obj.has("centerY")) eg.setCenterY(obj.get("centerY").getAsDouble());
-            if (obj.has("radiusX")) eg.setRadiusX(obj.get("radiusX").getAsDouble());
-            if (obj.has("radiusY")) eg.setRadiusY(obj.get("radiusY").getAsDouble());
+            case RectangleGate rg -> {
+                if (obj.has("minX")) rg.setMinX(obj.get("minX").getAsDouble());
+                if (obj.has("maxX")) rg.setMaxX(obj.get("maxX").getAsDouble());
+                if (obj.has("minY")) rg.setMinY(obj.get("minY").getAsDouble());
+                if (obj.has("maxY")) rg.setMaxY(obj.get("maxY").getAsDouble());
+            }
+            case EllipseGate eg -> {
+                if (obj.has("centerX")) eg.setCenterX(obj.get("centerX").getAsDouble());
+                if (obj.has("centerY")) eg.setCenterY(obj.get("centerY").getAsDouble());
+                if (obj.has("radiusX")) eg.setRadiusX(obj.get("radiusX").getAsDouble());
+                if (obj.has("radiusY")) eg.setRadiusY(obj.get("radiusY").getAsDouble());
+            }
         }
 
         // Deserialize branches

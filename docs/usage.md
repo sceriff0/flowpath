@@ -370,8 +370,8 @@ Both per-cell files open with the **same identity block**, so they can be joined
 other — and back to MIRAGE — on `label`:
 
 ```csv title="gate_pheno.csv"
-cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity,Out_of_annotation,Outlier,Unmeasured,region,CD45_raw,CD45_zscore,CD45_sign
-0,17,T cytotoxic,6134.5990,2291.3830,18876.4892,7051.9477,65.5930,30.6559,0.5733,0.9412,False,False,False,Tumor,1591.1916,1.8420,+
+cell_id,label,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px,area,perimeter,eccentricity,solidity,Out_of_annotation,Outlier,Unmeasured,region,CD45_raw,CD45_sign
+0,17,T cytotoxic,6134.5990,2291.3830,18876.4892,7051.9477,65.5930,30.6559,0.5733,0.9412,False,False,False,Tumor,1591.1916,+
 ```
 
 ```csv title="umap_coordinates.csv (coming in a future release)"
@@ -448,8 +448,13 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   in a methods section would not reproduce. If a pipeline ever exports a pre-standardised
   column, that is a real column and appears here as its own labelled option.
 
-    Gate trees saved under the old mode still load: the threshold is converted back into
-  the column's own units on open, so the gate keeps the cells it had.
+    Gate trees saved under the old mode still load: as soon as the tree meets an image's
+  cells, every gate's thresholds and shapes are converted back into the column's own units,
+  so each gate keeps the cells it had — including gates you never open and trees you export
+  straight away. A notification says how many gates were converted and names any that
+  could not be: a gate on a column with no spread keeps its old numbers, and a gate on a
+  channel this image does not carry stays in z-score units until the tree is opened on an
+  image that has it.
 
 - **Quality filters** — pre-gating QC with a min + max per morphology measurement
   **your export actually carries**. A MIRAGE run gives you area, eccentricity, perimeter,
@@ -459,8 +464,13 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   gets a row like any other.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
   zooming to the clipped range.
-- **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++); drag-and-drop
-  to reorder gates between branches.
+- **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++).
+- **Reordering** — drag a gate onto any **branch** row to re-parent it there, subtree and
+  all; drop it on the empty space below the tree to promote it back to a top-level gate.
+  Only branches hold children, so a gate row is not a target, and neither is the branch
+  the gate already hangs off nor any branch inside its own subtree. Those rows are marked
+  as non-droppable while you drag over them and refuse the drop, leaving the tree exactly
+  as it was. A completed move is one undo step.
 
 ### Analysis *(coming in a future release)*
 

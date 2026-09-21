@@ -51,7 +51,6 @@ class LivePreviewServiceRegionTallyTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         // Deliberately keeping GateTree's default, non-null QualityFilter (empty ranges,
         // so it excludes nothing) rather than the null this test's fixture siblings use:
         // LivePreviewService.submitGatingWork() deep-copies the tree on every pass, and
@@ -85,7 +84,7 @@ class LivePreviewServiceRegionTallyTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
 
             GatingEngine.AssignmentResult result = service.getLastResult();

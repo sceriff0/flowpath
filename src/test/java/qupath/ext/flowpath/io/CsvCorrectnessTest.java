@@ -44,7 +44,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD3", 45.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -81,7 +80,6 @@ class CsvCorrectnessTest {
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
         GateNode gate = new GateNode("CD3", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -99,7 +97,7 @@ class CsvCorrectnessTest {
      * measure. {@code computeSign} has always returned blank for NaN and its javadoc
      * claims the sign column "cannot drift away from the phenotype column beside it" --
      * but the phenotype column, coming from the engine, said {@code CD3-} for exactly the
-     * cell whose {@code CD3_raw}, {@code CD3_zscore} and {@code CD3_sign} were all blank.
+     * cell whose {@code CD3_raw} and {@code CD3_sign} were both blank.
      * One row asserted both "never measured" and "measured, and negative".
      */
     @Test
@@ -112,7 +110,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD3", 25.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -126,16 +123,14 @@ class CsvCorrectnessTest {
         List<String> row = parseCsvLine(lines.get(3));   // cell_id 2
 
         int rawCol = header.indexOf("CD3_raw");
-        int zCol = header.indexOf("CD3_zscore");
         int signCol = header.indexOf("CD3_sign");
         int phenoCol = header.indexOf("phenotype");
         int unmeasuredCol = header.indexOf("Unmeasured");
-        assertTrue(rawCol >= 0 && zCol >= 0 && signCol >= 0 && phenoCol >= 0,
+        assertTrue(rawCol >= 0 && signCol >= 0 && phenoCol >= 0,
                 "measurement columns present");
         assertTrue(unmeasuredCol >= 0, "the Unmeasured flag is exported");
 
         assertEquals("", row.get(rawCol), "no raw value for an omitted measurement");
-        assertEquals("", row.get(zCol), "no z-score either");
         assertEquals("", row.get(signCol), "and no sign -- the gate has no opinion");
         assertEquals("Unclassified", row.get(phenoCol),
                 "so the phenotype must not claim one; this used to read CD3-");
@@ -205,10 +200,8 @@ class CsvCorrectnessTest {
 
         GateNode gate1 = new GateNode("CD45", 5.0);
         gate1.setStatistic(Statistic.MEAN);
-        gate1.setThresholdIsZScore(false);
         GateNode gate2 = new GateNode("CD3", 5.0);
         gate2.setStatistic(Statistic.MEAN);
-        gate2.setThresholdIsZScore(false);
         gate1.getPositiveChildren().add(gate2);
 
         GateTree tree = new GateTree();
@@ -227,7 +220,7 @@ class CsvCorrectnessTest {
 
     @Test
     void ungatedMarkersAppearInCsv() throws IOException {
-        // 3 markers but only CD45 is gated — CD3 and CD8 should still appear as raw+zscore columns
+        // 3 markers but only CD45 is gated — CD3 and CD8 should still appear as raw+sign columns
         List<String> markers = List.of("CD45", "CD3", "CD8");
         double[][] values = { {2, 8}, {3, 7}, {4, 6} };
         CellIndex index = Cells.columns(markers, values).build();
@@ -235,7 +228,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -252,36 +244,33 @@ class CsvCorrectnessTest {
         assertEquals("", csv.val(0, "CD8_sign"));
     }
 
-    // ========== Gap 10 cont: Z-score values verified ==========
+    // ========== Gap 10 cont: no computed z-score column ==========
 
+    /**
+     * The export used to carry a {@code _zscore} per column: FlowPath's own standardisation
+     * against the cells loaded and filtered at export time. No gate compares against it any
+     * more and no re-run could reproduce it, so it is gone -- each column is a raw value and a
+     * sign, and the sign is judged on the raw value.
+     */
     @Test
-    void zscoreValuesInCsvAreCorrect() throws IOException {
-        // 4 cells, CD45 values [2, 4, 6, 8]. mean=5, std=sqrt(5)≈2.2361
+    void theExportCarriesRawAndSignButNoComputedZScore() throws IOException {
         List<String> markers = List.of("CD45");
         double[][] values = { {2, 4, 6, 8} };
         CellIndex index = Cells.columns(markers, values).build();
-        boolean[] mask = Cells.allTrue(4);
-        MarkerStats stats = MarkerStats.compute(index, mask);
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
 
-        GateNode gate = new GateNode("CD45", 0.0);
+        GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(true);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
 
-        CsvResult csv = run(tree, index, stats, "zscore.csv");
+        CsvResult csv = run(tree, index, stats, "no_zscore.csv");
 
-        MeasuredColumn col = index.column("CD45", null, null, stats);
-        double mean = col.mean();
-        double std = col.std();
-
+        assertTrue(csv.header().stream().noneMatch(h -> h.endsWith("_zscore")), csv.header().toString());
         for (int i = 0; i < 4; i++) {
-            double raw = values[0][i];
-            double expectedZ = (raw - mean) / std;
-            String actual = csv.val(i, "CD45_zscore");
-            assertEquals(expectedZ, Double.parseDouble(actual), 0.001,
-                "Cell " + i + " z-score should be " + expectedZ);
+            assertEquals(values[0][i], Double.parseDouble(csv.val(i, "CD45_raw")), 1e-9);
+            assertEquals(values[0][i] >= 5.0 ? "+" : "-", csv.val(i, "CD45_sign"), "cell " + i);
         }
     }
 
@@ -296,7 +285,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD45", 0.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
@@ -356,7 +344,6 @@ class CsvCorrectnessTest {
         gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(50);
         gate.setThresholdY(50);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
         gate.setClipPercentileHigh(99.0);
@@ -370,11 +357,11 @@ class CsvCorrectnessTest {
         assertTrue(result.getExcluded()[99], "Cell 99 (CD3 outlier) should be excluded");
     }
 
-    // ========== Gap 7: Z-score mode for QuadrantGate ==========
+    // ========== Gap 7: a legacy z-score QuadrantGate, migrated ==========
 
     @Test
-    void quadrantGateWithZScoreMode() throws IOException {
-        // 4 cells. With z-score mode, threshold 0 splits at the mean.
+    void quadrantGateSavedInZScoreModeSplitsAtTheMeanOnceMigrated() throws IOException {
+        // 4 cells. A legacy z-threshold of 0 split at the mean; migration must keep that.
         // CD45 values [1,9,1,9], mean=5, so z>0 for 9, z<0 for 1
         // CD3 values  [1,1,9,9], mean=5, so z>0 for 9, z<0 for 1
         List<String> markers = List.of("CD45", "CD3");
@@ -393,6 +380,9 @@ class CsvCorrectnessTest {
         tree.setQualityFilter(null);
         tree.addRoot(gate);
 
+        LegacyZScoreMigration.migrate(tree, index, stats);
+        assertEquals(5.0, gate.getThresholdX(), 1e-9);
+        assertEquals(5.0, gate.getThresholdY(), 1e-9);
         AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
         // Cell 0: CD45=1 (z<0), CD3=1 (z<0) -> NN
@@ -405,11 +395,11 @@ class CsvCorrectnessTest {
         assertEquals("CD45+/CD3+", result.getPhenotypes()[3]);
     }
 
-    // ========== Gap 8: Z-score mode for 2D gates ==========
+    // ========== Gap 8: a legacy z-score 2D gate, migrated ==========
 
     @Test
-    void rectangleGateWithZScoreMode() throws IOException {
-        // Region gate with z-score mode: boundaries are in z-score space (drawn on z-score scatter).
+    void rectangleGateSavedInZScoreModeKeepsItsCellsOnceMigrated() throws IOException {
+        // Region gate saved in z-score mode: boundaries were in z-score space.
         // CD45 values [1,5,9], mean=5, std≈3.27 → z-scores: -1.22, 0.0, 1.22
         // Gate bounds [-0.5, 0.5] in z-score space → only cell 1 (z=0) is inside.
         List<String> markers = List.of("CD45", "CD3");
@@ -426,7 +416,9 @@ class CsvCorrectnessTest {
         tree.setQualityFilter(null);
         tree.addRoot(gate);
 
-        // Per-gate z-score flag controls evaluation space
+        // The engine compares raw values only; the legacy bounds are converted first.
+        LegacyZScoreMigration.migrate(tree, index, stats);
+        assertFalse(gate.isThresholdIsZScore());
         AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
         String insideName = gate.getBranches().get(0).getName();
@@ -449,7 +441,6 @@ class CsvCorrectnessTest {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 3, 7, 3, 7);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -478,7 +469,6 @@ class CsvCorrectnessTest {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -508,7 +498,6 @@ class CsvCorrectnessTest {
         gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(5.0);
         gate.setThresholdY(5.0);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -544,7 +533,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD45", 250.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -651,7 +639,6 @@ class CsvCorrectnessTest {
 
         GateNode child = new GateNode("CD8", 3.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         parent.getBranches().get(0).getChildren().add(child);
 
         GateTree tree = new GateTree();
@@ -667,11 +654,12 @@ class CsvCorrectnessTest {
         assertEquals(3.0, lc.getThreshold());
     }
 
-    // ========== Gap 4: Z-score NaN when std=0 ==========
+    // ========== Gap 4: a column with no spread ==========
 
     @Test
-    void zscoreIsEmptyInCsvWhenAllValuesIdentical() throws IOException {
-        // All cells have identical CD45=5.0 → std=0 → zscore should be empty in CSV
+    void aColumnWithNoSpreadStillExportsItsRawValueAndSign() throws IOException {
+        // All cells have identical CD45=5.0 → std=0. Nothing divides by it any more: the raw
+        // value is exported and the sign is judged on it.
         List<String> markers = List.of("CD45");
         double[][] values = { {5, 5, 5} };
         CellIndex index = Cells.columns(markers, values).build();
@@ -679,18 +667,16 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD45", 0.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);
 
         CsvResult csv = run(tree, index, stats, "zero_std.csv");
 
-        // Z-score should be empty (NaN → "") when std is zero
-        assertEquals("", csv.val(0, "CD45_zscore"));
-        assertEquals("", csv.val(1, "CD45_zscore"));
-        // Raw should still be present
+        assertFalse(csv.header().contains("CD45_zscore"));
         assertEquals("5.0000", csv.val(0, "CD45_raw"));
+        assertEquals("+", csv.val(0, "CD45_sign"), "5.0 >= 0.0 on a flat column is still positive");
+        assertEquals("+", csv.val(2, "CD45_sign"));
     }
 
     // ========== Enabled flag survives serialization ==========
@@ -740,7 +726,6 @@ class CsvCorrectnessTest {
 
         GateNode gate = new GateNode("CD45", 25.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(1.0);
         gate.setClipPercentileHigh(99.0);
@@ -795,7 +780,6 @@ class CsvCorrectnessTest {
         gate.setStatisticY(Statistic.MEAN);
         gate.setThresholdX(5.0);
         gate.setThresholdY(5.0);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -827,7 +811,6 @@ class CsvCorrectnessTest {
         RectangleGate gate = new RectangleGate("CD45", "CD3", 2, 8, 2, 8);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);  // region is in raw marker units
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -859,12 +842,10 @@ class CsvCorrectnessTest {
 
         GateNode enabled = new GateNode("CD45", 5.0);
         enabled.setStatistic(Statistic.MEAN);
-        enabled.setThresholdIsZScore(false);
         enabled.setEnabled(true);
 
         GateNode disabled = new GateNode("CD3", 5.0);
         disabled.setStatistic(Statistic.MEAN);
-        disabled.setThresholdIsZScore(false);
         disabled.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -897,14 +878,12 @@ class CsvCorrectnessTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         QuadrantGate quad = new QuadrantGate("CD3", "CD8");
         quad.setStatisticX(Statistic.MEAN);
         quad.setStatisticY(Statistic.MEAN);
         quad.setThresholdX(5.0);
         quad.setThresholdY(5.0);
-        quad.setThresholdIsZScore(false);
         root.getPositiveChildren().add(quad);
 
         GateTree tree = new GateTree();
@@ -949,12 +928,10 @@ class CsvCorrectnessTest {
         quad.setStatisticY(Statistic.MEAN);
         quad.setThresholdX(5.0);
         quad.setThresholdY(5.0);
-        quad.setThresholdIsZScore(false);
 
         RectangleGate rect = new RectangleGate("CD8", "CD4", 4, 10, 4, 10);
         rect.setStatisticX(Statistic.MEAN);
         rect.setStatisticY(Statistic.MEAN);
-        rect.setThresholdIsZScore(false);  // region is in raw marker units
         quad.getBranches().get(0).getChildren().add(rect); // PP branch
 
         GateTree tree = new GateTree();
@@ -1042,7 +1019,6 @@ class CsvCorrectnessTest {
         // Root: CD45 threshold=15 (raw), excludeOutliers
         GateNode root = new GateNode("CD45", 15.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         root.setExcludeOutliers(true);
         root.setClipPercentileLow(1.0);
         root.setClipPercentileHigh(99.0);
@@ -1050,13 +1026,11 @@ class CsvCorrectnessTest {
         // Child on CD45+: CD3 threshold=5 (raw)
         GateNode cd3gate = new GateNode("CD3", 5.0);
         cd3gate.setStatistic(Statistic.MEAN);
-        cd3gate.setThresholdIsZScore(false);
         root.getPositiveChildren().add(cd3gate);
 
         // Disabled root: CD20 (should be skipped)
         GateNode disabledGate = new GateNode("CD20", 10.0);
         disabledGate.setStatistic(Statistic.MEAN);
-        disabledGate.setThresholdIsZScore(false);
         disabledGate.setEnabled(false);
 
         GateTree tree = new GateTree();
@@ -1074,8 +1048,8 @@ class CsvCorrectnessTest {
         assertEquals("True", csv.val(n - 1, "Outlier"), "Cell 99 is CD45 outlier");
 
         // All rows should have CD45, CD3, CD8, CD20 raw columns (all markers)
-        assertTrue(csv.header.contains("CD20_raw"), "Ungated CD20 should still appear in CSV");
-        assertTrue(csv.header.contains("CD8_raw"), "Ungated CD8 should still appear in CSV");
+        assertTrue(csv.header().contains("CD20_raw"), "Ungated CD20 should still appear in CSV");
+        assertTrue(csv.header().contains("CD8_raw"), "Ungated CD8 should still appear in CSV");
 
         // Verify phenotype correctness: early cells with low CD45 should be CD45-
         // Find a cell that's clearly below threshold (CD45 < 15 = cell indices with cd45[i] < 15)

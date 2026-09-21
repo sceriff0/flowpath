@@ -60,11 +60,10 @@ class CompartmentCsvTest {
     }
 
     private static GateNode thresholdGate(String channel, Compartment c, Statistic s,
-                                          boolean zScore, double threshold) {
+                                          double threshold) {
         GateNode g = new GateNode(channel);
         g.setCompartment(c);
         g.setStatistic(s);
-        g.setThresholdIsZScore(zScore);
         g.setThreshold(threshold);
         return g;
     }
@@ -104,7 +103,7 @@ class CompartmentCsvTest {
     void nuclearRawGateExportsNuclearValuesAndConsistentSigns() throws IOException {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100));
+        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, 100));
 
         assertEquals(10.0, csv.num(0, "CD3_Nucleus_Mean_raw"), 1e-6,
                 "the _raw column must carry the nuclear value the gate compared, not whole-cell 50");
@@ -124,26 +123,10 @@ class CompartmentCsvTest {
     }
 
     @Test
-    void nuclearZScoreGateExportsZScoreOfTheNuclearColumn() throws IOException {
-        CellIndex idx = index();
-        MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, true, 0.0));
-
-        MeasuredColumn col = idx.column("CD3", Compartment.NUCLEAR, Statistic.MEAN, stats);
-        assertEquals("CD3: Nucleus: Mean", col.key(),
-                "the nuclear mean must resolve to the structured key, not the bare marker");
-        assertTrue(col.std() > 1e-10, "fixture must give the nuclear column real variance");
-        // Bare CD3 has zero variance, so the old bare-key path produced a blank cell here.
-        // CSV values are written with %.4f, so allow one rounding step.
-        assertEquals(col.toZScore(10.0), csv.num(0, "CD3_Nucleus_Mean_zscore"), 1e-4);
-        assertEquals(col.toZScore(300.0), csv.num(3, "CD3_Nucleus_Mean_zscore"), 1e-4);
-    }
-
-    @Test
     void statisticSelectionGetsItsOwnColumn() throws IOException {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, false, 50));
+        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, 50));
 
         assertEquals(5.0, csv.num(0, "CD3_Nucleus_Median_raw"), 1e-6);
         assertEquals(150.0, csv.num(3, "CD3_Nucleus_Median_raw"), 1e-6);
@@ -157,10 +140,10 @@ class CompartmentCsvTest {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
 
-        GateNode nuc = thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100);
+        GateNode nuc = thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, 100);
         nuc.getBranches().get(0).setName("nucHigh");
         nuc.getBranches().get(1).setName("nucLow");
-        GateNode cyt = thresholdGate("CD3", Compartment.CYTOPLASMIC, Statistic.MEAN, false, 100);
+        GateNode cyt = thresholdGate("CD3", Compartment.CYTOPLASMIC, Statistic.MEAN, 100);
         cyt.getBranches().get(0).setName("cytHigh");
         cyt.getBranches().get(1).setName("cytLow");
         nuc.getBranches().get(1).getChildren().add(cyt);
@@ -185,7 +168,7 @@ class CompartmentCsvTest {
     void wholeCellMeanGateKeepsTheHistoricalBareColumnNames() throws IOException {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        Csv csv = run(idx, stats, thresholdGate("CD8", Compartment.WHOLE_CELL, Statistic.MEAN, false, 25));
+        Csv csv = run(idx, stats, thresholdGate("CD8", Compartment.WHOLE_CELL, Statistic.MEAN, 25));
 
         assertTrue(csv.header().contains("CD8_raw"), "whole-cell mean must not be renamed");
         assertFalse(csv.header().contains("CD8_Cell_Mean_raw"),
@@ -198,7 +181,7 @@ class CompartmentCsvTest {
     void ungatedMarkersStillGetTheirBareColumns() throws IOException {
         CellIndex idx = index();
         MarkerStats stats = MarkerStats.compute(idx, Cells.allTrue(idx.size()));
-        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, false, 100));
+        Csv csv = run(idx, stats, thresholdGate("CD3", Compartment.NUCLEAR, Statistic.MEAN, 100));
 
         assertTrue(csv.header().contains("CD3_raw"), "bare CD3 column must survive");
         assertTrue(csv.header().contains("CD8_raw"), "ungated CD8 must still be exported");
@@ -218,7 +201,6 @@ class CompartmentCsvTest {
         rg.setCompartmentX(Compartment.NUCLEAR);
         rg.setStatisticX(Statistic.MEAN);
         rg.setStatisticY(Statistic.MEAN);   // Y is whole-cell CD8 (bare column, mean)
-        rg.setThresholdIsZScore(false);
 
         Csv csv = run(idx, stats, rg);
 

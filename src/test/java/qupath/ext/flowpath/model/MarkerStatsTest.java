@@ -26,8 +26,9 @@ class MarkerStatsTest {
         CellIndex index = Cells.columns(List.of("CD45"), new double[][]{{1, 2, 3, 4, 5}}).atGrid(1, 1).build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
-        assertEquals(0.0, stats.toZScore("CD45", 3.0), 0.001);
-        assertEquals(Math.sqrt(2.0), stats.toZScore("CD45", 5.0), 0.001);
+        MeasuredColumn col = index.column("CD45", Compartment.WHOLE_CELL, Statistic.MEAN, stats);
+        assertEquals(0.0, col.toZScore(3.0), 0.001);
+        assertEquals(Math.sqrt(2.0), col.toZScore(5.0), 0.001);
     }
 
     @Test
@@ -36,8 +37,9 @@ class MarkerStatsTest {
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(5));
 
         double rawValue = 4.2;
-        double z = stats.toZScore("CD45", rawValue);
-        double recovered = stats.fromZScore("CD45", z);
+        MeasuredColumn col = index.column("CD45", Compartment.WHOLE_CELL, Statistic.MEAN, stats);
+        double z = col.toZScore(rawValue);
+        double recovered = col.fromZScore(z);
         assertEquals(rawValue, recovered, 0.001);
     }
 
@@ -71,7 +73,8 @@ class MarkerStatsTest {
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(10));
 
         assertEquals(0.0, stats.getStd("CD45"), 0.001);
-        assertEquals(0.0, stats.toZScore("CD45", 5.0), 0.001);
+        assertEquals(0.0, index.column("CD45", Compartment.WHOLE_CELL, Statistic.MEAN, stats)
+                .toZScore(5.0), 0.001);
     }
 
     @Test

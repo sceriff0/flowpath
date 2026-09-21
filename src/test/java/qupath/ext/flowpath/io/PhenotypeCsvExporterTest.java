@@ -77,7 +77,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -106,7 +105,8 @@ class PhenotypeCsvExporterTest {
                 "no perimeter in this fixture, so no perimeter column: " + header);
         assertFalse(header.contains("solidity"), header);
         assertTrue(header.contains("CD45_raw"), "Header should contain CD45_raw");
-        assertTrue(header.contains("CD45_zscore"), "Header should contain CD45_zscore");
+        assertFalse(header.contains("CD45_zscore"),
+                "the computed z-score column was retired with the computed z-score mode");
         assertTrue(header.contains("CD45_sign"), "Header should contain CD45_sign");
 
         // Every cell is a row — now includes excluded cells flagged via the two columns
@@ -159,7 +159,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 3.5);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -209,7 +208,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -256,11 +254,9 @@ class PhenotypeCsvExporterTest {
 
         GateNode root = new GateNode("CD45", 5.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateNode child = new GateNode("CD3", 3.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         root.getPositiveChildren().add(child);
 
         GateTree tree = new GateTree();
@@ -314,7 +310,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         gate.setPositiveName("CD45+, bright");
 
         GateTree tree = new GateTree();
@@ -388,7 +383,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 2.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
@@ -430,7 +424,6 @@ class PhenotypeCsvExporterTest {
 
         GateNode gate = new GateNode("CD45", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);

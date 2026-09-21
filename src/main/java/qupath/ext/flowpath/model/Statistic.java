@@ -56,8 +56,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * neither mechanism is the only thing standing between the rule and a silent wrong
  * answer.
  * <p>
- * Orthogonal to FlowPath's live z-score toggle, which is applied on top of
- * whichever statistic is selected.
+ * FlowPath applies no standardisation of its own on top of whichever statistic is
+ * selected; a standardised reading is only ever one of these pipeline columns (see
+ * {@link ValueMode}).
  */
 public final class Statistic {
 
@@ -183,23 +184,6 @@ public final class Statistic {
         return of(baseToken() + norm);
     }
 
-    /**
-     * True when MIRAGE has <b>already standardised</b> this column across the cells of one
-     * patient — the {@code " Z"} and {@code " RobustZ"} variants.
-     * <p>
-     * The reason FlowPath cares: its own z-score toggle standardises whatever column is
-     * selected, so turning it on over an already-standardised statistic z-scores a
-     * z-score. Nothing would throw, and the second pass is close to a no-op on a
-     * well-behaved column, which is exactly what makes it hard to notice — the axis would
-     * simply be wrong by a rescaling that varies with the filtered population.
-     * <p>
-     * Note the two are not the same number even in principle: MIRAGE standardises across
-     * every cell of a patient, FlowPath across the cells currently loaded and filtered.
-     */
-    public boolean isStandardised() {
-        return !normalisation().isEmpty();
-    }
-
     /** True if this is one of the three statistics FlowPath ships an opinion about. */
     public boolean isKnown() {
         return KNOWN.contains(this);
@@ -273,7 +257,7 @@ public final class Statistic {
      * resolves to the bare {@code "CD3"} column, which MIRAGE defines as the whole-cell
      * mean. That is why this is {@link #MEAN} while the gate model's own field default is
      * {@link #MEDIAN}: the two answer different questions. Gates pick their statistic from
-     * {@link CompartmentCapability} via {@code GateEditorPane.chooseStatistic}.
+     * {@link CompartmentCapability} via {@link GateAxis#choicesFrom}.
      */
     public static Statistic defaultStatistic() {
         return MEAN;

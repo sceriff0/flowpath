@@ -18,11 +18,11 @@ import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
+import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestReport;
 import qupath.ext.flowpath.ingest.IngestResult;
-import qupath.ext.flowpath.io.PhenotypeCsvExporter;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.BranchTally;
 import qupath.ext.flowpath.model.CellIndex;
@@ -36,7 +36,6 @@ import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.RegionMask;
-import qupath.ext.flowpath.model.UndoHistory;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
 import qupath.lib.display.ChannelDisplayInfo;
@@ -50,12 +49,14 @@ import qupath.lib.images.servers.PixelCalibration;
 
 import java.util.List;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.hierarchy.events.PathObjectHierarchyEvent;
-import qupath.lib.objects.hierarchy.events.PathObjectHierarchyListener;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main panel for the FlowPath extension.
@@ -69,6 +70,8 @@ public class FlowPathPane extends BorderPane {
 
     private final QuPathGUI qupath;
     private final TreeView<Object> treeView;
+    /** One gate drag in {@link #treeView}, shared by every recycled cell; see {@link FlowPathCell}. */
+    private final GateDragCoordinator dragCoordinator;
     private final GateEditorPane editorPane;
     private final QualityFilterPane qualityFilterPane;
     private final CheckBox roiFilterCheckBox;
@@ -76,6 +79,8 @@ public class FlowPathPane extends BorderPane {
     private final LivePreviewService previewService;
     private final Label statusBar;
     private final ComboBox<String> colorByRootCombo;
+    /** Which root {@link #colorByRootCombo} is on, as a value; see {@link ColorByRootSelection}. */
+    private final ColorByRootSelection colorByRoot = new ColorByRootSelection();
     private final Button umapButton;
     private final Button analysisButton;
 
@@ -125,34 +130,71 @@ public class FlowPathPane extends BorderPane {
      */
     private final AnalysisWindow analysisWindow = new AnalysisWindow();
 
-    private final UndoHistory<GateTree> undoHistory =
-        new UndoHistory<>(UndoHistory.DEFAULT_MAX_DEPTH, GateTree::deepCopy, System::currentTimeMillis);
+    /**
+     * The gate tree, the cells, everything derived from the two, and the undo history.
+     * {@link #resyncToTree()} is the one place that brings it and the widgets back in line.
+     */
+    private final GatingSession session;
 
-    private GateTree gateTree;
-    private CellIndex cellIndex;
-    private MarkerStats markerStats;
     private List<String> markerNames;
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
     /** What the last ingest could not resolve. Surfaced in the status bar, never modally. */
     private IngestReport ingestReport = IngestReport.empty();
-    private boolean[] cachedQualityMask;
-    private boolean[] cachedRoiMask;
-    /** Which annotated region each cell fell in; null whenever the filter is off. */
-    private RegionMask cachedRegions;
-    private PathObjectHierarchyListener hierarchyListener;
     private boolean suppressRoiFilterEvents = false;
-    private ImageData<?> listenerImageData;
+
+    /**
+     * The pane's one thread for heavy work, so it never runs on the FX thread: reading an
+     * image's detections and computing their statistics, and exporting the CSV. Single
+     * threaded, so two background jobs never race each other for the session's inputs — a
+     * re-ingest requested while a CSV export is running simply queues behind it, and lands
+     * once the export's gating pass and write are done. It also times {@link #ingest}'s
+     * re-read debounce. Shut down in {@link #shutdown()}.
+     */
+    private final ScheduledExecutorService backgroundExecutor =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "flowpath-background");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** Reads the open image's detections in the background, and again whenever they change. */
+    private final IngestCoordinator ingest;
+
+    /**
+     * Recomputes the masks and statistics in the background for the edits that change them —
+     * the annotation-filter toggle, an undo or redo across a filter change, and a load. See
+     * {@link #resyncToTree()}.
+     */
+    private final DerivationCoordinator derivations;
+
+    /** Gates the export snapshot and writes the CSV in the background. */
+    private final CsvExportCoordinator csvExport;
+
+    private final Button addRootBtn;
+    private final Button exportBtn;
+    private final ProgressIndicator spinner;
+    /**
+     * A gating pass is running; the spinner also shows while {@link #ingest} is busy or
+     * {@link #csvExport} is exporting.
+     */
+    private boolean previewRunning;
 
     public FlowPathPane(QuPathGUI qupath) {
         this.qupath = qupath;
-        this.gateTree = new GateTree();
         this.previewService = new LivePreviewService();
+        this.session = new GatingSession(System::currentTimeMillis, this::requestGatingPass);
 
         // --- Left side: TreeView + Quality Filter ---
+        // A drop is a tree edit like any other: recorded as one undo step before it is applied,
+        // and refused while a derivation is in flight for the same reason the editor is greyed
+        // out (see BusyState#editingBlocked).
+        this.dragCoordinator = new GateDragCoordinator(session::tree,
+                () -> busyState().editingBlocked(), this::pushUndo, this::onGateMoved);
         treeView = new TreeView<>();
         treeView.setCellFactory(tv -> {
             FlowPathCell cell = new FlowPathCell();
             cell.setOnEnabledToggled(this::onGateEnabledToggled);
+            cell.setDragCoordinator(dragCoordinator);
             return cell;
         });
         treeView.setShowRoot(false);
@@ -171,19 +213,21 @@ public class FlowPathPane extends BorderPane {
         treeView.setOnContextMenuRequested(e -> showTreeContextMenu(e.getScreenX(), e.getScreenY()));
 
         // Add root gate button
-        Button addRootBtn = new Button("+ Add Root Gate");
+        addRootBtn = new Button("+ Add Root Gate");
         addRootBtn.setMaxWidth(Double.MAX_VALUE);
         addRootBtn.setOnAction(e -> addRootGate());
         addRootBtn.setTooltip(new Tooltip("Add a new top-level gate to the gating hierarchy"));
 
         // ROI filter
         roiFilterCheckBox = new CheckBox("Filter by annotations");
-        roiFilterCheckBox.setStyle("-fx-text-fill: black; -fx-font-size: 10;");
+        roiFilterCheckBox.getStyleClass().add("fp-primary-text");
+        roiFilterCheckBox.setStyle("-fx-font-size: 10;");
         roiFilterCheckBox.setOnAction(e -> { if (!suppressRoiFilterEvents) onRoiFilterToggled(); });
 
         // Auto-sync the QuPath viewer's visible channels to the selected gate's channel(s)
         syncViewerChannelsToggle = new CheckBox("Sync viewer channels");
-        syncViewerChannelsToggle.setStyle("-fx-text-fill: black; -fx-font-size: 10;");
+        syncViewerChannelsToggle.getStyleClass().add("fp-primary-text");
+        syncViewerChannelsToggle.setStyle("-fx-font-size: 10;");
         syncViewerChannelsToggle.setSelected(true);
         syncViewerChannelsToggle.setTooltip(new Tooltip(
             "Show only the selected gate's channel(s) in the QuPath viewer."));
@@ -191,7 +235,16 @@ public class FlowPathPane extends BorderPane {
             if (syncViewerChannelsToggle.isSelected()) syncViewerChannels(currentNode);
         });
 
-        qualityFilterPane = new QualityFilterPane(gateTree.getQualityFilter());
+        qualityFilterPane = new QualityFilterPane(session.tree().getQualityFilter());
+        // Recorded before the panel writes into the tree's filter, so undo restores the
+        // value the drag started from. A drag is coalesced into one step; Reset is a
+        // discrete step that ends any drag burst rather than folding into it.
+        qualityFilterPane.setOnBeforeFilterChange(kind -> {
+            switch (kind) {
+                case DRAG -> session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
+                case RESET -> session.recordEdit();
+            }
+        });
         qualityFilterPane.setOnFilterChanged(filter -> onQualityFilterChanged());
 
         // Color-by-root selector (for multi-root trees)
@@ -203,6 +256,7 @@ public class FlowPathPane extends BorderPane {
         colorByRootCombo.getSelectionModel().selectedIndexProperty().addListener((obs, old, idx) -> {
             if (idx.intValue() >= 0) {
                 previewService.setColorRootIndex(idx.intValue());
+                colorByRoot.selected(idx.intValue());
             }
         });
 
@@ -218,8 +272,7 @@ public class FlowPathPane extends BorderPane {
         // --- Right side: Gate Editor ---
         editorPane = new GateEditorPane();
         editorPane.setOnNodeChanged(node -> onGateNodeChanged());
-        editorPane.setOnAddToPositive(this::addGateToPositive);
-        editorPane.setOnAddToNegative(this::addGateToNegative);
+        editorPane.setOnNodeNormalised(node -> onGateNodeNormalised());
         editorPane.setOnAddToBranch(this::addChildGate);
         editorPane.setOnRemoveGate(this::removeSelectedGate);
         editorPane.setOnReplaceGate(this::replaceGateNode);
@@ -235,16 +288,34 @@ public class FlowPathPane extends BorderPane {
 
         // --- Status bar ---
         statusBar = new Label("Total: 0 cells | Excluded: 0 | Gates: 0");
-        statusBar.setStyle("-fx-font-size: 11; -fx-text-fill: #aaaaaa; -fx-padding: 2 6 2 6;");
-        ProgressIndicator spinner = new ProgressIndicator();
+        statusBar.getStyleClass().add("fp-muted");
+        statusBar.setStyle("-fx-font-size: 11; -fx-padding: 2 6 2 6;");
+        spinner = new ProgressIndicator();
         spinner.setPrefSize(14, 14);
         spinner.setMaxSize(14, 14);
         spinner.setVisible(false);
-        previewService.setOnUpdateStarted(() -> Platform.runLater(() -> spinner.setVisible(true)));
+        previewService.setOnUpdateStarted(() -> Platform.runLater(() -> {
+            previewRunning = true;
+            updateSpinner();
+        }));
         previewService.setOnUpdateComplete(() -> Platform.runLater(() -> {
-            spinner.setVisible(false);
+            previewRunning = false;
+            updateSpinner();
             onPreviewUpdated();
         }));
+        previewService.setOnStatsRecomputed(() -> {
+            // A quality-filter drag recomputes the statistics in the background; adopt them
+            // here. computeAncestorMask and the CSV exporter both read the session's
+            // statistics, and when the filter narrows the population, ancestors that
+            // excludeOutliers reject every cell otherwise -- the editor shows "No data" while
+            // the gate-engine count, computed with fresh stats, still reads the true number.
+            // The service drops a recompute that a resync has superseded, so this never
+            // brings back statistics for a filter the tree no longer has.
+            session.adoptStats(previewService.getMarkerStats());
+            session.recomputeQualityMask();
+            refreshAncestorMask();
+            editorPane.setMarkerStats(session.stats());
+        });
 
         // --- Bottom toolbar ---
         Button saveBtn = new Button("Save JSON");
@@ -253,7 +324,7 @@ public class FlowPathPane extends BorderPane {
         Button loadBtn = new Button("Load JSON");
         loadBtn.setOnAction(e -> loadTree());
         loadBtn.setTooltip(new Tooltip("Load gate tree from JSON file (Ctrl+O)"));
-        Button exportBtn = new Button("Export CSV");
+        exportBtn = new Button("Export CSV");
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
 
@@ -315,8 +386,22 @@ public class FlowPathPane extends BorderPane {
             }
         });
 
-        // Style
-        setStyle("-fx-background-color: #1e1e1e;");
+        // Style — follows the active QuPath theme's base colour instead of forcing dark.
+        getStyleClass().add("fp-panel");
+
+        // Detections are read on backgroundExecutor and applied on the FX thread. FlowPath's own
+        // classification writes fire hierarchy events too; the coordinator ignores those.
+        ingest = new IngestCoordinator(session, backgroundExecutor, this::scheduleOnBackground,
+                Platform::runLater, previewService::isFiringHierarchyEvent, new IngestHost());
+
+        // The same executor: a derivation and a re-ingest queue behind each other rather than
+        // racing for the session's inputs.
+        derivations = new DerivationCoordinator(session, backgroundExecutor, Platform::runLater,
+                new DerivationHost());
+
+        // A CSV export's snapshot is gated and written on the same single-threaded executor,
+        // so it never races an ingest for the session's inputs.
+        csvExport = new CsvExportCoordinator(backgroundExecutor, Platform::runLater, new CsvExportHost());
 
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
@@ -328,129 +413,195 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * Build CellIndex and MarkerStats from the currently loaded image's detections.
+     * Hand the current image to {@link #ingest}. Its detections are read and their statistics
+     * computed on {@link #backgroundExecutor}, and every path ends in {@link #render}, so
+     * switching images runs a gating pass over the new cells straight away — without freezing
+     * QuPath while a million cells are read. The coordinator also listens to the image's
+     * hierarchy: cells added or deleted while FlowPath is open are read again (debounced,
+     * keeping the gate tree), and an annotation edit under the ROI filter recomputes the mask.
      */
     private void initializeFromImage() {
-        detachHierarchyListener();
-
-        ImageData<?> imageData = qupath.getImageData();
-        if (imageData == null) {
-            clearImageState();
-            editorPane.setChannelNames(markerNames);
-            return;
-        }
-
-        Collection<PathObject> detections = imageData.getHierarchy().getDetectionObjects();
-        if (detections.isEmpty()) {
-            clearImageState();
-            editorPane.setChannelNames(markerNames);
-            editorPane.setGateNode(null);
-            Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
-            return;
-        }
-
-        // One read of the hierarchy: the panel, the per-compartment capability, the index
-        // and the report all come from a single measurement-key sample, so the gate editor
-        // can no longer offer a compartment the index resolved to nothing. The pixel
-        // calibration rides along inside — it is the only thing FlowPath holds that MIRAGE
-        // does not, and it is what makes ScaleVerdict possible.
-        IngestResult ingest = DetectionIngest.read(detections, imageData);
-        markerNames = ingest.markerNames();
-        compartmentCapability = ingest.capability();
-        cellIndex = ingest.index();
-        ingestReport = ingest.report();
-
-        // Compute ROI mask (if filter is enabled)
-        recomputeRoiMask();
-
-        // Compute quality mask and stats (using combined mask)
-        recomputeQualityMask();
-        markerStats = MarkerStats.compute(cellIndex, getCombinedMask());
-
-        // Update UI
-        editorPane.setChannelNames(markerNames);
-        editorPane.setCompartmentCapability(compartmentCapability);
-        editorPane.setCellIndex(cellIndex);
-        editorPane.setRoiMask(cachedRoiMask);
-        editorPane.setMarkerStats(markerStats);
-
-        // Which QC metrics exist, and how far each slider should travel, are both read
-        // from the index's discovered morphology. This used to be a hand-rolled scan for
-        // three maxima and three booleans, which could only ever describe the five fields
-        // FlowPath had been told about -- it re-ranged area, total intensity and perimeter,
-        // and decided availability for eccentricity, solidity and perimeter, so the two
-        // lists did not even agree with each other.
-        qualityFilterPane.setCellIndex(cellIndex);
-
-        // Setup preview service
-        previewService.setCellIndex(cellIndex);
-        previewService.setMarkerStats(markerStats);
-        previewService.setRoiMask(cachedRoiMask);
-        previewService.setGateTree(gateTree);
-        previewService.setImageData(imageData);
-        previewService.setOnStatsRecomputed(() -> {
-            // Keep this pane's markerStats in sync with the preview service.
-            // computeAncestorMask (line 608) and the CSV exporter (line 912+)
-            // both consult this field; when the annotation filter narrows the
-            // stats population, ancestors that excludeOutliers reject every
-            // cell otherwise — the editor shows "No data" while the gate-engine
-            // count, computed with fresh stats, still reads the true number.
-            this.markerStats = previewService.getMarkerStats();
-            recomputeQualityMask();
-            refreshAncestorMask();
-            editorPane.setMarkerStats(this.markerStats);
-        });
-
-        // Listen for annotation changes (add/remove) to recompute ROI mask
-        hierarchyListener = event -> {
-            // Skip events fired by our own gating update to prevent feedback loops
-            if (previewService.isFiringHierarchyEvent()) return;
-            if (!event.isChanging() && gateTree.isRoiFilterEnabled()) {
-                Platform.runLater(() -> {
-                    recomputeRoiMask();
-                    refreshAncestorMask();
-                    editorPane.setRoiMask(cachedRoiMask);
-                    previewService.recomputeStats();
-                });
-            }
-        };
-        listenerImageData = imageData;
-        imageData.getHierarchy().addListener(hierarchyListener);
-
-        updateStatusBar();
+        ingest.open(qupath.getImageData());
     }
 
-    /** Detach the hierarchy listener from whichever image it was registered on. */
-    private void detachHierarchyListener() {
-        if (hierarchyListener != null && listenerImageData != null) {
-            listenerImageData.getHierarchy().removeListener(hierarchyListener);
+    /** {@link IngestCoordinator}'s debounce timer, on the background thread. */
+    private Runnable scheduleOnBackground(Runnable task, long delayMs) {
+        ScheduledFuture<?> future = backgroundExecutor.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+        return () -> future.cancel(false);
+    }
+
+    /** What {@link #ingest} asks of this pane. Every call arrives on the FX thread. */
+    private final class IngestHost implements IngestCoordinator.Host {
+
+        @Override
+        public List<PathObject> annotations(ImageData<?> imageData) {
+            return annotationsToFilterBy(imageData);
         }
-        hierarchyListener = null;
-        listenerImageData = null;
+
+        /**
+         * Drop every reference to the previous image, in this pane <em>and</em> in the
+         * preview service. Clearing only this pane's fields left the service holding the old
+         * {@code ImageData}: a gate edit made with no image open — or while the next image is
+         * still being read — would re-run gating and write PathClass assignments onto the
+         * previous image's detections. The index, statistics and masks reach the service
+         * through the resync that follows; the image data is the one piece it does not carry.
+         */
+        @Override
+        public void cleared(IngestCoordinator.Cleared why) {
+            markerNames = Collections.emptyList();
+            ingestReport = IngestReport.empty();
+            previewService.setImageData(null);
+            qualityFilterPane.setCellIndex(null);
+            // A switch keeps the selected gate, and the channel list its combos show, for the
+            // image being read; the editor is disabled until it lands. With no cells to come
+            // there is nothing to show — and the gate leaves the editor before the channel
+            // list empties, so emptying it cannot retarget the gate's channel.
+            if (why != IngestCoordinator.Cleared.LOADING) {
+                currentNode = null;
+                editorPane.setGateNode(null);
+                editorPane.setChannelNames(markerNames);
+            }
+            if (why == IngestCoordinator.Cleared.NO_DETECTIONS) {
+                Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
+            }
+        }
+
+        /**
+         * One read of the hierarchy: the panel, the per-compartment capability, the index and
+         * the report all come from a single measurement-key sample, so the gate editor can no
+         * longer offer a compartment the index resolved to nothing. The pixel calibration
+         * rides along inside — it is what makes ScaleVerdict possible.
+         */
+        @Override
+        public void ingested(ImageData<?> imageData, IngestResult result) {
+            // Re-read on every detection edit: repopulating the channel list the editor's
+            // combos share is skipped when the panel is unchanged.
+            if (!result.markerNames().equals(markerNames)) {
+                markerNames = result.markerNames();
+                editorPane.setChannelNames(markerNames);
+            }
+            compartmentCapability = result.capability();
+            ingestReport = result.report();
+            editorPane.setCompartmentCapability(compartmentCapability);
+            // Which QC metrics exist, and how far each slider should travel, are both read
+            // from the index's discovered morphology.
+            qualityFilterPane.setCellIndex(result.index());
+            previewService.setImageData(imageData);
+        }
+
+        @Override
+        public void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+            render(notice, newIndex);
+        }
+
+        @Override
+        public void busyChanged(IngestCoordinator.Busy state) {
+            updateBusyControls();
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Reading the image's detections failed", error);
+            Dialogs.showErrorNotification("FlowPath",
+                    "Could not read the detections: " + ErrorMessages.describe(error));
+        }
+    }
+
+    /** What {@link #derivations} asks of this pane. Every call arrives on the FX thread. */
+    private final class DerivationHost implements DerivationCoordinator.Host {
+
+        @Override
+        public List<PathObject> annotations() {
+            return annotationsForRoiFilter();
+        }
+
+        @Override
+        public void resynced(Optional<GatingSession.MigrationNotice> notice) {
+            render(notice, false);
+        }
+
+        @Override
+        public void busyChanged(boolean deriving) {
+            updateBusyControls();
+        }
+
+        /**
+         * Nothing was adopted, so the session still holds the masks and statistics it had. The
+         * tree edit that asked for the derivation stands — it was taken on the FX thread before
+         * the work was submitted — so the widgets are rendered against what the session actually
+         * holds rather than left showing the tree before it.
+         */
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Recomputing the masks and statistics failed", error);
+            render(Optional.empty(), false);
+            Dialogs.showErrorNotification("FlowPath",
+                    "Could not recompute the statistics: " + ErrorMessages.describe(error));
+        }
+    }
+
+    /** What {@link #csvExport} asks of this pane. Every call arrives on the FX thread. */
+    private final class CsvExportHost implements CsvExportCoordinator.Host {
+        @Override
+        public void exported(File file) {
+            updateExportControlsDisabled();
+            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Exporting the phenotype CSV failed", error);
+            updateExportControlsDisabled();
+            Dialogs.showErrorMessage("Export Error", ErrorMessages.describe(error));
+        }
     }
 
     /**
-     * Drop every reference to the previous image, in this pane <em>and</em> in the
-     * preview service.
+     * The one place that applies {@link BusyState} to the widgets — every background worker
+     * reports its state here rather than each disabling its own set of controls, and the rule
+     * itself (what each state blocks, what the status bar says) lives in {@code BusyState},
+     * where it is table-tested.
      * <p>
-     * Clearing only this pane's fields left the service holding the old
-     * {@code CellIndex} and {@code ImageData}, which pass its non-null guard: a gate
-     * edit made with no image open would then re-run gating and write PathClass
-     * assignments onto the previous image's detections.
+     * While a new image is read the session has no cells, so the controls that need them wait
+     * for it; a refresh of cells the session still holds disables nothing. While a derivation
+     * is in flight the editor waits too — the tree edit that asked for it has already been
+     * taken and shown, but the statistics beside it are being replaced, and an editor write
+     * lands in the gate before it is reported, which is one place the old values must not
+     * reach. Undo, redo, the toggle and the quality filter stay live: a second edit supersedes
+     * the derivation in flight rather than being queued or refused (see
+     * {@link DerivationCoordinator}).
      */
-    private void clearImageState() {
-        cellIndex = null;
-        markerStats = null;
-        markerNames = Collections.emptyList();
-        ingestReport = IngestReport.empty();
-        cachedQualityMask = null;
-        cachedRoiMask = null;
-        cachedRegions = null;
-        previewService.setCellIndex(null);
-        previewService.setMarkerStats(null);
-        previewService.setImageData(null);
-        previewService.setRoiMask(null);
-        previewService.setRegions(null, 0);
+    private void updateBusyControls() {
+        BusyState busy = busyState();
+        addRootBtn.setDisable(busy.loading());
+        editorPane.setDisable(busy.editingBlocked());
+        umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
+        analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
+        updateExportControlsDisabled();
+        updateStatusBar();
+    }
+
+    /** What the three background workers are doing right now; see {@link BusyState}. */
+    private BusyState busyState() {
+        return new BusyState(ingest.busy() == IngestCoordinator.Busy.LOADING,
+                derivations.deriving(), csvExport.exporting());
+    }
+
+    /**
+     * Export CSV (and, through {@link #exportCsv()}'s own guard, Ctrl+E) is disabled whenever
+     * {@link BusyState#exportBlocked()} says so: no cells read yet, an export already running,
+     * or a derivation in flight, whose statistics and masks would otherwise be snapshotted
+     * beside a tree they do not describe. One guard, checked from both places that can end any
+     * of those states, rather than a second parallel disable mechanism.
+     */
+    private void updateExportControlsDisabled() {
+        exportBtn.setDisable(busyState().exportBlocked());
+        updateSpinner();
+    }
+
+    private void updateSpinner() {
+        spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE
+                || derivations.deriving() || csvExport.exporting());
     }
 
     /**
@@ -467,7 +618,7 @@ public class FlowPathPane extends BorderPane {
 
     private void rebuildTreeView() {
         TreeItem<Object> root = new TreeItem<>("Root");
-        for (GateNode gate : gateTree.getRoots()) {
+        for (GateNode gate : session.tree().getRoots()) {
             root.getChildren().add(buildTreeItem(gate));
         }
         treeView.setRoot(root);
@@ -509,17 +660,9 @@ public class FlowPathPane extends BorderPane {
         GateNode node = promptForNewGate();
         if (node == null) return;
         pushUndo();
-        gateTree.addRoot(node);
+        session.tree().addRoot(node);
         rebuildTreeView();
         requestPreviewUpdate();
-    }
-
-    private void addGateToPositive() {
-        addChildGate(0);
-    }
-
-    private void addGateToNegative() {
-        addChildGate(1);
     }
 
     private void addChildGate(int branchIndex) {
@@ -532,6 +675,35 @@ public class FlowPathPane extends BorderPane {
         pushUndo();
         selected.getBranches().get(branchIndex).getChildren().add(child);
         rebuildTreeView();
+        requestPreviewUpdate();
+    }
+
+    /**
+     * A gate was dragged onto another branch — or onto the tree's background, which promotes it
+     * back to a root. {@link GateDragCoordinator} has already recorded the undo step and applied
+     * the move; re-parenting a gate changes neither the ROI mask nor the statistics, so there is
+     * nothing for a derivation to recompute and this stops short of {@link #resyncToTree()},
+     * exactly as {@link #addRootGate()} and {@link #addChildGate(int)} do.
+     * <p>
+     * <b>It goes through {@link #render} rather than rebuilding the tree here.</b> A
+     * {@code rebuildTreeView()} call on its own clears the selection — {@code setRoot} does —
+     * which fires the selection listener with {@code null} and blanks the editor, while the
+     * {@link #selectNodeInTree} that follows suppresses the listener and so never restores it.
+     * A completed move then left the tree showing the gate selected and the editor empty, with
+     * the ancestor mask (which genuinely changed: the gate hangs under a different parent now)
+     * never recomputed. {@link #render} is the one place that already does all of this
+     * correctly — suppressed rebuild, {@link EditorRebuild#surviving}, ancestor mask,
+     * {@link EditorRebuild#needed} — so the only decision left here is which gate the editor
+     * should end up on, and that is the one that was just moved.
+     * <p>
+     * Seeding {@link #currentNode} rather than calling {@code setGateNode} outright keeps the
+     * rebuild conditional: a re-parented gate's own controls (channel, threshold, branch names)
+     * are unchanged, so {@link EditorRebuild#needed} says no, and a polygon the user is halfway
+     * through drawing survives the move.
+     */
+    private void onGateMoved(GateNode moved) {
+        currentNode = moved;
+        render(Optional.empty(), false);
         requestPreviewUpdate();
     }
 
@@ -579,8 +751,8 @@ public class FlowPathPane extends BorderPane {
         pushUndo();
 
         // Remove from parent
-        if (!gateTree.getRoots().remove(selected)) {
-            removeFromTree(gateTree.getRoots(), selected);
+        if (!session.tree().getRoots().remove(selected)) {
+            removeFromTree(session.tree().getRoots(), selected);
         }
 
         editorPane.setGateNode(null);
@@ -591,13 +763,14 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void replaceGateNode(GateNode oldNode, GateNode newNode) {
-        pushUndo();
+        // One step with the editor's gateChanged() that follows, not two.
+        session.recordReplacement();
         // Replace in roots
-        int rootIdx = gateTree.getRoots().indexOf(oldNode);
+        int rootIdx = session.tree().getRoots().indexOf(oldNode);
         if (rootIdx >= 0) {
-            gateTree.getRoots().set(rootIdx, newNode);
+            session.tree().getRoots().set(rootIdx, newNode);
         } else {
-            replaceInTree(gateTree.getRoots(), oldNode, newNode);
+            replaceInTree(session.tree().getRoots(), oldNode, newNode);
         }
         currentNode = newNode;
         // Suppress selection events during rebuild to prevent the editor from being
@@ -659,11 +832,11 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * Resolve a population ref pushed back from the Analysis window's table (or a clicked plot
-     * bar) against the LIVE {@link #gateTree} and land the TreeView's selection on it — the
+     * bar) against the LIVE {@code session.tree()} and land the TreeView's selection on it — the
      * reverse direction of the push {@link #onTreeSelectionChanged} makes into
      * {@link AnalysisWindow#selectPopulation}.
      * <p>
-     * {@code ref} was minted from a report built off {@code gateTree.deepCopy()} (see
+     * {@code ref} was minted from a report built off {@code session.tree().deepCopy()} (see
      * {@link #buildAnalysisInput()}), so {@link GateTree#findBranch} — not any object
      * reference — is what resolves it against the tree the user may have gone on editing since.
      * A ref that no longer resolves (the gate was deleted, disabled, or renamed since the
@@ -673,7 +846,7 @@ public class FlowPathPane extends BorderPane {
      */
     private void onPopulationSelectedFromAnalysis(PopulationRef ref) {
         if (ref == null) return;
-        Branch branch = gateTree.findBranch(ref.rootIndex(), ref.path());
+        Branch branch = session.tree().findBranch(ref.rootIndex(), ref.path());
         if (branch == null) return;
         TreeItem<Object> item = findBranchTreeItem(treeView.getRoot(), branch);
         if (item == null) return;
@@ -700,7 +873,7 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * The {@code (rootIndex, path)} that names {@code target} in the live {@link #gateTree} —
+     * The {@code (rootIndex, path)} that names {@code target} in the live {@code session.tree()} —
      * a one-line map from {@link GateTree#locate}'s {@code BranchLocation} (a {@code model}
      * value) onto {@link PopulationRef} (an {@code analysis.ui} value). The walk itself lives
      * exactly once, in {@code GateTree}, alongside {@link GateTree#findBranch} which it is the
@@ -711,7 +884,7 @@ public class FlowPathPane extends BorderPane {
      * layering violation this method exists to avoid.
      */
     private PopulationRef populationRefFor(Branch target) {
-        GateTree.BranchLocation location = gateTree.locate(target);
+        GateTree.BranchLocation location = session.tree().locate(target);
         return location == null ? null : new PopulationRef(location.rootIndex(), location.path());
     }
 
@@ -767,9 +940,9 @@ public class FlowPathPane extends BorderPane {
     }
 
     private boolean[] computeAncestorMask(GateNode node) {
-        if (cellIndex == null || markerStats == null) return null;
-        boolean[] baseMask = getCombinedMask();
-        return GatingEngine.computeAncestorMask(gateTree, node, cellIndex, markerStats, baseMask);
+        if (session.index() == null || session.stats() == null) return null;
+        return GatingEngine.computeAncestorMask(session.tree(), node, session.index(), session.stats(),
+                session.combinedMask());
     }
 
     /** Recompute and apply the ancestor mask for the currently selected gate. */
@@ -790,49 +963,6 @@ public class FlowPathPane extends BorderPane {
 
     // --- ROI filtering ---
 
-    private void recomputeRoiMask() {
-        if (cellIndex == null) {
-            cachedRoiMask = null;
-            cachedRegions = null;
-            return;
-        }
-
-        if (!gateTree.isRoiFilterEnabled()) {
-            cachedRoiMask = null;
-            cachedRegions = null;
-            previewService.setRoiMask(null);
-            previewService.setRegions(null, 0);
-            return;
-        }
-
-        ImageData<?> imageData = qupath.getImageData();
-        if (imageData == null) {
-            cachedRoiMask = null;
-            cachedRegions = null;
-            previewService.setRoiMask(null);
-            previewService.setRegions(null, 0);
-            return;
-        }
-
-        RegionMask regions = RegionMask.compute(cellIndex, annotationsToFilterBy(imageData));
-        if (regions.isEmpty()) {
-            // Nothing usable to filter by. Treated as "no filter" rather than "exclude
-            // everything": annotations that enclose no area answer contains() false
-            // everywhere, so the old behaviour was to empty the entire view whenever the
-            // only annotation on the image was a point or a line, with empty histograms
-            // as the sole symptom.
-            cachedRegions = null;
-            cachedRoiMask = null;
-            previewService.setRoiMask(null);
-            previewService.setRegions(null, 0);
-        } else {
-            cachedRegions = regions;
-            cachedRoiMask = regions.included();
-            previewService.setRoiMask(cachedRoiMask);
-            previewService.setRegions(regions.regionOf(), regions.regionNames().size());
-        }
-    }
-
     /**
      * The annotations the filter should use: whatever is <b>selected</b> in the viewer, or
      * every annotation on the image when the selection holds none.
@@ -851,31 +981,46 @@ public class FlowPathPane extends BorderPane {
         return new ArrayList<>(hierarchy.getAnnotationObjects());
     }
 
-    private boolean[] getCombinedMask() {
-        if (cachedQualityMask == null) return cachedRoiMask;
-        if (cachedRoiMask == null) return cachedQualityMask;
-        return GatingEngine.combineMasks(cachedQualityMask, cachedRoiMask);
+    /** The annotations for the ROI filter, or none when no image is open. */
+    private List<PathObject> annotationsForRoiFilter() {
+        ImageData<?> imageData = qupath.getImageData();
+        return imageData == null ? List.of() : annotationsToFilterBy(imageData);
     }
 
+    /** One undo step, then the same resync as a load or an undo. */
     private void onRoiFilterToggled() {
-        gateTree.setRoiFilterEnabled(roiFilterCheckBox.isSelected());
-        recomputeRoiMask();
-        refreshAncestorMask();
-        editorPane.setRoiMask(cachedRoiMask);
-        previewService.recomputeStats();
+        session.setRoiFilterEnabled(roiFilterCheckBox.isSelected());
+        resyncToTree();
     }
 
     // --- Updates ---
 
     private void onGateNodeChanged() {
         pushUndoCoalesced();
+        // A legacy z-score gate whose channel this image lacked keeps its flag. Re-pointed
+        // in the editor onto a channel the image does carry, it is convertible now, and must
+        // be converted before the pass below reads its z-value as a raw threshold.
+        session.migrateLegacyZScores().ifPresent(this::showMigrationNotice);
         treeView.refresh();
         requestPreviewUpdate();
         syncViewerChannels(currentNode);
     }
 
+    /**
+     * Opening a gate pinned it to a signal the export carries. No undo step — the user did not
+     * edit anything, and undoing it would only have the editor write it again on the next
+     * opening — but the tree changed, so it is settled as the pre-state for the next edit's
+     * undo step (otherwise that step would silently revert the pin too) and gated, so the
+     * counts describe the column the editor now draws.
+     */
+    private void onGateNodeNormalised() {
+        treeView.refresh();
+        requestPreviewUpdate();
+    }
+
     private void onGateEnabledToggled(GateNode node) {
-        pushUndoCoalesced();
+        // The cell has already written the flag, so record from the settled tree.
+        session.recordAppliedDiscreteEdit();
         requestPreviewUpdate();
     }
 
@@ -961,26 +1106,30 @@ public class FlowPathPane extends BorderPane {
         }
     }
 
+    /**
+     * A quality-filter slider moved (the undo step was recorded just before, see the
+     * constructor). The incremental path rather than {@link #resyncToTree()}: this runs on
+     * every tick of a drag, so the statistics are recomputed in the background and adopted
+     * in the service's {@code onStatsRecomputed} callback.
+     */
     private void onQualityFilterChanged() {
-        if (cellIndex == null) return;
-        recomputeQualityMask();
+        session.settle();
+        if (session.index() == null) return;
+        session.recomputeQualityMask();
         refreshAncestorMask();
         // Recompute stats on background thread, then trigger preview update
         previewService.recomputeStats();
     }
 
-    private void recomputeQualityMask() {
-        if (cellIndex == null) {
-            cachedQualityMask = null;
-            return;
-        }
-        cachedQualityMask = GatingEngine.computeQualityMask(cellIndex, gateTree.getQualityFilter());
-    }
 
 
-
+    /**
+     * Every edit ends here, or in {@link #resyncToTree()}: the edit is complete, so it is
+     * settled as the pre-state for the next gate edit's undo step, and a pass is requested.
+     */
     private void requestPreviewUpdate() {
-        previewService.setGateTree(gateTree);
+        session.settle();
+        previewService.setGateTree(session.tree());
         previewService.requestUpdate();
     }
 
@@ -989,8 +1138,8 @@ public class FlowPathPane extends BorderPane {
         treeView.refresh();
         updateStatusBar();
         refreshColorByRootCombo();
-        umapButton.setDisable(!UMAP_ENABLED || cellIndex == null);
-        analysisButton.setDisable(!ANALYSIS_ENABLED || cellIndex == null);
+        umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
+        analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
 
         // Push the new phenotyping to the UMAP if it is open. push() is a no-op when it
         // is not, so the common case costs one boolean check rather than the snapshot
@@ -1056,7 +1205,7 @@ public class FlowPathPane extends BorderPane {
             // Styled as the primary action on this toolbar because it is the one step
             // that is not file I/O: everything else here saves or loads the gating,
             // this one takes it somewhere new.
-            button.setStyle("-fx-base: #2563eb; -fx-text-fill: white; -fx-font-weight: bold;");
+            button.getStyleClass().add("fp-cta-button");
             button.setTooltip(new Tooltip(
                 "Embed these cells in a UMAP, coloured by the phenotypes above (Ctrl+U).\n"
                 + "Opens pre-configured on the markers your gates use.\n"
@@ -1137,7 +1286,7 @@ public class FlowPathPane extends BorderPane {
         PhenotypeSnapshot snap = buildSnapshot();
         if (snap == null) {
             Dialogs.showWarningNotification("FlowPath",
-                cellIndex == null
+                session.index() == null
                     ? "Load an image with cell detections first."
                     : "Waiting for the first gating pass to finish — try again in a moment.");
             return;
@@ -1156,7 +1305,7 @@ public class FlowPathPane extends BorderPane {
      * update.
      */
     private PhenotypeSnapshot buildSnapshot() {
-        if (cellIndex == null || markerStats == null) return null;
+        if (session.index() == null || session.stats() == null) return null;
         GatingEngine.AssignmentResult result = previewService.getLastResult();
         if (result == null) return null;
 
@@ -1165,12 +1314,12 @@ public class FlowPathPane extends BorderPane {
         boolean[] excluded = result.getExcluded();
         // A result produced against an older index (image switched mid-pass) would
         // mislabel every cell. Drop it and wait for the next pass instead.
-        if (phenotypes.length != cellIndex.size()) return null;
+        if (phenotypes.length != session.index().size()) return null;
 
-        var panel = PhenotypeSnapshot.collectGatedPanel(gateTree);
+        var panel = PhenotypeSnapshot.collectGatedPanel(session.tree());
         return new PhenotypeSnapshot(
-                cellIndex,
-                markerStats,
+                session.index(),
+                session.stats(),
                 markerNames != null ? markerNames : List.of(),
                 compartmentCapability,
                 phenotypes,
@@ -1178,7 +1327,7 @@ public class FlowPathPane extends BorderPane {
                 excluded,
                 panel.markers(),
                 panel.selection(),
-                countGates(gateTree.getRoots()),
+                countGates(session.tree().getRoots()),
                 imageKey());
     }
 
@@ -1213,7 +1362,7 @@ public class FlowPathPane extends BorderPane {
             // caller cannot open the window without also flipping the flag.
             return;
         }
-        if (cellIndex == null) {
+        if (session.index() == null) {
             Dialogs.showWarningNotification("FlowPath", "Load an image with cell detections first.");
             return;
         }
@@ -1238,7 +1387,7 @@ public class FlowPathPane extends BorderPane {
 
     /** {@code true} when the tree has at least one enabled root gate. */
     private boolean hasEnabledRootGate() {
-        for (GateNode root : gateTree.getRoots()) {
+        for (GateNode root : session.tree().getRoots()) {
             if (root.isEnabled()) return true;
         }
         return false;
@@ -1251,14 +1400,14 @@ public class FlowPathPane extends BorderPane {
      * The tally comes straight off {@link LivePreviewService#getLastResult()} — the same
      * walk that just ran, never a second one — per {@code BranchTally}'s own invariant that
      * counting outside the walk would be a second gate predicate. Region names and areas
-     * come from {@link #cachedRegions}, the same {@link RegionMask} instance the walk's
+     * come from {@code session.regions()}, the same {@link RegionMask} instance the walk's
      * region indices were assigned from, so the two can never describe different region
      * sets.
      * <p>
      * <b>The tree is deep-copied, and the tally rebound onto the copy.</b> The window does
      * not merely read the input once: {@code AnalysisSession.stats()} re-walks
      * {@code input.tree()} on every scope, denominator or population change. Handing it
-     * {@link #gateTree} itself therefore handed it a tree the user goes on editing, so
+     * {@code session.tree()} itself therefore handed it a tree the user goes on editing, so
      * disabling the last enabled root left the window holding a tree that yields no rows
      * at all — and because {@code AnalysisState.hasData()} is derived from "a pass was
      * accepted" rather than from the row count, {@code emptyMessage()} stayed {@code null}
@@ -1273,30 +1422,30 @@ public class FlowPathPane extends BorderPane {
      * mismatch fails loudly here instead of silently reporting zeroes.
      */
     private AnalysisSession.AnalysisInput buildAnalysisInput() {
-        if (cellIndex == null || markerStats == null) return null;
+        if (session.index() == null || session.stats() == null) return null;
         GatingEngine.AssignmentResult result = previewService.getLastResult();
         if (result == null) return null;
         BranchTally tally = result.getTally();
 
-        List<String> regionNames = cachedRegions != null ? cachedRegions.regionNames() : List.of();
-        // A pass computed just before cachedRegions changed underneath it (recomputeRoiMask
+        List<String> regionNames = session.regions() != null ? session.regions().regionNames() : List.of();
+        // A pass computed just before session.regions() changed underneath it (a resync
         // ran between this preview's submit and its completion) would carry a tally sized
-        // for the region set that pass actually walked, not the one cachedRegions now
+        // for the region set that pass actually walked, not the one session.regions() now
         // describes. Drop it and wait for the next pass rather than hand
         // AnalysisSession.AnalysisInput's constructor a mismatch it would only reject.
         if (tally.regionCount() != regionNames.size()) return null;
 
-        double[] regionAreas = cachedRegions != null
-                ? regionAreasMm2(cachedRegions, qupath.getImageData()) : null;
+        double[] regionAreas = session.regions() != null
+                ? regionAreasMm2(session.regions(), qupath.getImageData()) : null;
 
         // Freeze the tree this report describes, and move the tally's keys onto the frozen
         // copy in the same breath -- the tally is identity-keyed on Branch objects, and
         // deepCopy() builds fresh ones, so a copy without a rebind would answer 0 for every
         // branch by design.
-        GateTree frozen = gateTree.deepCopy();
+        GateTree frozen = session.tree().deepCopy();
         BranchTally reboundTally;
         try {
-            reboundTally = tally.rebindTo(gateTree.getRoots(), frozen.getRoots());
+            reboundTally = tally.rebindTo(session.tree().getRoots(), frozen.getRoots());
         } catch (IllegalArgumentException structureChanged) {
             // The live tree was edited between the walk finishing and this call, so the
             // tally and the copy describe different trees. Drop the pass and wait for the
@@ -1307,7 +1456,7 @@ public class FlowPathPane extends BorderPane {
             return null;
         }
 
-        return new AnalysisSession.AnalysisInput(frozen, cellIndex, markerStats, reboundTally,
+        return new AnalysisSession.AnalysisInput(frozen, session.index(), session.stats(), reboundTally,
                 regionNames, regionAreas, currentImageName());
     }
 
@@ -1366,7 +1515,7 @@ public class FlowPathPane extends BorderPane {
 
     private void refreshColorByRootCombo() {
         List<String> rootNames = new ArrayList<>();
-        for (GateNode root : gateTree.getRoots()) {
+        for (GateNode root : session.tree().getRoots()) {
             if (root.isEnabled()) {
                 List<String> channels = root.getChannels();
                 rootNames.add(channels.isEmpty() ? "Root" : channels.get(0));
@@ -1375,31 +1524,47 @@ public class FlowPathPane extends BorderPane {
         // Skip update if items haven't changed (avoids triggering selection listeners)
         if (rootNames.equals(colorByRootCombo.getItems())) return;
 
-        int prev = colorByRootCombo.getSelectionModel().getSelectedIndex();
+        // The selection is restored by VALUE, not by index -- see ColorByRootSelection. The
+        // rebuild happens BEFORE the items are replaced, so the listener above resolves any
+        // index JavaFX reports mid-replacement against the new entries, never the old ones.
+        int restore = colorByRoot.rebuild(rootNames);
         colorByRootCombo.getItems().setAll(rootNames);
         if (rootNames.size() <= 1) {
             colorByRootCombo.setDisable(true);
             colorByRootCombo.getSelectionModel().clearSelection();
+            colorByRoot.clear();
             // Reset to default color mode (no-op if already -1)
             previewService.setColorRootIndex(-1);
-        } else {
+        } else if (restore >= 0) {
             colorByRootCombo.setDisable(false);
-            if (prev >= 0 && prev < rootNames.size()) {
-                colorByRootCombo.getSelectionModel().select(prev);
-            }
+            colorByRootCombo.getSelectionModel().select(restore);
+        } else {
+            // The root that was being coloured by is gone (deleted or disabled). Fall back to
+            // the default colours rather than repaint the slide by whichever root inherited
+            // its position.
+            colorByRootCombo.setDisable(false);
+            colorByRootCombo.getSelectionModel().clearSelection();
+            previewService.setColorRootIndex(-1);
         }
     }
 
     private void updateStatusBar() {
-        int total = cellIndex != null ? cellIndex.size() : 0;
+        Optional<String> busyMessage = busyState().message();
+        if (busyMessage.isPresent()) {
+            statusBar.setText(String.format("%s | Gates: %d", busyMessage.get(),
+                countGates(session.tree().getRoots())));
+            statusBar.setTooltip(null);
+            return;
+        }
+        int total = session.index() != null ? session.index().size() : 0;
         int excluded = previewService.getLastExcludedCount();
-        int gateCount = countGates(gateTree.getRoots());
-        String roiInfo = gateTree.isRoiFilterEnabled() ? describeRegions() : "";
+        int gateCount = countGates(session.tree().getRoots());
+        String roiInfo = session.tree().isRoiFilterEnabled() ? describeRegions() : "";
         statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s%s",
             total, excluded, gateCount, roiInfo, ingestWarning()));
         // The full report goes in the tooltip rather than a dialog: an ingest finding is
         // context for reading the histograms, not an event that should block the user.
-        statusBar.setTooltip(cellIndex == null ? null : new Tooltip(ingestReport.describe()));
+        statusBar.setTooltip(session.index() == null ? null : new Tooltip(ingestReport.describe()));
     }
 
     /**
@@ -1412,17 +1577,17 @@ public class FlowPathPane extends BorderPane {
      * the old text could not.
      */
     private String describeRegions() {
-        if (cachedRegions == null) {
+        if (session.regions() == null) {
             return " | ROI: no usable annotation";
         }
         StringBuilder sb = new StringBuilder(" | ROI: ");
-        int regions = cachedRegions.regionNames().size();
+        int regions = session.regions().regionNames().size();
         sb.append(regions).append(regions == 1 ? " region" : " regions");
-        if (cachedRegions.excludeRegionCount() > 0) {
-            sb.append(" \u2212 ").append(cachedRegions.excludeRegionCount()).append(" excluded");
+        if (session.regions().excludeRegionCount() > 0) {
+            sb.append(" \u2212 ").append(session.regions().excludeRegionCount()).append(" excluded");
         }
-        if (cachedRegions.droppedNonArea() > 0) {
-            sb.append(" (").append(cachedRegions.droppedNonArea())
+        if (session.regions().droppedNonArea() > 0) {
+            sb.append(" (").append(session.regions().droppedNonArea())
               .append(" annotation(s) skipped: no area)");
         }
         return sb.toString();
@@ -1440,7 +1605,7 @@ public class FlowPathPane extends BorderPane {
      * line was the same duplication the whole ingest seam exists to remove.
      */
     private String ingestWarning() {
-        if (cellIndex == null) return "";
+        if (session.index() == null) return "";
         String summary = ingestReport.summary();
         return summary.isEmpty() ? "" : " | \u26a0 " + summary;
     }
@@ -1473,10 +1638,10 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptToSaveFile("Save FlowPath", null, "flowpath.json", "JSON", ".json");
         if (file == null) return;
         try {
-            FlowPathSerializer.save(gateTree, file, currentProvenance());
+            FlowPathSerializer.save(session.tree(), file, currentProvenance());
             Dialogs.showInfoNotification("FlowPath", "Saved to " + file.getName());
         } catch (Exception ex) {
-            Dialogs.showErrorMessage("Save Error", ex.getMessage());
+            Dialogs.showErrorMessage("Save Error", ErrorMessages.describe(ex));
         }
     }
 
@@ -1489,9 +1654,9 @@ public class FlowPathPane extends BorderPane {
      */
     private FlowPathSerializer.Provenance currentProvenance() {
         String imageName = currentImageName();
-        int cells = cellIndex != null ? cellIndex.getSize() : -1;
-        List<String> channels = cellIndex != null
-                ? List.of(cellIndex.getMarkerNames())
+        int cells = session.index() != null ? session.index().getSize() : -1;
+        List<String> channels = session.index() != null
+                ? List.of(session.index().getMarkerNames())
                 : List.of();
         return new FlowPathSerializer.Provenance(imageName, cells, channels);
     }
@@ -1500,26 +1665,14 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptForFile("Load FlowPath", null, "JSON", ".json");
         if (file == null) return;
         try {
-            pushUndo();
-            gateTree = FlowPathSerializer.load(file);
-            // Sync the quality filter pane to the new filter object
-            qualityFilterPane.setFilter(gateTree.getQualityFilter());
-
-            // Restore ROI filter checkbox state
-            suppressRoiFilterEvents = true;
-            roiFilterCheckBox.setSelected(gateTree.isRoiFilterEnabled());
-            suppressRoiFilterEvents = false;
-            recomputeRoiMask();
-
-            rebuildTreeView();
-            onQualityFilterChanged();
-            requestPreviewUpdate();
+            session.replaceTree(FlowPathSerializer.load(file));
+            resyncToTree();
 
             // Check for missing markers and warn user
             if (markerNames != null && !markerNames.isEmpty()) {
                 Set<String> available = new HashSet<>(markerNames);
                 Set<String> missing = new LinkedHashSet<>();
-                collectGateChannels(gateTree.getRoots(), missing, available);
+                collectGateChannels(session.tree().getRoots(), missing, available);
                 if (!missing.isEmpty()) {
                     Dialogs.showWarningNotification("FlowPath",
                         "Gate channels not found in current image: " + String.join(", ", missing));
@@ -1528,12 +1681,23 @@ public class FlowPathPane extends BorderPane {
 
             Dialogs.showInfoNotification("FlowPath", "Loaded from " + file.getName());
         } catch (Exception ex) {
-            Dialogs.showErrorMessage("Load Error", ex.getMessage());
+            Dialogs.showErrorMessage("Load Error", ErrorMessages.describe(ex));
         }
     }
 
+    /**
+     * Snapshot the tree, cells, statistics, ROI mask and regions at this moment and hand them
+     * to {@link #csvExport}, which gates and writes them on {@link #backgroundExecutor}. The
+     * snapshot -- not the live session -- is what reaches the file, so a gate edited while the
+     * export is running never leaks into it. A stray Ctrl+E while the export button is
+     * disabled -- the accelerator is not tied to it -- is a no-op: an export already running,
+     * cells still being read, or a derivation in flight, in which case the statistics and ROI
+     * mask beside the tree are the ones it is replacing and the file would not describe any
+     * state the session was ever in.
+     */
     private void exportCsv() {
-        if (cellIndex == null || markerStats == null || gateTree.getRoots().isEmpty()) {
+        if (busyState().exportBlocked()) return;
+        if (session.index() == null || session.stats() == null || session.tree().getRoots().isEmpty()) {
             Dialogs.showWarningNotification("FlowPath", "No gates defined or no cells loaded.");
             return;
         }
@@ -1541,14 +1705,10 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptToSaveFile("Export Phenotypes", null, "gate_pheno.csv", "CSV", ".csv");
         if (file == null) return;
 
-        try {
-            GatingEngine.AssignmentResult result = GatingEngine.assignAll(
-                gateTree, cellIndex, markerStats, cachedRoiMask);
-            PhenotypeCsvExporter.export(file, cellIndex, result, gateTree, markerStats, cachedRegions);
-            Dialogs.showInfoNotification("FlowPath", "Exported " + file.getName());
-        } catch (Exception ex) {
-            Dialogs.showErrorMessage("Export Error", ex.getMessage());
-        }
+        CsvExportJob.Snapshot snapshot = CsvExportJob.Snapshot.of(
+                file, session.tree(), session.index(), session.stats(), session.roiMask(), session.regions());
+        csvExport.export(snapshot);
+        updateExportControlsDisabled();
     }
 
     // --- Context menu ---
@@ -1556,6 +1716,12 @@ public class FlowPathPane extends BorderPane {
     private void showTreeContextMenu(double screenX, double screenY) {
         GateNode selected = getSelectedGateNode();
         ContextMenu menu = new ContextMenu();
+        // Same predicate as addRootBtn's own setDisable: there is no index yet to add a gate
+        // against, so "Add Root Gate..." and "Add child to..." are disabled while loading,
+        // exactly as the toolbar button already is -- the tree view offered them regardless,
+        // whether or not the tree is currently editable (Duplicate/Remove need no index and
+        // stay enabled).
+        boolean loading = busyState().loading();
 
         if (selected != null) {
             // Add child gate to each branch
@@ -1564,6 +1730,7 @@ public class FlowPathPane extends BorderPane {
                 int branchIdx = i;
                 MenuItem addItem = new MenuItem("Add child to '" + branch.getName() + "'");
                 addItem.setOnAction(e -> addChildGate(branchIdx));
+                addItem.setDisable(loading);
                 menu.getItems().add(addItem);
             }
             menu.getItems().add(new SeparatorMenuItem());
@@ -1578,6 +1745,7 @@ public class FlowPathPane extends BorderPane {
         } else {
             MenuItem addRoot = new MenuItem("Add Root Gate...");
             addRoot.setOnAction(e -> addRootGate());
+            addRoot.setDisable(loading);
             menu.getItems().add(addRoot);
         }
 
@@ -1592,11 +1760,11 @@ public class FlowPathPane extends BorderPane {
         GateNode copy = selected.deepCopy();
 
         // Insert as sibling: find parent and add to the same branch
-        if (gateTree.getRoots().contains(selected)) {
-            gateTree.addRoot(copy);
+        if (session.tree().getRoots().contains(selected)) {
+            session.tree().addRoot(copy);
         } else {
             // Search for the branch containing the selected gate
-            for (GateNode root : gateTree.getRoots()) {
+            for (GateNode root : session.tree().getRoots()) {
                 if (insertSiblingCopy(root, selected, copy)) break;
             }
         }
@@ -1620,39 +1788,136 @@ public class FlowPathPane extends BorderPane {
     // --- Undo / Redo ---
 
     private void pushUndo() {
-        undoHistory.record(gateTree);
+        session.recordEdit();
     }
 
+    /**
+     * Record a gate edit the editor has already written (it writes, then fires
+     * {@code onNodeChanged}), from the tree as it stood before, coalesced with the rest of
+     * its drag.
+     */
     private void pushUndoCoalesced() {
-        undoHistory.recordCoalesced(gateTree);
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
     }
 
     private void undo() {
-        undoHistory.undo(gateTree).ifPresent(previous -> {
-            gateTree = previous;
-            afterUndoRedo();
-        });
+        if (session.undo()) resyncToTree();
     }
 
     private void redo() {
-        undoHistory.redo(gateTree).ifPresent(next -> {
-            gateTree = next;
-            afterUndoRedo();
-        });
+        if (session.redo()) resyncToTree();
     }
 
-    private void afterUndoRedo() {
-        currentNode = null;
-        qualityFilterPane.setFilter(gateTree.getQualityFilter());
-        editorPane.setGateNode(null);
-        rebuildTreeView();
-        requestPreviewUpdate();
+    /**
+     * Bring every widget and the gating pass in line with the session's current tree and
+     * index: the path for a load, an undo or redo and an ROI toggle. An image switch and a
+     * hierarchy change take the same resync through {@link #ingest}; these take it through
+     * {@link #derivations}. Either way the masks and statistics are computed on
+     * {@link #backgroundExecutor} and the result is rendered here through {@link #render} —
+     * a changed mask re-sorts every marker column over every cell, which on a million-cell
+     * slide froze QuPath for seconds when it ran here.
+     * <p>
+     * What is <em>not</em> deferred is the tree edit itself: the undo, redo, load or toggle
+     * has already been applied to {@link #session} on this thread before this is called, so the
+     * undo stack, its coalescing window and the baseline the next edit records are untouched.
+     * A second edit while a derivation is in flight is taken at once and supersedes it.
+     * <p>
+     * Nor is <em>showing</em> that edit deferred. The widgets are rendered here, against the
+     * derived state the session still holds, and again when the derivation lands. Rendering
+     * only at the landing left the tree view and the editor holding {@code GateNode}s an undo
+     * or a load had already replaced — an edit made in that window was written into a node no
+     * longer in the tree and silently dropped, while still costing an undo step. The counts
+     * shown meanwhile are the previous pass's, exactly as they are for any edit whose gating
+     * pass has not finished.
+     * <p>
+     * {@link GatingSession#resync} recomputes the ROI mask, quality mask and statistics from
+     * this tree's own filters, migrates a legacy z-score tree through those statistics, and
+     * requests the gating pass (see {@link #requestGatingPass}). This method then renders the
+     * result (see {@link #render}): quality-filter panel, ROI checkbox (events suppressed, so rendering is not
+     * mistaken for a toggle), editor masks and statistics, tree view, the selected gate if it
+     * is still in the tree, and the status bar.
+     * <p>
+     * Undo used to redraw only the panel and the tree, so the ROI checkbox, the cached masks
+     * and the statistics went on describing the tree before the undo. Add a step here, never
+     * at a caller.
+     */
+    private void resyncToTree() {
+        // Show the edit, then ask for its derivation: requesting first would render twice on
+        // the no-cells path, where the request resyncs and renders on this very thread.
+        render(Optional.empty(), false);
+        derivations.request();
+    }
+
+    /**
+     * Render what the session holds — a resync's result, from {@link #ingest} or from
+     * {@link #derivations}, or the tree as an edit has just left it, before its derivation has
+     * been asked for (see {@link #resyncToTree()}).
+     * <p>
+     * The editor is rebuilt only when it has to be: the cells changed ({@code newIndex}), a
+     * migration rewrote gates in place, or the selected gate is not the one it shows (an undo
+     * or a load swaps in fresh {@code GateNode}s). An annotation edit or a filter toggle keeps
+     * it, and its plots redraw through the masks and statistics set below. Rebuilding on every
+     * resync threw away a polygon half-drawn on the scatter plot whenever an annotation moved.
+     */
+    private void render(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+        GateTree tree = session.tree();
+
+        qualityFilterPane.setFilter(tree.getQualityFilter());
+        suppressRoiFilterEvents = true;
+        try {
+            roiFilterCheckBox.setSelected(tree.isRoiFilterEnabled());
+        } finally {
+            suppressRoiFilterEvents = false;
+        }
+
+        editorPane.setCellIndex(session.index());
+        editorPane.setRoiMask(session.roiMask());
+        editorPane.setMarkerStats(session.stats());
+
+        // Undo and load swap in a tree of fresh GateNode objects, so the gate the editor was
+        // showing may no longer be in it; an image switch or a filter toggle keeps it.
+        suppressTreeSelection = true;
+        try {
+            rebuildTreeView();
+            currentNode = EditorRebuild.surviving(currentNode, tree);
+            if (currentNode != null) selectNodeInTree(currentNode);
+        } finally {
+            suppressTreeSelection = false;
+        }
+        editorPane.setAncestorMask(currentNode != null ? computeAncestorMask(currentNode) : null);
+        if (EditorRebuild.needed(newIndex, notice.isPresent(), editorPane.getGateNode(), currentNode)) {
+            editorPane.setGateNode(currentNode);
+        }
+
+        updateStatusBar();
+        notice.ifPresent(this::showMigrationNotice);
+    }
+
+    /** Hand a resync's result to the live preview and request the pass. */
+    private void requestGatingPass(GatingSession.PassInput input) {
+        RegionMask regions = input.regions();
+        previewService.setCellIndex(input.index());
+        previewService.setMarkerStats(input.stats());
+        previewService.setRoiMask(input.roiMask());
+        previewService.setRegions(regions != null ? regions.regionOf() : null,
+                regions != null ? regions.regionNames().size() : 0);
+        previewService.setGateTree(input.tree());
+        previewService.requestUpdate();
+    }
+
+    private void showMigrationNotice(GatingSession.MigrationNotice notice) {
+        if (notice.warning()) {
+            Dialogs.showWarningNotification("FlowPath", notice.message());
+        } else {
+            Dialogs.showInfoNotification("FlowPath", notice.message());
+        }
     }
 
     /**
      * Clean up resources when the window is closed.
      * <p>
-     * Detaching the hierarchy listener matters as much as stopping the executor:
+     * Closing the ingest coordinator (which detaches its hierarchy listener) matters as much
+     * as stopping the executors:
      * the extension builds a fresh pane every time the window is reopened
      * ({@code FlowPathExtension.showGateTreeWindow}), so a listener left attached
      * keeps a discarded pane — and its whole {@code CellIndex} — reachable, and
@@ -1665,9 +1930,14 @@ public class FlowPathPane extends BorderPane {
      * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
-        detachHierarchyListener();
+        ingest.close();
+        derivations.close();
         umapWindow.close();
         analysisWindow.dispose();
         previewService.shutdown();
+        // shutdownNow: a read or an export still queued on this executor is for a pane that is
+        // gone. Its result could not land anyway -- ingest is closed above, and a queued export
+        // has no pane left to notify either way -- so there is nothing to wait for.
+        backgroundExecutor.shutdownNow();
     }
 }

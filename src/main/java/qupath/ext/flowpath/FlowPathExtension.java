@@ -62,7 +62,12 @@ public class FlowPathExtension implements QuPathExtension {
         stage = new Stage();
         stage.setTitle("FlowPath — Gating");
         stage.initOwner(qupath.getStage());
-        stage.setScene(new Scene(flowPathPane, 940, 720));
+        Scene scene = new Scene(flowPathPane, 940, 720);
+        // Class-relative getResource(), so this resolves from the fat JAR the release
+        // workflow ships as well as from the exploded classes directory in dev/test.
+        scene.getStylesheets().add(
+                FlowPathExtension.class.getResource("/qupath/ext/flowpath/ui/flowpath.css").toExternalForm());
+        stage.setScene(scene);
         stage.setMinWidth(700);
         stage.setMinHeight(500);
 

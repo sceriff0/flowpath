@@ -38,6 +38,10 @@ public class LivePreviewService {
     private volatile GateTree gateTree;
     private volatile CellIndex cellIndex;
     private volatile MarkerStats markerStats;
+    /** Guards {@link #markerStats} against a background recompute that an explicit set superseded. */
+    private final Object statsLock = new Object();
+    /** Bumped by every {@link #setMarkerStats}; a recompute publishes only if it is unchanged. */
+    private long statsGeneration;
     private volatile ImageData<?> imageData;
     private volatile boolean[] roiMask;
     /** Per-cell annotated-region index (from {@code RegionMask.regionOf()}), or {@code null}. */
@@ -73,11 +77,19 @@ public class LivePreviewService {
     private volatile boolean firingHierarchyEvent;
 
     public LivePreviewService() {
-        this.executor = Executors.newSingleThreadExecutor(r -> {
+        this(Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "flowpath-preview");
             t.setDaemon(true);
             return t;
-        });
+        }));
+    }
+
+    /**
+     * Run background work on {@code executor}. Package-private so a test can drive the
+     * work by hand and choose an ordering, rather than hope a scheduler produces it.
+     */
+    LivePreviewService(ExecutorService executor) {
+        this.executor = executor;
         this.debounce = new PauseTransition(Duration.millis(DEBOUNCE_MS));
         this.debounce.setOnFinished(e -> submitGatingWork());
     }
@@ -92,8 +104,19 @@ public class LivePreviewService {
         this.cellIndex = index;
     }
 
+    /**
+     * Adopt {@code stats} as the statistics gating runs against.
+     * <p>
+     * This supersedes any {@link #recomputeStats()} still in flight: that recompute was
+     * submitted against an older filter, and letting it land afterwards would put
+     * statistics back that the caller has just replaced (an undo during a quality-filter
+     * drag was exactly that).
+     */
     public void setMarkerStats(MarkerStats stats) {
-        this.markerStats = stats;
+        synchronized (statsLock) {
+            this.markerStats = stats;
+            statsGeneration++;
+        }
     }
 
     public MarkerStats getMarkerStats() {
@@ -209,15 +232,22 @@ public class LivePreviewService {
             return;
         }
         final QualityFilter qf = rawQf.deepCopy();
+        final long generation;
+        synchronized (statsLock) {
+            generation = statsGeneration;
+        }
         executor.submit(() -> {
             // As in submitGatingWork: the Future is discarded, so a throw here would
             // otherwise vanish -- combineMasks rejects a length mismatch, and silently
             // never recomputing the statistics would surface only as stale sliders.
             try {
-                boolean[] qualityMask = GatingEngine.computeQualityMask(idx, qf);
-                boolean[] mask = roi != null ? GatingEngine.combineMasks(qualityMask, roi) : qualityMask;
-                MarkerStats recomputed = MarkerStats.compute(idx, mask);
-                this.markerStats = recomputed;
+                MarkerStats recomputed = GatingEngine.recomputeStats(idx, qf, roi);
+                synchronized (statsLock) {
+                    // Someone set statistics explicitly after this was submitted -- a resync
+                    // under a restored filter. Those are newer than anything computed here.
+                    if (generation != statsGeneration) return;
+                    this.markerStats = recomputed;
+                }
                 if (onStatsRecomputed != null) {
                     Platform.runLater(onStatsRecomputed);
                 }
@@ -277,28 +307,47 @@ public class LivePreviewService {
                 Platform.runLater(() -> {
                     // Discard result if the live tree changed (e.g. undo/redo) while we were computing
                     if (this.gateTree != originalTree) return;
-                    // Transfer counts from the snapshot back to the live tree for UI display
-                    GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
+                    // ...or the index did: a detection re-read keeps the tree, and this pass's
+                    // phenotypes are positional against the cells it walked. Published, a
+                    // same-size re-read passed buildSnapshot's length check and the UMAP
+                    // handoff labelled the new cells with the old cells' phenotypes. The
+                    // resync that installed the new index has queued its own pass.
+                    if (this.cellIndex != index) return;
 
-                    // ...and re-key the per-branch tally the same way. transferCounts moves
-                    // only Branch.getCount(); the tally is identity-keyed on the *copy's*
-                    // Branch objects, so without this every per-branch lookup a consumer
-                    // makes against the live tree misses and reads 0 -- which is exactly how
-                    // the Analysis window shipped reporting every population as empty.
+                    // Re-key the per-branch tally onto the live tree's Branch objects.
+                    // GateTree.transferCounts below moves only Branch.getCount(); the tally is
+                    // identity-keyed on the *copy's* Branch objects, so without this every
+                    // per-branch lookup a consumer makes against the live tree misses and
+                    // reads 0 -- which is exactly how the Analysis window shipped reporting
+                    // every population as empty.
+                    //
+                    // This runs BEFORE transferCounts, and the order is load-bearing.
+                    // rebindTo pairs strictly and throws when the structures have diverged;
+                    // transferCounts pairs leniently and simply stops at the shorter forest,
+                    // which means it writes one gate's counts onto another gate's branches
+                    // when the live tree was restructured while this pass walked its copy.
+                    // Done the other way round, a drag-and-drop mid-pass (roots [CD3, CD8]
+                    // walked, [CD8] live after CD3 was dropped under it) landed CD3's counts
+                    // on CD8's branches and only then hit the refusal below -- the pass was
+                    // discarded, but the tree view was left showing plausible, wrong numbers
+                    // until the queued pass landed. Nothing is written to the live tree now
+                    // until the rebind has agreed the two structures still pair.
                     GatingEngine.AssignmentResult published;
                     try {
                         published = result.withTally(
                                 result.getTally().rebindTo(tree.getRoots(), originalTree.getRoots()));
                     } catch (IllegalArgumentException ex) {
                         // The live tree was edited in place while this pass walked its copy
-                        // (addRoot/addChildGate mutate the same GateTree instance, so the
-                        // identity check above cannot see it). Every such edit queues a fresh
-                        // pass, so drop this one rather than publish counts keyed to a
-                        // structure that no longer exists.
+                        // (addRoot/addChildGate and the drag-and-drop reorder mutate the same
+                        // GateTree instance, so the identity check above cannot see it). Every
+                        // such edit queues a fresh pass, so drop this one rather than publish
+                        // counts keyed to a structure that no longer exists.
                         logger.debug("Gate tree changed structurally while a preview pass ran; "
                                 + "discarding the pass and waiting for the queued one.", ex);
                         return;
                     }
+                    // Transfer counts from the snapshot back to the live tree for UI display
+                    GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
                     applyResult(published, index, data, true);
                 });
             } catch (RuntimeException | Error ex) {

@@ -79,7 +79,6 @@ class PhenotypeCsvGeometryTest {
         MarkerStats stats = MarkerStats.compute(index, all);
 
         GateNode gate = new GateNode("CD3");
-        gate.setThresholdIsZScore(false);
         gate.setThreshold(100.0);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);

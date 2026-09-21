@@ -9,6 +9,7 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
@@ -41,14 +42,12 @@ class ClassificationEdgeCaseTest {
     private static GateNode threshold(String channel, double t) {
         GateNode g = new GateNode(channel, t);
         g.setStatistic(Statistic.MEAN);
-        g.setThresholdIsZScore(false);
         return g;
     }
 
     private static <G extends Region2DGate> G raw2D(G g) {
         g.setStatisticX(Statistic.MEAN);
         g.setStatisticY(Statistic.MEAN);
-        g.setThresholdIsZScore(false);
         return g;
     }
 
@@ -82,19 +81,22 @@ class ClassificationEdgeCaseTest {
         assertEquals(2, gate.getBranches().get(1).getCount(), "1, 2");
     }
 
-    // The same >= rule in z-score space: the cell sitting exactly at the column mean has
-    // z == 0.0 and is positive at a z-threshold of 0.
+    // The same >= rule for a legacy z-threshold of 0 once migrated: it converts to exactly
+    // the column mean, and the cell sitting on the mean is still positive.
     @Test
-    void aCellExactlyAtTheMeanIsPositiveAtAZeroZThreshold() {
+    void aCellExactlyAtTheMeanIsPositiveAtAMigratedZeroZThreshold() {
         CellIndex index = Cells.of(3).marker("A", 1.0, 2.0, 3.0).area(100.0).build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
         GateNode gate = threshold("A", 0.0);
         gate.setThresholdIsZScore(true);
+        GateTree tree = treeOf(gate);
 
-        AssignmentResult result = GatingEngine.assignAll(treeOf(gate), index, stats);
+        LegacyZScoreMigration.migrate(tree, index, stats);
+        assertEquals(2.0, gate.getThreshold(), 0.0, "z = 0 is exactly the mean");
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
         assertEquals("A-", result.getPhenotypes()[0]);
-        assertEquals("A+", result.getPhenotypes()[1], "z(2.0) == 0.0 is at-or-above 0.0");
+        assertEquals("A+", result.getPhenotypes()[1], "2.0 on the migrated cut is at-or-above");
         assertEquals("A+", result.getPhenotypes()[2]);
     }
 
@@ -109,7 +111,6 @@ class ClassificationEdgeCaseTest {
         QuadrantGate gate = new QuadrantGate("X", "Y", 2.0, 2.0);
         gate.setStatisticX(Statistic.MEAN);
         gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
 
         AssignmentResult result = GatingEngine.assignAll(treeOf(gate), index, stats);
         String[] p = result.getPhenotypes();
@@ -124,23 +125,42 @@ class ClassificationEdgeCaseTest {
 
     // ---- region boundaries and degenerate shapes ----
 
-    // Characterisation of PolygonGate's ray-casting boundary rule, which is half-open: the
-    // left/bottom edges of an axis-aligned square are inside, the right/top edges outside.
-    // Note this differs from RectangleGate (all edges inclusive) for the same square.
+    // All four edges and all four vertices of an axis-aligned square are Inside -- the same
+    // rule RectangleGate already applies to the same square (see Region2DGate's javadoc).
+    // A point one representable double outside any edge is Outside.
     @Test
-    void polygonBoundaryIsHalfOpenLeftAndBottomInRightAndTopOut() {
+    void polygonBoundaryIncludesEveryEdgeAndVertex() {
         PolygonGate gate = new PolygonGate("X", "Y");
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0},
                 new double[]{2, 2}, new double[]{0, 2}));
 
         assertTrue(gate.contains(0.0, 1.0), "left edge");
         assertTrue(gate.contains(1.0, 0.0), "bottom edge");
+        assertTrue(gate.contains(2.0, 1.0), "right edge");
+        assertTrue(gate.contains(1.0, 2.0), "top edge");
         assertTrue(gate.contains(0.0, 0.0), "bottom-left vertex");
-        assertFalse(gate.contains(2.0, 1.0), "right edge");
-        assertFalse(gate.contains(1.0, 2.0), "top edge");
-        assertFalse(gate.contains(2.0, 2.0), "top-right vertex");
-        assertFalse(gate.contains(2.0, 0.0), "bottom-right vertex");
-        assertFalse(gate.contains(0.0, 2.0), "top-left vertex");
+        assertTrue(gate.contains(2.0, 2.0), "top-right vertex");
+        assertTrue(gate.contains(2.0, 0.0), "bottom-right vertex");
+        assertTrue(gate.contains(0.0, 2.0), "top-left vertex");
+
+        double justOutside = Math.nextUp(2.0);
+        assertFalse(gate.contains(justOutside, 1.0), "just past the right edge");
+        assertFalse(gate.contains(1.0, justOutside), "just past the top edge");
+        assertFalse(gate.contains(Math.nextDown(0.0), 1.0), "just past the left edge");
+        assertFalse(gate.contains(1.0, Math.nextDown(0.0)), "just past the bottom edge");
+    }
+
+    // A self-intersecting (bowtie) polygon still puts every point on any of its edges
+    // Inside, including the crossing segments and the point where they cross.
+    @Test
+    void selfIntersectingPolygonEdgesIncludingTheCrossingAreInside() {
+        PolygonGate gate = new PolygonGate("X", "Y");
+        gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 2},
+                new double[]{2, 0}, new double[]{0, 2}));
+
+        assertTrue(gate.contains(0.5, 0.5), "on the (0,0)-(2,2) diagonal edge");
+        assertTrue(gate.contains(1.0, 1.0), "the crossing point of the two diagonals");
+        assertTrue(gate.contains(1.5, 0.5), "on the (2,0)-(0,2) diagonal edge");
     }
 
     // A self-intersecting (bowtie) polygon follows the even-odd rule: the two lobes are
@@ -199,28 +219,32 @@ class ClassificationEdgeCaseTest {
                 "the cell at (0, 0) sits on the degenerate rectangle's only point");
     }
 
-    // The z-score arm of the same degenerate case is far worse: z-mode is the default, the
-    // cleared rectangle sits at z = (0,0), and a zero-spread column z-scores EVERY cell to 0.0.
+    // The whole-population arm of the same degenerate case: every cell reads exactly (0, 0)
+    // -- a raw background channel -- so every cell sits on the cleared rectangle's only
+    // point. (It used to be reached through a zero-spread column z-scoring every cell to 0;
+    // a legacy cleared rectangle on such a column must also migrate still cleared.)
     @Test
-    void aClearedRectangleInZScoreModeDoesNotSelectAZeroSpreadPopulation() {
-        CellIndex index = Cells.of(6).marker("X", 7.0).marker("Y", 7.0).area(100.0).build();
+    void aClearedRectangleDoesNotSelectAPopulationSittingAtTheOrigin() {
+        CellIndex index = Cells.of(6).marker("X", 0.0).marker("Y", 0.0).area(100.0).build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(6));
-        RectangleGate gate = new RectangleGate("X", "Y", 0, 0, 0, 0);
-        gate.setStatisticX(Statistic.MEAN);
-        gate.setStatisticY(Statistic.MEAN);
+        RectangleGate gate = raw2D(new RectangleGate("X", "Y", 0, 0, 0, 0));
         gate.setThresholdIsZScore(true);
+        GateTree tree = treeOf(gate);
 
-        GatingEngine.assignAll(treeOf(gate), index, stats);
+        LegacyZScoreMigration.migrate(tree, index, stats);
+        GatingEngine.assignAll(tree, index, stats);
 
+        assertEquals(0.0, gate.getMaxX(), "a cleared rectangle migrates still cleared");
         assertEquals(0, gate.getInsideBranch().getCount(),
                 "a cleared rectangle must not select the whole population");
         assertEquals(6, gate.getOutsideBranch().getCount());
     }
 
     // The ellipse counterpart of the cleared-shape case, through the engine rather than
-    // contains(): zero radii at the origin put even an origin cell Outside, in z mode too.
+    // contains(): zero radii at the origin put even an origin cell Outside, and a legacy flag
+    // still on the gate changes nothing -- the engine has no second space to read it in.
     @Test
-    void aClearedEllipseClassifiesEveryCellOutsideInBothSpaces() {
+    void aClearedEllipseClassifiesEveryCellOutsideWithOrWithoutTheLegacyFlag() {
         for (boolean z : new boolean[]{false, true}) {
             CellIndex index = Cells.of(4).marker("X", 0.0).marker("Y", 0.0).area(100.0).build();
             MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
@@ -364,13 +388,13 @@ class ClassificationEdgeCaseTest {
     }
 
     // A zero-spread column with clipping on: every percentile equals the constant, so no cell
-    // is strictly outside the bounds; and z-scores collapse to 0.0, so all land positive at z=0.
+    // is strictly outside the bounds; and every cell sits exactly on a cut at the constant, so
+    // all land positive.
     @Test
-    void aZeroSpreadColumnClipsNobodyAndZScoresEveryoneToTheMean() {
+    void aZeroSpreadColumnClipsNobodyAndACutAtTheConstantKeepsEveryone() {
         CellIndex index = Cells.of(8).marker("A", 5.0).area(100.0).build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(8));
-        GateNode gate = threshold("A", 0.0);
-        gate.setThresholdIsZScore(true);
+        GateNode gate = threshold("A", 5.0);
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(10.0);
         gate.setClipPercentileHigh(90.0);
@@ -413,10 +437,11 @@ class ClassificationEdgeCaseTest {
         assertEquals(rect.getInsideBranch().getName(), r2.getPhenotypes()[3]);
     }
 
-    // One +Infinity in a column must not poison the z-score of every finite cell. MarkerStats
-    // excludes only NaN from mean/std, so mean=Inf and std=NaN; toZScore's `std < 1e-10`
-    // guard is false for NaN, every finite z becomes NaN, and `NaN >= t` silently counts ALL
-    // cells negative -- the same silent-plausible-wrong shape as the old silent-zero z-score.
+    // One +Infinity in a column must not poison the statistics of every finite cell. MarkerStats
+    // used to exclude only NaN from mean/std, so mean=Inf and std=NaN; toZScore's `std < 1e-10`
+    // guard is false for NaN and every finite z became NaN. Gates no longer z-score, but the
+    // UMAP still does, and a legacy z-threshold is migrated through the same mean and std --
+    // an infinite mean would convert it to an infinite cut that no finite cell reaches.
     @Test
     void oneInfiniteValueDoesNotTurnEveryFiniteZScoreIntoNaN() {
         CellIndex index = Cells.of(11)
@@ -429,7 +454,10 @@ class ClassificationEdgeCaseTest {
 
         GateNode gate = threshold("A", 0.0);
         gate.setThresholdIsZScore(true);
-        AssignmentResult result = GatingEngine.assignAll(treeOf(gate), index, stats);
+        GateTree tree = treeOf(gate);
+        LegacyZScoreMigration.migrate(tree, index, stats);
+        assertTrue(Double.isFinite(gate.getThreshold()), "migrated through finite statistics");
+        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
         assertEquals("A+", result.getPhenotypes()[9],
                 "10.0, the largest finite value, is above any mean that is not itself infinite");
     }

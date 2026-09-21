@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -24,7 +24,6 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
-import qupath.ext.flowpath.model.MeasuredColumn;
 
 /**
  * The display path and the classification path must answer "which branch does this
@@ -41,10 +40,9 @@ import qupath.ext.flowpath.model.MeasuredColumn;
  * polygon edge, on the ellipse rim, on the quadrant crosshair) called out explicitly
  * because that is where two spellings of the same predicate diverge first.
  * <p>
- * Gates are put in <b>raw</b> mode so the probe coordinates are literally the values the
- * engine compares; the raw-vs-z-score transform is a separate concern (it is shared
- * through {@code ResolvedGate} / {@code MeasuredColumn}) and is covered by the z-score
- * case at the end.
+ * The probe coordinates are literally the values the engine compares: there is one space,
+ * the column as measured. The case at the end pins that a legacy gate still carrying the
+ * retired z-score flag does not open a second one on either side.
  */
 class DisplayClassificationAgreementTest {
 
@@ -150,7 +148,6 @@ class DisplayClassificationAgreementTest {
     void quadrantGateAgreesIncludingOnTheCrosshair() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         QuadrantGate gate = new QuadrantGate(MX, MY, 0.5, 0.5);
-        gate.setThresholdIsZScore(false);
         named(gate);
 
         double[] px = {1.0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.0, 1.0};
@@ -162,7 +159,6 @@ class DisplayClassificationAgreementTest {
     void rectangleGateAgreesOnItsEdgesAndCorners() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         RectangleGate gate = new RectangleGate(MX, MY, 0.0, 1.0, 0.0, 1.0);
-        gate.setThresholdIsZScore(false);
         named(gate);
 
         double[] px = {0.5, 0.0, 1.0, 0.0, 1.0, 0.5, -0.001, 1.001, 2.0, 0.5};
@@ -174,7 +170,6 @@ class DisplayClassificationAgreementTest {
     void ellipseGateAgreesOnItsRim() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         EllipseGate gate = new EllipseGate(MX, MY, 0.0, 0.0, 1.0, 1.0);
-        gate.setThresholdIsZScore(false);
         named(gate);
 
         // (0.6, 0.8) sits exactly on the rim: 0.36 + 0.64 == 1.0 in binary floating point.
@@ -188,12 +183,37 @@ class DisplayClassificationAgreementTest {
         assumeTrue(FxTestSupport.toolkitAvailable());
         PolygonGate gate = new PolygonGate(MX, MY);
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0}, new double[]{2, 2}, new double[]{0, 2}));
-        gate.setThresholdIsZScore(false);
         named(gate);
 
         double[] px = {1.0, 0.0, 2.0, 1.0, 1.0, 0.0, 2.0, 3.0, -1.0};
         double[] py = {1.0, 0.0, 2.0, 0.0, 2.0, 1.0, 1.0, 1.0, 1.0};
         assertAgrees("polygon", gate, px, py);
+    }
+
+    // Every edge and vertex of the square is Inside on both paths -- not merely agreeing with
+    // each other on some rule, but agreeing on the specific Inside rule the user chose.
+    @Test
+    void polygonBoundaryIsInsideOnBothPathsForEveryEdgeAndVertex() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        PolygonGate gate = new PolygonGate(MX, MY);
+        gate.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0}, new double[]{2, 2}, new double[]{0, 2}));
+        named(gate);
+
+        // left edge, bottom edge, right edge, top edge, then all four vertices.
+        double[] px = {0.0, 1.0, 2.0, 1.0, 0.0, 2.0, 2.0, 0.0};
+        double[] py = {1.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 2.0};
+
+        CellIndex index = indexOf(px, py);
+        MarkerStats stats = MarkerStats.compute(index);
+        double[] colX = columnOf(index, MX);
+        double[] colY = columnOf(index, MY);
+
+        int[] classified = classify(gate, index, stats);
+        int[] drawn = display2D(gate, colX, colY);
+        for (int i = 0; i < px.length; i++) {
+            assertEquals(0, classified[i], "point " + i + " classified Inside (branch 0)");
+            assertEquals(0, drawn[i], "point " + i + " drawn Inside (branch 0)");
+        }
     }
 
     // ---- the shapes the user has not finished drawing yet ----
@@ -206,7 +226,6 @@ class DisplayClassificationAgreementTest {
     void emptyPolygonAgrees() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         PolygonGate gate = new PolygonGate(MX, MY);
-        gate.setThresholdIsZScore(false);
         named(gate);
         assertAgrees("polygon with no vertices", gate,
                 new double[]{0.0, 1.0, -1.0}, new double[]{0.0, 1.0, -1.0});
@@ -217,7 +236,6 @@ class DisplayClassificationAgreementTest {
         assumeTrue(FxTestSupport.toolkitAvailable());
         PolygonGate gate = new PolygonGate(MX, MY);
         gate.setVertices(List.of(new double[]{0, 0}, new double[]{1, 1}));
-        gate.setThresholdIsZScore(false);
         named(gate);
         assertAgrees("polygon with two vertices", gate,
                 new double[]{0.0, 0.5, 2.0}, new double[]{0.0, 0.5, 2.0});
@@ -227,7 +245,6 @@ class DisplayClassificationAgreementTest {
     void zeroExtentRectangleAgrees() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         RectangleGate gate = new RectangleGate(MX, MY, 0, 0, 0, 0);
-        gate.setThresholdIsZScore(false);
         named(gate);
         assertAgrees("rectangle with no extent", gate,
                 new double[]{0.0, 1.0, -1.0}, new double[]{0.0, 1.0, -1.0});
@@ -237,7 +254,6 @@ class DisplayClassificationAgreementTest {
     void zeroRadiusEllipseAgrees() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         EllipseGate gate = new EllipseGate(MX, MY, 0, 0, 0, 0);
-        gate.setThresholdIsZScore(false);
         named(gate);
         assertAgrees("ellipse with no radius", gate,
                 new double[]{0.0, 1.0, -1.0}, new double[]{0.0, 1.0, -1.0});
@@ -249,7 +265,6 @@ class DisplayClassificationAgreementTest {
     void histogramBarColourAgreesWithClassificationIncludingOnTheThreshold() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         GateNode gate = named(new GateNode(MX, 0.5));
-        gate.setThresholdIsZScore(false);
 
         double[] probes = {0.0, 0.25, 0.5, 0.500000001, 0.75, 1.0, -1.0};
         CellIndex index = indexOf(probes, new double[probes.length]);
@@ -303,19 +318,19 @@ class DisplayClassificationAgreementTest {
         }
 
         for (GateNode gate : gates) {
-            gate.setThresholdIsZScore(false);
             named(gate);
             assertAgrees(gate.getGateType() + " (randomised)", gate, px, py);
         }
     }
 
     @Test
-    void zScoreModeAgreesToo() {
+    void aStillFlaggedLegacyGateIsDrawnAndClassifiedInTheSameRawSpace() {
         assumeTrue(FxTestSupport.toolkitAvailable());
-        // In z-score mode the plot is fed standardised values and the gate boundary lives
-        // in the same space, so the geometry comparison is identical — this pins that the
-        // shared transform is applied on both sides rather than only on one.
-        RectangleGate gate = new RectangleGate(MX, MY, -0.5, 0.5, -0.5, 0.5);
+        // The engine used to standardise a flagged gate and the plot was fed standardised
+        // values to match. Both now read the column as measured, flag or no flag, so a legacy
+        // gate that has not been migrated yet can still never be drawn one way and
+        // classified another.
+        RectangleGate gate = new RectangleGate(MX, MY, 3.5, 6.5, 3.5, 6.5);
         gate.setThresholdIsZScore(true);
         named(gate);
 
@@ -326,26 +341,21 @@ class DisplayClassificationAgreementTest {
         MarkerStats stats = MarkerStats.compute(index);
         double[] colX = columnOf(index, MX);
         double[] colY = columnOf(index, MY);
-        MeasuredColumn cx = index.column(MX, null, null, stats);
-        MeasuredColumn cy = index.column(MY, null, null, stats);
-        double[] zx = new double[raw.length];
-        double[] zy = new double[raw.length];
-        for (int i = 0; i < raw.length; i++) {
-            zx[i] = cx.toZScore(colX[i]);
-            zy[i] = cy.toZScore(colY[i]);
-        }
 
         GateTree tree = new GateTree();
         tree.addRoot(gate);
         String[] phenotypes = GatingEngine.assignAll(tree, index, stats).getPhenotypes();
-        int[] drawn = display2D(gate, zx, zy);
+        int[] drawn = display2D(gate, colX, colY);
+        int inside = 0;
         for (int i = 0; i < raw.length; i++) {
             final int idx = i;
             int classified = Integer.parseInt(phenotypes[i].substring(1));
             assertEquals(classified, drawn[i], () -> String.format(
-                    "z-score rectangle: cell %d (z = %s, %s) classified into branch %d but drawn as branch %d",
-                    idx, zx[idx], zy[idx], Integer.parseInt(phenotypes[idx].substring(1)), drawn[idx]));
+                    "flagged rectangle: cell %d (%s, %s) classified into branch %d but drawn as branch %d",
+                    idx, colX[idx], colY[idx], Integer.parseInt(phenotypes[idx].substring(1)), drawn[idx]));
+            if (classified == 0) inside++;
         }
+        assertEquals(2, inside, "cells (4,5) and (5,4) are inside in raw units");
     }
 
     /**
@@ -394,7 +404,6 @@ class DisplayClassificationAgreementTest {
         // And the engine agrees about the size of the population being described.
         GateNode gate = new GateNode("A", 5.0);
         gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(gate);

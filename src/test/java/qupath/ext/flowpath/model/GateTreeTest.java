@@ -71,6 +71,59 @@ class GateTreeTest {
     }
 
     @Test
+    void transferCountsIfStructureMatchesCopiesWhenTheForestsPair() {
+        var destination = new GateNode("CD45");
+        destination.getPositiveChildren().add(new GateNode("CD3"));
+
+        var source = new GateNode("CD45");
+        var sourceChild = new GateNode("CD3");
+        source.getPositiveChildren().add(sourceChild);
+        source.setPosCount(100);
+        source.setNegCount(200);
+        sourceChild.setPosCount(30);
+        sourceChild.setNegCount(70);
+
+        assertTrue(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)));
+
+        assertEquals(100, destination.getPosCount());
+        assertEquals(200, destination.getNegCount());
+        assertEquals(30, destination.getPositiveChildren().get(0).getPosCount());
+        assertEquals(70, destination.getPositiveChildren().get(0).getNegCount());
+    }
+
+    @Test
+    void transferCountsIfStructureMatchesLeavesDestinationAloneOnAMismatch() {
+        var destination = new GateNode("CD45");   // no children
+        var source = new GateNode("CD45");
+        source.getPositiveChildren().add(new GateNode("CD3"));   // one child: different shape
+        source.setPosCount(999);
+
+        assertFalse(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)));
+
+        assertEquals(0, destination.getPosCount(), "left at its own default, not partially transferred");
+    }
+
+    /**
+     * Same shape (one root, no children, two branches each) is not enough to pair: a
+     * threshold root on a different channel must not borrow the outgoing tree's counts just
+     * because it happens to have the same number of roots and branches. This is the
+     * controller ruling narrowing {@link GateTree#transferCountsIfStructureMatches} to also
+     * require matching channels per gate.
+     */
+    @Test
+    void transferCountsIfStructureMatchesLeavesDestinationAloneOnASameShapeDifferentChannel() {
+        var destination = new GateNode("CD45");   // same shape as source: one root, no children
+        var source = new GateNode("CD3");         // different channel
+        source.setPosCount(999);
+        source.setNegCount(999);
+
+        assertFalse(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)),
+                "same shape, different channel: no correspondence to borrow");
+        assertEquals(0, destination.getPosCount(), "left at its own default, not the unrelated tree's count");
+        assertEquals(0, destination.getNegCount());
+    }
+
+    @Test
     void collectLeafNamesAcrossMultipleRoots() {
         var tree = new GateTree();
         tree.addRoot(new GateNode("CD45"));

@@ -20,7 +20,6 @@ class BranchTallyTest {
     private static GateTree tree() {
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(root);
@@ -41,7 +40,6 @@ class BranchTallyTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         // Clip bounds land at [2.8, 8.2] over values 1..10: cells 1,2,9,10 are outlier-
         // clipped (excluded, but still land in a real branch), cells 3-8 are clean.
         root.setExcludeOutliers(true);
@@ -125,7 +123,6 @@ class BranchTallyTest {
 
         GateNode root = new GateNode("CD45", 25.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
         tree.addRoot(root);
@@ -175,7 +172,6 @@ class BranchTallyTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
         GateTree tree = new GateTree();
         tree.setQualityFilter(qf);
         tree.addRoot(root);
@@ -214,14 +210,12 @@ class BranchTallyTest {
 
             GateNode clipper = new GateNode("A", 5.5);
             clipper.setStatistic(Statistic.MEAN);
-            clipper.setThresholdIsZScore(false);
             clipper.setExcludeOutliers(true);
             clipper.setClipPercentileLow(20.0);
             clipper.setClipPercentileHigh(80.0);
 
             GateNode plain = new GateNode("B", 5.5);
             plain.setStatistic(Statistic.MEAN);
-            plain.setThresholdIsZScore(false);
 
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
@@ -395,7 +389,6 @@ class BranchTallyTest {
         GateTree live = tree();
         GateNode extra = new GateNode("CD45", 5.5);
         extra.setStatistic(Statistic.MEAN);
-        extra.setThresholdIsZScore(false);
         live.addRoot(extra);
 
         assertThrows(IllegalArgumentException.class,
@@ -404,7 +397,6 @@ class BranchTallyTest {
         GateTree deeper = tree();
         GateNode child = new GateNode("CD45", 8.0);
         child.setStatistic(Statistic.MEAN);
-        child.setThresholdIsZScore(false);
         deeper.getRoots().get(0).setPositiveChildren(List.of(child));
         assertThrows(IllegalArgumentException.class,
                 () -> tally.rebindTo(walked.getRoots(), deeper.getRoots()));

@@ -65,7 +65,6 @@ class LivePreviewServiceTallyIdentityTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         // GateTree's default (non-null, empty-range) quality filter, not the null one the
         // AnalysisFixtures use: LivePreviewService deep-copies the tree on every pass and
@@ -89,7 +88,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
             result = service.getLastResult();
             assertNotNull(result, "a completed pass must leave a result behind");
@@ -148,11 +147,9 @@ class LivePreviewServiceTallyIdentityTest {
         // The AnalysisFixtures.twoRootsSameChannelInput() shape: one channel, two cuts.
         GateNode rootA = new GateNode("CD45", 10.5);
         rootA.setStatistic(Statistic.MEAN);
-        rootA.setThresholdIsZScore(false);
 
         GateNode rootB = new GateNode("CD45", 15.5);
         rootB.setStatistic(Statistic.MEAN);
-        rootB.setThresholdIsZScore(false);
 
         // GateTree's default (non-null) quality filter, as above: deepCopy() dereferences it.
         GateTree tree = new GateTree();
@@ -175,7 +172,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
             result = service.getLastResult();
             assertNotNull(result, "a completed pass must leave a result behind");
@@ -226,7 +223,6 @@ class LivePreviewServiceTallyIdentityTest {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.addRoot(root);
@@ -253,7 +249,7 @@ class LivePreviewServiceTallyIdentityTest {
             CountDownLatch firstPass = new CountDownLatch(1);
             service.setOnUpdateComplete(firstPass::countDown);
             service.requestUpdate();
-            assertTrue(firstPass.await(10, TimeUnit.SECONDS),
+            assertTrue(firstPass.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the first gating pass did not complete in time");
             GatingEngine.AssignmentResult firstResult = service.getLastResult();
             assertNotNull(firstResult);
@@ -264,7 +260,6 @@ class LivePreviewServiceTallyIdentityTest {
             // copy's tally is rebound onto it.
             GateNode addedMidPass = new GateNode("CD45", 7.5);
             addedMidPass.setStatistic(Statistic.MEAN);
-            addedMidPass.setThresholdIsZScore(false);
 
             CountDownLatch mutated = new CountDownLatch(1);
             CountDownLatch secondPassPublished = new CountDownLatch(1);
@@ -275,7 +270,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(secondPassPublished::countDown);
             service.requestUpdate();
 
-            assertTrue(mutated.await(10, TimeUnit.SECONDS),
+            assertTrue(mutated.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the second pass never started, so nothing was exercised");
             // An absence, bounded: this latch can only fall if a pass keyed to a structure
             // the tree no longer has was published anyway.
@@ -295,6 +290,95 @@ class LivePreviewServiceTallyIdentityTest {
             service.shutdown();
             FxTestSupport.onFxRun(() ->
                     Thread.currentThread().setUncaughtExceptionHandler(previousHandler.get()));
+        }
+    }
+
+    /**
+     * Discarding the pass is not enough on its own: the publish step must not have <em>written
+     * anything</em> to the live tree before it decides to discard.
+     * <p>
+     * {@code GateTree.transferCounts} is the lenient pairing — it walks the two forests
+     * together and stops at the shorter one — while {@code BranchTally.rebindTo} is the strict
+     * one that refuses a mismatch outright. Run in that order, a restructure mid-pass lands one
+     * gate's counts on a <em>different</em> gate's branches and only then hits the refusal: the
+     * pass is dropped with a debug line, and the tree view is left showing plausible, wrong
+     * per-branch numbers until the queued pass lands.
+     * <p>
+     * Drag-and-drop is what makes that routine rather than theoretical. It is a continuous
+     * gesture the user performs while earlier passes are still running, and it restructures the
+     * live {@code GateTree} <b>in place</b> — so the {@code this.gateTree != originalTree}
+     * identity guard cannot see it, exactly as for {@code addRoot}. This test reproduces the
+     * drop shape: two roots on one channel are walked, one is taken out of the live forest
+     * mid-pass, and the surviving root's branches must still read the numbers the previous
+     * completed pass gave them, never the removed root's.
+     * <p>
+     * The two roots carry <b>pairwise distinct</b> counts (10/10 against 5/15), so a mis-paired
+     * transfer cannot hide behind a symmetric number — which is precisely how the one-root
+     * version of this scenario would have passed either way.
+     */
+    @Test
+    void aRestructureMidPassWritesNoCountsToTheLiveTreeBeforeTheRebindRefusesIt() throws Exception {
+        int n = 20;
+        double[] cd45 = new double[n];
+        for (int i = 0; i < n; i++) cd45[i] = i + 1;
+        CellIndex index = Cells.columns(List.of("CD45"), new double[][] {cd45}).build();
+        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(n));
+
+        GateNode rootA = new GateNode("CD45", 10.5);     // 10 positive, 10 negative
+        rootA.setStatistic(Statistic.MEAN);
+        GateNode rootB = new GateNode("CD45", 15.5);     // 5 positive, 15 negative
+        rootB.setStatistic(Statistic.MEAN);
+
+        GateTree tree = new GateTree();
+        tree.addRoot(rootA);
+        tree.addRoot(rootB);
+
+        ImageData<?> imageData = new ImageData<>(new WrappedBufferedImageServer(
+                "live-preview-restructure-mid-pass",
+                new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB)));
+
+        LivePreviewService service = new LivePreviewService();
+        try {
+            service.setCellIndex(index);
+            service.setMarkerStats(stats);
+            service.setImageData(imageData);
+            service.setGateTree(tree);
+
+            CountDownLatch firstPass = new CountDownLatch(1);
+            service.setOnUpdateComplete(firstPass::countDown);
+            service.requestUpdate();
+            assertTrue(firstPass.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
+                    "the first gating pass did not complete in time");
+            GatingEngine.AssignmentResult firstResult = service.getLastResult();
+            assertNotNull(firstResult);
+            assertEquals(5, rootB.getBranches().get(0).getCount(), "root B: CD45 > 15.5");
+            assertEquals(15, rootB.getBranches().get(1).getCount(), "root B: CD45 <= 15.5");
+
+            // Second pass: the copy is taken with both roots, then root A leaves the live
+            // forest before the copy's counts would be carried back onto it. The lenient
+            // transfer would now pair live B against walked A.
+            CountDownLatch mutated = new CountDownLatch(1);
+            CountDownLatch secondPassPublished = new CountDownLatch(1);
+            service.setOnUpdateStarted(() -> {
+                tree.removeRoot(rootA);
+                mutated.countDown();
+            });
+            service.setOnUpdateComplete(secondPassPublished::countDown);
+            service.requestUpdate();
+
+            assertTrue(mutated.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
+                    "the second pass never started, so nothing was exercised");
+            assertFalse(secondPassPublished.await(3, TimeUnit.SECONDS),
+                    "a pass whose tally cannot be rebound must not reach applyResult");
+            FxTestSupport.onFxRun(() -> { });   // drain the FX queue before reading the verdict
+
+            assertSame(firstResult, service.getLastResult(), "the pass really was discarded");
+            assertEquals(5, rootB.getBranches().get(0).getCount(),
+                    "root B keeps its own count; root A's 10 must never have been written to it");
+            assertEquals(15, rootB.getBranches().get(1).getCount(),
+                    "root B keeps its own count; root A's 10 must never have been written to it");
+        } finally {
+            service.shutdown();
         }
     }
 }

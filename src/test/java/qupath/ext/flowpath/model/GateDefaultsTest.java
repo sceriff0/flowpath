@@ -7,30 +7,34 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Every gate type must agree on the default comparison space.
  *
- * <p>The z-score flag decides whether {@code GatingEngine} compares raw intensities
- * or standardised values, and it decides which space the editor draws its scatter
- * and histogram in. When one gate type defaults differently from the others, a gate
- * added from the type chooser silently lands in a different coordinate space than
- * its neighbours, and a gate converted from one type to another inherits the wrong
- * default. The flag lives on {@link GateNode} so there is exactly one declaration
- * governing every subclass.
+ * <p>There is one space now: the column as measured. The retired z-score flag used to decide
+ * whether {@code GatingEngine} compared raw intensities or values FlowPath standardised
+ * itself, and it defaulted to z-score, so every new gate was born in a space that could not
+ * be reproduced from the export. New gates never carry it; only a legacy file does, until
+ * {@link LegacyZScoreMigration} converts it. The flag lives on {@link GateNode} so there is
+ * exactly one declaration for that migration to read.
  */
 class GateDefaultsTest {
 
     @Test
-    void everyGateTypeDefaultsToZScore() {
-        assertTrue(new GateNode("CD3").isThresholdIsZScore(), "threshold gate");
-        assertTrue(new GateNode().isThresholdIsZScore(), "threshold gate (no-arg)");
-        assertTrue(new QuadrantGate("CD3", "CD8").isThresholdIsZScore(), "quadrant gate");
-        assertTrue(new QuadrantGate().isThresholdIsZScore(), "quadrant gate (no-arg)");
-        assertTrue(new PolygonGate("CD3", "CD8").isThresholdIsZScore(), "polygon gate");
-        assertTrue(new PolygonGate().isThresholdIsZScore(), "polygon gate (no-arg)");
-        assertTrue(new RectangleGate("CD3", "CD8", 0, 1, 0, 1).isThresholdIsZScore(), "rectangle gate");
-        assertTrue(new RectangleGate().isThresholdIsZScore(), "rectangle gate (no-arg)");
-        assertTrue(new EllipseGate("CD3", "CD8", 0, 0, 1, 1).isThresholdIsZScore(), "ellipse gate");
-        assertTrue(new EllipseGate().isThresholdIsZScore(), "ellipse gate (no-arg)");
+    void everyGateTypeDefaultsToRaw() {
+        assertFalse(new GateNode("CD3").isThresholdIsZScore(), "threshold gate");
+        assertFalse(new GateNode("CD3", 1.0).isThresholdIsZScore(), "threshold gate (with threshold)");
+        assertFalse(new GateNode().isThresholdIsZScore(), "threshold gate (no-arg)");
+        assertFalse(new QuadrantGate("CD3", "CD8").isThresholdIsZScore(), "quadrant gate");
+        assertFalse(new QuadrantGate().isThresholdIsZScore(), "quadrant gate (no-arg)");
+        assertFalse(new PolygonGate("CD3", "CD8").isThresholdIsZScore(), "polygon gate");
+        assertFalse(new PolygonGate().isThresholdIsZScore(), "polygon gate (no-arg)");
+        assertFalse(new RectangleGate("CD3", "CD8", 0, 1, 0, 1).isThresholdIsZScore(), "rectangle gate");
+        assertFalse(new RectangleGate().isThresholdIsZScore(), "rectangle gate (no-arg)");
+        assertFalse(new EllipseGate("CD3", "CD8", 0, 0, 1, 1).isThresholdIsZScore(), "ellipse gate");
+        assertFalse(new EllipseGate().isThresholdIsZScore(), "ellipse gate (no-arg)");
     }
 
+    /**
+     * A legacy tree can be snapshotted (undo, live preview) before it meets an index, and the
+     * copy must still tell the migration which numbers are in z-space.
+     */
     @Test
     void zScoreFlagSurvivesDeepCopyForEveryGateType() {
         for (GateNode gate : new GateNode[]{

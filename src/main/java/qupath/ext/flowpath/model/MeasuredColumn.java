@@ -7,7 +7,7 @@ package qupath.ext.flowpath.model;
  * Reading a per-compartment statistic used to be a four-step protocol — resolve the
  * key, materialise the column, register it with {@link MarkerStats}, then read the
  * statistic under that key — and <b>skipping the registration step did not throw</b>:
- * {@link MarkerStats#toZScore} falls back to {@code getOrDefault(key, 0.0)}, so an
+ * {@code MarkerStats} reads its mean and std with {@code getOrDefault(key, 0.0)}, so an
  * unregistered column silently reports every cell as sitting exactly at the mean, and
  * {@link MarkerStats#getPercentileValue} silently returns NaN so outlier clipping
  * no-ops. Both are plausible-looking wrong answers that feed straight into gate
@@ -36,6 +36,16 @@ package qupath.ext.flowpath.model;
  * preserved. Instances are immutable and safe to publish across threads.
  */
 public final class MeasuredColumn {
+
+    /**
+     * Below this standard deviation (or, in {@link MarkerStats}' histogram binning, this
+     * value range), a column counts as having no spread at all rather than a merely small
+     * one. Guards a divide-by-zero in {@link #toZScore} and a zero-width histogram bin in
+     * {@link MarkerStats#compute}: both are "this column doesn't vary enough to treat as
+     * continuous," the same judgment call against the same threshold, just read off two
+     * different statistics of the column.
+     */
+    static final double DEGENERATE_SPREAD_EPSILON = 1e-10;
 
     private final String key;
     private final double[] values;
@@ -85,22 +95,27 @@ public final class MeasuredColumn {
         return values[cell];
     }
 
-    /** Standardised value for one cell — the number a z-score gate compares. */
+    /**
+     * Standardised value for one cell. No gate compares this any more (the computed z-score
+     * was retired from gating); the UMAP half still scales and colours by it.
+     */
     public double zScoreAt(int cell) {
         return toZScore(values[cell]);
     }
 
     /**
      * Standardise a raw value against this column's own mean and standard deviation.
-     * A degenerate column (std below 1e-10) yields 0.0, matching
-     * {@link MarkerStats#toZScore}.
+     * A degenerate column (std below {@link #DEGENERATE_SPREAD_EPSILON}) yields 0.0.
      */
     public double toZScore(double raw) {
-        if (std < 1e-10) return 0.0;
+        if (std < DEGENERATE_SPREAD_EPSILON) return 0.0;
         return (raw - mean) / std;
     }
 
-    /** Inverse of {@link #toZScore}. */
+    /**
+     * Inverse of {@link #toZScore}. Used by {@link LegacyZScoreMigration} to move a gate
+     * saved in the retired z-space back onto the column it was standardised from.
+     */
     public double fromZScore(double zScore) {
         return zScore * std + mean;
     }
@@ -137,7 +152,7 @@ public final class MeasuredColumn {
      * z-score transform is meaningful.
      */
     public boolean hasSpread() {
-        return std > 1e-10;
+        return std > DEGENERATE_SPREAD_EPSILON;
     }
 
     /** Histogram bin edges for this column (length {@code bins + 1}). */

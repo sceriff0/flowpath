@@ -38,11 +38,13 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     private double clipPercentileLow = 1.0;
     private double clipPercentileHigh = 99.0;
     private boolean excludeOutliers = false;
-    // Declared once here, for every gate type: the flag decides whether the engine
-    // compares raw intensities or standardised values, and which space the editor
-    // draws in. Subclasses must not shadow it, or two gate types end up reading
-    // different variables and a gate converted between them changes meaning.
-    private boolean thresholdIsZScore = true;
+    // The retired computed z-score. Nothing classifies or draws in a z-space any more --
+    // every gate compares against the column as measured (see ValueMode) -- so this is
+    // true only on a gate read from a file saved before that change, and only until
+    // LegacyZScoreMigration converts its numbers the first time the tree meets an index.
+    // New gates never carry it. Declared once, for every gate type, so the migration has
+    // one variable to read.
+    private boolean thresholdIsZScore = false;
 
     // --- ThresholdGate-specific fields (kept here for backward compat) ---
     private String channel;
@@ -74,7 +76,6 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public GateNode(String channel, double threshold) {
         this.channel = channel;
         this.threshold = threshold;
-        this.thresholdIsZScore = true;
         int defaultPosColor = (0 << 16) | (200 << 8) | 0; // green
         int defaultNegColor = (128 << 16) | (128 << 8) | 128; // gray
         List<String> names = thresholdBranchNames(channel);
@@ -186,8 +187,7 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     /**
      * Which branch of {@link #getBranches()} does a point at plot-space {@code (x, y)}
      * land in? This is the gate's geometry and nothing else: {@code x} and {@code y} are
-     * already resolved to this gate's measurement columns and already in the gate's own
-     * coordinate space (raw or z-scored, per {@link #isThresholdIsZScore()}).
+     * the raw values of this gate's resolved measurement columns.
      * <p>
      * <b>This is the single geometry predicate.</b> {@code GatingEngine} calls it (through
      * {@code ResolvedGate}) to classify; {@code ScatterPlotCanvas} calls it to colour a
@@ -196,6 +196,18 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
      */
     public int branchFor(double x, double y) {
         return isPositiveAt(0, x) ? 0 : 1;
+    }
+
+    /**
+     * Does landing in {@code branch} put a cell on the positive side of this gate's
+     * {@code axis}-th column? The inverse of {@link #branchFor} read one axis at a time, for
+     * a consumer that reports per-column positivity (the CSV {@code _sign} column) from the
+     * branch the engine decided rather than from its own comparison.
+     * <p>
+     * A threshold gate's only positive branch is 0.
+     */
+    public boolean branchIsPositiveOn(int branch, int axis) {
+        return branch == 0;
     }
 
     /**
@@ -227,6 +239,11 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public double getThreshold() { return threshold; }
     public void setThreshold(double threshold) { this.threshold = threshold; }
 
+    /**
+     * Whether this gate still holds numbers in the retired computed z-space. Read only by
+     * {@link LegacyZScoreMigration}; set only by the serializer reading a legacy file (and by
+     * the migration, clearing it). The engine ignores it.
+     */
     public boolean isThresholdIsZScore() { return thresholdIsZScore; }
     public void setThresholdIsZScore(boolean v) { this.thresholdIsZScore = v; }
 

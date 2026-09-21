@@ -79,8 +79,9 @@ public class MarkerStats {
 
         // Only finite values describe the distribution. NaN is "unmeasured"; a single
         // +/-Infinity used to make the mean infinite and the std NaN, and the std guard in
-        // toZScore is false for NaN -- so every finite cell's z-score became NaN, and NaN
-        // compares false against any threshold: the whole column silently went negative.
+        // MeasuredColumn.toZScore is false for NaN -- so every finite cell's z-score became
+        // NaN, and NaN compares false against any threshold: the whole column silently went
+        // negative (the gates no longer z-score, but the UMAP's feature scaling still does).
         // The infinite cell itself still classifies by its sign against the finite stats.
         int actualCount = 0;
         for (int i = 0; i < n; i++) {
@@ -122,7 +123,7 @@ public class MarkerStats {
         double[] bins = new double[HISTOGRAM_BINS + 1];
         double[] counts = new double[HISTOGRAM_BINS];
         double range = max - min;
-        if (range < 1e-10) range = 1.0;
+        if (range < MeasuredColumn.DEGENERATE_SPREAD_EPSILON) range = 1.0;
         double binWidth = range / HISTOGRAM_BINS;
 
         for (int b = 0; b <= HISTOGRAM_BINS; b++) {
@@ -167,19 +168,6 @@ public class MarkerStats {
      */
     public boolean hasColumn(String key) {
         return means.containsKey(key);
-    }
-
-    double toZScore(String channel, double rawValue) {
-        double mean = means.getOrDefault(channel, 0.0);
-        double std = stds.getOrDefault(channel, 0.0);
-        if (std < 1e-10) return 0.0;
-        return (rawValue - mean) / std;
-    }
-
-    double fromZScore(String channel, double zScore) {
-        double mean = means.getOrDefault(channel, 0.0);
-        double std = stds.getOrDefault(channel, 0.0);
-        return zScore * std + mean;
     }
 
     double getPercentileValue(String channel, double percentile) {

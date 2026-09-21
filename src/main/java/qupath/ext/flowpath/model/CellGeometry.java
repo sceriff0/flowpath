@@ -98,12 +98,14 @@ public final class CellGeometry {
     private final double pixelWidthMicrons;   // NaN when the image is uncalibrated
     private final double pixelHeightMicrons;  // NaN when the image is uncalibrated
     private final int roiFallbackCount;
+    private final boolean centroidColumnsPresent;
     private final ScaleVerdict scaleVerdict;
 
     private CellGeometry(PathObject[] objects, double[] sourceX, double[] sourceY,
                          CoordinateSpace sourceSpace,
                          double pixelWidthMicrons, double pixelHeightMicrons,
-                         int roiFallbackCount, ScaleVerdict scaleVerdict) {
+                         int roiFallbackCount, boolean centroidColumnsPresent,
+                         ScaleVerdict scaleVerdict) {
         this.objects = objects;
         this.sourceX = sourceX;
         this.sourceY = sourceY;
@@ -111,6 +113,7 @@ public final class CellGeometry {
         this.pixelWidthMicrons = pixelWidthMicrons;
         this.pixelHeightMicrons = pixelHeightMicrons;
         this.roiFallbackCount = roiFallbackCount;
+        this.centroidColumnsPresent = centroidColumnsPresent;
         this.scaleVerdict = scaleVerdict;
     }
 
@@ -121,7 +124,7 @@ public final class CellGeometry {
      * @param calibration the image's pixel calibration, or {@code null} when unavailable
      */
     public static CellGeometry of(PathObject[] objects, PixelCalibration calibration) {
-        return of(objects, CellIndex.sampleMeasurementKeys(objects), calibration);
+        return of(objects, MeasurementKeySample.keys(objects), calibration);
     }
 
     /**
@@ -197,7 +200,7 @@ public final class CellGeometry {
 
         ScaleVerdict verdict = checkScale(objects, xKey, yKey, space, pw, ph);
 
-        return new CellGeometry(objects, sx, sy, space, pw, ph, fallbacks, verdict);
+        return new CellGeometry(objects, sx, sy, space, pw, ph, fallbacks, measured, verdict);
     }
 
     /**
@@ -381,6 +384,16 @@ public final class CellGeometry {
      */
     public int roiFallbackCount() {
         return roiFallbackCount;
+    }
+
+    /**
+     * True when the key sample offered a centroid measurement <em>pair</em>, so the index
+     * reads positions from the export and only individual cells can fall back. False for
+     * plain QuPath detections (or a lone {@code Centroid X}), where every cell is positioned
+     * from its ROI by design and {@link #roiFallbackCount()} equals the cell count.
+     */
+    public boolean centroidColumnsPresent() {
+        return centroidColumnsPresent;
     }
 
     /** Whether the exported micrometres agree with the image's own calibration. */

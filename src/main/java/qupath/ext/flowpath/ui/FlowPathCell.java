@@ -2,6 +2,9 @@ package qupath.ext.flowpath.ui;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tooltip;
@@ -38,19 +41,187 @@ import java.util.function.Consumer;
  */
 public class FlowPathCell extends TreeCell<Object> {
 
-    private static final Color GATE_BAR_COLOR = Color.web("#3a4a5a");
-    private static final Color GATE_BAR_DISABLED_COLOR = Color.web("#2a2a2a");
-    private static final CornerRadii BAR_RADII = new CornerRadii(6);
+    // Bar/badge/pill colours live in flowpath.css (fp-bar, fp-bar-disabled, fp-badge-*,
+    // fp-pill-text) rather than here: they are fixed swatches on this cell's own
+    // self-painted chips, not text sitting on the surrounding theme's background, so they
+    // stay literal on purpose (see the stylesheet's file header). Centralising them in CSS
+    // is what keeps them in one place instead of a dozen setStyle(...) calls.
     private static final CornerRadii PILL_RADII = new CornerRadii(10);
     private static final Insets BAR_PADDING = new Insets(5, 10, 5, 10);
     private static final Insets PILL_PADDING = new Insets(2, 10, 2, 10);
     private static final Insets CELL_PADDING = new Insets(2, 0, 2, 0);
     private static final String STAR = "\u2605";
 
+    /** The hover cue on a row that would take the dragged gate; see {@code flowpath.css}. */
+    static final String DROP_TARGET_CLASS = "fp-drop-target";
+    /** The hover cue on a row under the cursor that would <em>not</em> take it. */
+    static final String DROP_INVALID_CLASS = "fp-drop-invalid";
+
     private Consumer<GateNode> onEnabledToggled;
+    private GateDragCoordinator dragCoordinator;
+
+    /**
+     * The row currently showing a hover cue, tracked across every cell so a whole-gesture
+     * cleanup can find it even when it is not {@code this} cell. {@code DRAG_DONE} is
+     * delivered only to the row the drag <em>started</em> on, but the row cued with a
+     * highlight is whichever one the cursor is over — usually a different row — and an
+     * Escape-cancelled drag can end with the cursor still sitting over it, never receiving a
+     * {@code DRAG_EXITED} to clear it itself. Static because the highlight is single, not
+     * per-cell: at most one row is ever cued at a time across the whole tree.
+     */
+    private static FlowPathCell cuedCell;
+
+    public FlowPathCell() {
+        installDragHandlers();
+    }
 
     public void setOnEnabledToggled(Consumer<GateNode> callback) {
         this.onEnabledToggled = callback;
+    }
+
+    // ---- drag and drop: reordering gates ---------------------------------------------------
+
+    /**
+     * The shared state of one gate drag; {@code FlowPathPane}'s cell factory hands every cell
+     * the same instance. Without one the cell is inert, which is what keeps this class usable
+     * on its own.
+     */
+    void setDragCoordinator(GateDragCoordinator drag) {
+        this.dragCoordinator = drag;
+    }
+
+    /**
+     * The JavaFX plumbing, and nothing else: each handler translates a {@code DragEvent} into
+     * one of the four package-private decisions below and consumes the event. The decisions
+     * themselves hold no JavaFX types, which is what makes them testable — {@code
+     * startDragAndDrop} needs a real drag gesture from the platform toolkit and cannot be
+     * driven by a synthetic event.
+     * <p>
+     * Every cell consumes {@code DRAG_OVER} and {@code DRAG_DROPPED}, accepted or not, so an
+     * unhandled drop never bubbles up to the {@code TreeView} behind it and get taken somewhere
+     * the cue never pointed at. The empty rows below the last gate are cells too — that is how
+     * "dropped on the tree's background" reaches {@link #dropHere()} as a promotion to a root.
+     */
+    private void installDragHandlers() {
+        setOnDragDetected(event -> {
+            if (!beginDrag()) return;
+            Dragboard board = startDragAndDrop(TransferMode.MOVE);
+            ClipboardContent content = new ClipboardContent();
+            // A label for the platform's benefit only: the gate's identity travels in the
+            // coordinator, because a channel name cannot tell two same-channel gates apart.
+            content.putString(((GateNode) getItem()).getChannel());
+            board.setContent(content);
+            event.consume();
+        });
+        setOnDragOver(event -> {
+            if (dragOver()) event.acceptTransferModes(TransferMode.MOVE);
+            event.consume();
+        });
+        setOnDragExited(event -> {
+            clearDropCue();
+            event.consume();
+        });
+        setOnDragDropped(event -> {
+            // Settle the gesture with the platform BEFORE the mutation and the tree-view
+            // rebuild it triggers, not after: dropHere() ends by rebuilding the tree, and an
+            // exception escaping that rebuild used to leave setDropCompleted/consume never
+            // called, which would strand the drag as "never completed" over a model that had
+            // already changed. acceptsDrop() is the same pure check dropHere() makes first, so
+            // computing it here and again inside dropHere() cannot disagree.
+            //
+            // Consequence: setDropCompleted's argument now means "this drop would be taken",
+            // not "this drop was taken" -- it is reported before dropHere() runs the mutation,
+            // not after. That is fine here because dropHere() re-checks the same pure
+            // predicate and cannot come out differently (nothing else runs between the two
+            // calls on this thread), but it is why the two calls are order-sensitive and
+            // must not be reordered to "mutate, then report what happened".
+            boolean accepted = acceptsDrop();
+            event.setDropCompleted(accepted);
+            event.consume();
+            if (accepted) dropHere();
+            clearDropCue();
+        });
+        setOnDragDone(event -> {
+            dragFinished();
+            event.consume();
+        });
+    }
+
+    /** A drag may start from this row: {@code true} only for a gate row, and only when free. */
+    boolean beginDrag() {
+        if (dragCoordinator == null || isEmpty()) return false;
+        return getItem() instanceof GateNode gate && dragCoordinator.begin(gate);
+    }
+
+    /**
+     * The cursor is over this row during a gate drag: mark it as a drop target or as visibly
+     * non-droppable, and answer whether a drop here would be taken. One question, asked of
+     * {@link GateDragCoordinator#accepts}, so the row that highlights is the row that accepts.
+     * <p>
+     * Mutates the style classes only when the wanted cue differs from what is already showing
+     * — {@code DRAG_OVER} fires on every pixel of mouse movement within the same row, and
+     * removing and re-adding the same class on each of those would re-trigger CSS application
+     * for no visible change.
+     */
+    boolean dragOver() {
+        boolean accepted = acceptsDrop();
+        if (!dragInProgress()) {
+            clearDropCue();
+            return accepted;
+        }
+        String wanted = accepted ? DROP_TARGET_CLASS : DROP_INVALID_CLASS;
+        if (!getStyleClass().contains(wanted)) {
+            clearDropCue();
+            getStyleClass().add(wanted);
+            cuedCell = this;
+        }
+        return accepted;
+    }
+
+    /** The gate was dropped on this row. {@code false} — changing nothing — when refused. */
+    boolean dropHere() {
+        if (!acceptsDrop()) return false;
+        return dragCoordinator.drop(dropTargetBranch());
+    }
+
+    /**
+     * The drag gesture ended, dropped or not. {@code DRAG_DONE} is delivered only to the row
+     * the drag started on, so the row actually showing a cue — usually a different one, and
+     * left uncued by an Escape cancel that never reaches its {@code DRAG_EXITED} — is cleared
+     * through {@link #cuedCell} rather than {@code this}.
+     */
+    void dragFinished() {
+        clearDropCue();
+        if (cuedCell != null) cuedCell.clearDropCue();
+        if (dragCoordinator != null) dragCoordinator.end();
+    }
+
+    /** Remove the hover cue. Also done on {@link #updateItem}: cells are recycled per row. */
+    void clearDropCue() {
+        getStyleClass().removeAll(DROP_TARGET_CLASS, DROP_INVALID_CLASS);
+        if (cuedCell == this) cuedCell = null;
+    }
+
+    private boolean dragInProgress() {
+        return dragCoordinator != null && dragCoordinator.dragged() != null;
+    }
+
+    /**
+     * Whether this row can hold a dropped gate at all: a branch row (branches hold children),
+     * or the empty space below the last gate, which stands for the root list. A gate row is
+     * never a target — a gate's children hang off its branches, not off the gate itself.
+     */
+    private boolean isDropRow() {
+        return isEmpty() || getItem() instanceof BranchItem;
+    }
+
+    /** The branch this row drops onto, or {@code null} for the background — the root list. */
+    private Branch dropTargetBranch() {
+        return getItem() instanceof BranchItem bi ? bi.branch : null;
+    }
+
+    private boolean acceptsDrop() {
+        return dragInProgress() && isDropRow() && dragCoordinator.accepts(dropTargetBranch());
     }
 
     /**
@@ -87,6 +258,10 @@ public class FlowPathCell extends TreeCell<Object> {
     @Override
     protected void updateItem(Object item, boolean empty) {
         super.updateItem(item, empty);
+
+        // A TreeCell is recycled: without this, a row that was highlighted mid-drag carries
+        // the cue into whatever row it is scrolled into becoming.
+        clearDropCue();
 
         if (empty || item == null) {
             setText(null);
@@ -127,15 +302,15 @@ public class FlowPathCell extends TreeCell<Object> {
         if (!Statistic.MEAN.equals(stat)) text += "·" + stat.displayName().substring(0, 3).toLowerCase();
         Label badge = new Label(text);
         badge.setFont(Font.font(null, FontWeight.BOLD, 9));
-        badge.setTextFill(Color.WHITE);
         // Not a switch: the compartment vocabulary is open, so a badge has to have a
         // colour for one FlowPath has never seen rather than failing to compile against it.
-        Color bg;
-        if (Compartment.NUCLEAR.equals(comp)) bg = Color.web("#3a6ea5");
-        else if (Compartment.CYTOPLASMIC.equals(comp)) bg = Color.web("#4a9a5a");
-        else if (Compartment.WHOLE_CELL.equals(comp)) bg = Color.web("#777777");
-        else bg = Color.web("#8a6ea5");
-        badge.setBackground(new Background(new BackgroundFill(bg, new CornerRadii(4), Insets.EMPTY)));
+        // The four swatches themselves live in flowpath.css (fp-badge-*).
+        String styleClass;
+        if (Compartment.NUCLEAR.equals(comp)) styleClass = "fp-badge-nuclear";
+        else if (Compartment.CYTOPLASMIC.equals(comp)) styleClass = "fp-badge-cytoplasmic";
+        else if (Compartment.WHOLE_CELL.equals(comp)) styleClass = "fp-badge-wholecell";
+        else styleClass = "fp-badge-other";
+        badge.getStyleClass().add(styleClass);
         badge.setPadding(new Insets(0, 4, 0, 4));
         badge.setTooltip(new Tooltip(comp.displayName() + " · " + stat.displayName()));
         return badge;
@@ -145,7 +320,7 @@ public class FlowPathCell extends TreeCell<Object> {
     private static Label channelLabel(String name) {
         Label label = new Label(name);
         label.setFont(Font.font(null, FontWeight.BOLD, 13));
-        label.setTextFill(Color.WHITE);
+        label.getStyleClass().add("fp-bar-text");
         return label;
     }
 
@@ -153,16 +328,21 @@ public class FlowPathCell extends TreeCell<Object> {
     private static Label detailLabel(String text, int size) {
         Label label = new Label(text);
         label.setFont(Font.font(null, FontWeight.NORMAL, size));
-        label.setTextFill(Color.web("#a0b0c0"));
+        label.getStyleClass().add("fp-bar-muted");
         return label;
     }
 
-    /** The gate-type word shown on a 2D region gate. */
+    /**
+     * The gate-type word shown on a 2D region gate. A genuine per-type dispatch over
+     * Region2DGate's sealed permits: exhaustive with no default, so a new region shape
+     * fails to compile here instead of silently displaying as a generic "region".
+     */
     private static String regionTypeName(Region2DGate gate) {
-        if (gate instanceof PolygonGate) return "polygon";
-        if (gate instanceof RectangleGate) return "rectangle";
-        if (gate instanceof EllipseGate) return "ellipse";
-        return "region";
+        return switch (gate) {
+            case PolygonGate _ -> "polygon";
+            case RectangleGate _ -> "rectangle";
+            case EllipseGate _ -> "ellipse";
+        };
     }
 
     /**
@@ -175,7 +355,7 @@ public class FlowPathCell extends TreeCell<Object> {
         Label badgeX = compartmentBadge(compX, statX);
         Label badgeY = compartmentBadge(compY, statY);
         Label sep = new Label("/");
-        sep.setTextFill(Color.web("#a0b0c0"));
+        sep.getStyleClass().add("fp-bar-muted");
 
         bar.getChildren().add(channelLabel(channelX));
         if (badgeX != null) bar.getChildren().add(badgeX);
@@ -188,8 +368,7 @@ public class FlowPathCell extends TreeCell<Object> {
         HBox bar = new HBox(6);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(BAR_PADDING);
-        Color barColor = node.isEnabled() ? GATE_BAR_COLOR : GATE_BAR_DISABLED_COLOR;
-        bar.setBackground(new Background(new BackgroundFill(barColor, BAR_RADII, Insets.EMPTY)));
+        bar.getStyleClass().add(node.isEnabled() ? "fp-bar" : "fp-bar-disabled");
         bar.setMaxWidth(Double.MAX_VALUE);
         bar.setOpacity(node.isEnabled() ? 1.0 : 0.5);
         HBox.setHgrow(bar, Priority.ALWAYS);
@@ -201,8 +380,7 @@ public class FlowPathCell extends TreeCell<Object> {
             node.setEnabled(val);
             // Update visual immediately
             bar.setOpacity(val ? 1.0 : 0.5);
-            bar.setBackground(new Background(new BackgroundFill(
-                val ? GATE_BAR_COLOR : GATE_BAR_DISABLED_COLOR, BAR_RADII, Insets.EMPTY)));
+            bar.getStyleClass().setAll(val ? "fp-bar" : "fp-bar-disabled");
             if (onEnabledToggled != null) onEnabledToggled.accept(node);
         });
 
@@ -260,7 +438,7 @@ public class FlowPathCell extends TreeCell<Object> {
 
         String displayName = isLeaf ? (STAR + " " + name) : name;
         Label nameLabel = new Label(displayName);
-        nameLabel.setTextFill(Color.WHITE);
+        nameLabel.getStyleClass().add("fp-pill-text");
         nameLabel.setFont(Font.font(null, isLeaf ? FontWeight.BOLD : FontWeight.NORMAL, 12));
 
         pill.getChildren().add(nameLabel);
@@ -278,7 +456,7 @@ public class FlowPathCell extends TreeCell<Object> {
             : String.format("%,d", count);
         Label countLabel = new Label(countText);
         countLabel.setFont(Font.font(null, FontWeight.NORMAL, 11));
-        countLabel.setTextFill(Color.web("#888888"));
+        countLabel.getStyleClass().add("fp-muted");
 
         row.getChildren().addAll(pill, spacer, countLabel);
         return row;

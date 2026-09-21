@@ -239,20 +239,17 @@ class MeasurementKeyContractTest {
     void aStatisticKnowsItsBaseAndItsNormalisation() {
         assertEquals("Median", Statistic.of("Median").baseToken());
         assertEquals("", Statistic.of("Median").normalisation());
-        assertFalse(Statistic.of("Median").isStandardised());
 
         assertEquals("Median", Statistic.of("Median Z").baseToken());
         assertEquals(" Z", Statistic.of("Median Z").normalisation());
-        assertTrue(Statistic.of("Median Z").isStandardised());
 
         assertEquals("Median", Statistic.of("Median RobustZ").baseToken(),
                 "\" RobustZ\" must beat \" Z\", or the base becomes \"Median Robust\"");
         assertEquals(" RobustZ", Statistic.of("Median RobustZ").normalisation());
-        assertTrue(Statistic.of("Median RobustZ").isStandardised());
 
         assertEquals("REDSEA", Statistic.of("REDSEA").baseToken());
-        assertFalse(Statistic.of("REDSEA").isStandardised());
-        assertTrue(Statistic.of("REDSEA RobustZ").isStandardised());
+        assertEquals("", Statistic.of("REDSEA").normalisation());
+        assertEquals(" RobustZ", Statistic.of("REDSEA RobustZ").normalisation());
     }
 
     /** A composed name must not be confused with the plain statistic it is built from. */

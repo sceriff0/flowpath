@@ -49,6 +49,156 @@ public class GateTree {
         this.roiFilterEnabled = roiFilterEnabled;
     }
 
+    // ---- moving a gate within the tree ---------------------------------------------------
+
+    /**
+     * Why {@link #move(GateNode, Branch)} would, or would not, take a gate.
+     * <p>
+     * A value rather than a bare {@code boolean} because the tree view's hover cue and its
+     * drop both ask the same question and must get the same answer: the hover path calls
+     * {@link #checkMove}, the drop path calls {@link #move}, which re-checks. A drop that is
+     * offered and then silently refused — or, worse, taken where the hover said no — is the
+     * "two implementations of one rule" failure this codebase keeps catalogueing.
+     */
+    public enum MoveVerdict {
+        /** The move would be taken. */
+        ALLOWED,
+        /** No such gate in this tree (or {@code null}). */
+        NO_SUCH_GATE,
+        /** No such branch in this tree — a non-{@code null} target that belongs elsewhere. */
+        NO_SUCH_BRANCH,
+        /** The gate already hangs off that branch (or already is a root): a no-op, not a move. */
+        ALREADY_THERE,
+        /** The target lies inside the gate's own subtree, so the move would orphan the tree. */
+        WOULD_CYCLE;
+
+        public boolean allowed() { return this == ALLOWED; }
+    }
+
+    /**
+     * Whether {@link #move(GateNode, Branch)} would take this move, and why not when it would
+     * not. Pure: asks nothing of the caller and changes nothing.
+     *
+     * @param gate   the gate to move, which must belong to this tree
+     * @param target the branch to move it under, or {@code null} to promote it to a root —
+     *               see {@link #move(GateNode, Branch)} for that contract
+     */
+    public MoveVerdict checkMove(GateNode gate, Branch target) {
+        if (gate == null || !holdsGate(roots, gate)) return MoveVerdict.NO_SUCH_GATE;
+        if (target == null) {
+            return containsIdentical(roots, gate) ? MoveVerdict.ALREADY_THERE : MoveVerdict.ALLOWED;
+        }
+        if (!holdsBranch(roots, target)) return MoveVerdict.NO_SUCH_BRANCH;
+        // Cycle before no-op: a gate's own branch can never already hold it, so the two can
+        // not both apply, but checking the destructive case first keeps that obvious.
+        if (subtreeHolds(gate, target)) return MoveVerdict.WOULD_CYCLE;
+        if (containsIdentical(target.getChildren(), gate)) return MoveVerdict.ALREADY_THERE;
+        return MoveVerdict.ALLOWED;
+    }
+
+    /**
+     * Move {@code gate} — with its whole subtree — to hang off {@code target}, appended after
+     * whatever already hangs there. The one implementation of "reorder a gate", shared by the
+     * tree view's drag and drop and by anything else that ever needs to re-parent a gate.
+     * <p>
+     * <b>A {@code null} target means the root list.</b> Promoting a gate back to a root is the
+     * same operation with the same rules — detach from wherever it is, append last — and
+     * naming it {@code moveToRoot} would have been a second copy of the detach-and-append walk
+     * with its own chance to disagree about what "already there" means. The tree view's
+     * background rows (the empty space under the last gate) pass {@code null}.
+     * <p>
+     * <b>Atomic.</b> Every refusal is decided by {@link #checkMove} <em>before</em> anything is
+     * detached, so a refused move leaves the tree exactly as it was rather than dropping the
+     * gate on the floor between the two halves of the operation.
+     * <p>
+     * <b>Identity is preserved.</b> The very same {@link GateNode} and {@link Branch} objects
+     * are re-parented, not copied, so a caller holding the moved gate still holds it. What a
+     * move <em>does</em> change is the {@code (rootIndex, path)} that names the populations
+     * underneath it — which is exactly why nothing in this codebase may remember a {@link
+     * Branch} pointer across a pass, and why {@code PopulationRef}/{@code DenominatorRef} are
+     * re-resolved through {@link #findBranch} after every gating pass.
+     *
+     * @param gate   the gate to move, which must belong to this tree
+     * @param target the branch to move it under, or {@code null} to make it a root
+     * @return {@code true} when the move was applied; {@code false} for every refusal in
+     *         {@link MoveVerdict}, with the tree untouched
+     */
+    public boolean move(GateNode gate, Branch target) {
+        if (!checkMove(gate, target).allowed()) return false;
+        // checkMove already established the gate is somewhere in this tree, so detach should
+        // always succeed here -- checked anyway so "never in two places" is a structural
+        // guarantee of this method rather than resting on that invariant holding elsewhere.
+        if (!detach(roots, gate)) return false;
+        if (target == null) roots.add(gate);
+        else target.getChildren().add(gate);
+        return true;
+    }
+
+    /** Remove {@code gate} from wherever it hangs — the root list or some branch's children. */
+    private static boolean detach(List<GateNode> roots, GateNode gate) {
+        if (removeIdentical(roots, gate)) return true;
+        for (GateNode node : roots) {
+            for (Branch branch : node.getBranches()) {
+                if (removeIdentical(branch.getChildren(), gate)) return true;
+                if (detach(branch.getChildren(), gate)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** True when {@code target} is {@code gate}'s own branch or lies anywhere beneath it. */
+    private static boolean subtreeHolds(GateNode gate, Branch target) {
+        for (Branch branch : gate.getBranches()) {
+            if (branch == target) return true;
+            for (GateNode child : branch.getChildren()) {
+                if (subtreeHolds(child, target)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean holdsGate(List<GateNode> nodes, GateNode gate) {
+        for (GateNode node : nodes) {
+            if (node == gate) return true;
+            for (Branch branch : node.getBranches()) {
+                if (holdsGate(branch.getChildren(), gate)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean holdsBranch(List<GateNode> nodes, Branch target) {
+        for (GateNode node : nodes) {
+            for (Branch branch : node.getBranches()) {
+                if (branch == target) return true;
+                if (holdsBranch(branch.getChildren(), target)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Identity membership. {@link GateNode} does not override {@code equals}, so {@code
+     * List.contains} would agree today — but "this exact gate" is what every rule here means,
+     * and spelling it out keeps that true if a value {@code equals} is ever added.
+     */
+    private static boolean containsIdentical(List<GateNode> nodes, GateNode gate) {
+        for (GateNode node : nodes) {
+            if (node == gate) return true;
+        }
+        return false;
+    }
+
+    private static boolean removeIdentical(List<GateNode> nodes, GateNode gate) {
+        for (int i = 0; i < nodes.size(); i++) {
+            if (nodes.get(i) == gate) {
+                nodes.remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Create a deep copy of this tree (all nodes and the quality filter are cloned).
      */
@@ -278,6 +428,49 @@ public class GateTree {
     }
 
     /**
+     * Transfer {@code source}'s per-branch counts onto {@code destination} when the two
+     * forests are structurally identical (same number of roots, same channels and same
+     * branches per gate, same children per branch, at every depth), and leave
+     * {@code destination} untouched otherwise.
+     * <p>
+     * The channel check is what keeps this from being fooled by shape alone: loading an
+     * unrelated tree that happens to have the same number of roots, gates and branches (a
+     * single threshold root, say) used to carry the outgoing tree's counts across with no
+     * staleness cue, because two same-shaped threshold gates on different channels pair just
+     * as readily as the same gate before and after a threshold nudge. Undo and redo — the
+     * motivating case — still carry, because they restore a deep copy of the same tree, whose
+     * gates never change channel.
+     * <p>
+     * {@link GateNode#deepCopy()} does not carry {@link Branch#getCount()} — counts are
+     * {@code transient} on purpose, filled only by a gating walk — and neither does loading a
+     * tree from JSON. An undo, a redo or a load therefore used to hand the tree view a tree
+     * that reads 0/0% everywhere until the next {@code LivePreviewService} pass lands, which
+     * can be seconds on a large slide since that pass runs in the background. When the
+     * outgoing tree still pairs with the incoming one branch-for-branch — an undo of a
+     * threshold nudge, most loads of the tree just saved — its counts are a much better
+     * stand-in than zero for that whole window; when it does not (a gate was added, removed
+     * or reshaped), there is no correspondence to borrow and the destination is left at its
+     * own default.
+     * <p>
+     * Uses {@link #pairBranches} defensively rather than {@link #transferCounts} directly:
+     * {@code transferCounts} alone stops gracefully at the shorter of two diverged structures,
+     * which could transfer a count onto an unrelated branch under a partial mismatch; checking
+     * the pairing first (which throws on any mismatch, strict) means the transfer that follows
+     * either covers the whole forest correctly or does not run at all.
+     *
+     * @return {@code true} when the transfer happened
+     */
+    public static boolean transferCountsIfStructureMatches(List<GateNode> destination, List<GateNode> source) {
+        try {
+            pairBranches(destination, source);
+        } catch (IllegalArgumentException notPaired) {
+            return false;
+        }
+        transferCounts(destination, source);
+        return true;
+    }
+
+    /**
      * Walk two gate forests in parallel, handing each pair of corresponding branches to
      * {@code action} as {@code (fromA, fromB)}.
      *
@@ -297,11 +490,17 @@ public class GateTree {
                     "gate forests differ in size: " + a.size() + " vs " + b.size() + " node(s)");
         }
         for (int i = 0; i < a.size() && i < b.size(); i++) {
-            List<Branch> aBranches = a.get(i).getBranches();
-            List<Branch> bBranches = b.get(i).getBranches();
+            GateNode nodeA = a.get(i);
+            GateNode nodeB = b.get(i);
+            if (strict && !nodeA.getChannels().equals(nodeB.getChannels())) {
+                throw new IllegalArgumentException(
+                        "gate channels differ here: " + nodeA.getChannels() + " vs " + nodeB.getChannels());
+            }
+            List<Branch> aBranches = nodeA.getBranches();
+            List<Branch> bBranches = nodeB.getBranches();
             if (strict && aBranches.size() != bBranches.size()) {
                 throw new IllegalArgumentException(
-                        "gate '" + a.get(i).getChannel() + "' has " + aBranches.size()
+                        "gate '" + nodeA.getChannel() + "' has " + aBranches.size()
                                 + " branch(es) here and " + bBranches.size() + " in the other tree");
             }
             for (int k = 0; k < aBranches.size() && k < bBranches.size(); k++) {

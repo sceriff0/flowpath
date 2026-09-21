@@ -1,5 +1,8 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.ui.editor.AxisMath;
+import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
+
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ComboBox;
@@ -73,11 +76,10 @@ class GateEditorAxisChangeTest {
                 .mirageMedianMarker("CD4", i -> 20.0 + i)
                 // CD3's nuclear median, overridden to be deliberately NOT a scalar
                 // multiple of the bare column. Cells.mirageMedianMarker builds the
-                // compartments as exact multiples (0.9x / 1.5x / 0.5x), and z-scoring is
-                // scale-invariant: on proportional columns, a plot reading the wrong one
-                // is numerically identical to one reading the right one, so the z-score
-                // path — which is the default, and the one users actually see — cannot be
-                // tested at all. A quadratic ramp breaks the proportionality.
+                // compartments as exact multiples (0.9x / 1.5x / 0.5x); any scale-invariant
+                // reading of proportional columns (a standardised one, say) would make a
+                // plot reading the wrong column look identical to one reading the right
+                // one. A quadratic ramp breaks the proportionality.
                 .marker("CD3", Compartment.NUCLEAR, Statistic.MEDIAN, i -> 100.0 + i * i)
                 .marker("CD8", i -> 100.0 + i)
                 .area(100.0);
@@ -89,7 +91,7 @@ class GateEditorAxisChangeTest {
         CellIndex index = cells().build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
         CompartmentCapability capability =
-                CompartmentCapability.scan(Arrays.asList(index.getObjects()), 100);
+                CompartmentCapability.scan(Arrays.asList(index.getObjects()));
         GateEditorPane pane = FxTestSupport.onFx(GateEditorPane::new);
         FxTestSupport.onFxRun(() -> {
             pane.setChannelNames(List.of("CD3", "CD4", "CD8"));
@@ -175,7 +177,6 @@ class GateEditorAxisChangeTest {
         });
     }
 
-    /** The clip-percentile bounds of {@code column}, z-scored, as applyClipAxisRange builds them. */
     /**
      * The clip percentiles of a column, as measured.
      * <p>
@@ -212,7 +213,7 @@ class GateEditorAxisChangeTest {
         assertTrue(column.hasSpread(), "a column of NaN or one repeated value has no spread");
     }
 
-    // ---- one axis: buildThresholdEditor --------------------------------------
+    // ---- one axis: ThresholdGateEditor ---------------------------------------
 
     @Test
     void thresholdChannelChangeRepinsTheAxisToTheNewChannelsColumn() {
@@ -254,7 +255,7 @@ class GateEditorAxisChangeTest {
         assertEquals("CD4-", branchNames(gate).get(1));
     }
 
-    // ---- two axes: buildQuadrantEditor ---------------------------------------
+    // ---- two axes: QuadrantGateEditor ----------------------------------------
 
     @Test
     void quadrantXChannelChangeRepinsOnlyTheXAxis() {
@@ -315,7 +316,7 @@ class GateEditorAxisChangeTest {
         assertEquals("CD8-/CD4+", branchNames(gate).get(1));
     }
 
-    // ---- two axes: build2DEditor ---------------------------------------------
+    // ---- two axes: Region2DGateEditor ---------------------------------------
 
     @Test
     void regionXChannelChangeRepinsOnlyTheXAxis() {
@@ -377,11 +378,9 @@ class GateEditorAxisChangeTest {
      * The points that get plotted must come off each axis' <em>own</em> resolved column.
      * <p>
      * Asked of the quadrant threshold sliders, whose range is built from exactly that
-     * data. Deliberately in raw mode: a z-scored axis is scale-invariant, so a plot
-     * reading the whole-cell mean where the gate is set to the nuclear median would look
-     * identical — the fixture's compartment columns are proportional to each other, and an
-     * assertion that cannot tell them apart is not an assertion. In raw units the nuclear
-     * median is 1.5x the bare column and the range moves with it.
+     * data. In raw units a plot reading the whole-cell mean where the gate is set to the
+     * nuclear median cannot hide: the nuclear median differs from the bare column and the
+     * range moves with it.
      *
      * <p>This is the bug of commit {@code 6b66868}, which had to be fixed in four places
      * because the read was written out four times.
@@ -390,7 +389,6 @@ class GateEditorAxisChangeTest {
     void theSliderRangeIsBuiltFromTheColumnTheAxisActuallyReads() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         QuadrantGate gate = new QuadrantGate("CD3", "CD4");
-        gate.setThresholdIsZScore(false);
         gate.setCompartmentX(Compartment.NUCLEAR);
         gate.setCompartmentY(Compartment.NUCLEAR);
         Fixture f = editorFor(gate);
@@ -402,7 +400,7 @@ class GateEditorAxisChangeTest {
                 "the fixture must make the two candidate columns distinguishable");
         // Travel is that column's clip window (what the scatter shows), widened to hold the
         // threshold -- see QuadrantSliderSpanTest.
-        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{
+        double[] expected = AxisMath.quadrantSliderSpan(new double[]{
                 nuclearCol.percentile(gate.getClipPercentileLow()),
                 nuclearCol.percentile(gate.getClipPercentileHigh())}, gate.getThresholdX());
         double expectedMin = expected[0];
@@ -474,11 +472,8 @@ class GateEditorAxisChangeTest {
         var nuclear = GateAxis.of(gate, 0).columnIn(f.index(), f.stats());
         double lo = nuclear.percentile(gate.getClipPercentileLow());
         double hi = nuclear.percentile(gate.getClipPercentileHigh());
-        if (gate.isThresholdIsZScore()) {
-            lo = nuclear.toZScore(lo);
-            hi = nuclear.toZScore(hi);
-        }
-        double[] expected = GateEditorPane.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
+        assertFalse(gate.isThresholdIsZScore(), "a new gate reads its columns as measured");
+        double[] expected = AxisMath.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);
         assertEquals(expected[0], sliders.get(0).getMin(), 1e-9,

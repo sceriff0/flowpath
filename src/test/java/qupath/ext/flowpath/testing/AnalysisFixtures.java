@@ -39,7 +39,6 @@ public final class AnalysisFixtures {
 
         GateNode root = new GateNode("CD45", 5.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -66,7 +65,6 @@ public final class AnalysisFixtures {
 
         GateNode root = new GateNode("CD45", 100.0);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -121,11 +119,9 @@ public final class AnalysisFixtures {
 
         GateNode cd3Gate = new GateNode("CD3", 5.5);
         cd3Gate.setStatistic(Statistic.MEAN);
-        cd3Gate.setThresholdIsZScore(false);
 
         GateNode cd45Gate = new GateNode("CD45", 10.5);
         cd45Gate.setStatistic(Statistic.MEAN);
-        cd45Gate.setThresholdIsZScore(false);
         cd45Gate.setPositiveChildren(List.of(cd3Gate));
 
         GateTree tree = new GateTree();
@@ -180,16 +176,13 @@ public final class AnalysisFixtures {
 
         GateNode cd3Gate = new GateNode("CD3", 5.5);
         cd3Gate.setStatistic(Statistic.MEAN);
-        cd3Gate.setThresholdIsZScore(false);
 
         GateNode cd45Gate = new GateNode("CD45", 10.5);
         cd45Gate.setStatistic(Statistic.MEAN);
-        cd45Gate.setThresholdIsZScore(false);
         cd45Gate.setPositiveChildren(List.of(cd3Gate));
 
         GateNode cd19Gate = new GateNode("CD19", 10.5);
         cd19Gate.setStatistic(Statistic.MEAN);
-        cd19Gate.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -240,11 +233,9 @@ public final class AnalysisFixtures {
 
         GateNode rootA = new GateNode("CD45", 10.5);
         rootA.setStatistic(Statistic.MEAN);
-        rootA.setThresholdIsZScore(false);
 
         GateNode rootB = new GateNode("CD45", 15.5);
         rootB.setStatistic(Statistic.MEAN);
-        rootB.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -287,7 +278,6 @@ public final class AnalysisFixtures {
 
         GateNode root = new GateNode("CD45", 10.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -316,11 +306,9 @@ public final class AnalysisFixtures {
 
         GateNode rootA = new GateNode("CD45", 10.5);
         rootA.setStatistic(Statistic.MEAN);
-        rootA.setThresholdIsZScore(false);
 
         GateNode rootB = new GateNode("CD45", 15.5);
         rootB.setStatistic(Statistic.MEAN);
-        rootB.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);
@@ -362,7 +350,6 @@ public final class AnalysisFixtures {
 
         GateNode root = new GateNode("CD45", 15.5);
         root.setStatistic(Statistic.MEAN);
-        root.setThresholdIsZScore(false);
 
         GateTree tree = new GateTree();
         tree.setQualityFilter(null);

@@ -13,6 +13,7 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -56,6 +57,14 @@ public class QualityFilterPane extends TitledPane {
     private final Map<String, Row> rows = new LinkedHashMap<>();
 
     private Consumer<QualityFilter> onFilterChanged;
+    /**
+     * What kind of user change is about to be written: a slider tick, which arrives in bursts
+     * and is recorded coalesced, or a Reset, which is one discrete click.
+     */
+    public enum ChangeKind { DRAG, RESET }
+
+    /** Runs before the filter is written, so an undo snapshot taken there holds the old value. */
+    private Consumer<ChangeKind> onBeforeFilterChange;
 
     /** The controls for one morphology field. */
     private record Row(MorphologyField field, Slider min, Slider max,
@@ -71,7 +80,8 @@ public class QualityFilterPane extends TitledPane {
         grid.setVgap(4);
         grid.setPadding(new Insets(6));
 
-        emptyLabel.setStyle("-fx-font-size: 10; -fx-opacity: 0.7;");
+        emptyLabel.getStyleClass().add("fp-hint");
+        emptyLabel.setStyle("-fx-font-size: 10;");
         emptyLabel.setWrapText(true);
 
         Button reset = new Button("Reset");
@@ -129,8 +139,10 @@ public class QualityFilterPane extends TitledPane {
             Slider maxSlider = slider(bounds, hi);
             Label minLabel = new Label(fmt(lo));
             Label maxLabel = new Label(Double.isFinite(current.max()) ? fmt(hi) : "off");
-            minLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
-            maxLabel.setStyle("-fx-font-size: 9; -fx-opacity: 0.75;");
+            minLabel.getStyleClass().add("fp-muted");
+            maxLabel.getStyleClass().add("fp-muted");
+            minLabel.setStyle("-fx-font-size: 9;");
+            maxLabel.setStyle("-fx-font-size: 9;");
             // Fixed width, so a value growing a digit does not shove the sliders mid-drag.
             minLabel.setMinWidth(36);
             maxLabel.setMinWidth(36);
@@ -198,8 +210,13 @@ public class QualityFilterPane extends TitledPane {
         // against one slide would silently exclude cells on a slide whose values run wider.
         double min = lo <= r.min().getMin() ? Double.NEGATIVE_INFINITY : lo;
         double max = hi >= r.max().getMax() ? Double.POSITIVE_INFINITY : hi;
+        fireBeforeChange(ChangeKind.DRAG);
         filter.setRange(r.field().slug(), new QualityFilter.Range(min, max));
         fireChanged();
+    }
+
+    private void fireBeforeChange(ChangeKind kind) {
+        if (!suppressEvents && onBeforeFilterChange != null) onBeforeFilterChange.accept(kind);
     }
 
     private void fireChanged() {
@@ -229,6 +246,19 @@ public class QualityFilterPane extends TitledPane {
         this.onFilterChanged = callback;
     }
 
+    /**
+     * Called just before a user change is written into the filter, with what kind of change
+     * it is: a slider tick ({@link ChangeKind#DRAG}, coalesced by the caller) or a Reset
+     * ({@link ChangeKind#RESET}, a step of its own).
+     * <p>
+     * The panel edits the filter object in place and fires {@link #setOnFilterChanged
+     * onFilterChanged} afterwards, so an undo snapshot taken in that callback would already
+     * hold the new value and undo would restore nothing. This is where to take it.
+     */
+    public void setOnBeforeFilterChange(Consumer<ChangeKind> callback) {
+        this.onBeforeFilterChange = callback;
+    }
+
     public QualityFilter getFilter() {
         return filter;
     }
@@ -238,8 +268,15 @@ public class QualityFilterPane extends TitledPane {
         return List.copyOf(rows.keySet());
     }
 
-    /** Clear every constraint and return the sliders to their columns' full span. */
+    /**
+     * Clear every constraint and return the sliders to their columns' full span. A discrete
+     * change ({@link ChangeKind#RESET}): announced as a slider tick it was folded into a drag
+     * made within the coalescing window, and one undo reverted both. A reset that would clear
+     * nothing announces nothing, so it records no empty undo step.
+     */
     public void resetToDefaults() {
+        if (rows.keySet().stream().allMatch(slug -> filter.range(slug).isOpen())) return;
+        fireBeforeChange(ChangeKind.RESET);
         for (Row r : rows.values()) filter.setRange(r.field().slug(), null);
         List<MorphologyField> shown = new ArrayList<>();
         for (Row r : rows.values()) shown.add(r.field());

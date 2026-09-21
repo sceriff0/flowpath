@@ -43,9 +43,6 @@ import java.util.Set;
  */
 public final class CompartmentCapability {
 
-    private static final org.slf4j.Logger logger =
-            org.slf4j.LoggerFactory.getLogger(CompartmentCapability.class);
-
     /**
      * One (compartment, statistic) combination a marker actually carries. The unit the
      * capability is stored in — see the class javadoc on why the two axes cannot be
@@ -99,35 +96,15 @@ public final class CompartmentCapability {
     }
 
     /**
-     * How many detections to inspect by default. Both halves of FlowPath must use the
-     * same depth: gating scanned 100 cells and the UMAP 20, so a marker whose compartment
-     * keys first appeared past cell 20 was offered in the gate editor and silently
-     * downgraded to whole-cell in the UMAP's feature selection.
+     * Derive the capability from {@link MeasurementKeySample}, the one key sample every part
+     * of FlowPath reads. Both halves must see the same sample: gating once scanned 100
+     * cells and the UMAP 20, so a marker whose compartment keys first appeared past cell 20
+     * was offered in the gate editor and silently downgraded to whole-cell in the UMAP's
+     * feature selection. This used to be its own sampling loop, kept in step with two others
+     * only by a shared constant.
      */
-    public static final int DEFAULT_SAMPLE_SIZE = 100;
-
-    /** Scan the default number of detections. */
     public static CompartmentCapability scan(Collection<PathObject> detections) {
-        return scan(detections, DEFAULT_SAMPLE_SIZE);
-    }
-
-    /** Scan up to {@code sampleLimit} detections' measurement keys. */
-    public static CompartmentCapability scan(Collection<PathObject> detections, int sampleLimit) {
-        LinkedHashSet<String> keys = new LinkedHashSet<>();
-        int sampled = 0;
-        for (PathObject obj : detections) {
-            try {
-                var m = obj.getMeasurements();
-                if (m != null) keys.addAll(m.keySet());
-            } catch (Exception e) {
-                // One unreadable detection must not abort capability discovery for the
-                // slide -- but silence here shows up much later as a compartment the
-                // editor never offers, with nothing to trace it to.
-                logger.debug("Skipping detection with unreadable measurements", e);
-            }
-            if (++sampled >= sampleLimit) break;
-        }
-        return fromKeys(keys);
+        return fromKeys(MeasurementKeySample.keys(detections));
     }
 
     /** True if any per-compartment measurement key was found (rich GeoJSON). */

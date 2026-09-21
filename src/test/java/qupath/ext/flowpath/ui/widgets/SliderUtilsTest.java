@@ -1,4 +1,4 @@
-package qupath.ext.flowpath.ui;
+package qupath.ext.flowpath.ui.widgets;
 
 import javafx.scene.control.Slider;
 import org.junit.jupiter.api.Test;

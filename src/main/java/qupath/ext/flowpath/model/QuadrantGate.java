@@ -145,7 +145,7 @@ public final class QuadrantGate extends GateNode {
     @Override
     public void setThreshold(double threshold) { this.thresholdX = threshold; }
 
-    // The z-score flag is inherited from GateNode — see the field declaration there
+    // The legacy z-score flag is inherited from GateNode — see the field declaration there
     // for why it is not redeclared per gate type.
 
     // The base single-channel accessors map to the X axis (mirrors getChannel()).
@@ -201,6 +201,12 @@ public final class QuadrantGate extends GateNode {
     @Override
     public int branchFor(double x, double y) {
         return evaluateQuadrant(x, y);
+    }
+
+    /** Branches are ++, -+, +-, --: X is positive in 0 and 2, Y in 0 and 1. */
+    @Override
+    public boolean branchIsPositiveOn(int branch, int axis) {
+        return axis == 1 ? (branch == 0 || branch == 1) : (branch == 0 || branch == 2);
     }
 
     @Override

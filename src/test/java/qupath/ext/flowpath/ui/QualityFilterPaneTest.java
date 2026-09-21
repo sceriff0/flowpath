@@ -1,11 +1,14 @@
 package qupath.ext.flowpath.ui;
 
+import javafx.scene.Node;
+import javafx.scene.control.Slider;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -127,5 +130,151 @@ class QualityFilterPaneTest {
             assertTrue(filter.passes(index, i),
                     "this export has no solidity, so a solidity range says nothing about cell " + i);
         }
+    }
+
+    /** The panel's sliders in grid order: min then max, per field. */
+    private static List<Slider> sliders(QualityFilterPane pane) {
+        List<Slider> out = new ArrayList<>();
+        for (Node n : pane.getContent().lookupAll(".slider")) out.add((Slider) n);
+        return out;
+    }
+
+    /**
+     * The undo snapshot of a filter change has to be taken <em>before</em> the filter
+     * mutates. The panel writes into the tree's own filter object and only then fires
+     * {@code onFilterChanged}, so a snapshot taken there records the new value and undo
+     * restores nothing — which is why the panel says, first, that a change is coming.
+     */
+    @Test
+    void theBeforeChangeHookSeesTheFilterAsItWas() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        QualityFilter filter = new QualityFilter();
+        CellIndex index = Cells.of(10).marker("CD3", i -> 1.0 + i).area(i -> 10.0 * (i + 1)).build();
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(filter));
+        FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
+
+        List<QualityFilter.Range> seenBefore = new ArrayList<>();
+        List<QualityFilter.Range> seenAfter = new ArrayList<>();
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnBeforeFilterChange(kind -> seenBefore.add(filter.range("area")));
+            pane.setOnFilterChanged(f -> seenAfter.add(f.range("area")));
+            sliders(pane).get(0).setValue(45);
+        });
+
+        assertEquals(List.of(QualityFilter.Range.OPEN), seenBefore, "the hook runs before the write");
+        assertEquals(45.0, seenAfter.get(0).min(), 1e-9, "and the change notification after it");
+    }
+
+    /**
+     * Thin FX half of {@code GatingSessionResyncTest}'s filter-undo case: the panel wired to a
+     * session the way {@code FlowPathPane} wires it. A three-tick drag is one undo step, and
+     * after undo and resync the panel, the tree's filter and the session's mask all agree on
+     * the restored (open) filter.
+     */
+    @Test
+    void aDragIsOneUndoStepAndUndoRedrawsThePanelFromTheRestoredFilter() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        CellIndex index = Cells.of(10).marker("CD3", i -> 1.0 + i).area(i -> 10.0 * (i + 1)).build();
+        long[] clock = {10_000};
+        GatingSession session = new GatingSession(() -> clock[0], input -> { });
+        session.adoptIndex(index);
+        session.resync(List::of);
+
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(session.tree().getQualityFilter()));
+        FxTestSupport.onFxRun(() -> {
+            pane.setCellIndex(index);
+            pane.setOnBeforeFilterChange(kind -> session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER));
+            pane.setOnFilterChanged(f -> session.recomputeQualityMask());
+            Slider min = sliders(pane).get(0);
+            for (double v : new double[]{25, 35, 45}) {
+                clock[0] += 100;
+                min.setValue(v);
+            }
+        });
+        assertEquals(6, count(session.qualityMask()), "area >= 45 while dragging");
+
+        assertTrue(session.undo());
+        assertFalse(session.undo(), "the whole drag was one step");
+        assertTrue(session.redo());
+        assertTrue(session.undo());
+        session.resync(List::of);
+        FxTestSupport.onFxRun(() -> pane.setFilter(session.tree().getQualityFilter()));
+
+        assertSame(session.tree().getQualityFilter(), pane.getFilter(), "the panel edits the restored tree's filter");
+        assertTrue(pane.getFilter().range("area").isOpen());
+        assertEquals(10.0, sliders(pane).get(0).getValue(), 1e-9, "min slider back at the column minimum");
+        assertEquals(10, count(session.qualityMask()), "mask recomputed from the restored filter");
+    }
+
+    /**
+     * Reset is one click, not a tick of a drag: pressed within the 500ms coalescing window of
+     * a drag it used to share the drag's before-change hook and fold into that step, so one
+     * Ctrl+Z undid both and the filter the drag had set could not be got back by undo. Wired
+     * as {@code FlowPathPane} wires it; checked across the resync after each undo.
+     */
+    @Test
+    void aResetStraightAfterADragIsAStepOfItsOwn() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        CellIndex index = Cells.of(10).marker("CD3", i -> 1.0 + i).area(i -> 10.0 * (i + 1)).build();
+        long[] clock = {10_000};
+        GatingSession session = new GatingSession(() -> clock[0], input -> { });
+        session.adoptIndex(index);
+        session.resync(List::of);
+
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(session.tree().getQualityFilter()));
+        FxTestSupport.onFxRun(() -> {
+            pane.setCellIndex(index);
+            pane.setOnBeforeFilterChange(kind -> {
+                switch (kind) {
+                    case DRAG -> session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
+                    case RESET -> session.recordEdit();
+                }
+            });
+            pane.setOnFilterChanged(f -> session.recomputeQualityMask());
+            Slider min = sliders(pane).get(0);
+            for (double v : new double[]{25, 35, 45}) {
+                clock[0] += 100;
+                min.setValue(v);
+            }
+            clock[0] += 100;
+            pane.resetToDefaults();
+        });
+        assertEquals(10, count(session.qualityMask()), "reset reopened the filter");
+
+        assertTrue(session.undo(), "undo the reset");
+        session.resync(List::of);
+        assertEquals(45.0, session.tree().getQualityFilter().range("area").min(), 1e-9,
+                "one undo brings back the dragged filter");
+        assertEquals(6, count(session.qualityMask()));
+
+        assertTrue(session.undo(), "undo the drag");
+        session.resync(List::of);
+        assertTrue(session.tree().getQualityFilter().range("area").isOpen());
+        assertEquals(10, count(session.qualityMask()));
+        assertFalse(session.undo(), "the drag and the reset were two steps, no more");
+    }
+
+    /** A reset with nothing to reset is not an edit: no step, so the redo stack survives it. */
+    @Test
+    void aResetOfAnOpenFilterRecordsNothing() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        CellIndex index = Cells.of(10).marker("CD3", i -> 1.0 + i).area(i -> 10.0 * (i + 1)).build();
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(new QualityFilter()));
+        List<QualityFilterPane.ChangeKind> before = new ArrayList<>();
+        int[] changed = {0};
+        FxTestSupport.onFxRun(() -> {
+            pane.setCellIndex(index);
+            pane.setOnBeforeFilterChange(before::add);
+            pane.setOnFilterChanged(f -> changed[0]++);
+            pane.resetToDefaults();
+        });
+        assertEquals(List.of(), before);
+        assertEquals(0, changed[0]);
+    }
+
+    private static int count(boolean[] mask) {
+        int c = 0;
+        for (boolean b : mask) if (b) c++;
+        return c;
     }
 }

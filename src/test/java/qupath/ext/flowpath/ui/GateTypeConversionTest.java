@@ -26,9 +26,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class GateTypeConversionTest {
 
-    private static PolygonGate zScoredNuclearMedianPolygon() {
+    private static PolygonGate nuclearMedianPolygon() {
         PolygonGate source = new PolygonGate("CD3", "CD8");
-        source.setThresholdIsZScore(true);
         source.setCompartmentX(Compartment.NUCLEAR);
         source.setStatisticX(Statistic.MEDIAN);
         source.setCompartmentY(Compartment.CYTOPLASMIC);
@@ -41,19 +40,23 @@ class GateTypeConversionTest {
     }
 
     @Test
-    void conversionCarriesTheZScoreFlagToTheReplacementGate() {
-        PolygonGate source = zScoredNuclearMedianPolygon();
+    void conversionNeverCarriesTheRetiredZScoreFlag() {
+        // The scatter draws every axis as measured, so a shape drawn on it is in raw units.
+        // Carrying a legacy flag across would have LegacyZScoreMigration "convert" raw
+        // coordinates as if they were standard deviations.
+        PolygonGate source = nuclearMedianPolygon();
+        source.setThresholdIsZScore(true);
         RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
 
         GateEditorPane.copySharedSettings(source, replacement);
 
-        assertTrue(replacement.isThresholdIsZScore(),
-                "a rectangle drawn on a z-scored scatter must be evaluated in z-score space");
+        assertFalse(replacement.isThresholdIsZScore(),
+                "a rectangle drawn on the raw scatter is evaluated on raw values");
     }
 
     @Test
     void conversionCarriesPerAxisCompartmentAndStatistic() {
-        PolygonGate source = zScoredNuclearMedianPolygon();
+        PolygonGate source = nuclearMedianPolygon();
         RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
 
         GateEditorPane.copySharedSettings(source, replacement);
@@ -66,7 +69,7 @@ class GateTypeConversionTest {
 
     @Test
     void conversionStillCarriesClippingAndBranchMetadata() {
-        PolygonGate source = zScoredNuclearMedianPolygon();
+        PolygonGate source = nuclearMedianPolygon();
         source.getBranches().get(0).setName("blasts");
         source.getBranches().get(0).setColor(0x123456);
         source.getBranches().get(1).getChildren().add(new GateNode("CD19"));
@@ -86,7 +89,6 @@ class GateTypeConversionTest {
     @Test
     void rawSourceGateStaysRawAfterConversion() {
         PolygonGate source = new PolygonGate("CD3", "CD8");
-        source.setThresholdIsZScore(false);
 
         RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
         GateEditorPane.copySharedSettings(source, replacement);
@@ -98,7 +100,6 @@ class GateTypeConversionTest {
     @Test
     void thresholdToRegionConversionCarriesTheSingleAxisSelection() {
         GateNode source = new GateNode("CD3");
-        source.setThresholdIsZScore(false);
         source.setCompartment(Compartment.NUCLEAR);
         source.setStatistic(Statistic.MEDIAN);
 
