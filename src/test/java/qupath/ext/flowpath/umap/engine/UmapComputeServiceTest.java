@@ -849,7 +849,7 @@ class UmapComputeServiceTest {
             // Allow any straggler runLater callbacks to flush.
             CountDownLatch flush = new CountDownLatch(1);
             Platform.runLater(flush::countDown);
-            flush.await(5, TimeUnit.SECONDS);
+            flush.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS);
 
             assertEquals(1, completeCount.get(),
                     "Only the second compute's onComplete should fire; the first "
@@ -902,7 +902,7 @@ class UmapComputeServiceTest {
             // Allow Platform.runLater queue to flush
             CountDownLatch flush = new CountDownLatch(1);
             Platform.runLater(flush::countDown);
-            flush.await(5, TimeUnit.SECONDS);
+            flush.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS);
 
             boolean hasNN = statusLog.stream().anyMatch(s -> s.matches(".*NN-Descent: \\d+ms.*"));
             boolean hasFit = statusLog.stream().anyMatch(s -> s.matches(".*UMAP\\.fit: \\d+ms.*"));
