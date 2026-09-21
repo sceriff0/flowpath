@@ -630,6 +630,66 @@ class IngestCoordinatorTest {
     }
 
     /**
+     * The hand-off to a background re-derivation must not swallow a detection edit that is
+     * still sitting in the debounce window.
+     * <p>
+     * The two tests around this one both call {@code scheduler.elapse()} before changing a
+     * filter, so neither can see it: the re-derivation is entered with no timer armed. The
+     * ordinary sequence that does is one event later — a read is in flight, the user deletes or
+     * edits a <em>second</em> cell (arming the 500 ms timer, which has not fired, so
+     * {@code recheckAfterLanding} is still false), the user then toggles the annotation filter,
+     * and the read lands inside that window. {@code rederive} recomputes masks and statistics
+     * only; it never re-reads detections and nothing re-arms the timer, so cancelling it there
+     * loses the edit outright — the index stays stale with no log line and no UI cue until some
+     * unrelated hierarchy event happens along.
+     * <p>
+     * So the assertion is on the timer surviving the hand-off, and then on the cells: twelve in
+     * the index, including the one added while the read was running.
+     */
+    @Test
+    void aDetectionEditStillInTheDebounceWindowSurvivesTheHandOffToARederivation() {
+        Rig rig = new Rig();
+        ImageData<BufferedImage> image = imageWith("a", cd3Cells(10));
+        rig.coordinator.open(image);
+        rig.background.runAll();
+        assertEquals(10, rig.session.index().size());
+
+        // A first detection edit, debounced and submitted: a read is now in flight.
+        image.getHierarchy().addObject(cd3Cell(100, 150));
+        rig.scheduler.elapse();
+        assertEquals(1, rig.background.pending());
+        assertEquals(IngestCoordinator.Busy.REFRESHING, rig.host.lastBusy());
+
+        // A second detection edit arrives while that read runs. Its quiet period has NOT
+        // elapsed, so refresh() never ran and recheckAfterLanding is still false.
+        PathObject addedDuringTheRead = cd3Cell(200, 160);
+        image.getHierarchy().addObject(addedDuringTheRead);
+        assertEquals(1, rig.scheduler.live(), "the debounce timer is armed");
+
+        // ...and the user toggles the annotation filter, so the read will land stale.
+        rig.session.setRoiFilterEnabled(true);
+
+        rig.background.runOne();     // the read lands and hands off to a re-derivation
+        assertEquals(1, rig.scheduler.live(),
+                "the armed debounce must survive the hand-off: nothing else will ever re-read "
+                        + "the detection edit that armed it");
+        rig.background.runOne();     // the re-derivation lands
+        assertEquals(0, rig.background.pending());
+        assertEquals(11, rig.session.index().size(), "only the first edit is read so far");
+
+        rig.scheduler.elapse();      // the second edit's quiet period finally ends
+        rig.background.runAll();
+
+        assertEquals(12, rig.session.index().size(), "both edits reached the index");
+        assertTrue(indexHolds(rig.session.index(), addedDuringTheRead),
+                "the cell added while the read ran must be in the index");
+        assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
+        // CD3 = 1..10 plus 100 and 200; no annotation exists, so the ROI filter masks nothing.
+        assertArrayEquals(new int[]{7, 5}, counts(rig, rig.root(0)));
+        assertArrayEquals(new int[]{10, 2}, counts(rig, rig.root(1)));
+    }
+
+    /**
      * The same escape hatch on the other arm — a background re-derivation (the annotation
      * filter is already on, an annotation moved) landing against a quality filter the user
      * dragged meanwhile. The cells never changed, so {@code newIndex} must still be

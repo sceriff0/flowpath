@@ -453,10 +453,20 @@ final class IngestCoordinator {
      * result lands through {@link #land} and is re-checked there in turn, so a filter changed
      * again while <em>this</em> runs simply queues another one rather than falling through to a
      * synchronous derive.
+     * <p>
+     * <b>A bare generation bump, never {@link #supersede()}.</b> This runs inside {@link #land},
+     * which has already passed its own generation check, so there is nothing in flight left to
+     * supersede — and {@code supersede()} would also run {@link #cancelPendingRefresh()},
+     * silently disarming the debounce timer a detection edit had set while the read was
+     * running. Nothing here re-reads detections and nothing re-arms that timer, so the edit
+     * would never be read at all: the index would sit stale, with no log line and no UI cue,
+     * until some unrelated hierarchy event happened along — exactly the failure class this
+     * coordinator exists to prevent. (The other two things {@code supersede()} does are already
+     * handled: {@code land} takes and clears {@code recheckAfterLanding} before the switch and
+     * re-arms it afterwards.) The bump itself stays, so one stamp still identifies one job.
      */
     private void rederive(ImageData<?> imageData, boolean newIndex) {
-        supersede();
-        long stamp = generation.get();
+        long stamp = generation.incrementAndGet();
         CellIndex current = session.index();
         long readsCovered = readsApplied;
         GatingSession.DerivationInputs inputs =
