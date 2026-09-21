@@ -137,6 +137,13 @@ Analysis window remain held back, as in 0.9.3.
   `OutOfMemoryError` walking and serializing a million-cell population is the plausible
   case) — it escaped the background job uncaught, so the panel never learned the export had
   finished. Both are now caught, matching how detection reads already handled the pair.
+- **"Color by…" could jump to a different root.** The picker remembered which root it was
+  showing by its position in the list, so anything that renumbered the enabled roots —
+  dragging a gate to reorder the tree, above all, but also enabling, disabling or deleting a
+  root above the selected one — left it pointing at a different root and repainted the whole
+  slide by that one instead. It now remembers the root itself, including when two roots
+  share a channel; a root that is deleted or disabled falls back to the default colours
+  rather than handing its selection to whichever root took its place.
 - **Restructuring the gate tree while a pass was running could show one gate's counts on
   another gate's branches.** A gating pass walks a copy of the tree and carries the counts
   back onto the live one afterwards. Editing the tree meanwhile — dragging a gate onto

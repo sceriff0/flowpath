@@ -79,6 +79,8 @@ public class FlowPathPane extends BorderPane {
     private final LivePreviewService previewService;
     private final Label statusBar;
     private final ComboBox<String> colorByRootCombo;
+    /** Which root {@link #colorByRootCombo} is on, as a value; see {@link ColorByRootSelection}. */
+    private final ColorByRootSelection colorByRoot = new ColorByRootSelection();
     private final Button umapButton;
     private final Button analysisButton;
 
@@ -254,6 +256,7 @@ public class FlowPathPane extends BorderPane {
         colorByRootCombo.getSelectionModel().selectedIndexProperty().addListener((obs, old, idx) -> {
             if (idx.intValue() >= 0) {
                 previewService.setColorRootIndex(idx.intValue());
+                colorByRoot.selected(idx.intValue());
             }
         });
 
@@ -1521,18 +1524,27 @@ public class FlowPathPane extends BorderPane {
         // Skip update if items haven't changed (avoids triggering selection listeners)
         if (rootNames.equals(colorByRootCombo.getItems())) return;
 
-        int prev = colorByRootCombo.getSelectionModel().getSelectedIndex();
+        // The selection is restored by VALUE, not by index -- see ColorByRootSelection. The
+        // rebuild happens BEFORE the items are replaced, so the listener above resolves any
+        // index JavaFX reports mid-replacement against the new entries, never the old ones.
+        int restore = colorByRoot.rebuild(rootNames);
         colorByRootCombo.getItems().setAll(rootNames);
         if (rootNames.size() <= 1) {
             colorByRootCombo.setDisable(true);
             colorByRootCombo.getSelectionModel().clearSelection();
+            colorByRoot.clear();
             // Reset to default color mode (no-op if already -1)
             previewService.setColorRootIndex(-1);
-        } else {
+        } else if (restore >= 0) {
             colorByRootCombo.setDisable(false);
-            if (prev >= 0 && prev < rootNames.size()) {
-                colorByRootCombo.getSelectionModel().select(prev);
-            }
+            colorByRootCombo.getSelectionModel().select(restore);
+        } else {
+            // The root that was being coloured by is gone (deleted or disabled). Fall back to
+            // the default colours rather than repaint the slide by whichever root inherited
+            // its position.
+            colorByRootCombo.setDisable(false);
+            colorByRootCombo.getSelectionModel().clearSelection();
+            previewService.setColorRootIndex(-1);
         }
     }
 
