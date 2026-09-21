@@ -42,6 +42,10 @@ import java.util.function.Supplier;
  * else it needs is captured into the job first (the detection list, a copy of the quality
  * filter, the annotations, the index to compare against).
  * <p>
+ * <b>Nothing derives on the FX thread at the landing either.</b> A read that lands against a
+ * session whose filters moved on while it ran is <em>not</em> handed to {@code resync}'s
+ * synchronous fallback; it is derived again in the background. See {@link #adoptOrRederive}.
+ * <p>
  * <b>Only an image switch supersedes work in flight.</b> A hierarchy change that settles while
  * a read or check is still running does not replace it — that turned an annotation edit during
  * a first load into a second full read, and events arriving more often than one read takes
@@ -332,7 +336,13 @@ final class IngestCoordinator {
     /** What a job found. */
     private sealed interface Outcome {}
     private record Read(IngestResult result, GatingSession.Derived derived) implements Outcome {}
-    private record Rederived(GatingSession.Derived derived) implements Outcome {}
+    /**
+     * Masks and statistics for cells the session already holds. {@code newIndex} is what
+     * {@link Host#resynced} is told, and is {@code true} only for a derivation
+     * {@link #rederive} queued <em>after</em> a read had already installed new cells — see
+     * {@link #adoptOrRederive}.
+     */
+    private record Rederived(GatingSession.Derived derived, boolean newIndex) implements Outcome {}
     private record Unchanged() implements Outcome {}
     private record Failed(Throwable error) implements Outcome {}
 
@@ -361,7 +371,7 @@ final class IngestCoordinator {
                     outcome = new Read(result, GatingSession.derive(inputs.withIndex(result.index())));
                 } else if (inputs.roiFilterEnabled()) {
                     if (superseded(stamp)) return;
-                    outcome = new Rederived(GatingSession.derive(inputs));
+                    outcome = new Rederived(GatingSession.derive(inputs), false);
                 } else {
                     outcome = new Unchanged();
                 }
@@ -377,7 +387,11 @@ final class IngestCoordinator {
     private void land(long stamp, ImageData<?> imageData, CellIndex baseline, long readsCovered, Outcome outcome) {
         if (closed || superseded(stamp)) return;     // newer work owns the session
         setBusy(Busy.IDLE);
-        Supplier<List<PathObject>> annotations = () -> host.annotations(imageData);
+        // Taken and cleared before the switch, because the re-derivation arm below supersedes
+        // (which clears the flag) and then leaves a job in flight: the owed recheck must
+        // survive that and be re-armed against the new job by the refresh() at the end.
+        boolean recheck = recheckAfterLanding;
+        recheckAfterLanding = false;
         switch (outcome) {
             case Read r -> {
                 if (baseline == null) {
@@ -387,9 +401,9 @@ final class IngestCoordinator {
                 }
                 readsApplied = readsCovered;
                 host.ingested(imageData, r.result());
-                host.resynced(session.resync(r.derived(), annotations), true);
+                adoptOrRederive(imageData, r.derived(), true);
             }
-            case Rederived d -> host.resynced(session.resync(d.derived(), annotations), false);
+            case Rederived d -> adoptOrRederive(imageData, d.derived(), d.newIndex());
             case Unchanged u -> { }
             case Failed f -> {
                 // A first-load failure (baseline == null) leaves no cells to come and nothing
@@ -401,10 +415,66 @@ final class IngestCoordinator {
                 host.failed(f.error());
             }
         }
-        if (recheckAfterLanding) {
-            recheckAfterLanding = false;
-            refresh();
+        if (recheck) refresh();
+    }
+
+    /**
+     * Adopt {@code derived} if it still describes the session; otherwise derive again in the
+     * background rather than hand it to {@link GatingSession#resync(GatingSession.Derived,
+     * Supplier)} anyway.
+     * <p>
+     * <b>Why this escape hatch exists.</b> {@code resync}'s two-argument form falls back to a
+     * <em>synchronous</em> derive when the derivation handed to it has gone stale, and that
+     * derive is {@code MarkerStats.compute} — a sort of every marker column over every cell,
+     * seconds on a large slide, on the FX thread. Nothing disables the quality-filter panel or
+     * the annotation-filter checkbox while an ingest is {@link Busy#REFRESHING}, so the stale
+     * case is ordinary: edit a detection in QuPath, nudge a quality slider or toggle the ROI
+     * filter while the re-ingest runs, and the read lands against a session whose filters have
+     * moved on. That is precisely the freeze this coordinator exists to remove, reappearing at
+     * the landing. {@link DerivationCoordinator#land} takes the same escape hatch for the same
+     * reason; between them, {@code resync}'s synchronous fallback stays the safety net it is
+     * documented to be.
+     *
+     * @param newIndex what {@link Host#resynced} is told once the adoption finally happens —
+     *                 carried across the re-derivation, because the cells really did change and
+     *                 the editor still needs rebuilding whenever the derivation lands
+     */
+    private void adoptOrRederive(ImageData<?> imageData, GatingSession.Derived derived, boolean newIndex) {
+        if (session.stillDescribes(derived)) {
+            host.resynced(session.resync(derived, () -> host.annotations(imageData)), newIndex);
+        } else {
+            rederive(imageData, newIndex);
         }
+    }
+
+    /**
+     * Derive the masks and statistics for the cells the session now holds, in the background.
+     * Reads nothing on the FX thread but the inputs, exactly as {@link #submit} does; the
+     * result lands through {@link #land} and is re-checked there in turn, so a filter changed
+     * again while <em>this</em> runs simply queues another one rather than falling through to a
+     * synchronous derive.
+     */
+    private void rederive(ImageData<?> imageData, boolean newIndex) {
+        supersede();
+        long stamp = generation.get();
+        CellIndex current = session.index();
+        long readsCovered = readsApplied;
+        GatingSession.DerivationInputs inputs =
+                session.derivationInputs(current, () -> host.annotations(imageData));
+        GatingSession.ReusableStats reusable = session.reusableStats();
+
+        background.execute(() -> {
+            if (superseded(stamp)) return;
+            Outcome outcome;
+            try {
+                outcome = new Rederived(GatingSession.derive(inputs, reusable), newIndex);
+            } catch (RuntimeException | Error ex) {
+                outcome = new Failed(ex);
+            }
+            Outcome landed = outcome;
+            fxThread.execute(() -> land(stamp, imageData, current, readsCovered, landed));
+        });
+        setBusy(Busy.REFRESHING);
     }
 
     private boolean superseded(long stamp) {

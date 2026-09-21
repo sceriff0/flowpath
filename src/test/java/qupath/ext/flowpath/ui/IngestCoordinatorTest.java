@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.images.ImageData;
@@ -48,6 +49,8 @@ class IngestCoordinatorTest {
         @Override public void execute(Runnable command) { queue.add(command); }
         int pending() { return queue.size(); }
         void runAll() { while (!queue.isEmpty()) queue.remove(0).run(); }
+        /** Run the oldest queued job only, so work it queues in turn stays visible. */
+        void runOne() { queue.remove(0).run(); }
         void runNewestFirst() { while (!queue.isEmpty()) queue.remove(queue.size() - 1).run(); }
     }
 
@@ -158,6 +161,12 @@ class IngestCoordinatorTest {
     /** CD3 = 1..n, cell i at x = 10*i. */
     private static List<PathObject> cd3Cells(int n) {
         return Cells.of(n).marker("CD3", i -> i + 1.0).area(i -> 50.0).at(i -> i * 10.0, i -> 5.0).detections();
+    }
+
+    /** As {@link #cd3Cells}, but with graded areas so a quality filter can cut some of them. */
+    private static List<PathObject> cd3CellsWithGradedAreas(int n) {
+        return Cells.of(n).marker("CD3", i -> i + 1.0).area(i -> 10.0 * (i + 1))
+                .at(i -> i * 10.0, i -> 5.0).detections();
     }
 
     /** One more cell, carrying the same measurement keys. */
@@ -553,6 +562,115 @@ class IngestCoordinatorTest {
 
         assertEquals(4, rig.session.index().size());
         assertEquals(2, rig.host.ingested.size());
+    }
+
+    // ---- the landing never derives on the FX thread -----------------------------------------
+
+    /**
+     * Nothing disables the annotation-filter checkbox or the quality-filter panel while an
+     * ingest is {@link IngestCoordinator.Busy#REFRESHING}, so a filter change <em>during</em> a
+     * re-ingest is ordinary: edit a detection in QuPath, toggle "Filter by annotations" while
+     * the re-read runs, and the read lands carrying masks and statistics that no longer
+     * describe the session. {@code GatingSession.resync(Derived, Supplier)} answers that by
+     * deriving again <em>synchronously</em> — {@code MarkerStats.compute} sorting every marker
+     * column over every cell, on the FX thread: the multi-second freeze this coordinator exists
+     * to remove, reappearing at the landing.
+     * <p>
+     * So the landing must queue the derivation instead, exactly as
+     * {@code DerivationCoordinator.land} does. The test asserts the <em>absence</em> of a
+     * resync at the landing (no new pass, no {@code resynced} call, the busy state still
+     * REFRESHING) and its presence one background job later — an absence a synchronous fallback
+     * cannot produce, because it resyncs before {@code land} returns.
+     */
+    @Test
+    void aFilterToggledWhileAReReadRanIsDerivedAgainInTheBackgroundNotOnTheFxThread() {
+        Rig rig = new Rig();
+        ImageData<BufferedImage> image = imageWith("a", cd3Cells(10));
+        rig.coordinator.open(image);
+        rig.background.runAll();
+
+        // An annotation, added while the filter is off: ignored now, used once it is on.
+        image.getHierarchy().addObject(PathObjects.createAnnotationObject(
+                ROIs.createRectangleROI(-5, 0, 50, 10, PLANE)));   // cells 0..4, CD3 1..5
+        assertEquals(0, rig.background.pending(), "an annotation with the filter off is ignored");
+
+        // A detection edit starts a re-read...
+        image.getHierarchy().addObject(cd3Cell(100, 150));
+        rig.scheduler.elapse();
+        assertEquals(1, rig.background.pending());
+        assertEquals(IngestCoordinator.Busy.REFRESHING, rig.host.lastBusy());
+
+        // ...and the user toggles the annotation filter while it runs.
+        rig.session.setRoiFilterEnabled(true);
+
+        int passesBeforeLanding = rig.pass.inputs.size();
+        int resyncsBeforeLanding = rig.host.resyncedWithNewIndex.size();
+        rig.background.runOne();     // the read lands, against filters that have moved on
+
+        assertEquals(2, rig.host.ingested.size(), "the read result is still adopted");
+        assertEquals(11, rig.session.index().size(), "the new cells are in place");
+        assertEquals(passesBeforeLanding, rig.pass.inputs.size(),
+                "no gating pass, so no resync: the derivation did not run on this thread");
+        assertEquals(resyncsBeforeLanding, rig.host.resyncedWithNewIndex.size());
+        assertNull(rig.session.roiMask(), "the stale derivation is not adopted either");
+        assertEquals(1, rig.background.pending(), "the derivation is re-requested in the background");
+        assertEquals(IngestCoordinator.Busy.REFRESHING, rig.host.lastBusy());
+
+        rig.background.runOne();     // the re-derivation lands
+
+        assertEquals(0, rig.background.pending());
+        assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
+        assertNotNull(rig.session.roiMask(), "the annotation filter is now in force");
+        assertEquals(Boolean.TRUE,
+                rig.host.resyncedWithNewIndex.get(rig.host.resyncedWithNewIndex.size() - 1),
+                "the cells changed, so the editor must still be rebuilt: the flag survives "
+                        + "the detour through the background");
+        assertArrayEquals(new int[]{0, 5}, counts(rig, rig.root(0)));
+        assertArrayEquals(new int[]{3, 2}, counts(rig, rig.root(1)));
+    }
+
+    /**
+     * The same escape hatch on the other arm — a background re-derivation (the annotation
+     * filter is already on, an annotation moved) landing against a quality filter the user
+     * dragged meanwhile. The cells never changed, so {@code newIndex} must still be
+     * {@code false} when the adoption finally happens.
+     */
+    @Test
+    void aQualityFilterDraggedWhileARederivationRanIsDerivedAgainInTheBackground() {
+        Rig rig = new Rig();
+        ImageData<BufferedImage> image = imageWith("a", cd3CellsWithGradedAreas(10));
+        rig.session.setRoiFilterEnabled(true);
+        rig.coordinator.open(image);
+        rig.background.runAll();
+        CellIndex cells = rig.session.index();
+
+        image.getHierarchy().addObject(PathObjects.createAnnotationObject(
+                ROIs.createRectangleROI(-5, 0, 100, 10, PLANE)));   // cells 0..9: everything
+        rig.scheduler.elapse();
+        assertEquals(1, rig.background.pending());
+
+        // The user drags a quality slider while that re-derivation runs: areas are 10..100,
+        // so this cuts cells 0..4 and the mask it lands with describes nothing.
+        rig.session.tree().getQualityFilter().setRange("area",
+                new QualityFilter.Range(55, Double.POSITIVE_INFINITY));
+
+        int resyncsBeforeLanding = rig.host.resyncedWithNewIndex.size();
+        rig.background.runOne();
+
+        assertEquals(resyncsBeforeLanding, rig.host.resyncedWithNewIndex.size(),
+                "a derivation that no longer describes the session is not adopted here");
+        assertEquals(1, rig.background.pending(), "it is derived again in the background");
+
+        rig.background.runOne();
+
+        assertSame(cells, rig.session.index(), "no read happened: the same cells throughout");
+        assertEquals(Boolean.FALSE,
+                rig.host.resyncedWithNewIndex.get(rig.host.resyncedWithNewIndex.size() - 1),
+                "the cells never changed, so the editor is not rebuilt");
+        assertEquals(1, rig.reads.size(), "exactly the one read that opened the image");
+        // Cells 5..9 survive the area cut; CD3 6..10, so both are above the 5.5 and 2.5 cuts.
+        assertArrayEquals(new int[]{5, 0}, counts(rig, rig.root(0)));
+        assertArrayEquals(new int[]{5, 0}, counts(rig, rig.root(1)));
     }
 
     /** A refresh requested while the first read is still running is not lost to the guard. */

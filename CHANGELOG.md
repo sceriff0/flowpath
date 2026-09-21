@@ -125,6 +125,13 @@ Analysis window remain held back, as in 0.9.3.
   `OutOfMemoryError` walking and serializing a million-cell population is the plausible
   case) — it escaped the background job uncaught, so the panel never learned the export had
   finished. Both are now caught, matching how detection reads already handled the pair.
+- **Changing a filter while detections were being re-read could still freeze QuPath.**
+  Neither the annotation-filter checkbox nor the quality-filter panel is disabled while
+  FlowPath re-reads detections, so editing a cell in QuPath and then toggling the filter or
+  nudging a slider left the read landing against filters it no longer described — and the
+  landing recomputed the statistics on the UI thread after all, re-sorting every marker
+  column: exactly the freeze that moving the read into the background was meant to end.
+  That recompute now happens in the background too, like every other one.
 - Hardened the error-dialog message builder against a pathological multi-level exception
   cause cycle (A caused by B caused by C caused by A) that would have recursed until the
   stack overflowed; it now walks iteratively and stops on a cycle instead.
