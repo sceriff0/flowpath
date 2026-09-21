@@ -84,7 +84,7 @@ class LivePreviewServiceRegionTallyTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
 
             GatingEngine.AssignmentResult result = service.getLastResult();

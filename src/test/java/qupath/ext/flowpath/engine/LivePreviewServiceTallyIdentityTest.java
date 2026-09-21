@@ -88,7 +88,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
             result = service.getLastResult();
             assertNotNull(result, "a completed pass must leave a result behind");
@@ -172,7 +172,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(latch::countDown);
             service.requestUpdate();
 
-            assertTrue(latch.await(10, TimeUnit.SECONDS),
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the debounced gating pass did not complete in time");
             result = service.getLastResult();
             assertNotNull(result, "a completed pass must leave a result behind");
@@ -249,7 +249,7 @@ class LivePreviewServiceTallyIdentityTest {
             CountDownLatch firstPass = new CountDownLatch(1);
             service.setOnUpdateComplete(firstPass::countDown);
             service.requestUpdate();
-            assertTrue(firstPass.await(10, TimeUnit.SECONDS),
+            assertTrue(firstPass.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the first gating pass did not complete in time");
             GatingEngine.AssignmentResult firstResult = service.getLastResult();
             assertNotNull(firstResult);
@@ -270,7 +270,7 @@ class LivePreviewServiceTallyIdentityTest {
             service.setOnUpdateComplete(secondPassPublished::countDown);
             service.requestUpdate();
 
-            assertTrue(mutated.await(10, TimeUnit.SECONDS),
+            assertTrue(mutated.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS),
                     "the second pass never started, so nothing was exercised");
             // An absence, bounded: this latch can only fall if a pass keyed to a structure
             // the tree no longer has was published anyway.

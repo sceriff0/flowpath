@@ -158,7 +158,7 @@ class LivePreviewServiceStaleStatsTest {
                 started.countDown();
             });
             service.requestUpdate();
-            assertTrue(started.await(10, TimeUnit.SECONDS), "the first pass never started");
+            assertTrue(started.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS), "the first pass never started");
             assertEquals(1, executor.pending());
             executor.runAll();
             FxTestSupport.onFxRun(() -> { });      // drain the publish the walk queued
@@ -171,7 +171,7 @@ class LivePreviewServiceStaleStatsTest {
             CountDownLatch secondStarted = new CountDownLatch(1);
             service.setOnUpdateStarted(secondStarted::countDown);
             service.requestUpdate();
-            assertTrue(secondStarted.await(10, TimeUnit.SECONDS), "the second pass never started");
+            assertTrue(secondStarted.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS), "the second pass never started");
             executor.runAll();
             FxTestSupport.onFxRun(() -> { });
 
