@@ -125,6 +125,14 @@ Analysis window remain held back, as in 0.9.3.
   `OutOfMemoryError` walking and serializing a million-cell population is the plausible
   case) — it escaped the background job uncaught, so the panel never learned the export had
   finished. Both are now caught, matching how detection reads already handled the pair.
+- **Restructuring the gate tree while a pass was running could show one gate's counts on
+  another gate's branches.** A gating pass walks a copy of the tree and carries the counts
+  back onto the live one afterwards. Editing the tree meanwhile — dragging a gate onto
+  another branch above all, since that is a slow gesture performed while passes run — left
+  the two structures out of step, and the counts were carried back before anything checked
+  that they still matched, so the tree view showed plausible but wrong per-branch numbers
+  until the next pass landed. The check now happens first and nothing is written unless it
+  passes.
 - **Changing a filter while detections were being re-read could still freeze QuPath.**
   Neither the annotation-filter checkbox nor the quality-filter panel is disabled while
   FlowPath re-reads detections, so editing a cell in QuPath and then toggling the filter or

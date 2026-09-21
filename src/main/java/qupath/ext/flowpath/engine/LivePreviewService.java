@@ -313,28 +313,41 @@ public class LivePreviewService {
                     // handoff labelled the new cells with the old cells' phenotypes. The
                     // resync that installed the new index has queued its own pass.
                     if (this.cellIndex != index) return;
-                    // Transfer counts from the snapshot back to the live tree for UI display
-                    GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
 
-                    // ...and re-key the per-branch tally the same way. transferCounts moves
-                    // only Branch.getCount(); the tally is identity-keyed on the *copy's*
-                    // Branch objects, so without this every per-branch lookup a consumer
-                    // makes against the live tree misses and reads 0 -- which is exactly how
-                    // the Analysis window shipped reporting every population as empty.
+                    // Re-key the per-branch tally onto the live tree's Branch objects.
+                    // GateTree.transferCounts below moves only Branch.getCount(); the tally is
+                    // identity-keyed on the *copy's* Branch objects, so without this every
+                    // per-branch lookup a consumer makes against the live tree misses and
+                    // reads 0 -- which is exactly how the Analysis window shipped reporting
+                    // every population as empty.
+                    //
+                    // This runs BEFORE transferCounts, and the order is load-bearing.
+                    // rebindTo pairs strictly and throws when the structures have diverged;
+                    // transferCounts pairs leniently and simply stops at the shorter forest,
+                    // which means it writes one gate's counts onto another gate's branches
+                    // when the live tree was restructured while this pass walked its copy.
+                    // Done the other way round, a drag-and-drop mid-pass (roots [CD3, CD8]
+                    // walked, [CD8] live after CD3 was dropped under it) landed CD3's counts
+                    // on CD8's branches and only then hit the refusal below -- the pass was
+                    // discarded, but the tree view was left showing plausible, wrong numbers
+                    // until the queued pass landed. Nothing is written to the live tree now
+                    // until the rebind has agreed the two structures still pair.
                     GatingEngine.AssignmentResult published;
                     try {
                         published = result.withTally(
                                 result.getTally().rebindTo(tree.getRoots(), originalTree.getRoots()));
                     } catch (IllegalArgumentException ex) {
                         // The live tree was edited in place while this pass walked its copy
-                        // (addRoot/addChildGate mutate the same GateTree instance, so the
-                        // identity check above cannot see it). Every such edit queues a fresh
-                        // pass, so drop this one rather than publish counts keyed to a
-                        // structure that no longer exists.
+                        // (addRoot/addChildGate and the drag-and-drop reorder mutate the same
+                        // GateTree instance, so the identity check above cannot see it). Every
+                        // such edit queues a fresh pass, so drop this one rather than publish
+                        // counts keyed to a structure that no longer exists.
                         logger.debug("Gate tree changed structurally while a preview pass ran; "
                                 + "discarding the pass and waiting for the queued one.", ex);
                         return;
                     }
+                    // Transfer counts from the snapshot back to the live tree for UI display
+                    GateTree.transferCounts(originalTree.getRoots(), tree.getRoots());
                     applyResult(published, index, data, true);
                 });
             } catch (RuntimeException | Error ex) {
