@@ -60,15 +60,37 @@ class UiPackageDependencyDirectionTest {
     }
 
     /**
-     * The allowed direction still exists and is exercised elsewhere ({@code GateEditorPane}
-     * imports {@code ui.editor.GateTypeEditor} et al.); this just documents that {@code ui}
-     * depending on {@code ui.widgets} is expected, not a regression, so a future reader of this
-     * file does not "fix" it.
+     * The allowed direction is asserted, not merely described: {@code ui} really does import
+     * from both {@code ui.editor} and {@code ui.widgets}, so the two tests above are forbidding
+     * the reverse of an edge that exists rather than passing vacuously over a graph with no
+     * edges at all. Delete a subpackage's last consumer and this fails, which is the point —
+     * a one-way rule over a dependency nobody has any more is not a rule worth keeping.
+     * <p>
+     * This used to assert {@code Files.exists("QualityFilterPane.java")}, which could not fail
+     * for the reason its name gives.
      */
     @Test
     void uiIsAllowedToDependOnWidgetsAndEditor() throws IOException {
-        assertTrue(Files.exists(UI_DIR.resolve("QualityFilterPane.java")),
-                "sanity check: expected source layout");
+        assertTrue(importsAnywhereIn(UI_DIR, IMPORTS_UI_EDITOR),
+                "no class in the bare ui package imports from ui.editor any more, so "
+                        + "editorNeverImportsBackFromUi is guarding an edge that no longer exists");
+        assertTrue(importsAnywhereIn(UI_DIR, IMPORTS_UI_WIDGETS),
+                "no class in the bare ui package imports from ui.widgets any more, so "
+                        + "widgetsIsALeafDependingOnNeitherUiNorEditor is guarding an edge that "
+                        + "no longer exists");
+    }
+
+    /** Whether any {@code .java} file directly in {@code dir} has an import matching {@code pattern}. */
+    private static boolean importsAnywhereIn(Path dir, Pattern pattern) throws IOException {
+        assertTrue(Files.isDirectory(dir), "Expected directory to exist: " + dir.toAbsolutePath());
+        try (Stream<Path> files = Files.list(dir)) {
+            for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
+                for (String line : Files.readAllLines(file)) {
+                    if (pattern.matcher(line.trim()).find()) return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static void assertNoImportMatching(Path dir, Pattern pattern, String message) throws IOException {
