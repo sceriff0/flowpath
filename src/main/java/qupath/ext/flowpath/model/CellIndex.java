@@ -577,14 +577,23 @@ public class CellIndex {
     // address the markers the user ticked. Nothing in the gating half ever called this.
 
     /**
+     * The resolved measurement key for a triple, without an index: the bare channel for
+     * whole-cell mean, else {@code "<channel>: <Compartment>: <Stat>"}. The key alignments are
+     * stored under; {@link #resolvedKey} is this.
+     */
+    public static String keyFor(String channel, Compartment compartment, Statistic statistic) {
+        if (isDefault(compartment, statistic)) return channel;
+        return MeasurementKeys.build(channel, compartment, statistic);
+    }
+
+    /**
      * The resolved measurement key for a channel + compartment + statistic.
      * Whole-cell mean resolves to the bare channel name (so legacy/default data
      * uses the existing column and stats unchanged); other selections use the
      * {@code "<channel>: <Compartment>: <Stat>"} key.
      */
     public String resolvedKey(String channel, Compartment compartment, Statistic statistic) {
-        if (isDefault(compartment, statistic)) return channel;
-        return MeasurementKeys.build(channel, compartment, statistic);
+        return keyFor(channel, compartment, statistic);
     }
 
     /**
