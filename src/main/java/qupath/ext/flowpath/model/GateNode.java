@@ -1,7 +1,10 @@
 package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Base class for all gate types in the gating hierarchy.
@@ -45,6 +48,16 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     // New gates never carry it. Declared once, for every gate type, so the migration has
     // one variable to read.
     private boolean thresholdIsZScore = false;
+
+    // Per-slide decisions, keyed by ProjectImageEntry.getID(). On the node so every structural
+    // edit carries them; see SlideSetting.
+    private Map<String, SlideSetting> slideSettings = new LinkedHashMap<>();
+    // New gates correct for staining; the serializer loads a legacy (v1-v3) gate with false so
+    // opening an old tree never changes a number.
+    private boolean correctStaining = true;
+    // Set only by TreeResolver on a resolved copy: this gate is skipped on the slide being gated,
+    // so ResolvedGate compiles it unusable and every cell reads UNMEASURED. Never serialized.
+    private boolean skippedOnSlide = false;
 
     // --- ThresholdGate-specific fields (kept here for backward compat) ---
     private String channel;
@@ -231,6 +244,17 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public boolean isExcludeOutliers() { return excludeOutliers; }
     public void setExcludeOutliers(boolean v) { this.excludeOutliers = v; }
 
+    public Map<String, SlideSetting> getSlideSettings() { return Collections.unmodifiableMap(slideSettings); }
+    public SlideSetting slideSetting(String slideId) { return slideId == null ? null : slideSettings.get(slideId); }
+    public void setSlideSetting(String slideId, SlideSetting setting) {
+        if (slideId == null) return;
+        if (setting == null) slideSettings.remove(slideId); else slideSettings.put(slideId, setting);
+    }
+    public boolean isCorrectStaining() { return correctStaining; }
+    public void setCorrectStaining(boolean v) { this.correctStaining = v; }
+    public boolean isSkippedOnSlide() { return skippedOnSlide; }
+    public void setSkippedOnSlide(boolean v) { this.skippedOnSlide = v; }
+
     // ========== ThresholdGate-specific getters/setters ==========
 
     public String getChannel() { return channel; }
@@ -312,6 +336,9 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
         target.thresholdIsZScore = this.thresholdIsZScore;
         target.compartment = this.compartment;
         target.statistic = this.statistic;
+        target.slideSettings = new LinkedHashMap<>(this.slideSettings);
+        target.correctStaining = this.correctStaining;
+        target.skippedOnSlide = this.skippedOnSlide;
     }
 
     /**

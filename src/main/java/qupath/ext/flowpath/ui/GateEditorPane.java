@@ -418,6 +418,7 @@ public class GateEditorPane extends VBox {
         to.setClipPercentileLow(from.getClipPercentileLow());
         to.setClipPercentileHigh(from.getClipPercentileHigh());
         to.setExcludeOutliers(from.isExcludeOutliers());
+        to.setCorrectStaining(from.isCorrectStaining());
         GateAxis.copySignals(from, to);
         // Copy branch children, colors, and names from old gate to new gate
         for (int i = 0; i < Math.min(from.getBranches().size(), to.getBranches().size()); i++) {

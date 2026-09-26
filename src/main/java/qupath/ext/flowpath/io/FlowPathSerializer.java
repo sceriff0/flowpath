@@ -13,11 +13,13 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.EllipseGate;
+import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
+import qupath.ext.flowpath.model.SlideSetting;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -47,7 +49,13 @@ public class FlowPathSerializer {
     // structurally a v3 file and an older FlowPath can still load it. Bumping would have
     // made those readers throw "Unsupported gate tree version" over a block they were
     // free to ignore.
-    private static final int CURRENT_VERSION = 3;
+    //
+    // v4 adds per-slide cohort settings (SlideSetting, keyed by slide id) and the flag
+    // controlling whether a gate corrects for staining, on every node, plus an optional
+    // tree-level reference slide id. A v1-v3 file carries none of this: correction loads
+    // off (see deserializeNode) so opening an old tree never changes a number, and a gate
+    // with no "slideSettings" key simply has none.
+    private static final int CURRENT_VERSION = 4;
 
     private FlowPathSerializer() {
         // static utility class
@@ -107,6 +115,7 @@ public class FlowPathSerializer {
         root.add("meta", serializeMeta(provenance));
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
+        if (tree.getReferenceSlideId() != null) root.addProperty("referenceSlideId", tree.getReferenceSlideId());
         root.add("gates", serializeNodeList(tree.getRoots()));
 
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -204,6 +213,8 @@ public class FlowPathSerializer {
         if (root.has("roiFilterEnabled")) {
             tree.setRoiFilterEnabled(root.get("roiFilterEnabled").getAsBoolean());
         }
+
+        tree.setReferenceSlideId(optString(root, "referenceSlideId"));
 
         if (root.has("gates")) {
             tree.setRoots(deserializeNodeList(root.getAsJsonArray("gates")));
@@ -324,6 +335,12 @@ public class FlowPathSerializer {
         obj.addProperty("clipPercentileLow", node.getClipPercentileLow());
         obj.addProperty("clipPercentileHigh", node.getClipPercentileHigh());
         obj.addProperty("excludeOutliers", node.isExcludeOutliers());
+        obj.addProperty("correctStaining", node.isCorrectStaining());
+        if (!node.getSlideSettings().isEmpty()) {
+            JsonObject settings = new JsonObject();
+            node.getSlideSettings().forEach((slideId, setting) -> settings.add(slideId, serializeSlideSetting(setting)));
+            obj.add("slideSettings", settings);
+        }
 
         if (node instanceof PolygonGate pg) {
             serializeRegionAxes(obj, pg);
@@ -430,6 +447,42 @@ public class FlowPathSerializer {
         obj.addProperty("statisticY", gate.getStatisticY().token());
     }
 
+    private static JsonObject serializeSlideSetting(SlideSetting setting) {
+        JsonObject o = new JsonObject();
+        switch (setting) {
+            case SlideSetting.Skip s -> o.addProperty("kind", "skip");
+            case SlideSetting.Manual m -> { o.addProperty("kind", "manual"); writeValues(o, m.values()); }
+            case SlideSetting.Reviewed r -> { o.addProperty("kind", "reviewed"); writeValues(o, r.appliedValues()); }
+        }
+        return o;
+    }
+
+    private static void writeValues(JsonObject o, GateValues values) {
+        JsonArray axes = new JsonArray();
+        for (int k = 0; k < values.axisCount(); k++) {
+            JsonArray axis = new JsonArray();
+            for (double v : values.axis(k)) axis.add(v);
+            axes.add(axis);
+        }
+        o.add("values", axes);
+    }
+
+    private static SlideSetting deserializeSlideSetting(JsonObject o) throws IOException {
+        String kind = optString(o, "kind");
+        if ("skip".equals(kind)) return new SlideSetting.Skip();
+        JsonArray axes = o.getAsJsonArray("values");
+        double[][] read = new double[axes.size()][];
+        for (int k = 0; k < axes.size(); k++) {
+            JsonArray axis = axes.get(k).getAsJsonArray();
+            read[k] = new double[axis.size()];
+            for (int i = 0; i < axis.size(); i++) read[k][i] = axis.get(i).getAsDouble();
+        }
+        GateValues values = read.length == 1 ? GateValues.of(read[0]) : GateValues.of(read[0], read[1]);
+        if ("manual".equals(kind)) return new SlideSetting.Manual(values);
+        if ("reviewed".equals(kind)) return new SlideSetting.Reviewed(values);
+        throw new IOException("Unknown slide setting kind: \"" + kind + "\"");
+    }
+
     private static List<GateNode> deserializeNodeList(JsonArray array) throws IOException {
         List<GateNode> nodes = new ArrayList<>();
         for (JsonElement elem : array) {
@@ -467,6 +520,13 @@ public class FlowPathSerializer {
                     + "This file may have been created by a newer version of FlowPath.");
         }
         result.setEnabled(enabled);
+        // Absent means a v1-v3 file: correction off, so opening an old tree never changes a number.
+        result.setCorrectStaining(obj.has("correctStaining") && obj.get("correctStaining").getAsBoolean());
+        if (obj.has("slideSettings")) {
+            for (var entry : obj.getAsJsonObject("slideSettings").entrySet()) {
+                result.setSlideSetting(entry.getKey(), deserializeSlideSetting(entry.getValue().getAsJsonObject()));
+            }
+        }
         return result;
     }
 

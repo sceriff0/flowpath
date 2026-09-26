@@ -97,6 +97,22 @@ class GateTypeConversionTest {
                 "conversion must preserve raw mode too, not blanket-set z-score");
     }
 
+    /**
+     * A legacy gate loads with {@code correctStaining == false} so opening an old tree
+     * never changes a number (see {@code FlowPathSerializer}). Drawing a new shape over it
+     * must not silently flip that back to {@code true} for the replacement.
+     */
+    @Test
+    void conversionCarriesCorrectStaining() {
+        PolygonGate source = nuclearMedianPolygon();
+        source.setCorrectStaining(false);
+        RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
+
+        GateEditorPane.copySharedSettings(source, replacement);
+
+        assertFalse(replacement.isCorrectStaining());
+    }
+
     @Test
     void thresholdToRegionConversionCarriesTheSingleAxisSelection() {
         GateNode source = new GateNode("CD3");

@@ -13,6 +13,7 @@ public class GateTree {
     private List<GateNode> roots = new ArrayList<>();
     private QualityFilter qualityFilter = new QualityFilter();
     private boolean roiFilterEnabled;
+    private String referenceSlideId;
 
     public GateTree() {
     }
@@ -47,6 +48,14 @@ public class GateTree {
 
     public void setRoiFilterEnabled(boolean roiFilterEnabled) {
         this.roiFilterEnabled = roiFilterEnabled;
+    }
+
+    public String getReferenceSlideId() {
+        return referenceSlideId;
+    }
+
+    public void setReferenceSlideId(String referenceSlideId) {
+        this.referenceSlideId = referenceSlideId;
     }
 
     // ---- moving a gate within the tree ---------------------------------------------------
@@ -206,6 +215,7 @@ public class GateTree {
         GateTree copy = new GateTree();
         copy.qualityFilter = this.qualityFilter.deepCopy();
         copy.roiFilterEnabled = this.roiFilterEnabled;
+        copy.referenceSlideId = this.referenceSlideId;
         copy.roots = new ArrayList<>();
         for (GateNode root : this.roots) {
             copy.roots.add(root.deepCopy());
