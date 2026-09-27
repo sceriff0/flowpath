@@ -17,7 +17,7 @@ import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.cohort.AlignmentModel;
-import qupath.ext.flowpath.cohort.CohortCurves;
+import qupath.ext.flowpath.cohort.CohortCurvesCache;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
@@ -167,6 +167,8 @@ public class FlowPathPane extends BorderPane {
 
     /** The project's slides, their samples, the alignment model and the review; see {@link #refreshCohort()}. */
     private final CohortSession cohort = new CohortSession();
+    /** The All slides view's last answer, kept while its key holds (see {@link CohortCurvesCache}). */
+    private final CohortCurvesCache cohortCurves = new CohortCurvesCache();
 
     /** Samples the project's slides and scores them on {@link #backgroundExecutor}. */
     private final CohortCoordinator cohortCoordinator;
@@ -452,8 +454,10 @@ public class FlowPathPane extends BorderPane {
         applySlideContext();
         editorPane.setEditorAlignment(editorAlignment);
         // All slides (U1): each sample's values for the shown gate, aligned through the same
-        // correctionFor the pass gates with; read live, like the alignment seam above.
-        editorPane.setCohortValues(g -> CohortCurves.of(session.tree(), g, cohort.samples(), alignments, currentSlideId()));
+        // correctionFor the pass gates with; read live, like the alignment seam above, and
+        // memoised, because the editor asks on every refresh (every resync, filter tick, pass).
+        editorPane.setCohortValues(g -> cohortCurves.get(session.tree(), g, cohort.samples(), cohort.model(),
+                alignments, currentSlideId()));
         editorPane.setViewMode(cohort.viewMode());
         editorPane.setOnViewModeChanged(cohort::setViewMode);
 

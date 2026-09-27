@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
 
 import java.util.ArrayList;
@@ -35,13 +36,15 @@ public final class CohortCurves {
      * @param liveTree       the live gate tree ({@code liveGate} is one of its nodes)
      * @param samples        the cohort's samples, in the order their curves are stacked
      * @param currentSlideId the open slide's id, whose entry is marked {@code current}
-     * @return one entry per sample whose index carries every channel the gate reads
+     * @return one entry per sample whose index carries every channel the gate reads, except the
+     *         slides the gate is skipped on: there its cells are unmeasured, so it has no values
      */
     public static List<SlideValues> of(GateTree liveTree, GateNode liveGate, List<SlideSample> samples,
                                        AlignmentLookup lookup, String currentSlideId) {
         int axes = GateAxis.axisCount(liveGate);
         List<SlideValues> out = new ArrayList<>();
         for (SlideSample s : samples) {
+            if (liveGate.slideSetting(s.slideId()) instanceof SlideSetting.Skip) continue;
             MeasuredColumn[] columns = new MeasuredColumn[axes];
             boolean usable = axes > 0;
             for (int k = 0; k < axes && usable; k++) {

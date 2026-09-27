@@ -36,4 +36,25 @@ class CohortCanvasTest {
             assertEquals(0, s.cohortPointCount());
         });
     }
+
+    @Test
+    void theRidgesAreBinnedWhenSetOrWhenTheWindowMovesNeverOnRepaint() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        FxTestSupport.onFxRun(() -> {
+            HistogramCanvas h = new HistogramCanvas();
+            h.setData(new double[]{1, 2, 3}, 0, 4);
+            double[] a = {1, 2};
+            double[] b = {2, 3};
+            h.setCohortCurves(List.of(a, b), 1);
+            assertEquals(1, h.cohortBinPasses());
+            for (int i = 0; i < 5; i++) h.setThreshold(i * 0.5); // a drag: repaints only
+            h.setCohortCurves(List.of(a, b), 0);                 // the same arrays again
+            h.setData(new double[]{1, 2, 3, 3}, 0, 4);             // new bars, same window
+            assertEquals(1, h.cohortBinPasses());
+            h.setData(new double[]{1, 2, 3}, 0, 5);                // the window moved
+            assertEquals(2, h.cohortBinPasses());
+            h.setCohortCurves(List.of(a, new double[]{2, 3}), 0); // a new slide array
+            assertEquals(3, h.cohortBinPasses());
+        });
+    }
 }

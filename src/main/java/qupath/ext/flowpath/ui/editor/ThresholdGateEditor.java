@@ -109,22 +109,6 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
      * handle, so the histogram shows exactly what {@code GatingEngine} compares against —
      * mapped into reference units when this slide is corrected, as the gate's threshold is.
      */
-    /** The All slides ridges over the bars, or none; the open slide's entry is highlighted. */
-    private void showCohortCurves() {
-        List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
-        if (cohort.isEmpty()) {
-            histogram.clearCohortCurves();
-            return;
-        }
-        int current = -1;
-        List<double[]> curves = new ArrayList<>(cohort.size());
-        for (int i = 0; i < cohort.size(); i++) {
-            curves.add(cohort.get(i).x());
-            if (cohort.get(i).current()) current = i;
-        }
-        histogram.setCohortCurves(curves, current);
-    }
-
     @Override
     public void refresh() {
         if (isDisposed()) return;
@@ -164,6 +148,22 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             valueField.setText(format(gate.getThreshold()));
         });
         updatePopulationCounts();
+    }
+
+    /** The All slides ridges over the bars, or none; the open slide's entry is highlighted. */
+    private void showCohortCurves() {
+        List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
+        if (cohort.isEmpty()) {
+            histogram.clearCohortCurves();
+            return;
+        }
+        int current = -1;
+        List<double[]> curves = new ArrayList<>(cohort.size());
+        for (int i = 0; i < cohort.size(); i++) {
+            curves.add(cohort.get(i).x());
+            if (cohort.get(i).current()) current = i;
+        }
+        histogram.setCohortCurves(curves, current);
     }
 
     /** The aligned-units caption (its tooltip gives this slide's raw threshold); hidden when uncorrected. */

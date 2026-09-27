@@ -6,6 +6,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RectangleGate;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
@@ -88,5 +89,20 @@ class CohortCurvesTest {
         assertTrue(kept.length > 0);
         assertArrayEquals(IntStream.of(kept).mapToDouble(SHIFT::inverse).toArray(), curves.get(0).x(), 1e-9);
         assertArrayEquals(IntStream.of(kept).mapToDouble(i -> SHIFT.inverse(2.0 * i)).toArray(), curves.get(0).y(), 1e-9);
+    }
+
+    @Test
+    void aSlideTheGateIsSkippedOnIsLeftOut() {
+        GateNode child = new GateNode("CD4", 5);
+        child.setStatistic(Statistic.MEAN);
+        GateTree tree = tree(child);
+        child.setSlideSetting("s1", new SlideSetting.Skip());
+        // A Skip on root 0, the same-channel root that is not on the path, leaves ref in.
+        tree.getRoots().get(0).setSlideSetting("ref", new SlideSetting.Skip());
+        List<CohortCurves.SlideValues> curves = CohortCurves.of(tree, child,
+                List.of(sample("ref", true), sample("s1", true)), (slide, col) -> null, "s1");
+        assertEquals(List.of("ref"), curves.stream().map(CohortCurves.SlideValues::slideId).toList(),
+                "its cells are unmeasured on the run, so it has no values to draw");
+        assertEquals(20, curves.get(0).x().length);
     }
 }

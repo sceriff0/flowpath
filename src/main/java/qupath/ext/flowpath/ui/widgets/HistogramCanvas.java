@@ -41,6 +41,16 @@ public class HistogramCanvas extends Canvas {
     private List<double[]> cohortCurves = List.of();
     /** Which of {@link #cohortCurves} is the open slide, or -1. */
     private int cohortCurrent = -1;
+    /**
+     * {@link #cohortCurves} binned over {@code [ridgeMin, ridgeMax]} and normalised to each
+     * slide's own peak (a null row for a slide with nothing in the window); null when not binned.
+     * Built in {@link #setCohortCurves} and in {@link #setData} when the window moves, so a
+     * repaint (every threshold drag tick) only strokes them.
+     */
+    private double[][] cohortRidges;
+    private double ridgeMin = Double.NaN;
+    private double ridgeMax = Double.NaN;
+    private int cohortBinPasses;
 
     private int posCount = -1;
     private int negCount = -1;
@@ -130,6 +140,8 @@ public class HistogramCanvas extends Canvas {
         for (int i = 0; i <= NUM_BINS; i++) {
             binEdges[i] = displayMin + i * binWidth;
         }
+
+        if (!cohortCurves.isEmpty() && (displayMin != ridgeMin || displayMax != ridgeMax)) binCohortCurves();
 
         for (double val : rawValues) {
             // NaN first, and explicitly. MIRAGE omits an absent measurement entirely, so
@@ -226,8 +238,13 @@ public class HistogramCanvas extends Canvas {
      * The bars, the threshold and dragging are unchanged — this is a view only.
      */
     public void setCohortCurves(List<double[]> values, int currentIndex) {
-        cohortCurves = List.copyOf(values);
+        boolean sameCurves = values.size() == cohortCurves.size();
+        for (int i = 0; sameCurves && i < values.size(); i++) sameCurves = values.get(i) == cohortCurves.get(i);
         cohortCurrent = currentIndex;
+        if (!sameCurves || cohortRidges == null || displayMin != ridgeMin || displayMax != ridgeMax) {
+            cohortCurves = List.copyOf(values);
+            binCohortCurves();
+        }
         repaint();
     }
 
@@ -240,42 +257,67 @@ public class HistogramCanvas extends Canvas {
         return cohortCurves.size();
     }
 
+    /** How many times the curves have been binned. Package-private: tests pin that a repaint does not. */
+    int cohortBinPasses() {
+        return cohortBinPasses;
+    }
+
+    /**
+     * Bin every slide's values like the bars (same {@link #NUM_BINS} over the same window, NaN and
+     * out-of-window values skipped) and normalise each to its own peak. Needs a window, which
+     * exists only once {@link #setData} has had values.
+     */
+    private void binCohortCurves() {
+        if (cohortCurves.isEmpty() || binEdges == null) {
+            cohortRidges = null;
+            ridgeMin = ridgeMax = Double.NaN;
+            return;
+        }
+        cohortBinPasses++;
+        double binWidth = (displayMax - displayMin) / NUM_BINS;
+        double[][] ridges = new double[cohortCurves.size()][];
+        for (int i = 0; i < ridges.length; i++) {
+            double[] counts = new double[NUM_BINS];
+            double peak = 0;
+            for (double v : cohortCurves.get(i)) {
+                if (Double.isNaN(v) || v < displayMin || v > displayMax) continue;
+                int bin = (int) ((v - displayMin) / binWidth);
+                if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+                peak = Math.max(peak, ++counts[bin]);
+            }
+            if (peak <= 0) continue;
+            for (int b = 0; b < NUM_BINS; b++) counts[b] /= peak;
+            ridges[i] = counts;
+        }
+        cohortRidges = ridges;
+        ridgeMin = displayMin;
+        ridgeMax = displayMax;
+    }
+
     public void setOnMouseHover(DoubleConsumer callback) {
         this.onMouseHover = callback;
     }
 
     /**
-     * One ridge per slide, binned like the bars over the same window, normalised to that
-     * slide's own peak and stacked bottom-up in the order given; other slides first, the open
-     * slide last and heavier so it reads on top. Fixed canvas swatches, like the bars.
+     * One ridge per slide (binned and normalised ahead of time, see {@link #binCohortCurves}),
+     * stacked bottom-up in the order given; other slides first, the open slide last and heavier
+     * so it reads on top. Fixed canvas swatches, like the bars.
      */
     private void drawCohortCurves(GraphicsContext gc, double plotW, double plotH) {
-        if (binEdges == null || cohortCurves.isEmpty()) return;
-        int k = cohortCurves.size();
+        if (binEdges == null || cohortRidges == null) return;
+        int k = cohortRidges.length;
         double step = k > 1 ? plotH * 0.6 / (k - 1) : 0;
         double amplitude = plotH * 0.4;
-        double binWidth = (displayMax - displayMin) / NUM_BINS;
         double binPixelWidth = plotW / NUM_BINS;
+        double[] xs = new double[NUM_BINS];
+        for (int b = 0; b < NUM_BINS; b++) xs[b] = PADDING_LEFT + (b + 0.5) * binPixelWidth;
+        double[] ys = new double[NUM_BINS];
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < k; i++) {
                 boolean current = i == cohortCurrent;
-                if (current != (pass == 1)) continue;
-                double[] counts = new double[NUM_BINS];
-                double peak = 0;
-                for (double v : cohortCurves.get(i)) {
-                    if (Double.isNaN(v) || v < displayMin || v > displayMax) continue;
-                    int bin = (int) ((v - displayMin) / binWidth);
-                    if (bin >= NUM_BINS) bin = NUM_BINS - 1;
-                    peak = Math.max(peak, ++counts[bin]);
-                }
-                if (peak <= 0) continue;
+                if (current != (pass == 1) || cohortRidges[i] == null) continue;
                 double baseline = PADDING_TOP + plotH - i * step;
-                double[] xs = new double[NUM_BINS];
-                double[] ys = new double[NUM_BINS];
-                for (int b = 0; b < NUM_BINS; b++) {
-                    xs[b] = PADDING_LEFT + (b + 0.5) * binPixelWidth;
-                    ys[b] = baseline - counts[b] / peak * amplitude;
-                }
+                for (int b = 0; b < NUM_BINS; b++) ys[b] = baseline - cohortRidges[i][b] * amplitude;
                 gc.setStroke(current ? posColor : Color.gray(0.5, 0.7));
                 gc.setLineWidth(current ? 2 : 1);
                 gc.strokePolyline(xs, ys, NUM_BINS);
