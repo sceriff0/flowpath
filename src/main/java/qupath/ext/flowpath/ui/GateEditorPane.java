@@ -70,6 +70,8 @@ public class GateEditorPane extends VBox {
     // --- Cohort gating ---
     /** Per-gate "Correct staining" (U2); shown only while a cohort is available. */
     private final CheckBox correctStainingBox;
+    /** Per-gate "Lineage marker" tick (marker rules, flag type 5); threshold gates in a cohort only. */
+    private final CheckBox lineageMarkerBox;
     /** A slide Manual/Skip, shown as a banner rather than drawn: its number is this slide's own raw value. */
     static final String CUT_LOCKED_HINT =
             "This slide has its own threshold — open it from Needs a look, or use the cohort value";
@@ -142,6 +144,20 @@ public class GateEditorPane extends VBox {
             currentNode.setCorrectStaining(val);
             // The seam answers from the flag, so the plot moves between raw and aligned units.
             if (typeEditor != null) typeEditor.refresh();
+            fireNodeChanged();
+        });
+
+        lineageMarkerBox = new CheckBox("Lineage marker");
+        lineageMarkerBox.getStyleClass().add("fp-primary-text");
+        lineageMarkerBox.setTooltip(new Tooltip(
+            "A lineage marker should not be positive together with another lineage marker.\n" +
+            "FlowPath flags slides where such double positives are unusually common."));
+        lineageMarkerBox.setVisible(false);
+        lineageMarkerBox.managedProperty().bind(lineageMarkerBox.visibleProperty());
+        lineageMarkerBox.selectedProperty().addListener((obs, old, val) -> {
+            if (suppressEvents || currentNode == null) return;
+            // Written before it is reported: the host records it as one gate edit and rescores.
+            currentNode.setLineageMarker(val);
             fireNodeChanged();
         });
 
@@ -241,7 +257,7 @@ public class GateEditorPane extends VBox {
 
         HBox spacer = new HBox();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox header = new HBox(8, gateTypeLabel, spacer, correctStainingBox);
+        HBox header = new HBox(8, gateTypeLabel, spacer, lineageMarkerBox, correctStainingBox);
 
         getChildren().addAll(
             header,
@@ -275,6 +291,7 @@ public class GateEditorPane extends VBox {
         }
         boolean anotherGate = node != this.currentNode;
         this.currentNode = node;
+        updateLineageMarkerVisibility();
         // The last gate's setting on the open slide is not this one's: the host hands the new
         // gate's in after showing it, and the editor built below must not draw the old cut. The
         // same gate rebuilt (a channel or column switch) keeps its setting: it still applies.
@@ -305,6 +322,7 @@ public class GateEditorPane extends VBox {
             clipHighSpinner.getValueFactory().setValue(node.getClipPercentileHigh());
             excludeOutliersBox.setSelected(node.isExcludeOutliers());
             correctStainingBox.setSelected(node.isCorrectStaining());
+            lineageMarkerBox.setSelected(node.isLineageMarker());
 
             String typeDisplay = switch (node.getGateType()) {
                 case "threshold" -> "Threshold Gate";
@@ -505,8 +523,8 @@ public class GateEditorPane extends VBox {
     }
 
     /**
-     * Whether a cohort is available; the "Correct staining" switch and the This slide / All
-     * slides toggle are offered only then. Losing the cohort while in All slides drops the
+     * Whether a cohort is available; the "Correct staining" switch, the "Lineage marker" tick
+     * (threshold gates only) and the This slide / All slides toggle are offered only then. Losing the cohort while in All slides drops the
      * other slides' values from the plot at once (a refresh, not a rebuild).
      */
     public void setCohortAvailable(boolean available) {
@@ -514,6 +532,7 @@ public class GateEditorPane extends VBox {
         viewModeRow.setVisible(available);
         boolean changed = available != cohortAvailable;
         cohortAvailable = available;
+        updateLineageMarkerVisibility();
         if (changed && viewMode == CohortSession.ViewMode.ALL_SLIDES) refreshForNewData();
     }
 
@@ -603,6 +622,12 @@ public class GateEditorPane extends VBox {
 
     // ---- Internal ----
 
+    /** The Lineage marker tick is offered on a shown threshold gate while a cohort is available. */
+    private void updateLineageMarkerVisibility() {
+        lineageMarkerBox.setVisible(cohortAvailable && currentNode != null
+                && "threshold".equals(currentNode.getGateType()));
+    }
+
     /**
      * Carry a gate's settings onto its replacement when the user converts one gate
      * type into another by drawing a different shape.
@@ -622,6 +647,7 @@ public class GateEditorPane extends VBox {
         to.setClipPercentileHigh(from.getClipPercentileHigh());
         to.setExcludeOutliers(from.isExcludeOutliers());
         to.setCorrectStaining(from.isCorrectStaining());
+        to.setLineageMarker(from.isLineageMarker());
         GateAxis.copySignals(from, to);
         // Copy branch children, colors, and names from old gate to new gate
         for (int i = 0; i < Math.min(from.getBranches().size(), to.getBranches().size()); i++) {
@@ -697,6 +723,7 @@ public class GateEditorPane extends VBox {
             copySharedSettings(old, replacement);
             if (onReplaceGate != null) onReplaceGate.accept(old, replacement);
             currentNode = replacement;
+            updateLineageMarkerVisibility();
             // Rebuilt for the replacement AT ONCE, unlike showLater's full rebuild (deferred
             // to the next pulse so it does not tear down the scatter canvas a drag may still
             // be in progress on): neither of these two areas holds an input gesture of its

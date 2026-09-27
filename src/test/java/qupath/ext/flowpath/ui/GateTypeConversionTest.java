@@ -114,6 +114,17 @@ class GateTypeConversionTest {
     }
 
     @Test
+    void conversionCarriesTheLineageTick() {
+        GateNode source = new GateNode("CD3");
+        source.setLineageMarker(true);
+        RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
+
+        GateEditorPane.copySharedSettings(source, replacement);
+
+        assertTrue(replacement.isLineageMarker());
+    }
+
+    @Test
     void thresholdToRegionConversionCarriesTheSingleAxisSelection() {
         GateNode source = new GateNode("CD3");
         source.setCompartment(Compartment.NUCLEAR);

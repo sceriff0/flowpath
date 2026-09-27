@@ -19,7 +19,7 @@ public record ReviewItem(Key key, String slideName, GateNode gate, List<Flag> fl
     public record Key(String slideId, int rootIndex, String gatePath) {}
 
     public enum Flag {
-        NO_LANDMARK, UNUSUAL_STAINING, ON_PEAK, CANT_JUDGE;
+        NO_LANDMARK, UNUSUAL_STAINING, ON_PEAK, CANT_JUDGE, MARKER_RULE;
 
         public String token() {
             return name().toLowerCase(Locale.ROOT).replace('_', '-');

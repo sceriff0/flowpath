@@ -14,7 +14,9 @@ import qupath.ext.flowpath.model.cohort.Density;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -24,7 +26,9 @@ import java.util.StringJoiner;
 
 /**
  * Scores every slide x gate against the four flags of spec §6, top-down in tree order: no
- * landmark, unusual staining, on a peak, can't judge. Pure — no JavaFX, no mutation.
+ * landmark, unusual staining, on a peak, can't judge — then merges in the marker-rule findings
+ * ({@link MarkerRules}, flag type 5) under the same answered/hidden rule. Pure — no JavaFX, no
+ * mutation.
  */
 public final class ReviewScorer {
 
@@ -32,7 +36,17 @@ public final class ReviewScorer {
     public static final double MIN_COVERAGE = 0.90;
     public static final double ON_PEAK_FRACTION = 0.5;
 
-    public record Result(List<ReviewItem> items, List<ReviewItem.Info> infos) {
+    /**
+     * {@code rules} carries every slide's marker-rule rates, so a reader ({@code qc_summary.csv}'s
+     * {@code rule_violation_pct}) reports the numbers the review was built from instead of
+     * evaluating the rules a second time.
+     */
+    public record Result(List<ReviewItem> items, List<ReviewItem.Info> infos, MarkerRules.Evaluation rules) {
+
+        public Result(List<ReviewItem> items, List<ReviewItem.Info> infos) {
+            this(items, infos, MarkerRules.Evaluation.NONE);
+        }
+
         /** The manifest's {@code flags} column for {@code (slideId, rootIndex, gatePath)}: {@code ;}-joined tokens, {@code ""} when none. */
         public String flagsFor(String slideId, int rootIndex, String gatePath) {
             StringJoiner j = new StringJoiner(";");
@@ -136,7 +150,55 @@ public final class ReviewScorer {
                 }
             }
         }
-        return new Result(List.copyOf(items), List.copyOf(infos));
+        MarkerRules.Evaluation rules = MarkerRules.evaluate(tree, samples, resolved);
+        mergeRuleFindings(rules, tree, samples, resolved, items);
+        return new Result(List.copyOf(items), List.copyOf(infos), rules);
+    }
+
+    /**
+     * Adds each marker-rule finding to its slide x gate item — a new item, or {@code MARKER_RULE}
+     * and the reason appended to the one already there — then restores the top-down order (gate
+     * in tree order, then slide in sample order). A slide lacking the gate's channel stays an
+     * info; an {@link #answered} slide stays hidden.
+     */
+    private static void mergeRuleFindings(MarkerRules.Evaluation rules, GateTree tree, List<SlideSample> samples,
+                                          Map<String, TreeResolver.ResolvedTree> resolved, List<ReviewItem> items) {
+        if (rules.findings().isEmpty()) return;
+        Map<String, SlideSample> sampleById = new HashMap<>();
+        for (SlideSample s : samples) sampleById.put(s.slideId(), s);
+        for (MarkerRules.Finding f : rules.findings()) {
+            GateNode gate = f.gate();
+            SlideSample s = sampleById.get(f.slideId());
+            if (absentChannel(gate, s) != null) continue;
+            TreeResolver.Applied applied = resolved.get(s.slideId()).applied(gate);
+            if (answered(gate, s.slideId(), applied.applied())) continue;
+            ReviewItem.Key key = new ReviewItem.Key(s.slideId(), f.gateRef().rootIndex(), f.gateRef().gatePath());
+            // Matched by gate identity, not by key: two sibling gates on one channel share a path.
+            int at = -1;
+            for (int i = 0; i < items.size() && at < 0; i++) {
+                ReviewItem item = items.get(i);
+                if (item.gate() == gate && item.key().slideId().equals(s.slideId())) at = i;
+            }
+            if (at < 0) {
+                items.add(new ReviewItem(key, s.name(), gate, List.of(ReviewItem.Flag.MARKER_RULE),
+                        List.of(f.reason()), applied.applied()));
+            } else {
+                ReviewItem old = items.get(at);
+                Set<ReviewItem.Flag> flags = new LinkedHashSet<>(old.flags());
+                flags.add(ReviewItem.Flag.MARKER_RULE);
+                Set<String> reasons = new LinkedHashSet<>(old.reasons());
+                reasons.add(f.reason());
+                items.set(at, new ReviewItem(key, old.slideName(), old.gate(), List.copyOf(flags),
+                        List.copyOf(reasons), old.applied()));
+            }
+        }
+        Map<GateNode, Integer> gateOrder = new IdentityHashMap<>();
+        List<GateWalk.Entry> walk = GateWalk.enabled(tree);
+        for (int i = 0; i < walk.size(); i++) gateOrder.put(walk.get(i).gate(), i);
+        Map<String, Integer> slideOrder = new HashMap<>();
+        for (int i = 0; i < samples.size(); i++) slideOrder.put(samples.get(i).slideId(), i);
+        items.sort(Comparator.<ReviewItem>comparingInt(i -> gateOrder.get(i.gate()))
+                .thenComparingInt(i -> slideOrder.get(i.key().slideId())));
     }
 
     /**

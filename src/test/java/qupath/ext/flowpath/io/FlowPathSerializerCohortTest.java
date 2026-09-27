@@ -18,6 +18,24 @@ import static org.junit.jupiter.api.Assertions.*;
 class FlowPathSerializerCohortTest {
 
     @Test
+    void theLineageTickRoundTripsAndDefaultsOff(@TempDir Path dir) throws Exception {
+        GateTree tree = new GateTree();
+        GateNode a = new GateNode("CD3", 1.0);
+        a.setLineageMarker(true);
+        tree.addRoot(a);
+        tree.addRoot(new GateNode("CD3", 2.0));
+        File file = dir.resolve("t.json").toFile();
+        FlowPathSerializer.save(tree, file);
+        String json = Files.readString(file.toPath());
+        assertEquals(1, json.split("\"lineageMarker\"", -1).length - 1, "written only when set");
+        GateTree loaded = FlowPathSerializer.load(file);
+        assertTrue(loaded.getRoots().get(0).isLineageMarker());
+        assertFalse(loaded.getRoots().get(1).isLineageMarker());
+        assertTrue(a.deepCopy().isLineageMarker());
+        assertFalse(new GateNode("CD3", 1.0).isLineageMarker(), "defaults off");
+    }
+
+    @Test
     void version4RoundTripsSettingsForTwoSameChannelRoots(@TempDir Path dir) throws Exception {
         GateTree tree = new GateTree();
         GateNode a = new GateNode("CD8", 400.0);

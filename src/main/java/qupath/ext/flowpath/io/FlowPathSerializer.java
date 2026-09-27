@@ -352,6 +352,7 @@ public class FlowPathSerializer {
         obj.addProperty("clipPercentileHigh", node.getClipPercentileHigh());
         obj.addProperty("excludeOutliers", node.isExcludeOutliers());
         obj.addProperty("correctStaining", node.isCorrectStaining());
+        if (node.isLineageMarker()) obj.addProperty("lineageMarker", true);
         if (!node.getSlideSettings().isEmpty()) {
             JsonObject settings = new JsonObject();
             node.getSlideSettings().forEach((slideId, setting) -> settings.add(slideId, serializeSlideSetting(setting)));
@@ -538,6 +539,8 @@ public class FlowPathSerializer {
         result.setEnabled(enabled);
         // Absent means a v1-v3 file: correction off, so opening an old tree never changes a number.
         result.setCorrectStaining(obj.has("correctStaining") && obj.get("correctStaining").getAsBoolean());
+        // Optional v4 field: absent (every older file, and every unticked gate) reads off.
+        result.setLineageMarker(obj.has("lineageMarker") && obj.get("lineageMarker").getAsBoolean());
         if (obj.has("slideSettings")) {
             for (var entry : obj.getAsJsonObject("slideSettings").entrySet()) {
                 result.setSlideSetting(entry.getKey(), deserializeSlideSetting(entry.getValue().getAsJsonObject()));

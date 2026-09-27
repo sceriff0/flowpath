@@ -55,6 +55,9 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     // New gates correct for staining; the serializer loads a legacy (v1-v3) gate with false so
     // opening an old tree never changes a number.
     private boolean correctStaining = true;
+    // Marks a threshold gate's marker as a lineage marker: every pair of ticked threshold gates
+    // is an exclusive marker rule (cohort/MarkerRules). Off by default; serialised only when set.
+    private boolean lineageMarker = false;
     // Set only by TreeResolver on a resolved copy: this gate is skipped on the slide being gated,
     // so ResolvedGate compiles it unusable and every cell reads UNMEASURED. Never serialized.
     private boolean skippedOnSlide = false;
@@ -252,6 +255,8 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     }
     public boolean isCorrectStaining() { return correctStaining; }
     public void setCorrectStaining(boolean v) { this.correctStaining = v; }
+    public boolean isLineageMarker() { return lineageMarker; }
+    public void setLineageMarker(boolean v) { this.lineageMarker = v; }
     public boolean isSkippedOnSlide() { return skippedOnSlide; }
     public void setSkippedOnSlide(boolean v) { this.skippedOnSlide = v; }
 
@@ -338,6 +343,7 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
         target.statistic = this.statistic;
         target.slideSettings = new LinkedHashMap<>(this.slideSettings);
         target.correctStaining = this.correctStaining;
+        target.lineageMarker = this.lineageMarker;
         target.skippedOnSlide = this.skippedOnSlide;
     }
 
