@@ -96,7 +96,7 @@ public final class ReviewScorer {
                         reasons.add(unusual);
                     }
 
-                    MeasuredColumn measuredColumn = s.index().column(channel, gate.compartmentAt(k), gate.statisticAt(k), s.stats());
+                    MeasuredColumn measuredColumn = s.index().column(gate, k, s.stats());
                     double[] raw = measuredColumn.values();
 
                     if (parentCount < MIN_PARENT_CELLS) {
