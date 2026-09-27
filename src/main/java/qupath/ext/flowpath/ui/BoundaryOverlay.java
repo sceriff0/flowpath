@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.cohort.CellShapes;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.lib.gui.viewer.overlays.PathOverlay;
 import qupath.lib.images.ImageData;
@@ -11,7 +12,6 @@ import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Shape;
-import java.awt.geom.Ellipse2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -23,7 +23,8 @@ import java.util.List;
  * trigger {@code IngestCoordinator} nor dirty the .qpdata. Toggled with {@code B}.
  * <p>
  * A detection with no area (a point ROI, whose {@code getShape()} throws in QuPath 0.7) is drawn
- * as a small filled dot at its centroid instead of an outline.
+ * as a small filled dot at its centroid instead of an outline ({@link CellShapes}, the rule the
+ * evidence crop shares).
  */
 final class BoundaryOverlay implements PathOverlay {
 
@@ -45,14 +46,7 @@ final class BoundaryOverlay implements PathOverlay {
             ROI roi = o == null ? null : o.getROI();
             if (roi == null) continue;
             Color color = new Color(packedRgb[i] & 0xFFFFFF);
-            if (roi.isArea()) {
-                out.add(new Outline(roi.getShape(), color, false));
-            } else {
-                double cx = roi.getCentroidX();
-                double cy = roi.getCentroidY();
-                out.add(new Outline(new Ellipse2D.Double(cx - POINT_RADIUS, cy - POINT_RADIUS,
-                        2 * POINT_RADIUS, 2 * POINT_RADIUS), color, true));
-            }
+            out.add(new Outline(CellShapes.shapeOf(roi, POINT_RADIUS), color, !CellShapes.isOutlined(roi)));
         }
         outlines = List.copyOf(out);
     }

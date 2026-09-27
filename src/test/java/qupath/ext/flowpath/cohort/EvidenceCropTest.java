@@ -10,6 +10,7 @@ import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.lib.images.servers.ImageChannel;
 import qupath.lib.images.servers.WrappedBufferedImageServer;
 import qupath.lib.regions.ImagePlane;
 import qupath.lib.roi.ROIs;
@@ -154,5 +155,46 @@ class EvidenceCropTest {
         tree.getRoots().get(1).setThreshold(1e9);
         AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
         assertNull(EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model, model::alignment, 512));
+    }
+
+    /** 1600 × 1600, three channels named DAPI, CD8 and Other; CD8 is 120 everywhere. */
+    static WrappedBufferedImageServer namedServer() {
+        BufferedImage img = new BufferedImage(1600, 1600, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 1600; y++) for (int x = 0; x < 1600; x++) img.setRGB(x, y, (50 << 16) | (120 << 8) | 10);
+        return new WrappedBufferedImageServer("named", img, List.of(
+                ImageChannel.getInstance("DAPI", 0x0000FF), ImageChannel.getInstance("CD8", 0x00FF00),
+                ImageChannel.getInstance("Other", 0xFF0000)));
+    }
+
+    /** B14: {@code PointsROI.getShape()} throws; one point cell must not turn the crop into an error. */
+    @Test
+    void aSpecOverPointDetectionsRendersWithEachCellAsADot() {
+        List<SlideSample> samples = placedCohort();
+        GateTree tree = twoRootsOnCd8();
+        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        EvidenceCrop.Spec spec = EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model,
+                model::alignment, 512);
+        assertFalse(spec.outlines().isEmpty());
+        assertFalse(spec.outlines().get(0).roi().isArea(), "fixture check: Cells builds point ROIs");
+
+        EvidenceCrop.Crop crop = EvidenceCrop.render(namedServer(), spec);
+        assertTrue(crop.ok(), crop.error());
+        int x0 = 1280 - 256;
+        int dot = crop.argb()[(1500 - x0) * 512 + (1500 - x0)] & 0xFFFFFF;
+        assertTrue(dot == 0x00C800 || dot == 0x0000C8, "the cells at (1500, 1500) are a dot in root 1's colour: "
+                + Integer.toHexString(dot));
+        assertEquals(0, red(crop.argb()[10 * 512 + 10]), "away from the cells, the tissue");
+    }
+
+    @Test
+    void aMappedRangeThatMissesTheCropsPixelsFallsBackToTheCropsOwn() {
+        // A pre-standardised column: landmarks in z units, pixels in 0..255.
+        EvidenceCrop.Crop crop = EvidenceCrop.render(server(), new EvidenceCrop.Spec(300, 300, 512, "Green", 1000, 2000, List.of()));
+        assertTrue(crop.ok(), crop.error());
+        int x0 = 300 - 256;
+        assertEquals(255, green(crop.argb()[256 * 512 + (150 - x0)]), "the crop's own 99.5th percentile is the top");
+        assertArrayEquals(new double[]{50, 150}, EvidenceCrop.markerRange(50, 150, 0, 200), "an overlapping range is kept");
+        assertArrayEquals(new double[]{0, 200}, EvidenceCrop.markerRange(-3, -1, 0, 200));
+        assertArrayEquals(new double[]{0, 200}, EvidenceCrop.markerRange(Double.NaN, 1, 0, 200));
     }
 }

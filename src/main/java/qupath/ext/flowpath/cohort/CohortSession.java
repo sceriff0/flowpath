@@ -78,12 +78,24 @@ public final class CohortSession {
 
     private Alignment currentAlignment(String slideId, String column) {
         AlignmentModel m = model;
+        return answers(m) ? m.alignment(slideId, column) : null;
+    }
+
+    /** Whether the lookup may answer from {@code m} as the session now stands. */
+    private boolean answers(AlignmentModel m) {
         String reference = referenceSlideId;
-        if (slides.size() < 2 || correctionDisabled || foreign || reference == null
-                || !reference.equals(m.referenceSlideId())) {
-            return null;
-        }
-        return m.alignment(slideId, column);
+        return slides.size() >= 2 && !correctionDisabled && !foreign && reference != null
+                && reference.equals(m.referenceSlideId());
+    }
+
+    /**
+     * {@link #lookup()} frozen now, on {@link #model()} as it is now: for work that runs later on
+     * another thread against a model it captured (an evidence crop), so a rescore landing
+     * meanwhile cannot hand it alignments from a different model than the one it keyed on.
+     */
+    public AlignmentLookup lookupOn(AlignmentModel m) {
+        if (m == null || !answers(m)) return AlignmentLookup.NONE;
+        return m::alignment;
     }
 
     /**

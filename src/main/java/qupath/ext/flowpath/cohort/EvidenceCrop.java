@@ -15,6 +15,7 @@ import qupath.lib.roi.interfaces.ROI;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.Shape;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.util.ArrayList;
@@ -47,6 +48,9 @@ public final class EvidenceCrop {
         public static Crop failed(String error) { return new Crop(0, 0, new int[0], error); }
     }
 
+    /** A point detection's dot radius, in output pixels. */
+    private static final double POINT_RADIUS_OUTPUT = 2;
+
     private EvidenceCrop() {}
 
     /**
@@ -65,8 +69,7 @@ public final class EvidenceCrop {
         GateNode gate = CohortSession.liveGate(tree, item.key());
         if (gate == null || gate.getChannels().isEmpty()) return null;
         String slideId = item.key().slideId();
-        BoundaryHotspot.Boundary boundary = BoundaryHotspot.of(tree, gate, slideId, lookup, sample.index(),
-                sample.stats(), sample.clean(), model::cofactor);
+        BoundaryHotspot.Boundary boundary = BoundaryHotspot.ofSample(tree, gate, sample, lookup, model::cofactor);
         BoundaryHotspot.Hotspot hot = BoundaryHotspot.hotspot(sample.index(), boundary.cells(), fieldPixels);
         if (hot == null) return null;
 
@@ -124,11 +127,8 @@ public final class EvidenceCrop {
             int ow = img.getWidth(), oh = img.getHeight();
             double[] m = r.getSamples(0, 0, ow, oh, marker, (double[]) null);
             double[] d = r.getSamples(0, 0, ow, oh, dapi, (double[]) null);
-            double mLo = spec.markerLo(), mHi = spec.markerHi();
-            if (!(Double.isFinite(mLo) && Double.isFinite(mHi) && mHi > mLo)) {
-                mLo = percentile(m, 0.5);
-                mHi = percentile(m, 99.5);
-            }
+            double[] range = markerRange(spec.markerLo(), spec.markerHi(), percentile(m, 0.5), percentile(m, 99.5));
+            double mLo = range[0], mHi = range[1];
             double dLo = percentile(d, 0.5), dHi = percentile(d, 99.5);
             int[] argb = new int[ow * oh];
             for (int i = 0; i < argb.length; i++) {
@@ -144,7 +144,9 @@ public final class EvidenceCrop {
                 g2.setStroke(new BasicStroke((float) (1.5 / sx)));
                 for (Outline o : spec.outlines()) {
                     g2.setColor(new Color(o.rgb() & 0xFFFFFF));
-                    g2.draw(o.roi().getShape());
+                    Shape shape = CellShapes.shapeOf(o.roi(), POINT_RADIUS_OUTPUT / sx);
+                    if (CellShapes.isOutlined(o.roi())) g2.draw(shape);
+                    else g2.fill(shape);
                 }
             } finally {
                 g2.dispose();
@@ -158,6 +160,18 @@ public final class EvidenceCrop {
     /** A throwable as the text a failed crop shows: its message, else its class name. */
     public static String messageOf(Throwable ex) {
         return ex.getMessage() == null || ex.getMessage().isBlank() ? ex.getClass().getSimpleName() : ex.getMessage();
+    }
+
+    /**
+     * The marker's display range: the per-slide mapped reference range when it is usable and
+     * overlaps the crop's own 0.5–99.5 percentile span, else that span. A range that misses the
+     * pixels entirely — a gate on a pre-standardised column such as MIRAGE's {@code Median Z},
+     * whose landmarks are not in pixel units — would paint the whole crop black or saturated.
+     */
+    static double[] markerRange(double lo, double hi, double ownLo, double ownHi) {
+        boolean usable = Double.isFinite(lo) && Double.isFinite(hi) && hi > lo;
+        boolean overlaps = !(Double.isFinite(ownLo) && Double.isFinite(ownHi)) || (lo <= ownHi && hi >= ownLo);
+        return usable && overlaps ? new double[]{lo, hi} : new double[]{ownLo, ownHi};
     }
 
     private static int scale(double v, double lo, double hi) {

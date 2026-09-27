@@ -125,6 +125,16 @@ public final class BoundaryHotspot {
                 ? FIELD_MICRONS / cal.getAveragedPixelSizeMicrons() : CROP_PIXELS;
     }
 
+    /**
+     * {@code gate}'s boundary on a slide's <em>sample</em>: {@link #of} over the sample's cells,
+     * starting from its clean mask. The hotspot the evidence crop and the viewer's click-through
+     * both centre on is taken from this, so the two land on the same tile.
+     */
+    public static Boundary ofSample(GateTree live, GateNode gate, SlideSample sample, AlignmentLookup lookup,
+                                    ToDoubleFunction<String> cofactors) {
+        return of(live, gate, sample.slideId(), lookup, sample.index(), sample.stats(), sample.clean(), cofactors);
+    }
+
     /** ROI centroids are level-0 pixels — the space {@code QuPathViewer.setCenterPixelLocation} takes. */
     public static Hotspot hotspot(CellIndex index, boolean[] cells, double tilePixels) {
         Map<Long, Integer> counts = new TreeMap<>();

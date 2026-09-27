@@ -240,7 +240,8 @@ public class FlowPathPane extends BorderPane {
     });
 
     /** The selected review item's crop, the next few prefetched, an LRU of recent ones. */
-    private final EvidenceCropCoordinator crops = new EvidenceCropCoordinator(cropExecutor, Platform::runLater, this::cropJob);
+    private final EvidenceCropCoordinator crops = new EvidenceCropCoordinator(cropExecutor, Platform::runLater,
+            cohort::model, this::cropJob);
 
     /** The (item, applied values) whose crop the pane shows or awaits; null when none. */
     private EvidenceCropCoordinator.CacheKey shownCrop;
@@ -868,8 +869,8 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * The crop follows the selection: the selected item's crop is requested when it, or its
-     * applied values (a rescore after a moved cut), differ from the one shown — so a moved
-     * threshold re-renders — and nothing is shown when nothing is selected. The items after it
+     * applied values (a rescore after a moved cut), or the alignment model differ from the one
+     * shown — so a moved threshold or a rescore re-renders — and nothing is shown when nothing is selected. The items after it
      * in the list are prefetched. A crop landing for anything else is never shown (see
      * {@link EvidenceCropCoordinator}).
      */
@@ -881,7 +882,7 @@ public class FlowPathPane extends BorderPane {
             needsALook.clearCrop();
             return;
         }
-        EvidenceCropCoordinator.CacheKey key = EvidenceCropCoordinator.CacheKey.of(selected);
+        EvidenceCropCoordinator.CacheKey key = crops.keyOf(selected);
         if (key.equals(shownCrop)) return;
         shownCrop = key;
         int at = -1;
@@ -898,6 +899,8 @@ public class FlowPathPane extends BorderPane {
      */
     private void showItem(ReviewItem.Key key) {
         if (review.active() != null && !review.active().equals(key)) endActiveReview();
+        // A click-through still waiting for its slide is for the item the user has just left.
+        pendingFocus = ReviewTarget.pendingAfterSelecting(pendingFocus, key);
         cohort.select(key);
         renderNeedsALook();
     }
@@ -919,7 +922,9 @@ public class FlowPathPane extends BorderPane {
         SlideSample sample = cohort.sample(slideId);
         SlideSample reference = tree.getReferenceSlideId() == null ? null : cohort.sample(tree.getReferenceSlideId());
         AlignmentModel model = cohort.model();
-        AlignmentLookup lookup = alignments;
+        // Bound to the captured model — the one the crop's cache key names — never the live
+        // lookup, which a rescore landing mid-read would move to another model.
+        AlignmentLookup lookup = cohort.lookupOn(model);
         boolean open = slideId.equals(currentSlideId());
         ImageData<BufferedImage> imageData = qupath.getImageData();
         ImageServer<BufferedImage> openServer = open && imageData != null ? imageData.getServer() : null;
@@ -986,12 +991,20 @@ public class FlowPathPane extends BorderPane {
     /**
      * The item's slide is open: select its gate in This slide view (through {@link #render}, which
      * shows the selected gate), centre the viewer on the tile with most boundary cells, and turn
-     * the overlay on. The viewer centres on the same {@link BoundaryHotspot#fieldPixels} (200 µm)
-     * tile the evidence crop does, in level-0 pixels — the space ROI centroids are in — so the
-     * click-through lands on the cells the crop showed.
+     * the overlay on. The viewer centres on the tile the evidence crop does: the most-boundary
+     * {@link BoundaryHotspot#fieldPixels} (200 µm) tile of the slide's <em>sample</em>, in level-0
+     * pixels — the space ROI centroids are in — so the click-through lands on the cells the crop
+     * showed. Only a slide with no sample falls back to its full index. Nothing opens when the
+     * item is no longer the selected one ({@link ReviewTarget#mayFocus}).
      */
     private void focusReviewItem(ReviewItem.Key key) {
         GateNode gate = CohortSession.liveGate(session.tree(), key);
+        ReviewItem selected = cohort.selected();
+        if (!ReviewTarget.mayFocus(key, selected == null ? null : selected.key())) {
+            // The user moved on while the slide opened: open nothing the list is not showing.
+            renderNeedsALook();
+            return;
+        }
         if (gate == null) {
             renderNeedsALook();
             return;
@@ -1019,7 +1032,14 @@ public class FlowPathPane extends BorderPane {
         boundaryOverlay.setVisible(true);
         ImageData<BufferedImage> imageData = qupath.getImageData();
         double field = BoundaryHotspot.fieldPixels(imageData == null ? null : imageData.getServer().getPixelCalibration());
-        BoundaryHotspot.Hotspot hot = BoundaryHotspot.hotspot(session.index(), boundary.cells(), field);
+        // Centred as the crop is: the sample's boundary on the same 200 µm grid, the pair of calls
+        // EvidenceCrop.spec makes. The full index is the fallback only for a slide with no sample;
+        // the overlay above still outlines every boundary cell on the slide.
+        SlideSample sample = cohort.sample(currentSlideId());
+        BoundaryHotspot.Hotspot hot = sample != null
+                ? BoundaryHotspot.hotspot(sample.index(),
+                        BoundaryHotspot.ofSample(session.tree(), gate, sample, alignments, cohort.model()::cofactor).cells(), field)
+                : BoundaryHotspot.hotspot(session.index(), boundary.cells(), field);
         if (viewer != null) {
             if (hot != null) viewer.setCenterPixelLocation(hot.centerX(), hot.centerY());
             viewer.repaint();
@@ -1031,22 +1051,16 @@ public class FlowPathPane extends BorderPane {
         return review.gate(currentSlideId());
     }
 
-    /**
-     * The gate Enter and S answer: the viewer's reviewed gate while one is open, else the selected
-     * item's live gate — its crop is what the user is looking at (spec §6).
-     */
-    private GateNode activeGate() {
-        GateNode viewer = viewerGate();
-        if (viewer != null) return viewer;
+    /** What Enter and S answer now ({@link ReviewTarget}), or null. */
+    private ReviewTarget answerTarget() {
         ReviewItem selected = cohort.selected();
-        return selected == null ? null : CohortSession.liveGate(session.tree(), selected.key());
+        return ReviewTarget.of(viewerGate() == null ? null : review.active(), selected == null ? null : selected.key());
     }
 
-    /** The slide Enter and S answer on: the viewer review's (the open slide), else the selected item's. */
-    private String activeSlideId() {
-        if (viewerGate() != null) return currentSlideId();
-        ReviewItem selected = cohort.selected();
-        return selected == null ? null : selected.key().slideId();
+    /** The gate Enter and S would answer, or null: its live gate, still in the tree. */
+    private GateNode activeGate() {
+        ReviewTarget target = answerTarget();
+        return target == null ? null : CohortSession.liveGate(session.tree(), target.key());
     }
 
     /**
@@ -1054,14 +1068,13 @@ public class FlowPathPane extends BorderPane {
      * it is, else the selected item opened from the list — its undo mark taken now, so the answer
      * is its one undo step. An Adjust still needs the viewer: nothing here can drag a cut.
      *
-     * @return whether the answer went through the viewer, or null when there is nothing to answer
+     * @return what is answered, or null when there is nothing to answer
      */
-    private Boolean openAnswerTarget() {
-        if (viewerGate() != null) return Boolean.TRUE;
-        ReviewItem selected = cohort.selected();
-        if (selected == null) return null;
+    private ReviewTarget openAnswerTarget() {
+        ReviewTarget target = answerTarget();
+        if (target == null || target.inViewer()) return target;
         endActiveReview();
-        return review.open(selected.key()) == null ? null : Boolean.FALSE;
+        return review.open(target.key()) == null ? null : target;
     }
 
     /**
@@ -1069,20 +1082,18 @@ public class FlowPathPane extends BorderPane {
      * {@code Reviewed(applied values)}; the whole item is one undo step (see {@link ReviewFlow}).
      */
     private void answerEnter() {
-        Boolean inViewer = openAnswerTarget();
-        if (inViewer == null) return;
-        ReviewItem.Key answered = review.active();
-        String slideId = activeSlideId();
-        if (review.answerEnter(slideId, cohort.slideName(slideId), alignments)) afterAnswer(answered, inViewer);
+        ReviewTarget target = openAnswerTarget();
+        if (target == null) return;
+        String slideId = target.key().slideId();
+        if (review.answerEnter(slideId, cohort.slideName(slideId), alignments)) afterAnswer(target.key(), target.inViewer());
     }
 
     /** S / "Skip slide for this gate": its cells are unmeasured on this slide. One undo step. */
     private void answerSkip() {
-        Boolean inViewer = openAnswerTarget();
-        if (inViewer == null) return;
-        ReviewItem.Key answered = review.active();
-        String slideId = activeSlideId();
-        if (review.answerSkip(slideId, cohort.slideName(slideId))) afterAnswer(answered, inViewer);
+        ReviewTarget target = openAnswerTarget();
+        if (target == null) return;
+        String slideId = target.key().slideId();
+        if (review.answerSkip(slideId, cohort.slideName(slideId))) afterAnswer(target.key(), target.inViewer());
     }
 
     /**

@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.cohort;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
@@ -127,6 +128,29 @@ class CohortSessionTest {
         assertEquals("s1", tree.getReferenceSlideId());
         assertEquals(shift.apply(400.0), a.getThreshold(), 1e-9);
         assertEquals(600.0, b.getThreshold(), "correction off: the number is the same on every slide");
+    }
+
+    @Test
+    void aLookupTakenOnAModelKeepsAnsweringFromItAfterTheSessionMovesOn() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = new CohortSession();
+        s.setProject("/projects/a", refs("ref", "s1", "s2", "odd"));
+        s.samplingStarted();
+        for (SlideSample sample : ReviewScorerTest.cohort()) s.landed(new CohortSampler.Sampled(sample));
+        s.samplingFinished();
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        AlignmentModel captured = s.model();
+        AlignmentLookup frozen = s.lookupOn(captured);
+        assertSame(captured.alignment("s1", "CD8"), frozen.alignment("s1", "CD8"));
+
+        s.setProject("/projects/b", refs("ref", "s1"));
+        assertNull(s.lookup().alignment("s1", "CD8"), "the live lookup follows the session");
+        assertSame(captured.alignment("s1", "CD8"), frozen.alignment("s1", "CD8"), "the frozen one stays on its model");
+        assertNull(s.lookupOn(s.model()).alignment("s1", "CD8"));
+
+        tree.setReferenceSlideId("deleted");
+        CohortSession off = sampledSession(tree);
+        assertNull(off.lookupOn(off.model()).alignment("s1", "CD8"), "a disabled correction answers nothing");
     }
 
     // ---- review round 1 ----------------------------------------------------------------
