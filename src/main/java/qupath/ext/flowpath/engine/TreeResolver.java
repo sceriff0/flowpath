@@ -2,10 +2,12 @@ package qupath.ext.flowpath.engine;
 
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateValues;
+import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
@@ -91,14 +93,21 @@ public final class TreeResolver {
         }
         GateValues reference = GateValues.read(live);
         SlideSetting setting = live.slideSetting(slideId);
+        List<String> immutableColumns = Collections.unmodifiableList(columns);
 
         if (setting instanceof SlideSetting.Skip) {
             copy.setSkippedOnSlide(true);
-            return new Applied(reference, reference, Collections.nCopies(axes, Source.SKIPPED), columns);
+            return new Applied(reference, reference, Collections.nCopies(axes, Source.SKIPPED), immutableColumns);
         }
         if (setting instanceof SlideSetting.Manual manual && manual.values().fits(copy)) {
-            manual.values().writeTo(copy);
-            return new Applied(reference, manual.values(), Collections.nCopies(axes, Source.MANUAL), columns);
+            GateValues normalized = normalizeManual(copy, manual.values());
+            if (normalized != null) {
+                normalized.writeTo(copy);
+                return new Applied(reference, normalized, Collections.nCopies(axes, Source.MANUAL), immutableColumns);
+            }
+            // A degenerate Manual (zero or negative extent on a rectangle/ellipse bounding
+            // box) does not fit, exactly like a Manual of the wrong shape: fall through to
+            // the cohort/reference resolution below rather than write an inside-out shape.
         }
 
         List<Source> sources = new ArrayList<>(axes);
@@ -125,18 +134,51 @@ public final class TreeResolver {
         // breaks the exact display/classification agreement at the rim (CLAUDE.md "One
         // boundary rule"). The deep copy already holds the reference numbers exactly.
         if (!anyCorrected) {
-            return new Applied(reference, reference, List.copyOf(sources), Collections.unmodifiableList(columns));
+            return new Applied(reference, reference, List.copyOf(sources), immutableColumns);
         }
 
-        GateValues values = reference.map(maps[0], maps[1]);
+        GateValues values;
         if (copy instanceof Region2DGate region) {
             // Region-gate shape edits go through remapCoordinates, never GateValues'
             // instanceof chain, so a corrected shape keeps remapCoordinates' own degenerate
             // guards and bounds re-sort (CLAUDE.md "One boundary rule for 2D gates").
             region.remapCoordinates(maps[0], maps[1]);
+            // remapCoordinates leaves a degenerate shape (no usable extent) unchanged rather
+            // than mapping it, so the applied value reported here must be read back from the
+            // copy rather than computed from `reference.map(...)`, or a review would compare
+            // against numbers the gate never actually holds.
+            values = GateValues.read(copy);
         } else {
+            values = reference.map(maps[0], maps[1]);
             values.writeTo(copy);
         }
-        return new Applied(reference, values, List.copyOf(sources), Collections.unmodifiableList(columns));
+        return new Applied(reference, values, List.copyOf(sources), immutableColumns);
+    }
+
+    /**
+     * Manual values for a rectangle or ellipse are a raw bounding box in axis form
+     * ({@code [lo, hi]} per axis) and may arrive inverted (a drag that ended left of where it
+     * started) or zero-extent; {@link GateValues#writeTo} does not sort or guard against
+     * either, so a rectangle would store {@code minX > maxX} (never contains a cell) and an
+     * ellipse would store a negative radius. Sorting each axis ascending here is exactly what
+     * {@link RectangleGate#remapCoordinates} and {@link EllipseGate#remapCoordinates} already
+     * do to their own bounds after mapping; a polygon's per-vertex axes are left untouched,
+     * since sorting them would corrupt vertex order rather than a bounding box.
+     *
+     * @return the normalized values to write, or {@code null} when the resulting shape has no
+     * usable extent (the Manual does not fit, exactly like a Manual of the wrong shape)
+     */
+    private static GateValues normalizeManual(GateNode copy, GateValues values) {
+        if (!(copy instanceof RectangleGate) && !(copy instanceof EllipseGate)) {
+            return values;
+        }
+        double[] x = sortedPair(values.axis(0));
+        double[] y = sortedPair(values.axis(1));
+        if (x[1] - x[0] <= 0 || y[1] - y[0] <= 0) return null;
+        return GateValues.of(x, y);
+    }
+
+    private static double[] sortedPair(double[] axis) {
+        return axis[0] <= axis[1] ? axis : new double[]{axis[1], axis[0]};
     }
 }

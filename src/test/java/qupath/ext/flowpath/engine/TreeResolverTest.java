@@ -9,6 +9,7 @@ import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
+import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
@@ -103,6 +104,8 @@ class TreeResolverTest {
         assertEquals(612.5, s1.resolvedOf(b).getThreshold());
         assertEquals(List.of(SKIPPED), s1.applied(a).sources());
         assertEquals(List.of(MANUAL), s1.applied(b).sources());
+        assertTrue(GateTree.transferCountsIfStructureMatches(tree.getRoots(), s1.tree().getRoots()),
+                "the resolved copy still pairs branch-for-branch with the live tree even with Skip/Manual settings applied");
 
         TreeResolver.ResolvedTree s2 = TreeResolver.resolve(tree, "s2", (s, c) -> BRIGHTER);
         assertFalse(s2.resolvedOf(a).isSkippedOnSlide(), "a setting on s1 says nothing about s2");
@@ -116,6 +119,104 @@ class TreeResolverTest {
         cd3.setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{1}, new double[]{2})));
         assertEquals(List.of(CORRECTED),
                 TreeResolver.resolve(tree, "s1", lookup(Map.of("CD3", BRIGHTER))).applied(cd3).sources());
+    }
+
+    /** Review round 1, finding 1: an inverted Manual rectangle is stored sorted, not inside-out. */
+    @Test
+    void anInvertedManualRectangleIsStoredSortedAndEnclosesTheExpectedCells() {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        RectangleGate rect = new RectangleGate("CD3", "CD4", 0, 10, 0, 10);
+        rect.setStatisticX(Statistic.MEAN);
+        rect.setStatisticY(Statistic.MEAN);
+        // A drag that ended up-and-left of where it started: hi-then-lo on both axes.
+        rect.setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{8, 2}, new double[]{9, 1})));
+        tree.addRoot(rect);
+
+        TreeResolver.ResolvedTree r = TreeResolver.resolve(tree, "s1", AlignmentLookup.NONE);
+        RectangleGate resolved = (RectangleGate) r.resolvedOf(rect);
+        assertEquals(2.0, resolved.getMinX());
+        assertEquals(8.0, resolved.getMaxX());
+        assertEquals(1.0, resolved.getMinY());
+        assertEquals(9.0, resolved.getMaxY());
+        assertEquals(List.of(MANUAL, MANUAL), r.applied(rect).sources());
+
+        // A cell at (5,5) sits inside the sorted rectangle and must be counted, not silently
+        // excluded by an inside-out (minX > maxX) shape that contains() would always reject.
+        CellIndex index = Cells.of(1).marker("CD3", i -> 5.0).marker("CD4", i -> 5.0).build();
+        GatingEngine.AssignmentResult result = GatingEngine.assignAll(r.tree(), index, MarkerStats.compute(index));
+        assertEquals(1, result.getTally().total(resolved.getBranches().get(0)), "the sorted rectangle encloses the cell");
+    }
+
+    /** Review round 1, finding 1: a Manual ellipse never stores a negative radius. */
+    @Test
+    void aManualEllipseNormalizesToAPositiveRadius() {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        EllipseGate ellipse = new EllipseGate("CD3", "CD4", 5, 5, 2, 2);
+        ellipse.setStatisticX(Statistic.MEAN);
+        ellipse.setStatisticY(Statistic.MEAN);
+        // Bounding box given hi-then-lo: naive (x1-x0)/2 would give a negative radius.
+        ellipse.setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{8, 2}, new double[]{9, 1})));
+        tree.addRoot(ellipse);
+
+        TreeResolver.ResolvedTree r = TreeResolver.resolve(tree, "s1", AlignmentLookup.NONE);
+        EllipseGate resolved = (EllipseGate) r.resolvedOf(ellipse);
+        assertEquals(5.0, resolved.getCenterX(), 1e-12);
+        assertEquals(5.0, resolved.getCenterY(), 1e-12);
+        assertEquals(3.0, resolved.getRadiusX(), 1e-12);
+        assertEquals(4.0, resolved.getRadiusY(), 1e-12);
+        assertTrue(resolved.getRadiusX() > 0 && resolved.getRadiusY() > 0);
+        assertEquals(List.of(MANUAL, MANUAL), r.applied(ellipse).sources());
+    }
+
+    /** Review round 1, finding 1: a degenerate Manual falls through to the cohort/reference path. */
+    @Test
+    void aDegenerateManualFallsThroughToTheCohortPath() {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        RectangleGate rect = new RectangleGate("CD3", "CD4", 0, 10, 0, 20);
+        rect.setStatisticX(Statistic.MEAN);
+        rect.setStatisticY(Statistic.MEAN);
+        // Zero extent on X: not a usable shape.
+        rect.setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{5, 5}, new double[]{1, 9})));
+        tree.addRoot(rect);
+
+        TreeResolver.ResolvedTree r = TreeResolver.resolve(tree, "s1", lookup(Map.of("CD3", BRIGHTER, "CD4", BRIGHTER)));
+        assertEquals(List.of(CORRECTED, CORRECTED), r.applied(rect).sources());
+        RectangleGate resolved = (RectangleGate) r.resolvedOf(rect);
+        assertEquals(BRIGHTER.apply(0), resolved.getMinX(), 1e-12);
+        assertEquals(BRIGHTER.apply(10), resolved.getMaxX(), 1e-12);
+    }
+
+    /**
+     * Review round 1, finding 2: {@code remapCoordinates} leaves a degenerate shape (no usable
+     * extent) unchanged rather than mapping it, so the reported applied value must be read back
+     * from the copy the gate actually holds, not computed from {@code reference.map(...)}.
+     */
+    @Test
+    void aDegenerateRectangleUnderCorrectionReportsTheNumbersTheCopyActuallyHolds() {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        RectangleGate rect = new RectangleGate("CD3", "CD4", 0, 0, 0, 0);
+        rect.setStatisticX(Statistic.MEAN);
+        rect.setStatisticY(Statistic.MEAN);
+        tree.addRoot(rect);
+
+        TreeResolver.ResolvedTree r = TreeResolver.resolve(tree, "s1", lookup(Map.of("CD3", BRIGHTER, "CD4", BRIGHTER)));
+        assertEquals(List.of(CORRECTED, CORRECTED), r.applied(rect).sources());
+        RectangleGate resolved = (RectangleGate) r.resolvedOf(rect);
+        // remapCoordinates refused to touch a zero-extent rectangle, so it is still (0,0,0,0) --
+        // not BRIGHTER.apply(0), which is a different, nonzero number for this non-identity map.
+        assertEquals(0.0, resolved.getMinX());
+        assertEquals(0.0, resolved.getMaxX());
+        assertEquals(0.0, resolved.getMinY());
+        assertEquals(0.0, resolved.getMaxY());
+        TreeResolver.Applied applied = r.applied(rect);
+        assertEquals(0.0, applied.applied().axis(0)[0]);
+        assertEquals(0.0, applied.applied().axis(0)[1]);
+        assertNotEquals(BRIGHTER.apply(0.0), applied.applied().axis(0)[1],
+                "the reported value must be what the copy holds, not the unmapped-but-computed reference.map()");
     }
 
     @Test
