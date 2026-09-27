@@ -12,6 +12,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.lib.images.ImageData;
 
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -65,6 +66,17 @@ public class LivePreviewService {
     private volatile GatingEngine.AssignmentResult lastResult;
     private volatile CellIndex lastIndex;
     private volatile ImageData<?> lastImageData;
+
+    /**
+     * The phenotype→colour map this service last actually applied. Compared against a fresh
+     * {@link PhenotypeClassWriter#colorPlan} instead of trusting {@code PhenotypeClassWriter
+     * .apply}'s own return value alone — see that class's javadoc: the shared {@code PathClass}
+     * cache it checks is JVM-wide, and a background batch write-back gating a different slide
+     * can already have written the very colour this service was about to write, which would
+     * make {@code apply} report "nothing changed" even though this service's own tiles were
+     * never told to refresh.
+     */
+    private volatile Map<String, Integer> lastAppliedColors = Map.of();
 
     /**
      * Guard flag set while {@link #applyResult} is firing a hierarchy changed event.
@@ -374,10 +386,17 @@ public class LivePreviewService {
         for (boolean ex : excluded) if (ex) excCount++;
         this.lastExcludedCount = excCount;
 
-        boolean changed = PhenotypeClassWriter.apply(result, index, this.colorRootIndex);
+        Map<String, Integer> colorPlan = PhenotypeClassWriter.colorPlan(result, this.colorRootIndex);
+        boolean changed = PhenotypeClassWriter.apply(colorPlan, result, index);
+        // See PhenotypeClassWriter's javadoc and lastAppliedColors' own: apply()'s signal is
+        // based on the shared PathClass cache, which a concurrent batch write-back can already
+        // have set to this exact plan. Comparing against what THIS service last applied catches
+        // a real change that the shared-state check alone would miss.
+        boolean colorsChangedFromOurOwnLastApply = !colorPlan.equals(this.lastAppliedColors);
+        this.lastAppliedColors = colorPlan;
 
         // Fire hierarchy event if classifications changed or colors were mutated
-        if (changed) {
+        if (changed || colorsChangedFromOurOwnLastApply) {
             firingHierarchyEvent = true;
             try {
                 data.getHierarchy().fireHierarchyChangedEvent(this);
@@ -394,8 +413,12 @@ public class LivePreviewService {
     /**
      * Re-apply colors from the stored last result without re-running the gating engine.
      * Used when the user switches the color-by-root selection. Goes through
-     * {@link PhenotypeClassWriter}, the one place a gating result becomes {@code PathClass}es
-     * (see its javadoc for why a pure recolour needs its own change detection).
+     * {@link PhenotypeClassWriter}, the one place a gating result becomes {@code PathClass}es.
+     * Always fires the hierarchy event: this is a deliberate user click, and
+     * {@code PhenotypeClassWriter}'s own change signal is based on the shared, JVM-wide
+     * {@code PathClass} cache, which a concurrent batch write-back can leave misleadingly
+     * "already correct" (see that class's javadoc) — trying to detect whether a refresh is
+     * needed here is not worth the risk of silently skipping one.
      */
     private void recolorCells() {
         Platform.runLater(() -> {
@@ -412,15 +435,15 @@ public class LivePreviewService {
             final ImageData<?> data = this.lastImageData;
             if (result == null || index == null || data == null) return;
 
-            boolean changed = PhenotypeClassWriter.apply(result, index, this.colorRootIndex);
+            Map<String, Integer> colorPlan = PhenotypeClassWriter.colorPlan(result, this.colorRootIndex);
+            PhenotypeClassWriter.apply(colorPlan, result, index);
+            this.lastAppliedColors = colorPlan;
 
-            if (changed) {
-                firingHierarchyEvent = true;
-                try {
-                    data.getHierarchy().fireHierarchyChangedEvent(this);
-                } finally {
-                    firingHierarchyEvent = false;
-                }
+            firingHierarchyEvent = true;
+            try {
+                data.getHierarchy().fireHierarchyChangedEvent(this);
+            } finally {
+                firingHierarchyEvent = false;
             }
         });
     }

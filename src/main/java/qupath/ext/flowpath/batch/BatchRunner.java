@@ -47,12 +47,21 @@ public final class BatchRunner {
     public static final String COMBINED_FILE = "batch_populations.csv";
 
     public record Settings(GateTree tree, AlignmentLookup alignments, File outputDir, String openSlideId,
-                           boolean writeBack) {
+                           boolean writeBack, int colorRootIndex) {
         public Settings {
             Objects.requireNonNull(tree, "tree");
             Objects.requireNonNull(outputDir, "outputDir");
             tree = tree.deepCopy();   // frozen once: an edit made while the run goes never reaches it
             alignments = alignments == null ? AlignmentLookup.NONE : alignments;
+        }
+
+        /**
+         * Same as the 6-arg form with colour root -1 (a root's own colours, or the last enabled
+         * root's when none is chosen) — the default for a caller with no open viewer to match.
+         */
+        public Settings(GateTree tree, AlignmentLookup alignments, File outputDir, String openSlideId,
+                        boolean writeBack) {
+            this(tree, alignments, outputDir, openSlideId, writeBack, -1);
         }
     }
 
@@ -123,7 +132,7 @@ public final class BatchRunner {
         if (!settings.writeBack()) return ok;
         if (slide.id().equals(settings.openSlideId())) return ok.withWriteBack(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null);
         try {
-            PhenotypeClassWriter.apply(result, index, -1);
+            PhenotypeClassWriter.apply(result, index, settings.colorRootIndex());
             slide.save(data);
             return ok.withWriteBack(BatchResult.WriteBack.SAVED, null);
         } catch (Exception | Error ex) {
