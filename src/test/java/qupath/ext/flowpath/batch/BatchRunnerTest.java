@@ -193,4 +193,60 @@ class BatchRunnerTest {
         assertEquals(BatchResult.WriteBack.FAILED, r.writeBack());
         assertEquals("disk full", r.writeBackError());
     }
+
+    @Test
+    void theSummaryNamesEveryOutcome(@TempDir Path dir) {
+        List<BatchResult> results = List.of(
+                new BatchResult("a", "a.tif", 10, List.of(), null, null, null, BatchResult.WriteBack.SAVED, null, null),
+                new BatchResult("o", "open.tif", 10, List.of(), null, null, null,
+                        BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null, null),
+                new BatchResult("d", "d.tif", 10, List.of(), null, null, null, BatchResult.WriteBack.FAILED, "disk full", null),
+                BatchResult.failed("x", "x.tif", "no detections on this slide"));
+        String s = BatchRunner.summary(dir.toFile(), results, 5, true);
+        assertTrue(s.startsWith("Cancelled after 4 of 5 slide(s). 3 gated."), s);
+        assertTrue(s.contains("Wrote batch_populations.csv, gating_manifest.csv and one phenotype CSV per slide"), s);
+        assertTrue(s.contains("Skipped:\n  x.tif — no detections on this slide"), s);
+        assertTrue(s.contains("Not saved, open in the viewer:\n  open.tif — already classified; save it from QuPath"), s);
+        assertTrue(s.contains("Could not save:\n  d.tif — disk full"), s);
+    }
+
+    @Test
+    void aFinishedRunSaysSoAndListsNothingThatDidNotHappen(@TempDir Path dir) {
+        List<BatchResult> results = List.of(
+                new BatchResult("a", "a.tif", 10, List.of(), null, null, null, BatchResult.WriteBack.SAVED, null, null));
+        String s = BatchRunner.summary(dir.toFile(), results, 1, false);
+        assertTrue(s.startsWith("1 of 1 slide(s) processed. 1 gated."), s);
+        assertFalse(s.contains("Skipped:") || s.contains("Not saved") || s.contains("Could not save"), s);
+    }
+
+    @Test
+    void writeOutputsWritesTheTableAndTheManifest(@TempDir Path dir) throws Exception {
+        BatchRunner.Settings s = settings(tree(), dir.toFile());
+        List<BatchResult> results = BatchRunner.run(List.of(slide("s1", cells(), new ArrayList<>())),
+                s, (i, n) -> {}, () -> false);
+        // The tree the results were resolved from: Settings froze its own copy.
+        BatchRunner.writeOutputs(dir.toFile(), s.tree(), results, GatingManifestExporter.Annotations.NONE);
+        assertTrue(new File(dir.toFile(), BatchRunner.COMBINED_FILE).isFile());
+        List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
+        assertEquals(1 + 3, manifest.size(), "header + one row per enabled gate axis on the one slide");
+    }
+
+    /**
+     * A tree whose recorded slide names contradict the slides being run belongs to another
+     * project: its per-slide settings would land on different images here, so the run is refused.
+     */
+    @Test
+    void aForeignTreeIsRefusedAndThisProjectsTreeIsNot() {
+        GateTree tree = tree();
+        List<BatchSlide> slides = List.of(slide("1", cells(), new ArrayList<>()), slide("2", cells(), new ArrayList<>()));
+        assertNull(BatchRunner.refusal(tree, slides), "no recorded names: nothing contradicts");
+
+        tree.setSlideNames(java.util.Map.of("1", "1.tif", "9", "gone.tif"));
+        assertNull(BatchRunner.refusal(tree, slides), "same names; an id the project lacks is no contradiction");
+
+        tree.setSlideNames(java.util.Map.of("1", "other_project_slide.tif"));
+        String refusal = BatchRunner.refusal(tree, slides);
+        assertNotNull(refusal);
+        assertTrue(refusal.startsWith(qupath.ext.flowpath.cohort.CohortSession.FOREIGN_TREE), refusal);
+    }
 }

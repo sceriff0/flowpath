@@ -16,6 +16,9 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
+import qupath.ext.flowpath.batch.BatchRunner;
+import qupath.ext.flowpath.batch.BatchSlide;
+import qupath.ext.flowpath.batch.GatingManifestExporter;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
@@ -27,6 +30,7 @@ import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
+import qupath.ext.flowpath.cohort.ReviewScorer;
 import qupath.ext.flowpath.cohort.SlideSample;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -53,6 +57,7 @@ import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.cohort.Alignment;
+import qupath.ext.flowpath.model.cohort.Landmarks;
 import qupath.ext.flowpath.ui.editor.EditorAlignment;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
@@ -259,8 +264,13 @@ public class FlowPathPane extends BorderPane {
     /** Gates the export snapshot and writes the CSV in the background. */
     private final CsvExportCoordinator csvExport;
 
+    /** "Run on all slides": one slide per task on {@link #backgroundExecutor}, cancellable. */
+    private final BatchRunCoordinator batchRun;
+
     private final Button addRootBtn;
     private final Button exportBtn;
+    /** "Run on all slides…", or "Cancel run" while {@link #batchRun} is running; see {@link #updateBusyControls()}. */
+    private final Button runAllButton;
     private final ProgressIndicator spinner;
     /**
      * A gating pass is running; the spinner also shows while {@link #ingest} is busy or
@@ -419,6 +429,13 @@ public class FlowPathPane extends BorderPane {
         exportBtn = new Button("Export CSV");
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
+        runAllButton = new Button("Run on all slides…");
+        runAllButton.setOnAction(e -> runOnAllSlides());
+        runAllButton.setTooltip(new Tooltip("Gate every slide in the project with its own applied thresholds; "
+                + "write the population table, one phenotype CSV per slide and gating_manifest.csv"));
+        // Shown only in a project with a cohort; updateBusyControls decides, as for every control.
+        runAllButton.setVisible(false);
+        runAllButton.setManaged(false);
 
         // The bridge to the other half of the extension. See createUmapControl.
         UmapControl umap = createUmapControl(this::openUmapWindow);
@@ -449,7 +466,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, toolbarSpacer, analysisSlot, umapSlot);
+            exportBtn, runAllButton, toolbarSpacer, analysisSlot, umapSlot);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -496,6 +513,10 @@ public class FlowPathPane extends BorderPane {
         // A CSV export's snapshot is gated and written on the same single-threaded executor,
         // so it never races an ingest for the session's inputs.
         csvExport = new CsvExportCoordinator(backgroundExecutor, Platform::runLater, new CsvExportHost());
+
+        // The same executor, one slide per task: a derivation, a re-ingest or a sampling step queued
+        // meanwhile runs between two slides rather than after the whole project.
+        batchRun = new BatchRunCoordinator(backgroundExecutor, Platform::runLater, new BatchHost());
 
         // The same executor again, one slide per task: a pass, a derivation or an export queued
         // meanwhile runs between two slides rather than after the whole project.
@@ -706,6 +727,31 @@ public class FlowPathPane extends BorderPane {
             logger.error("Exporting the phenotype CSV failed", error);
             updateExportControlsDisabled();
             Dialogs.showErrorMessage("Export Error", ErrorMessages.describe(error));
+        }
+    }
+
+    /** What {@link #batchRun} asks of this pane. Every call arrives on the FX thread. */
+    private final class BatchHost implements BatchRunCoordinator.Host {
+        @Override
+        public void progress(int done, int total, String name) {
+            cohort.batchProgress(done, total, name);
+            updateStatusBar();
+        }
+
+        @Override
+        public void finished(BatchRunCoordinator.Outcome outcome) {
+            cohort.batchFinished();
+            updateBusyControls();
+            Dialogs.showPlainMessage("Run on all slides", BatchRunner.summary(outcome.outputDir(),
+                    outcome.results(), outcome.total(), outcome.cancelled()));
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("Run on all slides failed", error);
+            cohort.batchFinished();
+            updateBusyControls();
+            Dialogs.showErrorMessage("Run on all slides", ErrorMessages.describe(error));
         }
     }
 
@@ -1278,15 +1324,31 @@ public class FlowPathPane extends BorderPane {
         umapButton.setDisable(!UMAP_ENABLED || session.index() == null);
         analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
         updateExportControlsDisabled();
+        updateRunAllButton(busy);
         updateStatusBar();
         renderNeedsALook();
+    }
+
+    /**
+     * "Run on all slides" applies {@link BusyState#batchBlocked()} and decides nothing else of
+     * its own: while a run goes it becomes its Cancel, which is never disabled. Shown only where
+     * there is a cohort to run over — and while a run goes, so its Cancel stays reachable.
+     */
+    private void updateRunAllButton(BusyState busy) {
+        boolean running = batchRun.running();
+        boolean shown = running || cohort.state().available();
+        runAllButton.setVisible(shown);
+        runAllButton.setManaged(shown);
+        runAllButton.setText(running ? "Cancel run" : "Run on all slides…");
+        runAllButton.setDisable(!running && (busy.batchBlocked()
+                || session.tree().getRoots().stream().noneMatch(GateNode::isEnabled)));
     }
 
     /** What the background workers are doing right now; see {@link BusyState}. */
     private BusyState busyState() {
         return new BusyState(ingest.busy() == IngestCoordinator.Busy.LOADING,
                 derivations.deriving(), csvExport.exporting(), cohortCoordinator.sampling(),
-                cohort.state().batchRunning());
+                batchRun.running());
     }
 
     /**
@@ -1303,7 +1365,8 @@ public class FlowPathPane extends BorderPane {
 
     private void updateSpinner() {
         spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE
-                || derivations.deriving() || csvExport.exporting() || cohortCoordinator.sampling());
+                || derivations.deriving() || csvExport.exporting() || cohortCoordinator.sampling()
+                || batchRun.running());
     }
 
     /**
@@ -2478,6 +2541,62 @@ public class FlowPathPane extends BorderPane {
         updateExportControlsDisabled();
     }
 
+    /**
+     * Run the gate tree on every slide of the project, or cancel the run going. What may start is
+     * {@link BatchRunCoordinator#check}'s answer — a tree from another project is refused, and the
+     * confirmation says how many review items are still open. Everything the run reads is taken
+     * after the dialogs, since landings run while they are open: the tree (frozen by
+     * {@link BatchRunner.Settings}), the alignments bound to the model the user reviewed — never
+     * recomputed — and that model's landmarks and review flags for the manifest.
+     */
+    private void runOnAllSlides() {
+        if (batchRun.running()) {
+            batchRun.cancel();
+            return;
+        }
+        Project<BufferedImage> project = qupath.getProject();
+        if (project == null || busyState().batchBlocked()) return;
+        BatchRunCoordinator.Start start = BatchRunCoordinator.check(session.tree(),
+                ProjectSlides.batchSlides(project), cohort.state().remaining());
+        if (start instanceof BatchRunCoordinator.Refused refused) {
+            Dialogs.showPlainMessage("Run on all slides", refused.message());
+            return;
+        }
+        if (!Dialogs.showConfirmDialog("Run on all slides", start.message())) return;
+        File dir = Dialogs.promptForDirectory("Where should the results go?", null);
+        if (dir == null) return;
+
+        // The dialogs ran a nested event loop: re-ask, against the project and tree as they are now.
+        project = qupath.getProject();
+        if (project == null || busyState().batchBlocked()) {
+            Dialogs.showWarningNotification("FlowPath", "FlowPath became busy; run on all slides again when it is idle.");
+            return;
+        }
+        List<BatchSlide> slides = ProjectSlides.batchSlides(project);
+        if (BatchRunCoordinator.check(session.tree(), slides, 0) instanceof BatchRunCoordinator.Refused refused) {
+            Dialogs.showPlainMessage("Run on all slides", refused.message());
+            return;
+        }
+        AlignmentModel model = cohort.model();
+        ReviewScorer.Result reviewed = cohort.review();
+        // The viewer's image, not the index's: its .qpdata is the file QuPath would overwrite on
+        // its next save, whether or not its cells were read.
+        String openSlideId = slideIdOf(qupath.getImageData());
+        BatchRunner.Settings settings = new BatchRunner.Settings(session.tree(), cohort.lookupOn(model), dir,
+                openSlideId, true, previewService.getColorRootIndex());
+        GatingManifestExporter.Annotations annotations = new GatingManifestExporter.Annotations() {
+            @Override public Landmarks reference(String column) { return model.referenceLandmarks(column); }
+            @Override public Landmarks slide(String slideId, String column) { return model.landmarks(slideId, column); }
+            @Override public String flags(String slideId, int rootIndex, String gatePath) {
+                return reviewed.flagsFor(slideId, rootIndex, gatePath);
+            }
+        };
+        cohort.batchStarted();
+        batchRun.run(slides, settings,
+                (d, results) -> BatchRunner.writeOutputs(d, settings.tree(), results, annotations));
+        updateBusyControls();
+    }
+
     // --- Context menu ---
 
     private void showTreeContextMenu(double screenX, double screenY) {
@@ -2710,6 +2829,7 @@ public class FlowPathPane extends BorderPane {
             overlayViewer = null;
         }
         cohortCoordinator.cancel();
+        batchRun.close();
         crops.cancel();
         // shutdownNow: a crop still reading is for a pane that is gone.
         cropExecutor.shutdownNow();

@@ -2,6 +2,8 @@ package qupath.ext.flowpath.batch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.flowpath.cohort.CohortIdentity;
+import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.PhenotypeClassWriter;
@@ -26,7 +28,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
@@ -159,5 +163,51 @@ public final class BatchRunner {
                 if (r.succeeded()) PopulationStatsExporter.writeRows(w, r.stats(), r.imageName());
             }
         }
+    }
+
+    /**
+     * Why a run of {@code tree} over {@code slides} must not start, or null. A tree whose recorded
+     * slide names contradict these slides' names ({@link CohortIdentity}) carries another project's
+     * per-slide settings: entry ids restart in every project, so they would land on different
+     * images here. The live view merely switches them off; a run would write them into files.
+     */
+    public static String refusal(GateTree tree, List<BatchSlide> slides) {
+        Map<String, String> names = new LinkedHashMap<>();
+        for (BatchSlide s : slides) names.put(s.id(), s.name());
+        if (CohortIdentity.matches(tree, names)) return null;
+        return CohortSession.FOREIGN_TREE + ".\n\nRunning it on this project would apply those settings to other "
+                + "images, so the run was not started. Load this project's gate tree to run it here.";
+    }
+
+    /** {@value #COMBINED_FILE}, then {@value GatingManifestExporter#FILE}, into {@code dir}. */
+    public static void writeOutputs(File dir, GateTree tree, List<BatchResult> results,
+                                    GatingManifestExporter.Annotations annotations) throws IOException {
+        writeCombined(new File(dir, COMBINED_FILE), results);
+        GatingManifestExporter.write(new File(dir, GatingManifestExporter.FILE), tree, results, annotations);
+    }
+
+    /** Plain words for the run report: a silently short table would hide which slides are missing and why. */
+    public static String summary(File dir, List<BatchResult> results, int total, boolean cancelled) {
+        long ok = results.stream().filter(BatchResult::succeeded).count();
+        StringBuilder sb = new StringBuilder();
+        sb.append(cancelled ? "Cancelled after " + results.size() + " of " + total + " slide(s). "
+                        : results.size() + " of " + total + " slide(s) processed. ")
+          .append(ok).append(" gated.\n\nWrote ").append(COMBINED_FILE).append(", ")
+          .append(GatingManifestExporter.FILE).append(" and one phenotype CSV per slide to ").append(dir.getPath());
+        section(sb, "Skipped:", results.stream().filter(r -> !r.succeeded())
+                .map(r -> r.imageName() + " — " + r.failure()).toList());
+        section(sb, "Not saved, open in the viewer:", results.stream()
+                .filter(r -> r.writeBack() == BatchResult.WriteBack.SKIPPED_OPEN_SLIDE)
+                .map(r -> r.imageName() + " — already classified; save it from QuPath").toList());
+        section(sb, "Could not save:", results.stream()
+                .filter(r -> r.writeBack() == BatchResult.WriteBack.FAILED)
+                .map(r -> r.imageName() + " — " + r.writeBackError()).toList());
+        return sb.toString();
+    }
+
+    private static void section(StringBuilder sb, String title, List<String> lines) {
+        if (lines.isEmpty()) return;
+        sb.append("\n\n").append(title);
+        for (String l : lines) sb.append("\n  ").append(l);
     }
 }
