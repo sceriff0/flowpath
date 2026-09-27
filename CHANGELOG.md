@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added — cohort gating
+
+- **Set each threshold once for the whole project.** In a project with two or more images the
+  gate editor gains **This slide / All slides**: every slide's population for the gate, aligned to
+  the reference slide's staining, under one threshold line.
+- **Correct staining**, per gate (on for new gates, off for trees saved before this version, so
+  opening an old tree never changes a number). Each slide × marker column is aligned to the
+  reference slide by its staining landmarks — the negative peak, and the positive peak when there
+  is one — in asinh space. Percentile matching is deliberately not offered: it assumes every
+  slide has the same % positive, which is what is being measured.
+- **Needs a look (n)** under the gate tree lists only the slides where a gate is unsure: no clear
+  negative peak, unusual staining, a threshold on a peak, or too few (or too little measured)
+  cells to judge — each with its reason. Clicking one opens the slide at the tissue where the gate
+  decides, with a boundary overlay (`B`). Answer with **Looks right** (`Enter`), **Adjust** (drag,
+  then `Enter`) or **Skip slide for this gate** (`S`); `N`/`P` step, `Esc` returns to All slides.
+  Every answer is one undo step. A review is of a number: if the applied value later changes, the
+  item returns.
+- **Run on all slides** writes `batch_populations.csv`, one `<image>_gate_pheno.csv` per slide and
+  `gating_manifest.csv` — the exact threshold applied on every slide, per gate and axis, with its
+  source (`reference`, `corrected`, `uncorrected`, `manual`, `skipped`) and landmarks. Phenotypes
+  are saved into every slide's data file except the one open in the viewer.
+- **Cells per slide** for alignment and review is a preference (default 20 000; 0 = every cell).
+  Alignments are cached in `<project>/flowpath/alignment-cache.json` (safe to delete).
+- **Marker rules** turn the lineage the tree states into a number per slide: every gate implies the
+  ancestor branch it sits under, and gates ticked **Lineage marker** exclude each other. A slide
+  whose violation rate is far above the cohort's (median + 3 MAD, over 2%, at least 20 cells) is
+  flagged on the gate most likely at fault, with a direction ("CD3 threshold may be too high") and,
+  for double positives that vanish on the nuclear signal, "— try Nucleus". Rules only point; no
+  threshold is tuned for you.
+- **Review by gate**: items are grouped per gate; selecting a group shows every slide with the
+  flagged ones highlighted, and **Shift+Enter** marks the whole group reviewed in one undo step.
+- **Evidence crops**: each item shows a 200 µm tissue crop at the gate's boundary (marker green on
+  a per-slide range, DAPI blue, boundary cells outlined), so most items are answered without
+  opening the slide; **V** opens it in the viewer when a crop cannot settle it.
+- A **slide strip** (one square per slide: sampling, ready, needs a look, failed; click to filter)
+  and a status line (`38/40 sampled · 5 to review · Ready to run`) sit above the list.
+- **Robust and headless runs**: `FlowPathBatch.run(getProject(), treeJson, outDir)` runs the same
+  code from a QuPath script (e.g. on a cluster); runs resume where they stopped
+  (`.flowpath-run.json`); per-slide sanity checks are recorded, never fatal; every slide also gets
+  its own `<image>_populations.csv` and `<image>_qc.csv`, and every run leaves `flowpath.json`,
+  `gating_manifest.csv`, `qc_summary.csv` (long format) and `run_info.txt`.
+- Gate tree files are now **version 4**; versions 1–3 load unchanged.
+
+### Known limits
+
+- Per-slide **Adjust** is not offered for region gates in v1 — only **Looks right** / **Skip**;
+  their shapes are still corrected slide-by-slide when Correct staining is on.
+- The review keys (`Enter`, `S`, `N`, `P`, `Esc`, `B`, `V`) act only while the FlowPath window has
+  focus — they share letters with QuPath's own tool shortcuts.
+
 ## [0.9.4] - 21/09/2026
 
 Two post-release review rounds of the gating half — eighteen tasks, each reviewed against
