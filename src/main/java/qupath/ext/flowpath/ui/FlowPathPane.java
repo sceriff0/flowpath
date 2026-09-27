@@ -16,8 +16,10 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
+import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
+import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
@@ -135,6 +137,13 @@ public class FlowPathPane extends BorderPane {
      * {@link #resyncToTree()} is the one place that brings it and the widgets back in line.
      */
     private final GatingSession session;
+
+    /**
+     * Where the open slide's applied values come from, assigned directly by a later task
+     * (cohort alignment) once one is computed; {@link AlignmentLookup#NONE} until then, which
+     * makes every gate resolve to its reference number.
+     */
+    private AlignmentLookup alignments = AlignmentLookup.NONE;
 
     private List<String> markerNames;
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
@@ -941,8 +950,32 @@ public class FlowPathPane extends BorderPane {
 
     private boolean[] computeAncestorMask(GateNode node) {
         if (session.index() == null || session.stats() == null) return null;
-        return GatingEngine.computeAncestorMask(session.tree(), node, session.index(), session.stats(),
+        // The editor's parent population is the one the live pass classifies: the open slide's
+        // resolved tree, not the reference numbers.
+        TreeResolver.ResolvedTree resolved = TreeResolver.resolve(session.tree(), currentSlideId(), alignments);
+        GateNode target = resolved.resolvedOf(node);
+        if (target == null) return null;
+        return GatingEngine.computeAncestorMask(resolved.tree(), target, session.index(), session.stats(),
                 session.combinedMask());
+    }
+
+    /** The open image's project id, or null outside a project (then every number is the reference). */
+    private String currentSlideId() {
+        try {
+            var project = qupath.getProject();
+            var data = qupath.getImageData();
+            if (project == null || data == null) return null;
+            var entry = project.getEntry(data);
+            return entry == null ? null : entry.getID();
+        } catch (Exception e) {
+            logger.debug("No project entry for the open image", e);
+            return null;
+        }
+    }
+
+    /** Hand the open slide and the current alignments to the live pass. */
+    private void applySlideContext() {
+        previewService.setSlideContext(currentSlideId(), alignments);
     }
 
     /** Recompute and apply the ancestor mask for the currently selected gate. */
@@ -1128,6 +1161,7 @@ public class FlowPathPane extends BorderPane {
      * settled as the pre-state for the next gate edit's undo step, and a pass is requested.
      */
     private void requestPreviewUpdate() {
+        applySlideContext();
         session.settle();
         previewService.setGateTree(session.tree());
         previewService.requestUpdate();
@@ -1706,7 +1740,8 @@ public class FlowPathPane extends BorderPane {
         if (file == null) return;
 
         CsvExportJob.Snapshot snapshot = CsvExportJob.Snapshot.of(
-                file, session.tree(), session.index(), session.stats(), session.roiMask(), session.regions());
+                file, session.tree(), session.index(), session.stats(), session.roiMask(), session.regions(),
+                currentSlideId(), alignments);
         csvExport.export(snapshot);
         updateExportControlsDisabled();
     }
@@ -1895,6 +1930,7 @@ public class FlowPathPane extends BorderPane {
 
     /** Hand a resync's result to the live preview and request the pass. */
     private void requestGatingPass(GatingSession.PassInput input) {
+        applySlideContext();
         RegionMask regions = input.regions();
         previewService.setCellIndex(input.index());
         previewService.setMarkerStats(input.stats());

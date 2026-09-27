@@ -1,6 +1,8 @@
 package qupath.ext.flowpath.io;
 
+import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
+import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
@@ -59,7 +61,15 @@ public final class CsvExportJob {
          */
         public static Snapshot of(File file, GateTree tree, CellIndex index, MarkerStats stats,
                                    boolean[] roiMask, RegionMask regions) {
-            return new Snapshot(file, tree.deepCopy(), index, stats, roiMask, regions);
+            return of(file, tree, index, stats, roiMask, regions, null, AlignmentLookup.NONE);
+        }
+
+        /** The open slide's snapshot, its tree resolved to the applied values the live pass uses. */
+        public static Snapshot of(File file, GateTree tree, CellIndex index, MarkerStats stats,
+                                   boolean[] roiMask, RegionMask regions,
+                                   String slideId, AlignmentLookup alignments) {
+            return new Snapshot(file, TreeResolver.resolve(tree, slideId, alignments).tree(),
+                    index, stats, roiMask, regions);
         }
     }
 

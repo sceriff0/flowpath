@@ -43,6 +43,9 @@ public class LivePreviewService {
     /** Bumped by every {@link #setMarkerStats}; a recompute publishes only if it is unchanged. */
     private long statsGeneration;
     private volatile ImageData<?> imageData;
+    /** The open slide and where its alignments come from, captured together on each pass. */
+    private record SlideContext(String slideId, AlignmentLookup alignments) {}
+    private volatile SlideContext slideContext = new SlideContext(null, AlignmentLookup.NONE);
     private volatile boolean[] roiMask;
     /** Per-cell annotated-region index (from {@code RegionMask.regionOf()}), or {@code null}. */
     private volatile int[] regionOf;
@@ -129,6 +132,11 @@ public class LivePreviewService {
 
     public void setRoiMask(boolean[] roiMask) {
         this.roiMask = roiMask;
+    }
+
+    /** Gate the open slide {@code slideId} with its applied values; see {@link TreeResolver}. */
+    public void setSlideContext(String slideId, AlignmentLookup alignments) {
+        this.slideContext = new SlideContext(slideId, alignments == null ? AlignmentLookup.NONE : alignments);
     }
 
     /**
@@ -277,6 +285,7 @@ public class LivePreviewService {
         final CellIndex index = this.cellIndex;
         final MarkerStats stats = this.markerStats;
         final ImageData<?> data = this.imageData;
+        final SlideContext context = this.slideContext;
         final boolean[] roi = this.roiMask != null ? this.roiMask.clone() : null;
         // Captured together, at the same instant, so the BranchTally this pass builds is
         // sized for exactly the region set regionOf indexes into -- a regionOf snapshotted
@@ -289,8 +298,9 @@ public class LivePreviewService {
             return;
         }
 
-        // Deep-copy the tree so the background thread works on an immutable snapshot
-        final GateTree tree = originalTree.deepCopy();
+        // The resolved copy: a deep copy (so the background thread works on an immutable
+        // snapshot) carrying this slide's applied values. The one resolution point.
+        final GateTree tree = TreeResolver.resolve(originalTree, context.slideId(), context.alignments()).tree();
 
         if (onUpdateStarted != null) {
             Platform.runLater(onUpdateStarted);
