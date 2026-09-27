@@ -157,4 +157,40 @@ class BatchRunnerTest {
         assertEquals("slide_01.ome.tiff_gate_pheno.csv", BatchRunner.phenoFileName("slide 01.ome.tiff", used));
         assertEquals("slide_01.ome.tiff_2_gate_pheno.csv", BatchRunner.phenoFileName("slide/01.ome.tiff", used));
     }
+
+    /** Review Focus 4. */
+    @Test
+    void theOpenSlideIsGatedButNeverSaved(@TempDir Path dir) {
+        List<String> saved = new ArrayList<>();
+        Cells open = cells();
+        Cells other = cells();
+        List<BatchResult> results = BatchRunner.run(
+                List.of(slide("open", open, saved), slide("s1", other, saved)),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), "open", true),
+                (i, n) -> {}, () -> false);
+
+        assertEquals(List.of("s1"), saved, "only the closed slide's .qpdata is written");
+        assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, results.get(0).writeBack());
+        assertEquals(BatchResult.WriteBack.SAVED, results.get(1).writeBack());
+        assertTrue(new File(dir.toFile(), "open.tif_gate_pheno.csv").isFile(), "the open slide is still gated and exported");
+        assertTrue(open.detections().stream().allMatch(o -> o.getPathClass() == null), "no class written behind QuPath's back");
+        assertTrue(other.detections().stream().allMatch(o -> o.getPathClass() != null));
+    }
+
+    @Test
+    void aSaveFailureIsReportedButTheSlideStillSucceeded(@TempDir Path dir) {
+        BatchSlide unsavable = new BatchSlide() {
+            final BatchSlide inner = slide("s1", cells(), new ArrayList<>());
+            @Override public String id() { return "s1"; }
+            @Override public String name() { return "s1.tif"; }
+            @Override public ImageData<BufferedImage> read() throws Exception { return inner.read(); }
+            @Override public void save(ImageData<BufferedImage> d) throws Exception { throw new java.io.IOException("disk full"); }
+        };
+        BatchResult r = BatchRunner.run(List.of(unsavable),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), null, true),
+                (i, n) -> {}, () -> false).get(0);
+        assertTrue(r.succeeded());
+        assertEquals(BatchResult.WriteBack.FAILED, r.writeBack());
+        assertEquals("disk full", r.writeBackError());
+    }
 }

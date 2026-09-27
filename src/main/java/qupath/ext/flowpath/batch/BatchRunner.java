@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
+import qupath.ext.flowpath.engine.PhenotypeClassWriter;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestResult;
@@ -112,10 +113,26 @@ public final class BatchRunner {
         }
     }
 
-    /** Task 9 fills this in; until then nothing is written back. */
+    /**
+     * Phenotypes into the slide's own .qpdata — except the slide open in the viewer, whose file is
+     * never written behind QuPath's back (QuPath would overwrite it on its next save); the live
+     * pass has already classified it with the same resolved tree.
+     */
     static BatchResult writeBack(BatchResult ok, BatchSlide slide, ImageData<BufferedImage> data, CellIndex index,
                                  GatingEngine.AssignmentResult result, Settings settings) {
-        return ok;
+        if (!settings.writeBack()) return ok;
+        if (slide.id().equals(settings.openSlideId())) return ok.withWriteBack(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null);
+        try {
+            PhenotypeClassWriter.apply(result, index, -1);
+            slide.save(data);
+            return ok.withWriteBack(BatchResult.WriteBack.SAVED, null);
+        } catch (Exception | Error ex) {
+            // Error too: the slide was already gated and exported, so a save failure (or an
+            // OutOfMemoryError writing a large .qpdata) is a write-back failure, not a slide failure.
+            logger.warn("Could not save phenotypes into {}", slide.name(), ex);
+            return ok.withWriteBack(BatchResult.WriteBack.FAILED,
+                    ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+        }
     }
 
     public static String phenoFileName(String imageName, Set<String> used) {

@@ -10,14 +10,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
-import qupath.ext.flowpath.model.ColorUtils;
-import qupath.lib.common.ColorTools;
 import qupath.lib.images.ImageData;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.classes.PathClass;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -373,69 +367,17 @@ public class LivePreviewService {
         this.lastIndex = index;
         this.lastImageData = data;
 
-        String[] phenotypes = result.getPhenotypes();
         boolean[] excluded = result.getExcluded();
-        int[] defaultColors = result.getColors();
-        java.util.List<int[]> perRoot = result.getPerRootColors();
-        int n = phenotypes.length;
 
         // Count total excluded cells for status display
         int excCount = 0;
         for (boolean ex : excluded) if (ex) excCount++;
         this.lastExcludedCount = excCount;
 
-        Map<String, PathClass> classCache = new HashMap<>();
-
-        // Build cache and force-update colors.
-        // When a specific root is selected, use that root's per-cell colors instead of the default.
-        int activeRoot = this.colorRootIndex;
-        Map<String, Integer> colorByName = new HashMap<>();
-        for (int i = 0; i < n; i++) {
-            if (!excluded[i] && phenotypes[i] != null) {
-                int color;
-                if (activeRoot >= 0 && perRoot != null && activeRoot < perRoot.size()) {
-                    color = perRoot.get(activeRoot)[i];
-                } else {
-                    color = defaultColors[i];
-                }
-                colorByName.put(phenotypes[i], color);
-            }
-        }
-        for (var entry : colorByName.entrySet()) {
-            int packed = entry.getValue();
-            int qupathColor = ColorUtils.toQuPathColor(packed);
-            PathClass pc = PathClass.fromString(entry.getKey(), qupathColor);
-            pc.setColor(qupathColor);  // Force-update cached PathClass color
-            classCache.put(entry.getKey(), pc);
-        }
-
-        // Near-invisible PathClass for excluded cells (avoids red "Unclassified" default)
-        int excludedColor = ColorTools.packRGB(20, 20, 20);
-        PathClass excludedClass = PathClass.fromString("Excluded", excludedColor);
-        excludedClass.setColor(excludedColor);
-
-        boolean anyChanged = false;
-        boolean colorMutated = false;
-        for (int i = 0; i < n; i++) {
-            PathObject obj = index.getObject(i);
-            if (obj == null) {
-                continue;
-            }
-            PathClass newClass = excluded[i] ? excludedClass : classCache.get(phenotypes[i]);
-            if (!java.util.Objects.equals(obj.getPathClass(), newClass)) {
-                obj.setPathClass(newClass);
-                anyChanged = true;
-            } else if (newClass != null && obj.getPathClass() != null
-                       && obj.getPathClass().getColor() != newClass.getColor()) {
-                // Same PathClass reference but color was mutated — force reassign
-                obj.setPathClass(null);
-                obj.setPathClass(newClass);
-                colorMutated = true;
-            }
-        }
+        boolean changed = PhenotypeClassWriter.apply(result, index, this.colorRootIndex);
 
         // Fire hierarchy event if classifications changed or colors were mutated
-        if (anyChanged || colorMutated) {
+        if (changed) {
             firingHierarchyEvent = true;
             try {
                 data.getHierarchy().fireHierarchyChangedEvent(this);
@@ -451,14 +393,9 @@ public class LivePreviewService {
 
     /**
      * Re-apply colors from the stored last result without re-running the gating engine.
-     * Used when the user switches the color-by-root selection.
-     *
-     * <p>PathClass.fromString caches by name — the same Java object is returned for
-     * the same name string. Mutating its color via setColor() doesn't change the
-     * object reference on each cell's PathClass field, so QuPath's per-object rendering
-     * cache isn't invalidated. We force-reassign via null→class on each cell to trigger
-     * QuPath's per-object change tracking, then fire a hierarchy event for tile-level
-     * cache invalidation.</p>
+     * Used when the user switches the color-by-root selection. Goes through
+     * {@link PhenotypeClassWriter}, the one place a gating result becomes {@code PathClass}es
+     * (see its javadoc for why a pure recolour needs its own change detection).
      */
     private void recolorCells() {
         Platform.runLater(() -> {
@@ -475,56 +412,15 @@ public class LivePreviewService {
             final ImageData<?> data = this.lastImageData;
             if (result == null || index == null || data == null) return;
 
-            String[] phenotypes = result.getPhenotypes();
-            boolean[] excluded = result.getExcluded();
-            int[] defaultColors = result.getColors();
-            java.util.List<int[]> perRoot = result.getPerRootColors();
-            int n = phenotypes.length;
-            int activeRoot = this.colorRootIndex;
+            boolean changed = PhenotypeClassWriter.apply(result, index, this.colorRootIndex);
 
-            // Build color map and update cached PathClass colors
-            Map<String, Integer> colorByName = new HashMap<>();
-            for (int i = 0; i < n; i++) {
-                if (!excluded[i] && phenotypes[i] != null) {
-                    int color;
-                    if (activeRoot >= 0 && perRoot != null && activeRoot < perRoot.size()) {
-                        color = perRoot.get(activeRoot)[i];
-                    } else {
-                        color = defaultColors[i];
-                    }
-                    colorByName.put(phenotypes[i], color);
+            if (changed) {
+                firingHierarchyEvent = true;
+                try {
+                    data.getHierarchy().fireHierarchyChangedEvent(this);
+                } finally {
+                    firingHierarchyEvent = false;
                 }
-            }
-
-            Map<String, PathClass> classCache = new HashMap<>();
-            for (var entry : colorByName.entrySet()) {
-                int packed = entry.getValue();
-                int qupathColor = ColorUtils.toQuPathColor(packed);
-                PathClass pc = PathClass.fromString(entry.getKey(), qupathColor);
-                pc.setColor(qupathColor);
-                classCache.put(entry.getKey(), pc);
-            }
-
-            // Force-reassign PathClass on each cell via null→class to trigger
-            // QuPath's per-object change tracking (same-reference setPathClass
-            // is silently ignored by QuPath)
-            for (int i = 0; i < n; i++) {
-                if (excluded[i]) continue;
-                PathObject obj = index.getObject(i);
-                if (obj == null) continue;
-                PathClass pc = classCache.get(phenotypes[i]);
-                if (pc != null) {
-                    obj.setPathClass(null);
-                    obj.setPathClass(pc);
-                }
-            }
-
-            // Fire hierarchy event for tile-level cache invalidation
-            firingHierarchyEvent = true;
-            try {
-                data.getHierarchy().fireHierarchyChangedEvent(this);
-            } finally {
-                firingHierarchyEvent = false;
             }
         });
     }
