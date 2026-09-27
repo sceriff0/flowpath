@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   their shapes are still corrected slide-by-slide when Correct staining is on.
 - The review keys (`Enter`, `S`, `N`, `P`, `Esc`, `B`, `V`) act only while the FlowPath window has
   focus — they share letters with QuPath's own tool shortcuts.
+- A resumed run's per-slide fingerprint hashes every cell's centroid but only a bounded,
+  deterministic sample of measurement values (first 100 cells plus a stride, at most 1000), so a
+  re-quantification confined to unsampled cells' values can be skipped as already done; delete
+  `.flowpath-run.json` (or use a fresh output folder) to force a full re-run.
 
 ## [0.9.4] - 21/09/2026
 

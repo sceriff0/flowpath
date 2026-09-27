@@ -479,7 +479,10 @@ under the same resolved tree, so nothing is lost — the user saves it from QuPa
 - `batch/FlowPathBatch` — the headless entry point the GUI's "Run on all slides" also calls;
   resumable (`RunState`, `.flowpath-run.json`, per-slide fingerprints that ignore other slides'
   settings) and the source of the run's provenance bundle (`CohortEvidence`, `flowpath.json`,
-  `qc_summary.csv`, `run_info.txt`)
+  `qc_summary.csv`, `run_info.txt`). `RunState.fingerprint`'s detection half
+  (`CohortSampler.detectionFingerprint`) hashes every cell's centroid but only
+  `model/MeasurementKeySample`'s bounded sample of values, so a re-quantification confined to
+  unsampled cells' values is not detected and the slide resumes unchanged
 - `io/AlignmentCacheFile` — `<project>/flowpath/alignment-cache.json`; derived, safe to delete,
   never in undo
 - `ui/CohortCoordinator`, `BatchRunCoordinator` — one background worker each, one slide per task

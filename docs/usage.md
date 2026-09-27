@@ -310,7 +310,12 @@ FlowPathBatch.run(getProject(), new File('/path/tree.json'), new File('/path/out
 A run is **resumable**: `<outDir>/.flowpath-run.json` records, per slide, a fingerprint of the
 resolved tree, the detections and the FlowPath version. A slide whose fingerprint matches and
 whose outputs already exist is skipped, so a run interrupted at slide 37 of 40 picks up at 37
-rather than starting over. Per-slide sanity issues are recorded, never fatal to the run:
+rather than starting over. The detection fingerprint hashes every cell's centroid but only a
+bounded, deterministic sample of measurement values (the first 100 cells plus an even stride,
+at most 1000) for a bounded cost on a very large slide — a re-quantified slide whose changes
+fall entirely on unsampled cells' values can therefore still resume unchanged. To force a full
+re-run, use a fresh output folder or delete `.flowpath-run.json`. Per-slide sanity issues are
+recorded, never fatal to the run:
 
 - fewer than 100 cells on the slide;
 - the ROI filter is on but the slide has no area annotation (the whole slide was used instead);
