@@ -535,4 +535,126 @@ class DisplayClassificationAgreementTest {
                 List.of(PolygonGate.class, RectangleGate.class, EllipseGate.class);
         assertEquals(3, covered.size());
     }
+
+    // ---- a slide setting on the open slide (review answers) ----
+    //
+    // Under a Manual the pass applies the Manual's raw numbers, not the corrected reference; under
+    // a Skip the gate judges no cell. The editor must draw exactly that — driven here through the
+    // real GateEditorPane, which picks the gate its canvases classify with — with a same-channel
+    // sibling root beside the probe gate that must stay on its own corrected threshold.
+
+    /** Each gate's branch per cell on slide s1, read through the one predicate on the resolved tree. */
+    private static int[][] readOnSlide(GateNode gate, GateNode sibling, CellIndex index) {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        tree.addRoot(gate);
+        tree.addRoot(sibling);
+        qupath.ext.flowpath.engine.TreeResolver.ResolvedTree r =
+                qupath.ext.flowpath.engine.TreeResolver.resolve(tree, "s1", (s, c) -> ALIGN);
+        qupath.ext.flowpath.engine.GateReadout readout =
+                qupath.ext.flowpath.engine.GateReadout.compile(r.tree(), index, MarkerStats.compute(index));
+        int[][] out = new int[2][index.size()];
+        for (int i = 0; i < index.size(); i++) {
+            out[0][i] = readout.branchIgnoringClip(r.resolvedOf(gate), i);
+            out[1][i] = readout.branchIgnoringClip(r.resolvedOf(sibling), i);
+        }
+        return out;
+    }
+
+    private static <T> T find(javafx.scene.Parent root, Class<T> type) {
+        for (javafx.scene.Node child : root.getChildrenUnmodifiable()) {
+            if (type.isInstance(child)) return type.cast(child);
+            if (child instanceof javafx.scene.Parent p) {
+                T found = find(p, type);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * What the gate editor draws for each shown (aligned) point with {@code setting} on the open
+     * slide: the branch its canvas colours the point, or UNMEASURED when it draws the gate as
+     * judging nothing.
+     */
+    private static int[] drawnByEditor(GateNode gate, CellIndex index, qupath.ext.flowpath.model.SlideSetting setting,
+                                       double[] shownX, double[] shownY) {
+        return FxTestSupport.onFx(() -> {
+            qupath.ext.flowpath.ui.GateEditorPane pane = new qupath.ext.flowpath.ui.GateEditorPane();
+            pane.setChannelNames(List.of(MX, MY));
+            pane.setCompartmentCapability(qupath.ext.flowpath.model.CompartmentCapability.scan(
+                    java.util.Arrays.asList(index.getObjects())));
+            pane.setCellIndex(index);
+            pane.setMarkerStats(MarkerStats.compute(index));
+            pane.setEditorAlignment(new qupath.ext.flowpath.ui.editor.EditorAlignment() {
+                @Override public qupath.ext.flowpath.model.cohort.Alignment forAxis(GateNode g, int axis) { return ALIGN; }
+                @Override public String referenceName() { return "ref"; }
+            });
+            pane.setGateNode(gate);
+            pane.setSlideSetting(setting);
+            int[] out = new int[shownX.length];
+            if (gate instanceof QuadrantGate) {
+                ScatterPlotCanvas scatter = find(pane, ScatterPlotCanvas.class);
+                for (int i = 0; i < out.length; i++) {
+                    out[i] = scatter.isUnjudged() ? qupath.ext.flowpath.engine.GateReadout.UNMEASURED
+                            : scatter.branchAt(shownX[i], shownY[i]);
+                }
+            } else {
+                HistogramCanvas h = find(pane, HistogramCanvas.class);
+                for (int i = 0; i < out.length; i++) {
+                    out[i] = h.isUnjudged() ? qupath.ext.flowpath.engine.GateReadout.UNMEASURED
+                            : h.isPositiveAt(shownX[i]) ? 0 : 1;
+                }
+            }
+            return out;
+        });
+    }
+
+    private static final double[] SETTING_PX = {-1.0, 0.2, 0.8, 1.3, 1.9, 2.1, 2.5, 5.0};
+    private static final double[] SETTING_PY = {-1.0, 2.5, 0.1, 0.3, 2.5, -0.5, 3.5, 0.15};
+
+    @Test
+    void underAManualTheEditorDrawsTheManualCutNotTheCorrectedReference() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        var manualThreshold = new qupath.ext.flowpath.model.SlideSetting.Manual(
+                qupath.ext.flowpath.model.GateValues.of(new double[]{2.0}));
+        var manualQuadrant = new qupath.ext.flowpath.model.SlideSetting.Manual(
+                qupath.ext.flowpath.model.GateValues.of(new double[]{2.0}, new double[]{0.2}));
+        CellIndex index = indexOf(SETTING_PX, SETTING_PY);
+        double[] shownX = aligned(columnOf(index, MX));
+        double[] shownY = aligned(columnOf(index, MY));
+        for (GateNode gate : List.of(named(new GateNode(MX, 0.5)), named(new QuadrantGate(MX, MY, 0.5, 0.5)))) {
+            var setting = gate instanceof QuadrantGate ? manualQuadrant : manualThreshold;
+            gate.setSlideSetting("s1", setting);
+            GateNode sibling = sameChannelSibling();
+            int[][] engine = readOnSlide(gate, sibling, index);
+            assertArrayEquals(engine[0], drawnByEditor(gate, index, setting, shownX, shownY), gate.getGateType());
+            assertArrayEquals(engine[1], displayThreshold(sibling, shownX), gate.getGateType() + " sibling");
+
+            GateNode unset = gate.deepCopy();
+            unset.setSlideSetting("s1", null);
+            assertNotEquals(java.util.Arrays.toString(engine[0]),
+                    java.util.Arrays.toString(readOnSlide(unset, sameChannelSibling(), index)[0]),
+                    "fixture check: the Manual moves some cell to another branch");
+        }
+    }
+
+    @Test
+    void underASkipTheEditorDrawsNoCutAndTheEngineJudgesNoCell() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        var skip = new qupath.ext.flowpath.model.SlideSetting.Skip();
+        CellIndex index = indexOf(SETTING_PX, SETTING_PY);
+        double[] shownX = aligned(columnOf(index, MX));
+        double[] shownY = aligned(columnOf(index, MY));
+        for (GateNode gate : List.of(named(new GateNode(MX, 0.5)), named(new QuadrantGate(MX, MY, 0.5, 0.5)))) {
+            gate.setSlideSetting("s1", skip);
+            GateNode sibling = sameChannelSibling();
+            int[][] engine = readOnSlide(gate, sibling, index);
+            int[] none = new int[SETTING_PX.length];
+            java.util.Arrays.fill(none, qupath.ext.flowpath.engine.GateReadout.UNMEASURED);
+            assertArrayEquals(none, engine[0], gate.getGateType() + ": a skipped gate judges no cell");
+            assertArrayEquals(engine[0], drawnByEditor(gate, index, skip, shownX, shownY), gate.getGateType());
+            assertArrayEquals(engine[1], displayThreshold(sibling, shownX), gate.getGateType() + " sibling still judges");
+        }
+    }
 }

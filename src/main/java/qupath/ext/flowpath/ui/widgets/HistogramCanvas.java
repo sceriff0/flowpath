@@ -29,6 +29,9 @@ public class HistogramCanvas extends Canvas {
     private double displayMax;
     private double threshold = Double.NaN;
     private GateNode gate;
+    /** The gate judges no cell here (a Skip on this slide): grey bars, no threshold, no drag. */
+    private boolean unjudged;
+    private static final Color UNJUDGED = Color.gray(0.5);
     private Color posColor = Color.rgb(0, 200, 0);
     private Color negColor = Color.rgb(160, 160, 160);
     private double maxCount;
@@ -203,6 +206,20 @@ public class HistogramCanvas extends Canvas {
         repaint();
     }
 
+    /**
+     * Whether the shown gate judges no cell on this slide (a Skip): every bar is drawn grey and
+     * no threshold is drawn or dragged, because none applies here.
+     */
+    public void setUnjudged(boolean unjudged) {
+        this.unjudged = unjudged;
+        repaint();
+    }
+
+    /** Package-private for the display/classification agreement test. */
+    boolean isUnjudged() {
+        return unjudged;
+    }
+
     public void setThreshold(double threshold) {
         this.threshold = threshold;
         repaint();
@@ -361,7 +378,8 @@ public class HistogramCanvas extends Canvas {
             double binCenter = (binEdges[i] + binEdges[i + 1]) / 2.0;
             boolean isPositive = isPositiveAt(binCenter);
 
-            Color barColor = isPositive ? posColor.deriveColor(0, 1, 1, 0.8) : negColor.deriveColor(0, 1, 1, 0.8);
+            Color barColor = unjudged ? UNJUDGED.deriveColor(0, 1, 1, 0.8)
+                    : isPositive ? posColor.deriveColor(0, 1, 1, 0.8) : negColor.deriveColor(0, 1, 1, 0.8);
             gc.setFill(barColor);
 
             double barH = (binCounts[i] / maxCount) * plotH;
@@ -374,7 +392,7 @@ public class HistogramCanvas extends Canvas {
         drawCohortCurves(gc, plotW, plotH);
 
         // Draw threshold line
-        if (!Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
+        if (!unjudged && !Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
             double threshX = PADDING_LEFT + ((threshold - displayMin) / (displayMax - displayMin)) * plotW;
             gc.setStroke(Color.RED);
             gc.setLineWidth(2);
@@ -388,7 +406,7 @@ public class HistogramCanvas extends Canvas {
         }
 
         // Draw pos/neg count annotations above the histogram
-        if (!Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
+        if (!unjudged && !Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
             double threshX = PADDING_LEFT + ((threshold - displayMin) / (displayMax - displayMin)) * plotW;
             gc.setFont(Font.font(10));
             if (negCount >= 0) {
@@ -442,7 +460,7 @@ public class HistogramCanvas extends Canvas {
     }
 
     private void handleMousePressed(MouseEvent e) {
-        if (binEdges == null) return;
+        if (binEdges == null || unjudged) return;
         dragging = true;
         double val = xToValue(e.getX());
         threshold = val;

@@ -373,6 +373,19 @@ final class GatingSession {
         undoHistory.record(tree);
     }
 
+    /** A point to fold later undo steps back to; see {@link #collapseSince}. */
+    long undoMark() {
+        return undoHistory.undoMark();
+    }
+
+    /**
+     * Fold every undo step recorded after {@code mark} into its first — a review item's drags
+     * and its answer become the one step back to the item as it was opened.
+     */
+    void collapseSince(long mark) {
+        undoHistory.collapseSince(mark);
+    }
+
     /**
      * A slide-setting edit — a review answer, or a reference rebase — as one undo step: the tree
      * is recorded as it is now ({@link #recordEdit}), {@code edit} runs, and {@code slideId}'s

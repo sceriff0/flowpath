@@ -93,6 +93,52 @@ class NeedsALookPaneTest {
         assertEquals("5000", restored, "a bad entry restores the shown value");
     }
 
+    /**
+     * The host answers a click by opening the item, which re-renders the list with a rescore's
+     * fresh items while the ListView is still inside {@code select()}: the selection must hold.
+     */
+    @Test
+    void aClickWhoseHostReRendersTheListKeepsTheSelection() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        NeedsALookPane pane = FxTestSupport.onFx(NeedsALookPane::new);
+        CohortState state = new CohortState(true, false, 3, 3, 0, 3, "ref.tif", null, false, null, false, true);
+        List<ReviewItem.Key> chosen = new ArrayList<>();
+        Object[] after = FxTestSupport.onFx(() -> {
+            pane.setOnItemChosen(k -> {
+                chosen.add(k);
+                pane.render(state, List.of(item("s1", 0), item("s1", 1), item("s2", 0)), List.of(), k, 20000);
+            });
+            pane.render(state, List.of(item("s1", 0), item("s1", 1), item("s2", 0)), List.of(), null, 20000);
+            pane.itemList.getSelectionModel().select(1);
+            ReviewItem sel = pane.itemList.getSelectionModel().getSelectedItem();
+            return new Object[]{pane.itemList.getSelectionModel().getSelectedIndex(), sel == null ? null : sel.key()};
+        });
+        FxTestSupport.onFxRun(() -> {});   // let anything deferred run
+        ReviewItem sel = FxTestSupport.onFx(() -> pane.itemList.getSelectionModel().getSelectedItem());
+        assertEquals(new ReviewItem.Key("s1", 1, "CD8"), sel == null ? null : sel.key());
+        assertEquals(1, FxTestSupport.onFx(() -> pane.itemList.getSelectionModel().getSelectedIndex()));
+        assertEquals(List.of(new ReviewItem.Key("s1", 1, "CD8")), chosen, "one click, one report");
+        assertNotNull(after[0]);
+    }
+
+    @Test
+    void aRegionGateItemOffersNoPerSlideAdjust() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        NeedsALookPane pane = FxTestSupport.onFx(NeedsALookPane::new);
+        CohortState state = new CohortState(true, false, 3, 3, 0, 2, "ref.tif", null, false, null, false, true);
+        ReviewItem region = new ReviewItem(new ReviewItem.Key("s1", 1, "CD8/CD4"), "s1.tif",
+                new qupath.ext.flowpath.model.RectangleGate("CD8", "CD4", 0, 1, 0, 1),
+                List.of(ReviewItem.Flag.ON_PEAK), List.of("x"), GateValues.of(new double[]{0, 1}, new double[]{0, 1}));
+        String[] hints = FxTestSupport.onFx(() -> {
+            pane.render(state, List.of(item("s1", 0), region), List.of(), region.key(), 20000);
+            String a = pane.adjustHint.getText();
+            pane.render(state, List.of(item("s1", 0), region), List.of(), new ReviewItem.Key("s1", 0, "CD8"), 20000);
+            return new String[]{a, pane.adjustHint.getText()};
+        });
+        assertEquals("Per-slide shapes aren't supported yet: Looks right or Skip", hints[0]);
+        assertEquals("Adjust: drag the threshold, then Enter", hints[1]);
+    }
+
     /** The review keys: plain letters and Enter, never while a text field has focus. */
     @Test
     void reviewKeysMapWithoutModifiersAndNeverInATextField() {

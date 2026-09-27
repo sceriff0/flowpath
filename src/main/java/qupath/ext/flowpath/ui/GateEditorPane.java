@@ -263,6 +263,9 @@ public class GateEditorPane extends VBox {
             typeEditor = null;
         }
         this.currentNode = node;
+        // The last gate's setting on the open slide is not this one's: the host hands the new
+        // gate's in after showing it, and the editor built below must not draw the old cut.
+        setSlideSetting(null);
         if (node == null) {
             withSuppressedEvents(() -> setDisabled(true));
             gateTypeLabel.setText("No gate selected");
@@ -532,7 +535,9 @@ public class GateEditorPane extends VBox {
      * banner with a way back to the cohort value; {@code null} or {@code Reviewed} hides it.
      */
     public void setSlideSetting(SlideSetting setting) {
+        boolean changed = !java.util.Objects.equals(this.slideSetting, setting);
         this.slideSetting = setting;
+        if (changed && typeEditor != null) typeEditor.slideSettingChanged();
         String text = null;
         if (setting instanceof SlideSetting.Manual manual) {
             List<String> values = new ArrayList<>();

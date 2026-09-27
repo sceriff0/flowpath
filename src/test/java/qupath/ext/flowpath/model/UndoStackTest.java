@@ -247,4 +247,65 @@ class UndoStackTest {
         assertEquals(100.0, tree.getQualityFilter().range(QualityFilter.AREA).min(),
             "Original QualityFilter should not change after modifying copy");
     }
+
+    // ---- undoMark / collapseSince: a review item's Adjust is one step ----
+
+    private static UndoHistory<String> strings(int depth) {
+        return new UndoHistory<>(depth, v -> v, () -> 0L);
+    }
+
+    @Test
+    void collapseSinceKeepsOnlyTheFirstStepAfterTheMark() {
+        UndoHistory<String> h = strings(MAX_UNDO);
+        h.record("a");
+        long mark = h.undoMark();
+        h.record("opened");
+        h.record("burst 2");
+        h.record("answer");
+        h.collapseSince(mark);
+        assertEquals(Optional.of("opened"), h.undo("now"));
+        assertEquals(Optional.of("a"), h.undo("opened"));
+        assertEquals(Optional.empty(), h.undo("a"));
+    }
+
+    @Test
+    void collapseSinceWithAtMostOneStepChangesNothing() {
+        UndoHistory<String> h = strings(MAX_UNDO);
+        h.record("a");
+        long mark = h.undoMark();
+        h.collapseSince(mark);
+        h.record("opened");
+        h.collapseSince(mark);
+        assertEquals(Optional.of("opened"), h.undo("now"));
+        assertEquals(Optional.of("a"), h.undo("opened"));
+    }
+
+    @Test
+    void theMarkSurvivesTheDepthCapTrimmingOldSteps() {
+        UndoHistory<String> h = strings(3);
+        h.record("x1");
+        h.record("x2");
+        h.record("x3");
+        long mark = h.undoMark();
+        h.record("opened");      // trims x1
+        h.record("burst");       // trims x2
+        h.collapseSince(mark);
+        assertEquals(Optional.of("opened"), h.undo("now"));
+        assertEquals(Optional.of("x3"), h.undo("opened"));
+        assertEquals(Optional.empty(), h.undo("x3"));
+    }
+
+    @Test
+    void aStepUndoneAndRedoneAfterTheMarkStillCountsAsAfterIt() {
+        UndoHistory<String> h = strings(MAX_UNDO);
+        h.record("a");
+        long mark = h.undoMark();
+        h.record("opened");
+        h.undo("dragged");
+        h.redo("opened");
+        h.record("answer");
+        h.collapseSince(mark);
+        assertEquals(Optional.of("opened"), h.undo("now"));
+        assertEquals(Optional.of("a"), h.undo("opened"));
+    }
 }

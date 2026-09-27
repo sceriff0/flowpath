@@ -46,6 +46,8 @@ public class ScatterPlotCanvas extends Canvas {
      * with, so plot and phenotype cannot drift apart.
      */
     private GateNode overlayGate;
+    /** The gate judges no cell here (a Skip on this slide): grey dots, no overlay drawn. */
+    private boolean unjudged;
 
     /** All slides view: the other slides' points, pooled, in reference units; empty when off. */
     private double[] cohortX = new double[0];
@@ -197,6 +199,20 @@ public class ScatterPlotCanvas extends Canvas {
         gate.setThresholdX(thresholdX);
         gate.setThresholdY(thresholdY);
         setGateOverlay(gate);
+    }
+
+    /**
+     * Whether the shown gate judges no cell on this slide (a Skip): every dot is drawn grey and
+     * the overlay is not drawn, because no cut applies here.
+     */
+    public void setUnjudged(boolean unjudged) {
+        this.unjudged = unjudged;
+        repaint();
+    }
+
+    /** Package-private for the display/classification agreement test. */
+    boolean isUnjudged() {
+        return unjudged;
     }
 
     public void clearOverlay() {
@@ -611,7 +627,7 @@ public class ScatterPlotCanvas extends Canvas {
         }
 
         // Draw gate overlay
-        drawOverlay(gc, plotW, plotH);
+        if (!unjudged) drawOverlay(gc, plotW, plotH);
 
         // Draw in-progress drawing preview
         drawDrawingPreview(gc, plotW, plotH);
@@ -650,6 +666,7 @@ public class ScatterPlotCanvas extends Canvas {
     }
 
     private Color getPointColor(double x, double y) {
+        if (unjudged) return Color.gray(0.55, 0.6);
         int branch = branchAt(x, y);
         if (quadrantColors != null && overlayGate instanceof QuadrantGate) {
             return quadrantColors[branch];

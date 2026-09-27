@@ -15,6 +15,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.ReviewItem;
+import qupath.ext.flowpath.model.Region2DGate;
 
 import java.util.List;
 import java.util.Objects;
@@ -59,7 +60,10 @@ final class NeedsALookPane extends TitledPane {
     final Button previousButton = new Button("Previous (P)");
     final Button nextButton = new Button("Next (N)");
     final Button useReferenceButton = new Button();
-    final Label adjustHint = new Label("Adjust: drag the threshold, then Enter");
+    static final String ADJUST_HINT = "Adjust: drag the threshold, then Enter";
+    static final String NO_REGION_ADJUST_HINT = "Per-slide shapes aren't supported yet: Looks right or Skip";
+
+    final Label adjustHint = new Label(ADJUST_HINT);
     final Label referenceLabel = new Label("Reference: none");
     final Label infoLabel = new Label();
 
@@ -135,6 +139,9 @@ final class NeedsALookPane extends TitledPane {
             for (int i = 0; i < items.size(); i++) if (items.get(i).key().equals(selected)) at = i;
             if (at >= 0) itemList.getSelectionModel().select(at);
             else itemList.getSelectionModel().clearSelection();
+            // A region gate has no per-slide Adjust (v1): its item is Looks right or Skip.
+            adjustHint.setText(at >= 0 && items.get(at).gate() instanceof Region2DGate
+                    ? NO_REGION_ADJUST_HINT : ADJUST_HINT);
 
             referenceLabel.setText("Reference: " + (state.referenceName() == null ? "none" : state.referenceName()));
             String suggested = state.suggestedReferenceName();

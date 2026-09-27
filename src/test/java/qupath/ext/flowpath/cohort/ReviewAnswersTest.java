@@ -78,4 +78,34 @@ class ReviewAnswersTest {
         ReviewAnswers.recordSlideName(tree, null, "x.tif");
         assertEquals(2, tree.getSlideNames().size(), "nothing to record without both an id and a name");
     }
+
+    /**
+     * A quadrant's sliders move one axis per tick, and every tick puts the reference back: the
+     * axis this tick did not move keeps the value an earlier tick recorded for this slide.
+     */
+    @Test
+    void aQuadrantAdjustKeepsTheAxisThisTickDidNotMove() {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        qupath.ext.flowpath.model.QuadrantGate q = new qupath.ext.flowpath.model.QuadrantGate("CD8", "CD4", 400, 500);
+        q.setStatisticX(Statistic.MEAN);
+        q.setStatisticY(Statistic.MEAN);
+        tree.addRoot(q);
+        GateNode sibling = new GateNode("CD8", 300);
+        sibling.setStatistic(Statistic.MEAN);
+        tree.addRoot(sibling);
+        GateValues baseline = GateValues.read(q);
+
+        q.setThresholdX(450);                               // tick 1: X only
+        ReviewAnswers.adjust(tree, q, "s1", LOOKUP, baseline);
+        q.setThresholdY(550);                               // tick 2: Y only; X is back at 400
+        ReviewAnswers.adjust(tree, q, "s1", LOOKUP, baseline);
+
+        SlideSetting.Manual m = assertInstanceOf(SlideSetting.Manual.class, q.slideSetting("s1"));
+        assertEquals(SHIFT.apply(450), m.values().axis(0)[0], 1e-9, "X kept from tick 1");
+        assertEquals(SHIFT.apply(550), m.values().axis(1)[0], 1e-9);
+        assertEquals(400, q.getThresholdX());
+        assertEquals(500, q.getThresholdY());
+        assertNull(sibling.slideSetting("s1"));
+    }
 }

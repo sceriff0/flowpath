@@ -67,7 +67,6 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
                 rawThresholdText(context.slideSetting(), alignment(0), gate.getThreshold())));
         alignmentLabel.setTooltip(rawThreshold);
 
-        histogram.setGate(gate);
         branchColorsChanged();
 
         slider.valueProperty().addListener((obs, old, val) -> {
@@ -76,6 +75,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             valueField.setText(format(val.doubleValue()));
             histogram.setThreshold(val.doubleValue());
             context.gateChanged();
+            syncCut();
             updatePopulationCounts();
         });
 
@@ -87,9 +87,13 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         histogram.setOnThresholdChanged(val -> {
             if (!accepting()) return;
             gate.setThreshold(val);
-            slider.setValue(val);
+            // Suppressed: the slider's own listener would report this edit a second time, and on
+            // an open review item the second report would read the reference numbers the first
+            // one had already put back.
+            context.withSuppressedEvents(() -> slider.setValue(val));
             valueField.setText(format(val));
             context.gateChanged();
+            syncCut();
             updatePopulationCounts();
         });
 
@@ -101,6 +105,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
                 sectionHeader("Histogram"), histogram, alignmentLabel, hoverLabel,
                 sectionHeader("Threshold"), threshRow, populationLabel);
         refresh();
+        syncCut();
         return root;
     }
 
@@ -133,7 +138,6 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         showAlignment(a);
 
         histogram.setData(displayValues, window[0], window[1]);
-        histogram.setThreshold(gate.getThreshold());
         showCohortCurves();
         // Suppressed, so a clamping range move cannot write a corrupted value back to the gate.
         context.withSuppressedEvents(() -> {
@@ -142,13 +146,42 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             // Re-pin the step to the new range so threshold "speed" matches the QC sliders
             // whether the column is ~10 wide or ~10000s wide.
             SliderUtils.applyRangeStep(slider);
-            // Re-pin the thumb and the field AFTER the range move: Slider.setMin/setMax
-            // silently clamp the value, which would leave the gate, the thumb and the field
-            // holding three different numbers.
-            slider.setValue(gate.getThreshold());
-            valueField.setText(format(gate.getThreshold()));
         });
+        // Re-pin the thumb and the field AFTER the range move: Slider.setMin/setMax silently
+        // clamp the value, which would leave the gate, the thumb and the field holding three
+        // different numbers.
+        syncCut();
         updatePopulationCounts();
+    }
+
+    /**
+     * Draw the cut the pass applies on the open slide ({@link #cutGate}): the histogram colours
+     * through that gate and draws its threshold, and the thumb and the field show it — a Manual's
+     * number mapped into reference units, the gate's own number otherwise. Under a Skip there is
+     * no cut: the bars are grey, and the thumb keeps the gate's reference number.
+     */
+    private void syncCut() {
+        if (isDisposed()) return;
+        GateNode cut = cutGate();
+        histogram.setUnjudged(cut == null);
+        histogram.setGate(cut == null ? gate : cut);
+        double t = shownThreshold();
+        histogram.setThreshold(t);
+        context.withSuppressedEvents(() -> {
+            slider.setValue(t);
+            valueField.setText(format(t));
+        });
+    }
+
+    /** The threshold the thumb and field show: {@link #cutGate}'s, or the gate's own under a Skip. */
+    private double shownThreshold() {
+        GateNode cut = cutGate();
+        return (cut == null ? gate : cut).getThreshold();
+    }
+
+    @Override
+    public void slideSettingChanged() {
+        syncCut();
     }
 
     /** The All slides ridges over the bars, or none; the open slide's entry is highlighted. */
@@ -238,7 +271,9 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
      */
     private void applyThresholdFromField() {
         if (!accepting()) return;
-        double current = gate.getThreshold();
+        // The number the field shows, not the gate's own: under a Manual they differ, and a
+        // focus loss must not write the shown number back as a reference edit.
+        double current = shownThreshold();
         String text = valueField.getText();
         if (format(current).equals(text)) return;
         double val;
@@ -259,6 +294,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             histogram.setThreshold(val);
         });
         context.gateChanged();
+        syncCut();
         updatePopulationCounts();
     }
 

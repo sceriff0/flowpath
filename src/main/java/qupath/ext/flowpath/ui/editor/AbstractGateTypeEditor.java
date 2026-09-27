@@ -14,6 +14,8 @@ import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.Region2DGate;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.ValueMode;
 import qupath.ext.flowpath.model.cohort.Alignment;
@@ -107,6 +109,28 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
     /** The open slide's alignment for this axis; identity unless the axis is corrected here. */
     final Alignment alignment(int slot) {
         return context.displayAlignment(gate, slot);
+    }
+
+    /** A copy of the gate carrying a Manual's numbers for the canvases; built once per showing. */
+    private GateNode cutCopy;
+
+    /**
+     * The gate the canvases draw the cut of and colour through on the open slide, in reference
+     * units — the one the pass applies there. Usually the live gate itself (an in-place edit then
+     * shows with no copying). Under a {@code Manual} on a threshold or quadrant gate it is a copy
+     * holding the Manual's raw numbers mapped back through this slide's alignment, so the drawn cut
+     * and the bar colours are the applied ones (the gate's own reference numbers do not apply
+     * here). Null under a {@code Skip}: the gate judges no cell on this slide, so no cut is drawn.
+     * Region gates have no per-slide Adjust (v1) and always draw the live gate.
+     */
+    final GateNode cutGate() {
+        SlideSetting setting = context.slideSetting();
+        if (setting instanceof SlideSetting.Skip) return null;
+        if (!(setting instanceof SlideSetting.Manual manual) || gate instanceof Region2DGate
+                || !manual.values().fits(gate)) return gate;
+        if (cutCopy == null || cutCopy.getClass() != gate.getClass()) cutCopy = gate.deepCopy();
+        manual.values().map(alignment(0)::inverse, alignment(1)::inverse).writeTo(cutCopy);
+        return cutCopy;
     }
 
     /** Slide values mapped into reference units — the units the gate's own numbers are in. NaN stays NaN. */

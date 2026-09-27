@@ -24,7 +24,6 @@ import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
-import qupath.ext.flowpath.cohort.ReviewAnswers;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -44,7 +43,6 @@ import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
-import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
@@ -190,10 +188,11 @@ public class FlowPathPane extends BorderPane {
     private QuPathViewer overlayViewer;
     /** An item opened on another slide, focused once that slide's cells have landed. */
     private ReviewItem.Key pendingFocus;
-    /** The item being answered, by value; its gate is found in the live tree on every use. */
-    private ReviewItem.Key activeReview;
-    /** The reviewed gate's reference numbers when its item was opened: a drag since then is an Adjust. */
-    private GateValues adjustBaseline;
+    /**
+     * The item being answered (by value; its gate is found in the live tree on every use), its
+     * baseline and its undo mark; what a drag or an answer on it does lives there, toolkit-free.
+     */
+    private final ReviewFlow review;
     /**
      * What the editor's cohort seam last rendered against: availability, the model's reference
      * and whether correction is off. A rescore that changes any of them re-renders even when no
@@ -248,6 +247,7 @@ public class FlowPathPane extends BorderPane {
         this.qupath = qupath;
         this.previewService = new LivePreviewService();
         this.session = new GatingSession(System::currentTimeMillis, this::requestGatingPass);
+        this.review = new ReviewFlow(session);
 
         // --- Left side: TreeView + Quality Filter ---
         // A drop is a tree edit like any other: recorded as one undo step before it is applied,
@@ -861,8 +861,7 @@ public class FlowPathPane extends BorderPane {
             pendingFocus = key;   // this slide's cells are still being read
             return;
         }
-        activeReview = key;
-        adjustBaseline = GateValues.read(gate);
+        review.open(key);
         currentNode = gate;
         cohort.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
         editorPane.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
@@ -900,35 +899,24 @@ public class FlowPathPane extends BorderPane {
 
     /** The reviewed gate, only while its item's slide is the open one. */
     private GateNode activeGate() {
-        if (activeReview == null || !activeReview.slideId().equals(currentSlideId())) return null;
-        return CohortSession.liveGate(session.tree(), activeReview);
+        return review.gate(currentSlideId());
     }
 
     /**
-     * Enter / "Looks right": {@code Reviewed(applied values)} — or, when the gate was dragged
-     * since the item was opened, Adjust: {@code Manual} in this slide's units with the reference
-     * numbers put back. One undo step either way.
+     * Enter / "Looks right": an Adjust the drags already wrote is kept, else
+     * {@code Reviewed(applied values)}; the whole item is one undo step (see {@link ReviewFlow}).
      */
     private void answerEnter() {
-        GateNode gate = activeGate();
-        if (gate == null) return;
+        ReviewItem.Key answered = review.active();
         String slideId = currentSlideId();
-        GateValues baseline = adjustBaseline;
-        boolean dragged = baseline != null && !GateValues.read(gate).matches(baseline);
-        session.recordSlideEdit(slideId, cohort.slideName(slideId), () -> {
-            if (dragged) ReviewAnswers.adjust(session.tree(), gate, slideId, alignments, baseline);
-            else ReviewAnswers.looksRight(session.tree(), gate, slideId, alignments);
-        });
-        afterAnswer();
+        if (review.answerEnter(slideId, cohort.slideName(slideId), alignments)) afterAnswer(answered);
     }
 
     /** S / "Skip slide for this gate": its cells are unmeasured on this slide. One undo step. */
     private void answerSkip() {
-        GateNode gate = activeGate();
-        if (gate == null) return;
+        ReviewItem.Key answered = review.active();
         String slideId = currentSlideId();
-        session.recordSlideEdit(slideId, cohort.slideName(slideId), () -> ReviewAnswers.skip(gate, slideId));
-        afterAnswer();
+        if (review.answerSkip(slideId, cohort.slideName(slideId))) afterAnswer(answered);
     }
 
     /**
@@ -936,8 +924,7 @@ public class FlowPathPane extends BorderPane {
      * the list) and re-gates — a Manual or a Skip changes classification — and the rescore drops
      * the answered item. Then the next item opens.
      */
-    private void afterAnswer() {
-        ReviewItem.Key answered = activeReview;
+    private void afterAnswer(ReviewItem.Key answered) {
         endActiveReview();
         resyncToTree();
         cohortCoordinator.rescore(session.tree());
@@ -962,12 +949,10 @@ public class FlowPathPane extends BorderPane {
     /**
      * Stop answering the open item: Enter, S and B act on nothing until an item is opened again.
      * Also on undo, redo, a load and a reference rebase — each can change the reviewed gate's
-     * reference numbers, and a stale {@link #adjustBaseline} would turn the next Enter into an
-     * Adjust that writes the old numbers back.
+     * reference numbers, and a stale baseline would write the old numbers back on the next drag.
      */
     private void endActiveReview() {
-        activeReview = null;
-        adjustBaseline = null;
+        review.end();
         hideBoundaryOverlay();
     }
 
@@ -1005,19 +990,19 @@ public class FlowPathPane extends BorderPane {
         if (key == null) return false;
         switch (key) {
             case LOOKS_RIGHT -> {
-                if (activeGate() == null) return false;
-                answerEnter();
+                if (activeGate() == null && cohort.selected() == null) return false;
+                answerOrReopen(this::answerEnter);
             }
             case SKIP -> {
-                if (activeGate() == null) return false;
-                answerSkip();
+                if (activeGate() == null && cohort.selected() == null) return false;
+                answerOrReopen(this::answerSkip);
             }
             case NEXT, PREVIOUS -> {
                 if (!cohort.state().available()) return false;
                 stepReview(key == NeedsALookPane.ReviewKey.NEXT ? +1 : -1);
             }
             case BACK -> {
-                if (activeReview == null) return false;
+                if (review.active() == null) return false;
                 leaveReview();
             }
             case TOGGLE_OVERLAY -> {
@@ -1403,6 +1388,10 @@ public class FlowPathPane extends BorderPane {
             }
         }
 
+        // Another gate chosen by hand: the open item is left, so its answer can never fold an
+        // edit of a different gate into its undo step.
+        if (review.active() != null && node != activeGate()) endActiveReview();
+
         if (node != null) {
             currentNode = node;
             editorPane.setAncestorMask(computeAncestorMask(node));
@@ -1507,7 +1496,13 @@ public class FlowPathPane extends BorderPane {
     // --- Updates ---
 
     private void onGateNodeChanged() {
-        pushUndoCoalesced();
+        // Recorded as the editor's coalesced step; on an open review item in This slide view the
+        // drag is this slide's Manual instead of a reference edit (see ReviewFlow).
+        String slideId = currentSlideId();
+        if (review.gateEdited(editorPane.getGateNode(), slideId, cohort.slideName(slideId), alignments,
+                editorPane.viewMode() == CohortSession.ViewMode.THIS_SLIDE)) {
+            showSlideSetting();
+        }
         // A legacy z-score gate whose channel this image lacked keeps its flag. Re-pointed
         // in the editor onto a channel the image does carry, it is convertible now, and must
         // be converted before the pass below reads its z-value as a raw threshold.
@@ -2309,15 +2304,6 @@ public class FlowPathPane extends BorderPane {
 
     private void pushUndo() {
         session.recordEdit();
-    }
-
-    /**
-     * Record a gate edit the editor has already written (it writes, then fires
-     * {@code onNodeChanged}), from the tree as it stood before, coalesced with the rest of
-     * its drag.
-     */
-    private void pushUndoCoalesced() {
-        session.recordAppliedEdit(GatingSession.EditSource.GATE);
     }
 
     private void undo() {

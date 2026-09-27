@@ -40,12 +40,26 @@ public final class ReviewAnswers {
      * moves. The map into this slide's units is {@link TreeResolver#correctionFor}'s — the one the
      * pass corrects with — never one computed here. On a one-axis gate the second map is never
      * applied.
+     * <p>
+     * Called on every drag tick of an open review item, so a quadrant's slider moves one axis at
+     * a time: an axis still at its baseline keeps the value an earlier tick recorded in this
+     * slide's {@code Manual}, rather than snapping back to the corrected reference. (A quadrant
+     * axis typed back onto exactly its baseline number is therefore read as untouched.)
      */
     public static void adjust(GateTree tree, GateNode gate, String slideId, AlignmentLookup lookup, GateValues baseline) {
         GateValues dragged = GateValues.read(gate);
         GateValues onThisSlide = dragged.map(
                 TreeResolver.correctionFor(tree, gate, 0, slideId, lookup)::apply,
                 TreeResolver.correctionFor(tree, gate, 1, slideId, lookup)::apply);
+        if (dragged.axisCount() > 1 && gate.slideSetting(slideId) instanceof SlideSetting.Manual earlier
+                && earlier.values().fits(gate)) {
+            double[][] axes = new double[dragged.axisCount()][];
+            for (int k = 0; k < axes.length; k++) {
+                boolean untouched = GateValues.of(dragged.axis(k)).matches(GateValues.of(baseline.axis(k)));
+                axes[k] = untouched ? earlier.values().axis(k) : onThisSlide.axis(k);
+            }
+            onThisSlide = GateValues.of(axes[0], axes[1]);
+        }
         baseline.writeTo(gate);
         gate.setSlideSetting(slideId, new SlideSetting.Manual(onThisSlide));
     }
