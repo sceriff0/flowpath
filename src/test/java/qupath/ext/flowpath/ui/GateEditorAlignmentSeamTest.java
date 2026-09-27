@@ -122,10 +122,12 @@ class GateEditorAlignmentSeamTest {
         GateNode gate = Type.THRESHOLD.create.get();
         AtomicInteger reports = new AtomicInteger();
         boolean[] flagWhenReported = new boolean[1];
+        AtomicInteger coalesced = new AtomicInteger();
         FxTestSupport.onFxRun(() -> {
             GateEditorPane pane = new GateEditorPane();
             pane.setChannelNames(List.of("CD3"));
-            pane.setOnNodeChanged(n -> { reports.incrementAndGet(); flagWhenReported[0] = n.isCorrectStaining(); });
+            pane.setOnDiscreteEdit(n -> { reports.incrementAndGet(); flagWhenReported[0] = n.isCorrectStaining(); });
+            pane.setOnNodeChanged(n -> coalesced.incrementAndGet());
             pane.setGateNode(gate);
             CheckBox box = find(pane, CheckBox.class, b -> "Correct staining".equals(b.getText()));
             assertTrue(box.isSelected(), "shows the gate's flag");
@@ -137,6 +139,7 @@ class GateEditorAlignmentSeamTest {
         });
         assertFalse(gate.isCorrectStaining());
         assertEquals(1, reports.get());
+        assertEquals(0, coalesced.get(), "a discrete edit, never reported as a coalescing gate edit");
         assertFalse(flagWhenReported[0], "written before it is reported");
     }
 

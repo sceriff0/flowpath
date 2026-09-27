@@ -113,6 +113,7 @@ public class GateEditorPane extends VBox {
 
     private Consumer<GateNode> onNodeChanged;
     private Consumer<GateNode> onNodeNormalised;
+    private Consumer<GateNode> onDiscreteEdit;
     private IntConsumer onAddToBranch;
     private Runnable onRemoveGate;
     private BiConsumer<GateNode, GateNode> onReplaceGate;
@@ -139,12 +140,12 @@ public class GateEditorPane extends VBox {
         correctStainingBox.managedProperty().bind(correctStainingBox.visibleProperty());
         correctStainingBox.selectedProperty().addListener((obs, old, val) -> {
             if (suppressEvents || currentNode == null) return;
-            // Written before it is reported, like every other editor write, so the host
-            // records it through its applied-edit path as one undo step.
+            // Written before it is reported, like every other editor write; a discrete edit, so
+            // the host records it as its own undo step, never coalesced with a drag before it.
             currentNode.setCorrectStaining(val);
             // The seam answers from the flag, so the plot moves between raw and aligned units.
             if (typeEditor != null) typeEditor.refresh();
-            fireNodeChanged();
+            fireDiscreteEdit();
         });
 
         lineageMarkerBox = new CheckBox("Lineage marker");
@@ -156,9 +157,9 @@ public class GateEditorPane extends VBox {
         lineageMarkerBox.managedProperty().bind(lineageMarkerBox.visibleProperty());
         lineageMarkerBox.selectedProperty().addListener((obs, old, val) -> {
             if (suppressEvents || currentNode == null) return;
-            // Written before it is reported: the host records it as one gate edit and rescores.
+            // Written before it is reported, as a discrete edit: its own undo step, then a rescore.
             currentNode.setLineageMarker(val);
-            fireNodeChanged();
+            fireDiscreteEdit();
         });
 
         slideSettingLabel = new Label();
@@ -612,6 +613,13 @@ public class GateEditorPane extends VBox {
      * {@link #setOnNodeChanged} so the write is never folded into the next user edit's undo step.
      */
     public void setOnNodeNormalised(Consumer<GateNode> callback) { this.onNodeNormalised = callback; }
+    /**
+     * Called after a discrete, already-written switch on the gate ("Correct staining", "Lineage
+     * marker"). Reported apart from {@link #setOnNodeChanged}, whose edits coalesce into a drag's
+     * undo step, so a tick right after a drag stays its own step — like the tree's enabled
+     * checkbox.
+     */
+    public void setOnDiscreteEdit(Consumer<GateNode> callback) { this.onDiscreteEdit = callback; }
     public void setOnAddToBranch(IntConsumer callback) { this.onAddToBranch = callback; }
     public void setOnRemoveGate(Runnable callback) { this.onRemoveGate = callback; }
     public void setOnReplaceGate(BiConsumer<GateNode, GateNode> callback) { this.onReplaceGate = callback; }
@@ -668,6 +676,10 @@ public class GateEditorPane extends VBox {
 
     private void fireNodeChanged() {
         if (onNodeChanged != null && currentNode != null) onNodeChanged.accept(currentNode);
+    }
+
+    private void fireDiscreteEdit() {
+        if (onDiscreteEdit != null && currentNode != null) onDiscreteEdit.accept(currentNode);
     }
 
     private static String toWebColor(Color c) {

@@ -338,6 +338,7 @@ public class FlowPathPane extends BorderPane {
         editorPane = new GateEditorPane();
         editorPane.setOnNodeChanged(node -> onGateNodeChanged());
         editorPane.setOnNodeNormalised(node -> onGateNodeNormalised());
+        editorPane.setOnDiscreteEdit(node -> onGateDiscreteEdit());
         editorPane.setOnAddToBranch(this::addChildGate);
         editorPane.setOnRemoveGate(this::removeSelectedGate);
         editorPane.setOnReplaceGate(this::replaceGateNode);
@@ -1535,6 +1536,16 @@ public class FlowPathPane extends BorderPane {
      * counts describe the column the editor now draws.
      */
     private void onGateNodeNormalised() {
+        treeView.refresh();
+        requestPreviewUpdate();
+    }
+
+    /**
+     * A discrete switch on the shown gate ("Correct staining", "Lineage marker"), already written:
+     * its own undo step, never folded into a drag just before it, then a pass (which rescores).
+     */
+    private void onGateDiscreteEdit() {
+        session.recordAppliedDiscreteEdit();
         treeView.refresh();
         requestPreviewUpdate();
     }

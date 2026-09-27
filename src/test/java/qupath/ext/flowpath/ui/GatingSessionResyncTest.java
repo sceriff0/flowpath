@@ -364,6 +364,48 @@ class GatingSessionResyncTest {
     }
 
     /**
+     * The editor's "Lineage marker" and "Correct staining" switches report through
+     * {@code GateEditorPane#setOnDiscreteEdit}, which {@code FlowPathPane#onGateDiscreteEdit}
+     * records with {@link GatingSession#recordAppliedDiscreteEdit()}: ticked 50ms after a
+     * threshold drag, still its own undo step rather than folded into the drag's. Root 1 is on
+     * the same channel and must not move.
+     */
+    @Test
+    void aSwitchTickedRightAfterADragIsItsOwnUndoStep() {
+        AtomicLong clock = new AtomicLong(10_000);
+        GatingSession session = new GatingSession(clock::get, new RecordingPass());
+        session.replaceTree(twoRootsOnCd3());
+        session.adoptIndex(slideA());
+        session.resync(NO_ANNOTATIONS);
+
+        clock.addAndGet(1_000);
+        session.tree().getRoots().get(0).setThreshold(6.0);       // a drag: written, then reported
+        session.recordAppliedEdit(GatingSession.EditSource.GATE);
+        clock.addAndGet(50);
+        session.tree().getRoots().get(0).setLineageMarker(true);  // the tick
+        session.recordAppliedDiscreteEdit();
+        clock.addAndGet(50);
+        session.tree().getRoots().get(0).setCorrectStaining(false);
+        session.recordAppliedDiscreteEdit();
+
+        assertTrue(session.undo(), "undo #1 reverts only the Correct staining switch");
+        GateNode root0 = session.tree().getRoots().get(0);
+        assertTrue(root0.isCorrectStaining());
+        assertTrue(root0.isLineageMarker());
+        assertEquals(6.0, root0.getThreshold());
+
+        assertTrue(session.undo(), "undo #2 reverts only the tick");
+        root0 = session.tree().getRoots().get(0);
+        assertFalse(root0.isLineageMarker());
+        assertEquals(6.0, root0.getThreshold(), "the drag is a separate step");
+
+        assertTrue(session.undo(), "undo #3 reverts the drag");
+        assertEquals(5.5, session.tree().getRoots().get(0).getThreshold());
+        assertEquals(3.5, session.tree().getRoots().get(1).getThreshold());
+        assertFalse(session.tree().getRoots().get(1).isLineageMarker());
+    }
+
+    /**
      * A gate's enabled checkbox is toggled straight in the tree cell, then reported through
      * {@link GatingSession#recordAppliedDiscreteEdit()} -- {@code FlowPathPane#onGateEnabledToggled}'s
      * path. Unlike {@link GatingSession#recordAppliedEdit}, this is never coalesced: two

@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
+import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
@@ -157,6 +158,103 @@ class MarkerRulesTest {
         assertEquals(2, dbl.size());
         assertEquals("CD3+CD20+ 5% (cohort 0%) — a threshold may be too low, or signal spills from "
                 + "neighbouring cells", dbl.get(0).reason());
+    }
+
+    @Test
+    void noNucleusHintFromARateOverTooFewCells() {
+        // Nucleus columns present, but nothing on them reaches the thresholds set on the Cell column.
+        List<SlideSample> samples = new ArrayList<>();
+        for (String id : List.of("s1", "s2", "s3", "s4", "dbl")) {
+            IntPredicate extra = id.equals("dbl") ? i -> i < 40 : NONE;
+            CellIndex index = Cells.of(1000)
+                    .marker("CD3", i -> i < 600 ? 100 : 1)
+                    .marker("CD8", i -> i < 300 ? 100 : 1)
+                    .marker("CD20", i -> (i >= 600 && i < 800) || extra.test(i) ? 100 : 1)
+                    .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, i -> 1)
+                    .marker("CD20", Compartment.NUCLEAR, Statistic.MEAN, i -> 1)
+                    .build();
+            boolean[] clean = Cells.allTrue(1000);
+            samples.add(new SlideSample(id, id + ".tif", index, clean, MarkerStats.compute(index, clean), 1000, "f-" + id));
+        }
+        List<MarkerRules.Finding> dbl = MarkerRules.evaluate(tree(), samples, AlignmentLookup.NONE).findings();
+        assertEquals(2, dbl.size());
+        assertFalse(dbl.get(0).reason().contains("Nucleus"), dbl.get(0).reason());
+    }
+
+    /** {@code n} cells: CD3+ the first 60%, CD20+ the next 20%, plus CD20+ on the first {@code doubles} CD3+ cells. */
+    static SlideSample exclusiveSlide(String id, int n, int doubles) {
+        int cd3 = n * 6 / 10, cd20 = n * 8 / 10;
+        CellIndex index = Cells.of(n)
+                .marker("CD3", i -> i < cd3 ? 100 : 1)
+                .marker("CD8", i -> 1)
+                .marker("CD20", i -> (i >= cd3 && i < cd20) || i < doubles ? 100 : 1)
+                .build();
+        boolean[] clean = Cells.allTrue(n);
+        return new SlideSample(id, id + ".tif", index, clean, MarkerStats.compute(index, clean), n, "f-" + id);
+    }
+
+    static List<MarkerRules.RuleRate> flaggedExclusive(int n, int doubles) {
+        List<SlideSample> samples = new ArrayList<>();
+        for (String id : List.of("s1", "s2", "s3", "s4")) samples.add(exclusiveSlide(id, n, 0));
+        samples.add(exclusiveSlide("dbl", n, doubles));
+        MarkerRules.Evaluation e = MarkerRules.evaluate(tree(), samples, AlignmentLookup.NONE);
+        MarkerRules.RuleRate dbl = e.rates().stream()
+                .filter(r -> r.slideId().equals("dbl") && r.rule().kind() == MarkerRules.Kind.EXCLUSIVE)
+                .findFirst().orElseThrow();
+        assertEquals(doubles, dbl.violations());
+        return e.findings().stream().anyMatch(f -> f.slideId().equals("dbl")) ? List.of(dbl) : List.of();
+    }
+
+    @Test
+    void anUnusualRateNeedsAtLeastTwentyViolatingCells() {
+        assertTrue(flaggedExclusive(1000, 19).isEmpty(), "19/800 = 2.4%, far above the cohort, but 19 cells");
+        assertEquals(1, flaggedExclusive(1000, 20).size(), "20/800 = 2.5% on 20 cells");
+    }
+
+    @Test
+    void anUnusualRateNeedsToBeAboveTwoPercent() {
+        assertTrue(flaggedExclusive(5000, 80).isEmpty(), "80/4000 = exactly 2%, on 80 cells");
+        assertEquals(1, flaggedExclusive(5000, 81).size(), "81/4000 > 2%");
+    }
+
+    @Test
+    void anExclusivePairWhereOneGateSitsUnderTheOtherIsNotARule() {
+        GateTree tree = new GateTree();
+        GateNode cd3 = threshold("CD3", 50);
+        GateNode cd20 = threshold("CD20", 50);
+        cd3.setLineageMarker(true);
+        cd20.setLineageMarker(true);
+        cd3.getBranches().get(0).getChildren().add(cd20);
+        tree.addRoot(cd3);
+        GateNode cd8 = threshold("CD8", 50);
+        cd8.setLineageMarker(true);
+        tree.addRoot(cd8);
+        assertEquals(List.of("CD20+ => CD3+", "CD3+ & CD8+", "CD20+ & CD8+"),
+                MarkerRules.rulesOf(tree).stream().map(MarkerRules.Rule::label).toList());
+    }
+
+    @Test
+    void aRegionBranchIsNamedWithItsChannelsAndATwoBranchGateByItsOtherBranch() {
+        GateTree tree = new GateTree();
+        RectangleGate region = new RectangleGate("CD3", "CD20", 50, 1000, -1000, 1000);
+        region.setStatisticX(Statistic.MEAN);
+        region.setStatisticY(Statistic.MEAN);
+        region.getBranches().get(0).setName("Inside");     // as a loaded gate names them
+        region.getBranches().get(1).setName("Outside");
+        region.getBranches().get(0).getChildren().add(threshold("CD8", 50));
+        tree.addRoot(region);
+        GateNode cd3 = threshold("CD3", 50);
+        RectangleGate child = new RectangleGate("CD8", "CD20", 50, 1000, -1000, 1000);
+        cd3.getBranches().get(0).getChildren().add(child);
+        tree.addRoot(cd3);
+        assertEquals(List.of("CD8+ => CD3×CD20 Inside", "CD8/CD20 (in) => CD3+"),
+                MarkerRules.rulesOf(tree).stream().map(MarkerRules.Rule::label).toList());
+
+        List<MarkerRules.Finding> bad = MarkerRules.evaluate(tree, cohort(), AlignmentLookup.NONE).findings().stream()
+                .filter(f -> f.slideId().equals("bad") && f.gateRef().rootIndex() == 0).toList();
+        assertEquals(1, bad.size());
+        assertEquals("14% of CD8+ cells are CD3×CD20 Outside here (cohort 0%) — check the CD3 vs CD20 gate",
+                bad.get(0).reason());
     }
 
     @Test

@@ -50,10 +50,12 @@ class GateEditorLineageMarkerTest {
         gate.setStatistic(Statistic.MEAN);
         AtomicInteger reports = new AtomicInteger();
         boolean[] flagWhenReported = new boolean[1];
+        AtomicInteger coalesced = new AtomicInteger();
         FxTestSupport.onFxRun(() -> {
             GateEditorPane pane = new GateEditorPane();
             pane.setChannelNames(List.of("CD3"));
-            pane.setOnNodeChanged(n -> { reports.incrementAndGet(); flagWhenReported[0] = n.isLineageMarker(); });
+            pane.setOnDiscreteEdit(n -> { reports.incrementAndGet(); flagWhenReported[0] = n.isLineageMarker(); });
+            pane.setOnNodeChanged(n -> coalesced.incrementAndGet());
             pane.setGateNode(gate);
             CheckBox box = lineageBox(pane);
             assertFalse(box.isSelected(), "defaults off");
@@ -65,6 +67,7 @@ class GateEditorLineageMarkerTest {
         });
         assertTrue(gate.isLineageMarker());
         assertEquals(1, reports.get());
+        assertEquals(0, coalesced.get(), "a discrete edit, never reported as a coalescing gate edit");
         assertTrue(flagWhenReported[0], "written before it is reported");
     }
 

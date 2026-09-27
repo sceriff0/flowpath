@@ -3,7 +3,6 @@ package qupath.ext.flowpath.cohort;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GateReadout;
 import qupath.ext.flowpath.engine.TreeResolver;
-import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateAxis;
@@ -11,6 +10,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.cohort.CohortStats;
 
 import java.util.ArrayList;
@@ -27,7 +27,8 @@ import java.util.Map;
  *   <li><b>Implies</b>, automatic: every enabled gate's positive (branch 0) implies each ancestor
  *   gate's branch it sits under — {@code "CD8+ => CD3+"}.</li>
  *   <li><b>Exclusive</b>: every pair of enabled threshold gates ticked
- *   {@link GateNode#isLineageMarker() Lineage marker}, except a pair reading the same column —
+ *   {@link GateNode#isLineageMarker() Lineage marker}, except a pair reading the same column or a
+ *   pair where one gate sits under the other (already an implies rule) —
  *   {@code "CD3+ & CD20+"}, the forbidden combination.</li>
  * </ul>
  * <b>Rules reuse the readout.</b> Every sampled clean cell is judged by every gate regardless of
@@ -88,9 +89,9 @@ public final class MarkerRules {
             String positive = positiveName(e.gate());
             for (GateWalk.Entry up = e; up.parentGate() != null; up = byGate.get(up.parentGate())) {
                 GateNode ancestor = up.parentGate();
-                Branch under = up.parentBranch();
-                rules.add(new Rule(Kind.IMPLIES, e.gate(), ancestor, ancestor.getBranches().indexOf(under),
-                        positive + " => " + under.getName(), ref(e), ref(byGate.get(ancestor))));
+                int under = ancestor.getBranches().indexOf(up.parentBranch());
+                rules.add(new Rule(Kind.IMPLIES, e.gate(), ancestor, under,
+                        positive + " => " + branchName(ancestor, under), ref(e), ref(byGate.get(ancestor))));
             }
         }
         List<GateWalk.Entry> lineage = walk.stream()
@@ -102,11 +103,22 @@ public final class MarkerRules {
                 GateWalk.Entry a = lineage.get(i), b = lineage.get(j);
                 // Two gates on one column would be a rule against itself.
                 if (columnKey(a.gate()).equals(columnKey(b.gate()))) continue;
+                // A gate under another's branch is already an implies rule of it; as an exclusive
+                // pair it would contradict that rule and read ~100% on every slide.
+                if (isAncestor(a, b, byGate) || isAncestor(b, a, byGate)) continue;
                 rules.add(new Rule(Kind.EXCLUSIVE, a.gate(), b.gate(), 0,
                         positiveName(a.gate()) + " & " + positiveName(b.gate()), ref(a), ref(b)));
             }
         }
         return rules;
+    }
+
+    /** Whether {@code ancestor}'s gate sits above {@code e}'s in the tree. */
+    private static boolean isAncestor(GateWalk.Entry ancestor, GateWalk.Entry e, Map<GateNode, GateWalk.Entry> byGate) {
+        for (GateWalk.Entry up = e; up.parentGate() != null; up = byGate.get(up.parentGate())) {
+            if (up.parentGate() == ancestor.gate()) return true;
+        }
+        return false;
     }
 
     /** Evaluate every rule of {@code tree} on every sample, each slide gated through its own resolved tree. */
@@ -198,7 +210,10 @@ public final class MarkerRules {
             if (column == null || !anyFinite(column.values())) return -1;
         }
         GateReadout readout = GateReadout.compile(copy.tree(), s.index(), s.stats());
-        return rate(s.slideId(), rule, a, b, readout, s.clean()).rate();
+        RuleRate onNucleus = rate(s.slideId(), rule, a, b, readout, s.clean());
+        // A rate over (almost) no cells is not evidence: a membrane marker read on Nucleus at a
+        // threshold set on the Cell column may leave nothing positive, and 0 < rate / 2.
+        return onNucleus.judged() < MIN_CELLS ? -1 : onNucleus.rate();
     }
 
     private static boolean anyFinite(double[] values) {
@@ -206,11 +221,13 @@ public final class MarkerRules {
         return false;
     }
 
-    /** The name of the branch of {@code ancestor} a violating cell falls on instead of {@code branch}. */
+    /**
+     * Where a violating cell falls instead of {@code ancestor}'s branch {@code branch}: the other
+     * branch of a two-branch gate, "outside" the branch of a quadrant.
+     */
     private static String otherSide(GateNode ancestor, int branch) {
-        List<Branch> branches = ancestor.getBranches();
-        if (GateAxis.axisCount(ancestor) == 1) return branches.get(1 - branch).getName();
-        return "outside " + branches.get(branch).getName();
+        if (ancestor.getBranches().size() == 2) return branchName(ancestor, 1 - branch);
+        return "outside " + branchName(ancestor, branch);
     }
 
     /** Which way to move the ancestor: a child under its positive branch loses cells to a cut set too high. */
@@ -220,7 +237,21 @@ public final class MarkerRules {
     }
 
     private static String positiveName(GateNode gate) {
-        return gate.getBranches().get(0).getName();
+        return branchName(gate, 0);
+    }
+
+    /**
+     * A branch's name as a rule states it. A region branch named without its channels — the bare
+     * "Inside" / "Outside" a loaded gate carries, or a user's rename — is qualified with them
+     * ("CD3×CD8 Inside"); the default "CD3/CD8 (in)", threshold and quadrant names already say
+     * which markers they are about.
+     */
+    private static String branchName(GateNode gate, int branch) {
+        String name = gate.getBranches().get(branch).getName();
+        if (!(gate instanceof Region2DGate)) return name;
+        List<String> channels = gate.getChannels();
+        boolean namesAChannel = channels.stream().anyMatch(c -> c != null && !c.isEmpty() && name.contains(c));
+        return namesAChannel ? name : String.join("×", channels) + " " + name;
     }
 
     /** The column a threshold gate reads, as {@code TreeResolver} names it. */
