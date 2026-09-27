@@ -15,6 +15,7 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.ui.widgets.HistogramCanvas;
 import qupath.ext.flowpath.ui.widgets.SliderUtils;
@@ -62,8 +63,8 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         alignmentLabel.setManaged(false);
         // Worked out when shown, so a threshold dragged since the last refresh is not stale.
         Tooltip rawThreshold = new Tooltip();
-        rawThreshold.setOnShowing(e -> rawThreshold.setText(String.format(Locale.US,
-                "On this slide the threshold is %.4f (raw)", alignment(0).apply(gate.getThreshold()))));
+        rawThreshold.setOnShowing(e -> rawThreshold.setText(
+                rawThresholdText(context.slideSetting(), alignment(0), gate.getThreshold())));
         alignmentLabel.setTooltip(rawThreshold);
 
         histogram.setGate(gate);
@@ -164,6 +165,22 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             if (cohort.get(i).current()) current = i;
         }
         histogram.setCohortCurves(curves, current);
+    }
+
+    /**
+     * The number the pass applies on the open slide, in its raw units: a {@code Manual} there is
+     * applied as-is (the banner shows the same number), a {@code Skip} applies none, and
+     * otherwise it is the reference threshold through the slide's correction.
+     */
+    static String rawThresholdText(SlideSetting setting, Alignment alignment, double referenceThreshold) {
+        if (setting instanceof SlideSetting.Manual manual && manual.values().axisCount() == 1) {
+            return String.format(Locale.US, "On this slide the threshold is %.4f (raw, adjusted on this slide)",
+                    manual.values().axis(0)[0]);
+        }
+        if (setting instanceof SlideSetting.Skip) {
+            return "This gate is skipped on this slide — its cells are unmeasured";
+        }
+        return String.format(Locale.US, "On this slide the threshold is %.4f (raw)", alignment.apply(referenceThreshold));
     }
 
     /** The aligned-units caption (its tooltip gives this slide's raw threshold); hidden when uncorrected. */

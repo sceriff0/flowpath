@@ -6,6 +6,7 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
 
 import java.util.List;
@@ -39,6 +40,13 @@ public interface EditorContext {
 
     /** The reference slide's name, or null outside a cohort. */
     String referenceName();
+
+    /**
+     * The shown gate's setting on the open slide ({@code Manual}, {@code Skip}, {@code Reviewed})
+     * or null. A {@code Manual} or {@code Skip} replaces what {@link #displayAlignment} implies
+     * for this slide, so anything that states the number applied here must ask this first.
+     */
+    SlideSetting slideSetting();
 
     /**
      * Every sampled slide's values for {@code gate}, in reference units, for the All slides

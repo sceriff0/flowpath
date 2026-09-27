@@ -72,6 +72,8 @@ public class GateEditorPane extends VBox {
     private final CheckBox correctStainingBox;
     /** A slide Manual/Skip, shown as a banner rather than drawn: its number is this slide's own raw value. */
     private final Label slideSettingLabel;
+    /** The shown gate's setting on the open slide, as last handed to {@link #setSlideSetting}. */
+    private SlideSetting slideSetting;
     private final Button clearSlideSettingButton;
     private final HBox slideSettingRow;
     private EditorAlignment editorAlignment = EditorAlignment.IDENTITY;
@@ -530,6 +532,7 @@ public class GateEditorPane extends VBox {
      * banner with a way back to the cohort value; {@code null} or {@code Reviewed} hides it.
      */
     public void setSlideSetting(SlideSetting setting) {
+        this.slideSetting = setting;
         String text = null;
         if (setting instanceof SlideSetting.Manual manual) {
             List<String> values = new ArrayList<>();
@@ -634,6 +637,7 @@ public class GateEditorPane extends VBox {
         @Override public ObservableList<String> channelNames() { return channelNames; }
         @Override public Alignment displayAlignment(GateNode gate, int axis) { return editorAlignment.forAxis(gate, axis); }
         @Override public String referenceName() { return editorAlignment.referenceName(); }
+        @Override public SlideSetting slideSetting() { return slideSetting; }
         @Override public List<CohortCurves.SlideValues> cohortValues(GateNode gate) {
             return viewMode == CohortSession.ViewMode.ALL_SLIDES && cohortAvailable
                 ? cohortValues.apply(gate) : List.of();

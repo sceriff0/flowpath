@@ -223,6 +223,14 @@ public final class CohortSession {
     public List<SlideSample> samples() { return List.copyOf(samples.values()); }
     public SlideSample sample(String slideId) { return samples.get(slideId); }
 
+    /**
+     * The most typical slide's id, while it is not already the reference — the slide
+     * {@link CohortState#suggestedReferenceName()} names, by id, since two images may share a name.
+     */
+    public String suggestedReferenceId() {
+        return suggestedReferenceId != null && !suggestedReferenceId.equals(referenceSlideId) ? suggestedReferenceId : null;
+    }
+
     public String slideName(String slideId) {
         for (SlideRef r : slides) if (r.id().equals(slideId)) return r.name();
         return null;

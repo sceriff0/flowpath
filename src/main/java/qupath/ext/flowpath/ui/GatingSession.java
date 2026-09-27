@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.cohort.ReviewAnswers;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
@@ -370,6 +371,20 @@ final class GatingSession {
      */
     void recordEdit() {
         undoHistory.record(tree);
+    }
+
+    /**
+     * A slide-setting edit — a review answer, or a reference rebase — as one undo step: the tree
+     * is recorded as it is now ({@link #recordEdit}), {@code edit} runs, and {@code slideId}'s
+     * image name is recorded in the same step when the tree has none for it (see
+     * {@code cohort/CohortIdentity}), so undo takes the setting and the name back together.
+     * Settled; follow with {@link #resync}.
+     */
+    void recordSlideEdit(String slideId, String slideName, Runnable edit) {
+        recordEdit();
+        edit.run();
+        ReviewAnswers.recordSlideName(tree, slideId, slideName);
+        settle();
     }
 
     /**

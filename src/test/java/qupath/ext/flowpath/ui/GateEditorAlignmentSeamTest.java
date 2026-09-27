@@ -170,4 +170,42 @@ class GateEditorAlignmentSeamTest {
         assertNull(texts[3]);
         assertEquals(1, cleared.get());
     }
+
+    /** The raw-threshold tooltip, as it reads when it is about to show. */
+    private static String rawThresholdTooltip(SlideSetting setting) {
+        CellIndex index = Cells.of(100).marker("CD3", i -> i).area(50.0).build();
+        return FxTestSupport.onFx(() -> {
+            GateEditorPane pane = new GateEditorPane();
+            pane.setChannelNames(List.of("CD3"));
+            pane.setCompartmentCapability(CompartmentCapability.scan(Arrays.asList(index.getObjects())));
+            pane.setCellIndex(index);
+            pane.setMarkerStats(MarkerStats.compute(index, Cells.allTrue(100)));
+            pane.setEditorAlignment(new EditorAlignment() {
+                @Override public Alignment forAxis(GateNode gate, int axis) { return BRIGHTER; }
+                @Override public String referenceName() { return "slide_01"; }
+            });
+            pane.setGateNode(Type.THRESHOLD.create.get());
+            pane.setSlideSetting(setting);
+            Label caption = find(pane, Label.class, l -> l.getTooltip() != null && l.isVisible()
+                    && l.getText() != null && l.getText().contains("aligned to slide_01"));
+            javafx.scene.control.Tooltip tip = caption.getTooltip();
+            tip.getOnShowing().handle(new javafx.stage.WindowEvent(tip, javafx.stage.WindowEvent.WINDOW_SHOWING));
+            return tip.getText();
+        });
+    }
+
+    /**
+     * Task 12 carry: with a Manual on the open slide, the tooltip gives the Manual number the pass
+     * applies — the same number the banner shows — never f_s(reference).
+     */
+    @Test
+    void theRawThresholdTooltipGivesTheManualValueWhileOneStands() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        assertEquals(String.format(java.util.Locale.US, "On this slide the threshold is %.4f (raw)", BRIGHTER.apply(10)),
+                rawThresholdTooltip(null));
+        assertEquals("On this slide the threshold is 12.5000 (raw, adjusted on this slide)",
+                rawThresholdTooltip(new SlideSetting.Manual(GateValues.of(new double[]{12.5}))));
+        assertEquals("This gate is skipped on this slide — its cells are unmeasured",
+                rawThresholdTooltip(new SlideSetting.Skip()));
+    }
 }

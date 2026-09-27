@@ -17,11 +17,15 @@ import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
+import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.ReviewAnswers;
+import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
@@ -40,6 +44,7 @@ import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
@@ -58,6 +63,7 @@ import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
 
 import java.util.List;
 import qupath.lib.objects.PathObject;
@@ -175,6 +181,25 @@ public class FlowPathPane extends BorderPane {
 
     /** The slide ids and sample size the running or last sampling run was started for. */
     private String lastSampledKey;
+
+    /** The review list ("Needs a look"): renders the cohort's items, reports the answers. */
+    private final NeedsALookPane needsALook = new NeedsALookPane();
+    /** The review visual on the viewer; paints only (see {@link BoundaryOverlay}). */
+    private final BoundaryOverlay boundaryOverlay = new BoundaryOverlay();
+    /** The viewer {@link #boundaryOverlay} was added to, so {@link #shutdown()} removes it from that one. */
+    private QuPathViewer overlayViewer;
+    /** An item opened on another slide, focused once that slide's cells have landed. */
+    private ReviewItem.Key pendingFocus;
+    /** The item being answered, by value; its gate is found in the live tree on every use. */
+    private ReviewItem.Key activeReview;
+    /** The reviewed gate's reference numbers when its item was opened: a drag since then is an Adjust. */
+    private GateValues adjustBaseline;
+    /**
+     * What the editor's cohort seam last rendered against: availability, the model's reference
+     * and whether correction is off. A rescore that changes any of them re-renders even when no
+     * alignment number changed (see {@link CohortHost#scored}).
+     */
+    private List<Object> renderedCohortContext;
 
     private List<String> markerNames;
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
@@ -304,7 +329,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(addRootBtn, Priority.ALWAYS);
 
         HBox togglesRow = new HBox(8, roiFilterCheckBox, syncViewerChannelsToggle);
-        VBox leftPane = new VBox(4, treeView, treeToolbar, togglesRow, qualityFilterPane);
+        VBox leftPane = new VBox(4, treeView, treeToolbar, togglesRow, needsALook, qualityFilterPane);
         VBox.setVgrow(treeView, Priority.ALWAYS);
         leftPane.setPadding(new Insets(4));
         leftPane.setPrefWidth(280);
@@ -424,6 +449,8 @@ public class FlowPathPane extends BorderPane {
                 // Deliberately not consumed while the feature is off, so Ctrl+U falls
                 // through to QuPath rather than dying in a dead shortcut.
                 openUmapWindow(); e.consume();
+            } else if (onReviewKey(e)) {
+                e.consume();
             }
         });
 
@@ -460,6 +487,17 @@ public class FlowPathPane extends BorderPane {
                 alignments, currentSlideId()));
         editorPane.setViewMode(cohort.viewMode());
         editorPane.setOnViewModeChanged(cohort::setViewMode);
+
+        needsALook.setOnItemChosen(this::openReviewItem);
+        needsALook.setOnStep(this::stepReview);
+        needsALook.setOnLooksRight(() -> answerOrReopen(this::answerEnter));
+        needsALook.setOnSkip(() -> answerOrReopen(this::answerSkip));
+        needsALook.setOnUseReference(this::useSuggestedReference);
+        // The sample size is part of the sampling key, so the refresh re-samples.
+        needsALook.setOnSampleSizeChanged(n -> {
+            CohortPrefs.setSampledCellsPerSlide(CohortPrefs.node(), n);
+            refreshCohort();
+        });
 
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
@@ -507,6 +545,8 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void cleared(IngestCoordinator.Cleared why) {
             indexSlideId = null;
+            // The outlines are the previous slide's cells.
+            hideBoundaryOverlay();
             markerNames = Collections.emptyList();
             ingestReport = IngestReport.empty();
             previewService.setImageData(null);
@@ -554,6 +594,12 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
             render(notice, newIndex);
+            // After the resync, so the index, masks and statistics describe the slide just opened.
+            if (pendingFocus != null && pendingFocus.slideId().equals(currentSlideId())) {
+                ReviewItem.Key key = pendingFocus;
+                pendingFocus = null;
+                focusReviewItem(key);
+            }
         }
 
         @Override
@@ -655,9 +701,11 @@ public class FlowPathPane extends BorderPane {
          */
         @Override
         public void scored(boolean alignmentsChanged) {
-            if (alignmentsChanged) {
-                refreshAncestorMask();
-                syncEditorCohort();
+            // A new reference's model, or correction switching off or on, changes what the
+            // editor draws even when no alignment number changed: render, the one path that
+            // brings the editor, the Correct staining switch and the banner in line.
+            if (alignmentsChanged || !cohortContext().equals(renderedCohortContext)) {
+                render(Optional.empty(), false);
                 requestPreviewUpdate();
             }
             updateBusyControls();
@@ -669,6 +717,13 @@ public class FlowPathPane extends BorderPane {
     private void onCohortScored() {
         // New samples or alignments: the All slides view re-reads them (a refresh, not a rebuild).
         if (cohort.viewMode() == CohortSession.ViewMode.ALL_SLIDES) editorPane.refreshEditor();
+        renderNeedsALook();
+    }
+
+    /** What {@link #renderedCohortContext} holds; see there. */
+    private List<Object> cohortContext() {
+        CohortState state = cohort.state();
+        return Arrays.asList(state.available(), cohort.model().referenceSlideId(), state.correctionDisabled());
     }
 
     /**
@@ -733,17 +788,6 @@ public class FlowPathPane extends BorderPane {
         }
     };
 
-    /**
-     * Bring the editor's cohort view in line: whether "Correct staining" is offered, a redraw
-     * through the seam (a data change, so the editor is refreshed, not rebuilt), and the shown
-     * gate's setting on the open slide.
-     */
-    private void syncEditorCohort() {
-        editorPane.setCohortAvailable(cohort.state().available());
-        editorPane.setEditorAlignment(editorAlignment);
-        showSlideSetting();
-    }
-
     /** The shown gate's Manual/Skip on the open slide as the editor's banner, or none. */
     private void showSlideSetting() {
         GateNode shown = editorPane.getGateNode();
@@ -758,6 +802,231 @@ public class FlowPathPane extends BorderPane {
         session.recordEdit();
         gate.setSlideSetting(id, null);
         resyncToTree();
+    }
+
+    // --- Needs a look (spec §6): the list, the click-through and the answers ---
+
+    /** The review list as the cohort now stands; it renders and decides nothing. */
+    private void renderNeedsALook() {
+        ReviewItem selected = cohort.selected();
+        needsALook.render(cohort.state(), cohort.review().items(), cohort.review().infos(),
+                selected == null ? null : selected.key(), CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
+    }
+
+    /**
+     * Open an item: its slide first, when another one is open — QuPath owns the save prompt for
+     * the slide being left, and the item is focused once the new slide's cells have landed (see
+     * {@link IngestHost#resynced}).
+     */
+    private void openReviewItem(ReviewItem.Key key) {
+        cohort.select(key);
+        if (key.slideId().equals(currentSlideId())) {
+            focusReviewItem(key);
+            return;
+        }
+        endActiveReview();
+        Project<BufferedImage> project = qupath.getProject();
+        ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getImageList().stream()
+                .filter(e -> key.slideId().equals(e.getID())).findFirst().orElse(null);
+        if (entry == null) {
+            Dialogs.showWarningNotification("FlowPath", "That slide is no longer in the project");
+            renderNeedsALook();
+            return;
+        }
+        pendingFocus = key;
+        if (!qupath.openImageEntry(entry)) pendingFocus = null;
+        renderNeedsALook();
+    }
+
+    /** N / P and the list's buttons: the next or previous item, opened. */
+    private void stepReview(int delta) {
+        ReviewItem.Key key = cohort.step(delta);
+        if (key != null) openReviewItem(key);
+    }
+
+    /**
+     * The item's slide is open: select its gate in This slide view (through {@link #render}, which
+     * shows the selected gate), centre the viewer on the tile with most boundary cells, and turn
+     * the overlay on. The viewer centres on a {@link BoundaryHotspot#TILE_PIXELS} tile in level-0
+     * pixels, the space ROI centroids are in; the evidence crops' 200 µm field is a later task,
+     * so the two are not yet the same tile.
+     */
+    private void focusReviewItem(ReviewItem.Key key) {
+        GateNode gate = CohortSession.liveGate(session.tree(), key);
+        if (gate == null) {
+            renderNeedsALook();
+            return;
+        }
+        if (session.index() == null || session.stats() == null) {
+            pendingFocus = key;   // this slide's cells are still being read
+            return;
+        }
+        activeReview = key;
+        adjustBaseline = GateValues.read(gate);
+        currentNode = gate;
+        cohort.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
+        editorPane.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
+        render(Optional.empty(), false);
+        syncViewerChannels(gate);
+
+        BoundaryHotspot.Boundary boundary = BoundaryHotspot.of(session.tree(), gate, currentSlideId(), alignments,
+                session.index(), session.stats(), session.combinedMask(), cohort.model()::cofactor);
+        QuPathViewer viewer = qupath.getViewer();
+        if (viewer != null && overlayViewer != viewer) {
+            if (overlayViewer != null) overlayViewer.getCustomOverlayLayers().remove(boundaryOverlay);
+            viewer.getCustomOverlayLayers().add(boundaryOverlay);
+            overlayViewer = viewer;
+        }
+        boundaryOverlay.setCells(session.index(), boundary.cells(), boundary.rgb());
+        boundaryOverlay.setVisible(true);
+        BoundaryHotspot.Hotspot hot = BoundaryHotspot.hotspot(session.index(), boundary.cells(), BoundaryHotspot.TILE_PIXELS);
+        if (viewer != null) {
+            if (hot != null) viewer.setCenterPixelLocation(hot.centerX(), hot.centerY());
+            viewer.repaint();
+        }
+    }
+
+    /**
+     * The answer buttons act on the open item; with none open (after an undo, say) they reopen
+     * the selected one instead, so the answer is never given to a gate the user is not looking at.
+     */
+    private void answerOrReopen(Runnable answer) {
+        if (activeGate() != null) {
+            answer.run();
+        } else if (cohort.selected() != null) {
+            openReviewItem(cohort.selected().key());
+        }
+    }
+
+    /** The reviewed gate, only while its item's slide is the open one. */
+    private GateNode activeGate() {
+        if (activeReview == null || !activeReview.slideId().equals(currentSlideId())) return null;
+        return CohortSession.liveGate(session.tree(), activeReview);
+    }
+
+    /**
+     * Enter / "Looks right": {@code Reviewed(applied values)} — or, when the gate was dragged
+     * since the item was opened, Adjust: {@code Manual} in this slide's units with the reference
+     * numbers put back. One undo step either way.
+     */
+    private void answerEnter() {
+        GateNode gate = activeGate();
+        if (gate == null) return;
+        String slideId = currentSlideId();
+        GateValues baseline = adjustBaseline;
+        boolean dragged = baseline != null && !GateValues.read(gate).matches(baseline);
+        session.recordSlideEdit(slideId, cohort.slideName(slideId), () -> {
+            if (dragged) ReviewAnswers.adjust(session.tree(), gate, slideId, alignments, baseline);
+            else ReviewAnswers.looksRight(session.tree(), gate, slideId, alignments);
+        });
+        afterAnswer();
+    }
+
+    /** S / "Skip slide for this gate": its cells are unmeasured on this slide. One undo step. */
+    private void answerSkip() {
+        GateNode gate = activeGate();
+        if (gate == null) return;
+        String slideId = currentSlideId();
+        session.recordSlideEdit(slideId, cohort.slideName(slideId), () -> ReviewAnswers.skip(gate, slideId));
+        afterAnswer();
+    }
+
+    /**
+     * An answer is a tree edit: the one resync path shows it (editor, banner, Correct staining,
+     * the list) and re-gates — a Manual or a Skip changes classification — and the rescore drops
+     * the answered item. Then the next item opens.
+     */
+    private void afterAnswer() {
+        ReviewItem.Key answered = activeReview;
+        endActiveReview();
+        resyncToTree();
+        cohortCoordinator.rescore(session.tree());
+        ReviewItem.Key next = cohort.step(+1);
+        if (next != null && !next.equals(answered)) {
+            openReviewItem(next);
+        } else {
+            cohort.select(null);
+            renderNeedsALook();
+        }
+    }
+
+    /** Esc: back to All slides, the overlay off. A drag made meanwhile stays, as the edit it is. */
+    private void leaveReview() {
+        endActiveReview();
+        cohort.select(null);
+        cohort.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
+        editorPane.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
+        renderNeedsALook();
+    }
+
+    /**
+     * Stop answering the open item: Enter, S and B act on nothing until an item is opened again.
+     * Also on undo, redo, a load and a reference rebase — each can change the reviewed gate's
+     * reference numbers, and a stale {@link #adjustBaseline} would turn the next Enter into an
+     * Adjust that writes the old numbers back.
+     */
+    private void endActiveReview() {
+        activeReview = null;
+        adjustBaseline = null;
+        hideBoundaryOverlay();
+    }
+
+    private void hideBoundaryOverlay() {
+        if (!boundaryOverlay.isVisible()) return;
+        boundaryOverlay.setVisible(false);
+        if (overlayViewer != null) overlayViewer.repaint();
+    }
+
+    /**
+     * "Use … as reference": rebase every gate's numbers onto the suggested slide, as one undo
+     * step that records its name too, then the one resync path and a rescore for the new basis.
+     */
+    private void useSuggestedReference() {
+        String id = cohort.suggestedReferenceId();
+        if (id == null || !CohortIdentity.matches(session.tree(), cohort.projectNames())) return;
+        session.recordSlideEdit(id, cohort.slideName(id),
+                () -> CohortSession.rebaseReference(session.tree(), id, alignments));
+        endActiveReview();
+        resyncToTree();
+        cohortCoordinator.rescore(session.tree());
+    }
+
+    /**
+     * The review keys (spec §6), never while a text field has focus. Enter, S and B act only on
+     * an open item on its own slide; N and P while the cohort is available; Esc while reviewing.
+     *
+     * @return whether the key was handled (and should be consumed)
+     */
+    private boolean onReviewKey(javafx.scene.input.KeyEvent e) {
+        boolean textFocused = e.getTarget() instanceof TextInputControl
+                || (getScene() != null && getScene().getFocusOwner() instanceof TextInputControl);
+        boolean modifier = e.isShortcutDown() || e.isControlDown() || e.isMetaDown() || e.isAltDown() || e.isShiftDown();
+        NeedsALookPane.ReviewKey key = NeedsALookPane.ReviewKey.of(e.getCode(), modifier, textFocused);
+        if (key == null) return false;
+        switch (key) {
+            case LOOKS_RIGHT -> {
+                if (activeGate() == null) return false;
+                answerEnter();
+            }
+            case SKIP -> {
+                if (activeGate() == null) return false;
+                answerSkip();
+            }
+            case NEXT, PREVIOUS -> {
+                if (!cohort.state().available()) return false;
+                stepReview(key == NeedsALookPane.ReviewKey.NEXT ? +1 : -1);
+            }
+            case BACK -> {
+                if (activeReview == null) return false;
+                leaveReview();
+            }
+            case TOGGLE_OVERLAY -> {
+                if (activeGate() == null) return false;
+                boundaryOverlay.toggle();
+                if (overlayViewer != null) overlayViewer.repaint();
+            }
+        }
+        return true;
     }
 
     /**
@@ -783,6 +1052,7 @@ public class FlowPathPane extends BorderPane {
         analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
         updateExportControlsDisabled();
         updateStatusBar();
+        renderNeedsALook();
     }
 
     /** What the background workers are doing right now; see {@link BusyState}. */
@@ -1914,6 +2184,7 @@ public class FlowPathPane extends BorderPane {
         if (file == null) return;
         try {
             session.replaceTree(FlowPathSerializer.load(file));
+            endActiveReview();
             resyncToTree();
 
             // Check for missing markers and warn user
@@ -2050,11 +2321,17 @@ public class FlowPathPane extends BorderPane {
     }
 
     private void undo() {
-        if (session.undo()) resyncToTree();
+        if (session.undo()) {
+            endActiveReview();
+            resyncToTree();
+        }
     }
 
     private void redo() {
-        if (session.redo()) resyncToTree();
+        if (session.redo()) {
+            endActiveReview();
+            resyncToTree();
+        }
     }
 
     /**
@@ -2110,6 +2387,11 @@ public class FlowPathPane extends BorderPane {
      */
     private void render(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
         GateTree tree = session.tree();
+        // First: the cohort lookup answers for the tree's reference and identity, and the editor
+        // asks it (All slides curves, the display seam) from setGateNode and every refresh below.
+        // After an undo or a load of a foreign or re-referenced tree it would otherwise answer —
+        // and the curves cache store — for the tree just left.
+        cohort.setLiveTree(tree);
 
         qualityFilterPane.setFilter(tree.getQualityFilter());
         suppressRoiFilterEvents = true;
@@ -2139,8 +2421,10 @@ public class FlowPathPane extends BorderPane {
             editorPane.setGateNode(currentNode);
         }
         showSlideSetting();
+        renderedCohortContext = cohortContext();
 
         updateStatusBar();
+        renderNeedsALook();
         notice.ifPresent(this::showMigrationNotice);
     }
 
@@ -2182,6 +2466,11 @@ public class FlowPathPane extends BorderPane {
      * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
+        if (overlayViewer != null) {
+            overlayViewer.getCustomOverlayLayers().remove(boundaryOverlay);
+            overlayViewer.repaint();
+            overlayViewer = null;
+        }
         cohortCoordinator.cancel();
         ingest.close();
         derivations.close();
