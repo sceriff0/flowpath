@@ -156,4 +156,80 @@ class LivePreviewServiceRecolorTest {
             service.shutdown();
         }
     }
+
+    /**
+     * The other two tests above reach the scenario through {@code setColorRootIndex} →
+     * {@code recolorCells}, which fires unconditionally regardless of {@code lastAppliedColors} —
+     * so neither would fail if {@code lastAppliedColors} were deleted and {@code applyResult}
+     * reverted to a bare {@code if (changed) fire}. This test never calls
+     * {@code setColorRootIndex} at all: it goes through {@code requestUpdate()} → {@code
+     * applyResult} only, with the colour change coming from a live-tree edit (a {@code Branch}'s
+     * colour, not the selected root) between two gating passes. A second writer mutates the
+     * shared {@code PathClass} cache to the edited colour before the service's own next pass
+     * lands, which is what makes {@code PhenotypeClassWriter.apply}'s own identity/recolour
+     * signal report {@code false} for every cell — the ONLY thing that can still make
+     * {@code applyResult} fire is comparing the new plan against {@code lastAppliedColors}.
+     * <p>
+     * The colour the cell ends up in is not asserted as proof of anything: it already equals the
+     * edited colour the moment the second writer runs, because the {@code PathClass} instance is
+     * shared — only the hierarchy-event count can tell whether the service's own pass actually
+     * did the work.
+     */
+    @Test
+    void aLiveTreeColourEditFiresOnTheNextPassEvenAfterASecondWriterAlreadyMatches() throws Exception {
+        String channel = "LPSRT3_CD3";
+        CellIndex index = buildIndex(channel);
+
+        GateTree tree = new GateTree();
+        GateNode root = new GateNode(channel, 1.0);
+        root.setStatistic(Statistic.MEAN);
+        root.setPositiveColor(0x0000FF); // blue
+        tree.addRoot(root);
+
+        ImageData<BufferedImage> data = new ImageData<>(new WrappedBufferedImageServer(
+                "live-preview-recolor-3", new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB)));
+        data.getHierarchy().addObjects(List.of(index.getObjects()));
+        AtomicInteger events = new AtomicInteger();
+        data.getHierarchy().addListener(e -> events.incrementAndGet());
+
+        LivePreviewService service = startedService(index, tree, data);
+        try {
+            int blue = ColorUtils.toQuPathColor(0x0000FF);
+            int red = ColorUtils.toQuPathColor(0xFF0000);
+            assertEquals(blue, index.getObject(3).getPathClass().getColor(), "pass 1 painted the branch's colour, blue");
+
+            // The user edits the branch's own colour on the LIVE tree -- root -1's remains the
+            // channel/threshold selection, only the display colour changes.
+            root.setPositiveColor(0xFF0000);
+
+            // A second writer -- a batch launched right after the edit -- gates a fresh CellIndex
+            // (a different slide) against the SAME, now-edited tree and writes red to the shared
+            // PathClass cache before the service's own next pass has even started.
+            CellIndex otherSlide = buildIndex(channel);
+            GatingEngine.AssignmentResult batchResult = GatingEngine.assignAll(tree, otherSlide,
+                    MarkerStats.compute(otherSlide, null));
+            PhenotypeClassWriter.apply(batchResult, otherSlide, -1);
+            assertEquals(red, index.getObject(3).getPathClass().getColor(),
+                    "fixture check: the shared class this live index's cells reference is already red, "
+                    + "before the service's own next pass has run at all");
+
+            // The service's own next pass now walks the edited tree. Its own
+            // PhenotypeClassWriter.apply call will find every cell's class reference unchanged
+            // (same shared object) and already the right colour (the second writer just set it),
+            // so its own signal reports no change -- comparing against lastAppliedColors (still
+            // blue, from pass 1) is the only thing left that can trigger the event.
+            int beforePass2 = events.get();
+            CountDownLatch latch = new CountDownLatch(1);
+            service.setOnUpdateComplete(latch::countDown);
+            service.requestUpdate();
+            assertTrue(latch.await(FxTestSupport.timeoutSeconds(), TimeUnit.SECONDS), "the second pass never completed");
+
+            assertTrue(events.get() > beforePass2,
+                    "applyResult must fire when its OWN remembered colours (still blue) differ from "
+                    + "the new plan (red), even though PhenotypeClassWriter.apply's own shared-state "
+                    + "signal reports no change");
+        } finally {
+            service.shutdown();
+        }
+    }
 }
