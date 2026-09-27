@@ -32,7 +32,9 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Serializes and deserializes {@link GateTree} instances to/from JSON files.
@@ -116,6 +118,11 @@ public class FlowPathSerializer {
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
         if (tree.getReferenceSlideId() != null) root.addProperty("referenceSlideId", tree.getReferenceSlideId());
+        if (!tree.getSlideNames().isEmpty()) {
+            JsonObject names = new JsonObject();
+            tree.getSlideNames().forEach(names::addProperty);
+            root.add("slideNames", names);
+        }
         root.add("gates", serializeNodeList(tree.getRoots()));
 
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -215,6 +222,15 @@ public class FlowPathSerializer {
         }
 
         tree.setReferenceSlideId(optString(root, "referenceSlideId"));
+        // Optional within version 4: a file saved before it existed loads with no names, which
+        // CohortIdentity treats as matching any project (nothing recorded to contradict).
+        if (root.has("slideNames") && root.get("slideNames").isJsonObject()) {
+            Map<String, String> names = new LinkedHashMap<>();
+            for (var e : root.getAsJsonObject("slideNames").entrySet()) {
+                if (e.getValue().isJsonPrimitive()) names.put(e.getKey(), e.getValue().getAsString());
+            }
+            tree.setSlideNames(names);
+        }
 
         if (root.has("gates")) {
             tree.setRoots(deserializeNodeList(root.getAsJsonArray("gates")));

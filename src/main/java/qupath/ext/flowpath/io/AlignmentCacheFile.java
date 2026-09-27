@@ -56,8 +56,13 @@ public final class AlignmentCacheFile {
         }
     }
 
-    /** Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed. */
+    /**
+     * Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed. An
+     * empty cache is never written: it holds nothing worth keeping, and over an existing file it
+     * would throw away every landmark and the fixed per-column cofactors.
+     */
     public static void write(Path file, AlignmentModel.Cache cache) throws IOException {
+        if (cache.isEmpty()) return;
         JsonObject root = new JsonObject();
         root.addProperty("version", VERSION);
         JsonObject cofactors = new JsonObject();

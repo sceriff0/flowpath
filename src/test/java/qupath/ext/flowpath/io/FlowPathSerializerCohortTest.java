@@ -33,6 +33,7 @@ class FlowPathSerializerCohortTest {
         tree.addRoot(b);
         tree.addRoot(poly);
         tree.setReferenceSlideId("ref-id");
+        tree.setSlideNames(java.util.Map.of("ref-id", "ref.tif", "s1", "one.tif"));
 
         File file = dir.resolve("t.json").toFile();
         FlowPathSerializer.save(tree, file);
@@ -40,6 +41,7 @@ class FlowPathSerializerCohortTest {
 
         GateTree loaded = FlowPathSerializer.load(file);
         assertEquals("ref-id", loaded.getReferenceSlideId());
+        assertEquals(java.util.Map.of("ref-id", "ref.tif", "s1", "one.tif"), loaded.getSlideNames());
         GateNode la = loaded.getRoots().get(0);
         GateNode lb = loaded.getRoots().get(1);
         assertInstanceOf(SlideSetting.Skip.class, la.slideSetting("s1"));
@@ -62,6 +64,7 @@ class FlowPathSerializerCohortTest {
                 + "{\"type\":\"quadrant\",\"channelX\":\"CD3\",\"channelY\":\"CD8\"}]}");
         GateTree loaded = FlowPathSerializer.load(file);
         assertNull(loaded.getReferenceSlideId());
+        assertTrue(loaded.getSlideNames().isEmpty(), "no names recorded: matches any project");
         for (GateNode gate : loaded.getRoots()) {
             assertFalse(gate.isCorrectStaining(), gate.getGateType());
             assertTrue(gate.getSlideSettings().isEmpty());

@@ -51,6 +51,10 @@ public final class AlignmentModel {
         public static Cache empty() {
             return new Cache(Map.of(), Map.of());
         }
+
+        public boolean isEmpty() {
+            return cofactors.isEmpty() && slides.isEmpty();
+        }
     }
 
     private final String referenceSlideId;
@@ -74,7 +78,16 @@ public final class AlignmentModel {
     }
 
     public static AlignmentModel empty() {
-        return new AlignmentModel(null, false, Map.of(), Map.of(), Map.of(), Map.of(), Cache.empty());
+        return empty(Cache.empty());
+    }
+
+    /**
+     * No alignments, but carrying {@code cache}: what a score that could not align anything
+     * (no reference, fewer than two samples) hands back, so the persisted landmarks and the
+     * fixed cofactors survive it rather than being replaced by nothing.
+     */
+    public static AlignmentModel empty(Cache cache) {
+        return new AlignmentModel(null, false, Map.of(), Map.of(), Map.of(), Map.of(), cache);
     }
 
     /** Every axis column of every gate in {@code tree}, enabled or not. */

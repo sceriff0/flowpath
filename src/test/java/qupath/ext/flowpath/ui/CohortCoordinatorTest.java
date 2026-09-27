@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.ui;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.SlideSource;
@@ -8,6 +9,7 @@ import qupath.ext.flowpath.testing.Cells;
 import qupath.ext.flowpath.testing.GateTreeFixtures;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -40,6 +42,9 @@ class CohortCoordinatorTest {
         @Override public void sampled(CohortSampler.Outcome o) { events.add("sampled " + o.slideId()); }
         @Override public void samplingFinished() { events.add("finished"); }
         @Override public void scored(boolean changed) { events.add("scored"); }
+        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+            events.add("cache " + file.getFileName() + " " + cache.slides().keySet().stream().sorted().toList());
+        }
     }
 
     @Test
@@ -95,5 +100,88 @@ class CohortCoordinatorTest {
         bg.runAll();
         fx.runAll();
         assertEquals(List.of("scored"), host.events);
+    }
+
+    /** A host that rescores on every sampled slide, as the pane's does. */
+    private static final class RescoringHost implements CohortCoordinator.Host {
+        final List<String> events = new ArrayList<>();
+        CohortCoordinator coordinator;
+        @Override public void sampled(CohortSampler.Outcome o) {
+            events.add("sampled " + o.slideId());
+            coordinator.rescore(withReference("a"));
+        }
+        @Override public void samplingFinished() { events.add("finished"); }
+        @Override public void scored(boolean changed) { events.add("scored"); }
+        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+            events.add("cache " + file + " " + cache.slides().keySet().stream().sorted().toList());
+        }
+    }
+
+    private static CohortCoordinator coordinator(RescoringHost host, ManualExecutor bg, ManualExecutor fx) {
+        CohortSession session = new CohortSession();
+        session.setProjectSlides(List.of(new CohortSession.SlideRef("a", "a.tif"), new CohortSession.SlideRef("b", "b.tif")));
+        CohortCoordinator c = new CohortCoordinator(session, bg, fx, host);
+        host.coordinator = c;
+        return c;
+    }
+
+    private static void drain(ManualExecutor bg, ManualExecutor fx) {
+        while (!bg.queue.isEmpty() || !fx.queue.isEmpty()) {
+            bg.runAll();
+            fx.runAll();
+        }
+    }
+
+    /**
+     * Review fix 3: the cache is written from the first scoring adopted after the run finished —
+     * the one that includes the last slide — into the file captured when the run started.
+     */
+    @Test
+    void theCacheIsWrittenOnceFromTheFirstScoringAfterTheRunFinished() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        RescoringHost host = new RescoringHost();
+        CohortCoordinator c = coordinator(host, bg, fx);
+        c.start(List.of(source("a"), source("b")), withReference("a"), 0, Path.of("project-a"));
+        drain(bg, fx);
+        List<String> caches = host.events.stream().filter(e -> e.startsWith("cache")).toList();
+        assertEquals(List.of("cache project-a [a, b]"), caches, "both slides' landmarks, once: " + host.events);
+        int finished = host.events.indexOf("finished");
+        int cache = host.events.indexOf(caches.get(0));
+        assertTrue(cache > finished, "never before the last slide's scoring lands: " + host.events);
+        assertEquals("scored", host.events.get(cache - 1), "written from the adopt, not from the finish");
+    }
+
+    /** Review fix 1: a run superseded by another project's never writes its cache anywhere. */
+    @Test
+    void aSupersededRunWritesNoCacheAndTheNewRunWritesItsOwnFile() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        RescoringHost host = new RescoringHost();
+        CohortCoordinator c = coordinator(host, bg, fx);
+        c.start(List.of(source("a"), source("b")), withReference("a"), 0, Path.of("project-a"));
+        bg.runNext();
+        c.start(List.of(source("a"), source("b")), withReference("a"), 0, Path.of("project-b"));
+        drain(bg, fx);
+        List<String> caches = host.events.stream().filter(e -> e.startsWith("cache")).toList();
+        assertEquals(1, caches.size(), host.events.toString());
+        assertTrue(caches.get(0).startsWith("cache project-b "), caches.get(0));
+    }
+
+    @Test
+    void aCancelledRunWritesNoCache() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        RescoringHost host = new RescoringHost();
+        CohortCoordinator c = coordinator(host, bg, fx);
+        c.start(List.of(source("a")), withReference("a"), 0, Path.of("project-a"));
+        bg.runAll();
+        fx.runAll();                    // lands a, finishes; its rescore is queued
+        c.cancel();
+        drain(bg, fx);
+        assertTrue(host.events.stream().noneMatch(e -> e.startsWith("cache")), host.events.toString());
+    }
+
+    private static qupath.ext.flowpath.model.GateTree withReference(String id) {
+        qupath.ext.flowpath.model.GateTree tree = GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2);
+        tree.setReferenceSlideId(id);
+        return tree;
     }
 }

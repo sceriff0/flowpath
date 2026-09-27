@@ -8,11 +8,13 @@ import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.CohortStats;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -34,18 +36,28 @@ public final class CohortSession {
     public static final String REFERENCE_MISSING =
             "Reference slide is not in this project — correction is off; reference numbers are used as raw thresholds";
 
+    public static final String FOREIGN_TREE =
+            "This gate tree's per-slide settings belong to another project — correction and slide settings are off";
+
     private static final ReviewScorer.Result NO_REVIEW = new ReviewScorer.Result(List.of(), List.of());
 
+    /** Which project {@link #slides} belong to; a change drops everything sampled for the last one. */
+    private String projectKey;
     /** Volatile: the live pass reads it through {@link #lookup} on its own thread. */
     private volatile List<SlideRef> slides = List.of();
+    private volatile Map<String, String> projectNames = Map.of();
     private final Map<String, SlideSample> samples = new LinkedHashMap<>();
     private final Map<String, String> failures = new LinkedHashMap<>();
     private boolean sampling;
     private AlignmentModel.Cache cache = AlignmentModel.Cache.empty();
     private volatile AlignmentModel model = AlignmentModel.empty();
+    /** The live tree's reference slide is not in the project. */
     private volatile boolean correctionDisabled;
+    /** The live tree's recorded slide names contradict this project's (see {@link CohortIdentity}). */
+    private volatile boolean foreign;
     private ReviewScorer.Result review = NO_REVIEW;
-    private String referenceSlideId;
+    /** The live tree's reference slide, as last handed in by {@link #setLiveTree} or {@link #snapshot}. */
+    private volatile String referenceSlideId;
     private String suggestedReferenceId;
     private ReviewItem.Key selected;
     private ViewMode viewMode = ViewMode.THIS_SLIDE;
@@ -55,13 +67,49 @@ public final class CohortSession {
     /**
      * One stable instance: the live pass reads whatever model is current when it runs. Answers
      * null — every gate on its reference number — while the cohort is unavailable (fewer than two
-     * slides) or the reference slide is not in the project.
+     * slides), while the reference slide is not in the project, while the tree belongs to another
+     * project, and while the current model was built for a reference other than the live tree's
+     * (a reference just changed, its rescore not yet landed): alignments to the old reference
+     * applied to numbers now meant for the new one would move every threshold wrongly.
      */
-    private final AlignmentLookup lookup = (slideId, column) ->
-            slides.size() < 2 || correctionDisabled ? null : model.alignment(slideId, column);
+    private final AlignmentLookup lookup = this::currentAlignment;
 
+    private Alignment currentAlignment(String slideId, String column) {
+        AlignmentModel m = model;
+        String reference = referenceSlideId;
+        if (slides.size() < 2 || correctionDisabled || foreign || reference == null
+                || !reference.equals(m.referenceSlideId())) {
+            return null;
+        }
+        return m.alignment(slideId, column);
+    }
+
+    /**
+     * The project's slides, and which project they belong to. Entry ids restart in every
+     * project, so a change of {@code projectKey} drops every sample, failure, alignment, cached
+     * landmark, review item and selection held for the previous project — kept by id, they would
+     * be the other project's slides' numbers.
+     */
+    public void setProject(String projectKey, List<SlideRef> refs) {
+        if (!Objects.equals(this.projectKey, projectKey)) {
+            this.projectKey = projectKey;
+            samples.clear();
+            failures.clear();
+            cache = AlignmentModel.Cache.empty();
+            model = AlignmentModel.empty();
+            review = NO_REVIEW;
+            suggestedReferenceId = null;
+            selected = null;
+        }
+        setProjectSlides(refs);
+    }
+
+    /** The slides of the current project; see {@link #setProject} for a change of project. */
     public void setProjectSlides(List<SlideRef> refs) {
         slides = List.copyOf(refs);
+        Map<String, String> names = new LinkedHashMap<>();
+        for (SlideRef r : refs) names.put(r.id(), r.name());
+        projectNames = Collections.unmodifiableMap(names);
         Set<String> ids = new HashSet<>();
         for (SlideRef r : refs) ids.add(r.id());
         samples.keySet().retainAll(ids);
@@ -70,6 +118,20 @@ public final class CohortSession {
     }
 
     public List<SlideRef> projectSlides() { return slides; }
+
+    /** The project's images, id → name. */
+    public Map<String, String> projectNames() { return projectNames; }
+
+    /**
+     * The live tree as the next gating pass will read it: its reference slide, and whether it
+     * belongs to this project. Called before every pass, so the lookup never answers for a
+     * reference the model was not built for.
+     */
+    public void setLiveTree(GateTree tree) {
+        referenceSlideId = tree.getReferenceSlideId();
+        foreign = !CohortIdentity.matches(tree, projectNames);
+        updateCorrectionDisabled();
+    }
 
     public void setCache(AlignmentModel.Cache cache) { this.cache = cache == null ? AlignmentModel.Cache.empty() : cache; }
 
@@ -88,15 +150,17 @@ public final class CohortSession {
 
     public void samplingFinished() { sampling = false; }
 
+    /** What {@link #score} needs, taken on the FX thread; a foreign tree is scored as having no reference. */
     public Snapshot snapshot(GateTree tree) {
-        referenceSlideId = tree.getReferenceSlideId();
-        updateCorrectionDisabled();
-        return new Snapshot(referenceSlideId, List.copyOf(samples.values()), cache);
+        setLiveTree(tree);
+        return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache);
     }
 
     public static Scored score(Snapshot snapshot, GateTree treeCopy) {
         if (snapshot.referenceSlideId() == null || snapshot.samples().size() < 2) {
-            return new Scored(AlignmentModel.empty(), NO_REVIEW, List.of(), null);
+            // Nothing to align, but the persisted landmarks and fixed cofactors carry through:
+            // adopting an empty cache here would throw them away and the next write would lose them.
+            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), null);
         }
         Set<AlignmentModel.ColumnRef> columns = AlignmentModel.columnsOf(treeCopy);
         AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), snapshot.samples(), columns, snapshot.cache());
@@ -131,7 +195,7 @@ public final class CohortSession {
         boolean changed = false;
         for (String slideId : samples.keySet()) {
             for (String key : scored.columnKeys()) {
-                if (!same(previous.alignment(slideId, key), scored.model().alignment(slideId, key))) changed = true;
+                if (!sameAlignment(previous.alignment(slideId, key), scored.model().alignment(slideId, key))) changed = true;
             }
         }
         model = scored.model();
@@ -141,7 +205,8 @@ public final class CohortSession {
         return changed;
     }
 
-    private static boolean same(Alignment a, Alignment b) {
+    /** Whether two alignments map every number identically; package-private for its table test. */
+    static boolean sameAlignment(Alignment a, Alignment b) {
         if (a == null || b == null) return a == b;
         return a.kind() == b.kind() && a.stretch() == b.stretch() && a.shift() == b.shift()
                 && a.offset() == b.offset() && a.cofactor() == b.cofactor();
@@ -201,8 +266,14 @@ public final class CohortSession {
     public void batchFinished() { batchRunning = false; batchProgress = null; }
 
     public CohortState state() {
-        if (slides.size() < 2) return CohortState.UNAVAILABLE;
+        if (slides.size() < 2) {
+            // Nothing to offer, but a tree from another project is still resolved with no slide
+            // settings, and the status line must say why a Manual threshold is not applied.
+            return foreign ? new CohortState(false, false, 0, 0, 0, 0, null, null, false, FOREIGN_TREE, false, false)
+                    : CohortState.UNAVAILABLE;
+        }
         String message = batchRunning ? batchProgress
+                : foreign ? FOREIGN_TREE
                 : correctionDisabled ? REFERENCE_MISSING
                 : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), slides.size())
                 : !failures.isEmpty() ? String.format(Locale.US, "%d slide(s) could not be sampled", failures.size())
@@ -210,7 +281,8 @@ public final class CohortSession {
         String suggested = suggestedReferenceId != null && !suggestedReferenceId.equals(referenceSlideId)
                 ? slideName(suggestedReferenceId) : null;
         return new CohortState(true, sampling, samples.size(), slides.size(), failures.size(), review.items().size(),
-                referenceSlideId == null ? null : slideName(referenceSlideId), suggested, correctionDisabled, message,
+                referenceSlideId == null || foreign ? null : slideName(referenceSlideId), suggested,
+                correctionDisabled || foreign, message,
                 batchRunning, !batchRunning);
     }
 

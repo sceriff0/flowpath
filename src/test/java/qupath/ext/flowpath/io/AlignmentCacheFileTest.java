@@ -37,4 +37,18 @@ class AlignmentCacheFileTest {
         Files.writeString(file, "{not json");
         assertTrue(AlignmentCacheFile.read(file).cofactors().isEmpty());
     }
+
+    /** An empty cache never overwrites landmarks and fixed cofactors already on disk. */
+    @Test
+    void anEmptyCacheNeverOverwritesAStoredOne(@TempDir Path project) throws Exception {
+        Path file = AlignmentCacheFile.pathFor(project);
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8", 42.0), Map.of());
+        AlignmentCacheFile.write(file, cache);
+        AlignmentCacheFile.write(file, AlignmentModel.Cache.empty());
+        assertEquals(42.0, AlignmentCacheFile.read(file).cofactors().get("CD8"));
+
+        Path fresh = AlignmentCacheFile.pathFor(project.resolve("other"));
+        AlignmentCacheFile.write(fresh, AlignmentModel.Cache.empty());
+        assertFalse(Files.exists(fresh), "nothing worth keeping is not written");
+    }
 }

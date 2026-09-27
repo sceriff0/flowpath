@@ -17,6 +17,7 @@ import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
@@ -61,7 +62,6 @@ import qupath.lib.roi.interfaces.ROI;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -613,22 +613,26 @@ public class FlowPathPane extends BorderPane {
             updateBusyControls();
         }
 
-        /** The landmarks found are derived data: written to the project's cache in the background. */
         @Override
         public void samplingFinished() {
-            Project<BufferedImage> project = qupath.getProject();
-            if (project != null) {
-                AlignmentModel.Cache cache = cohort.model().cache();
-                Path file = AlignmentCacheFile.pathFor(ProjectSlides.projectDir(project));
-                backgroundExecutor.execute(() -> {
-                    try {
-                        AlignmentCacheFile.write(file, cache);
-                    } catch (IOException e) {
-                        logger.warn("Could not write the alignment cache", e);
-                    }
-                });
-            }
             updateBusyControls();
+        }
+
+        /**
+         * The landmarks a finished run found are derived data: written in the background to the
+         * cache file captured when that run started (see {@link CohortCoordinator#start}).
+         */
+        @Override
+        public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+            backgroundExecutor.execute(() -> {
+                try {
+                    AlignmentCacheFile.write(file, cache);
+                } catch (Exception | Error ex) {
+                    // Error too: an OutOfMemoryError serialising a large cache must be logged, not
+                    // left to kill the shared executor's task silently.
+                    logger.warn("Could not write the alignment cache {}", file, ex);
+                }
+            });
         }
 
         /**
@@ -658,27 +662,34 @@ public class FlowPathPane extends BorderPane {
     private void refreshCohort() {
         Project<BufferedImage> project = qupath.getProject();
         if (project == null) {
-            cohort.setProjectSlides(List.of());
+            cohort.setProject(null, List.of());
             cohortCoordinator.cancel();
             lastSampledKey = null;
             updateBusyControls();
             return;
         }
+        // Entry ids restart in every project, so the project's folder is part of every key: two
+        // projects' "1".."N" must never share samples, alignments or a cache file.
+        Path projectDir = ProjectSlides.projectDir(project);
         List<CohortSession.SlideRef> refs = ProjectSlides.refs(project);
-        cohort.setProjectSlides(refs);
+        cohort.setProject(projectDir.toString(), refs);
         if (refs.size() < 2) {
+            cohortCoordinator.cancel();
+            lastSampledKey = null;
             updateBusyControls();
             return;
         }
         // The open slide becomes the reference the first time the cohort is seen (spec §3), as
-        // one undo step (ruling C9). The resync this ingest ends in requests the pass.
-        session.applyDefaultReference(currentSlideId());
+        // one undo step (ruling C9), recording the project's slide names with it. The resync
+        // this ingest ends in requests the pass.
+        session.applyDefaultReference(indexSlideId, cohort.projectNames());
         int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
-        String key = refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
+        String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
         if (!key.equals(lastSampledKey)) {
             lastSampledKey = key;
-            cohort.setCache(AlignmentCacheFile.read(AlignmentCacheFile.pathFor(ProjectSlides.projectDir(project))));
-            cohortCoordinator.start(ProjectSlides.sources(project), session.tree(), cells);
+            Path cacheFile = AlignmentCacheFile.pathFor(projectDir);
+            cohort.setCache(AlignmentCacheFile.read(cacheFile));
+            cohortCoordinator.start(ProjectSlides.sources(project), session.tree(), cells, cacheFile);
         }
         cohortCoordinator.rescore(session.tree());
         updateBusyControls();
@@ -1080,12 +1091,13 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * The project id of the slide whose cells the session holds, or null outside a project
-     * (then every number is the reference). Taken with the index, never from the viewer; see
-     * {@link #indexSlideId}.
+     * The slide id the tree is resolved for: the project id of the slide whose cells the session
+     * holds (taken with the index, never from the viewer; see {@link #indexSlideId}), or null —
+     * every number the reference — outside a project, or when the tree's recorded slide names
+     * say it belongs to another project ({@link CohortIdentity}), whose ids name other images.
      */
     private String currentSlideId() {
-        return indexSlideId;
+        return CohortIdentity.resolutionSlideId(session.tree(), cohort.projectNames(), indexSlideId);
     }
 
     /** {@code data}'s project id, or null when there is no project or it holds no entry for it. */
@@ -1104,6 +1116,7 @@ public class FlowPathPane extends BorderPane {
 
     /** Hand the open slide and the current alignments to the live pass. */
     private void applySlideContext() {
+        cohort.setLiveTree(session.tree());
         previewService.setSlideContext(currentSlideId(), alignments);
     }
 

@@ -4,11 +4,14 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.GateValues;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -124,5 +127,138 @@ class CohortSessionTest {
         assertEquals("s1", tree.getReferenceSlideId());
         assertEquals(shift.apply(400.0), a.getThreshold(), 1e-9);
         assertEquals(600.0, b.getThreshold(), "correction off: the number is the same on every slide");
+    }
+
+    // ---- review round 1 ----------------------------------------------------------------
+
+    /** Fix 1: QuPath entry ids restart per project; "s1" in project B is not "s1" in project A. */
+    @Test
+    void twoProjectsWithCollidingIdsDoNotShareSamplesOrAlignments() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = new CohortSession();
+        s.setProject("/projects/a", refs("ref", "s1", "s2", "odd"));
+        s.samplingStarted();
+        for (SlideSample sample : ReviewScorerTest.cohort()) s.landed(new CohortSampler.Sampled(sample));
+        s.samplingFinished();
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertNotNull(s.lookup().alignment("s1", "CD8"), "fixture check: project A is aligned");
+        assertFalse(s.model().cache().isEmpty());
+
+        s.setProject("/projects/b", List.of(new CohortSession.SlideRef("ref", "other-ref.tif"),
+                new CohortSession.SlideRef("s1", "other-s1.tif")));
+        assertTrue(s.samples().isEmpty(), "B's slides were never sampled");
+        assertNull(s.sample("s1"));
+        assertNull(s.model().alignment("s1", "CD8"));
+        assertTrue(s.model().cache().isEmpty(), "A's landmarks are not B's");
+        assertTrue(s.review().items().isEmpty());
+        s.setLiveTree(tree);
+        assertNull(s.lookup().alignment("s1", "CD8"));
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertNull(s.lookup().alignment("s1", "CD8"), "a rescore over no samples aligns nothing");
+
+        // The same project again keeps what it has.
+        s.setProject("/projects/b", List.of(new CohortSession.SlideRef("ref", "other-ref.tif"),
+                new CohortSession.SlideRef("s1", "other-s1.tif"), new CohortSession.SlideRef("s3", "s3.tif")));
+        assertEquals("s3.tif", s.slideName("s3"));
+    }
+
+    /** Fix 3: a score that cannot align anything still carries the persisted cache. */
+    @Test
+    void aShortCircuitedScoreKeepsTheCacheAndItsCofactors() {
+        AlignmentModel.Cache persisted = sampledSession(ReviewScorerTest.tree()).model().cache();
+        assertFalse(persisted.cofactors().isEmpty(), "fixture check");
+
+        CohortSession s = new CohortSession();
+        s.setProjectSlides(refs("ref", "s1", "s2", "odd"));
+        s.setCache(persisted);
+        s.samplingStarted();
+        s.landed(new CohortSampler.Sampled(ReviewScorerTest.cohort().get(1)));   // one sample: < 2
+        s.samplingFinished();
+        GateTree tree = ReviewScorerTest.tree();
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertEquals(persisted, s.model().cache(), "fewer than two samples: nothing aligned, nothing lost");
+
+        tree.setReferenceSlideId(null);
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertEquals(persisted.cofactors(), s.model().cache().cofactors(), "no reference: the cofactors survive");
+    }
+
+    /** Fix 4: the model answers only for the reference it was built against. */
+    @Test
+    void theLookupAnswersNullAfterAReferenceChangeUntilItsRescoreLands() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = sampledSession(tree);
+        assertNotNull(s.lookup().alignment("s2", "CD8"));
+
+        tree.setReferenceSlideId("s1");
+        s.setLiveTree(tree);                       // what applySlideContext does before the pass
+        assertNull(s.lookup().alignment("s2", "CD8"), "the model is still aligned to 'ref'");
+
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertNotNull(s.lookup().alignment("s2", "CD8"));
+        assertEquals("s1", s.model().referenceSlideId());
+    }
+
+    /** Fix 5: the feedback-loop guard must also say yes. */
+    @Test
+    void adoptReportsAChangeWhenTheReferenceMovesOrASlideArrives() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = sampledSession(tree);
+        tree.setReferenceSlideId("s1");
+        assertTrue(s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy())), "every slide re-aligned to s1");
+
+        CohortSession grow = new CohortSession();
+        grow.setProjectSlides(refs("ref", "s1", "s2", "odd"));
+        GateTree t = ReviewScorerTest.tree();
+        List<SlideSample> cohort = ReviewScorerTest.cohort();
+        grow.samplingStarted();
+        grow.landed(new CohortSampler.Sampled(cohort.get(0)));
+        grow.landed(new CohortSampler.Sampled(cohort.get(1)));
+        grow.adopt(CohortSession.score(grow.snapshot(t), t.deepCopy()));
+        grow.landed(new CohortSampler.Sampled(cohort.get(2)));
+        assertTrue(grow.adopt(CohortSession.score(grow.snapshot(t), t.deepCopy())), "s2 has an alignment now");
+    }
+
+    /** Fix 5: same shift and stretch, different offset, is a different map. */
+    @Test
+    void alignmentsAreComparedOnEveryParameter() {
+        Alignment a = Alignment.between(new Landmarks(100, 1.0, 2.0), new Landmarks(100, 1.5, 3.5));
+        Alignment b = Alignment.between(new Landmarks(100, 2.0, 3.0), new Landmarks(100, 2.5, 4.5));
+        assertEquals(a.shift(), b.shift(), 1e-12, "fixture check");
+        assertEquals(a.stretch(), b.stretch(), 1e-12, "fixture check");
+        assertNotEquals(a.apply(500.0), b.apply(500.0), "fixture check: they map differently");
+
+        assertFalse(CohortSession.sameAlignment(a, b), "offset differs");
+        assertTrue(CohortSession.sameAlignment(a, Alignment.between(new Landmarks(100, 1.0, 2.0), new Landmarks(100, 1.5, 3.5))));
+        assertTrue(CohortSession.sameAlignment(null, null));
+        assertFalse(CohortSession.sameAlignment(a, null));
+        assertFalse(CohortSession.sameAlignment(Alignment.identity(),
+                Alignment.between(new Landmarks(100, 1.0, Double.NaN), new Landmarks(100, 1.3, Double.NaN))));
+    }
+
+    /** Fix 2: a tree whose recorded names contradict the project is resolved with no slide state. */
+    @Test
+    void aForeignTreeTurnsCorrectionOffAndSaysSo() {
+        GateTree tree = ReviewScorerTest.tree();
+        tree.setSlideNames(Map.of("ref", "ref.tif", "s1", "another-project-s1.tif"));
+        tree.getRoots().get(0).setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{1.0})));
+        CohortSession s = sampledSession(tree);
+
+        CohortState st = s.state();
+        assertTrue(st.correctionDisabled());
+        assertEquals(CohortSession.FOREIGN_TREE, st.message());
+        assertNull(st.referenceName());
+        assertNull(s.lookup().alignment("s1", "CD8"));
+        assertTrue(s.review().items().isEmpty(), "scored as having no reference");
+
+        String slideId = CohortIdentity.resolutionSlideId(tree, s.projectNames(), "s1");
+        assertNull(slideId);
+        TreeResolver.Applied applied = TreeResolver.resolve(tree, slideId, s.lookup()).applied(tree.getRoots().get(0));
+        assertEquals(List.of(TreeResolver.Source.REFERENCE), applied.sources(), "the Manual on 's1' is not honoured");
+        assertEquals(tree.getRoots().get(0).getThreshold(), applied.applied().axis(0)[0]);
+
+        tree.setSlideNames(Map.of("ref", "ref.tif", "s1", "s1.tif"));
+        s.setLiveTree(tree);
+        assertFalse(s.state().correctionDisabled(), "names that agree: this project's tree");
     }
 }

@@ -13,6 +13,7 @@ import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -71,8 +72,10 @@ class DefaultReferenceUndoTest {
         cohort.landed(new CohortSampler.Sampled(slide("s1", 2, 0.4)));
         cohort.samplingFinished();
 
-        assertTrue(session.applyDefaultReference("ref"));
-        assertFalse(session.applyDefaultReference("s1"), "only the first sighting picks a reference");
+        assertTrue(session.applyDefaultReference("ref", cohort.projectNames()));
+        assertFalse(session.applyDefaultReference("s1", cohort.projectNames()), "only the first sighting picks a reference");
+        assertEquals(Map.of("ref", "ref.tif", "s1", "s1.tif"), session.tree().getSlideNames(),
+                "the project's names are recorded in the same step");
         rescore(cohort, session.tree());
         assertEquals("ref.tif", cohort.state().referenceName());
         assertEquals(List.of(TreeResolver.Source.CORRECTED), sourcesOn(session.tree(), "s1", cohort, 0));
@@ -82,6 +85,7 @@ class DefaultReferenceUndoTest {
         // cohort's own state says so too once it is rescored (the pass after the undo does it).
         assertTrue(session.undo());
         assertNull(session.tree().getReferenceSlideId());
+        assertTrue(session.tree().getSlideNames().isEmpty(), "one step: the names go with the reference");
         rescore(cohort, session.tree());
         assertNull(cohort.state().referenceName());
         assertFalse(cohort.state().correctionDisabled(), "no reference is not a missing reference");
@@ -100,7 +104,7 @@ class DefaultReferenceUndoTest {
 
         // Undone again, the next cohort refresh re-applies the default, as its own undo step.
         assertTrue(session.undo());
-        assertTrue(session.applyDefaultReference("ref"));
+        assertTrue(session.applyDefaultReference("ref", cohort.projectNames()));
         assertEquals("ref", session.tree().getReferenceSlideId());
         assertTrue(session.undo());
         assertNull(session.tree().getReferenceSlideId(), "the re-applied default is one step, not folded away");
@@ -109,7 +113,7 @@ class DefaultReferenceUndoTest {
     @Test
     void noOpenSlideSetsNothingAndRecordsNothing() {
         GatingSession session = new GatingSession(() -> 0L, input -> {});
-        assertFalse(session.applyDefaultReference(null));
+        assertFalse(session.applyDefaultReference(null, Map.of("1", "a.tif")));
         assertNull(session.tree().getReferenceSlideId());
         assertFalse(session.undo(), "no step was recorded");
     }

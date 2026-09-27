@@ -2,11 +2,13 @@ package qupath.ext.flowpath.ui;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.SlideSource;
 import qupath.ext.flowpath.model.GateTree;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
@@ -25,6 +27,13 @@ final class CohortCoordinator {
         void sampled(CohortSampler.Outcome outcome);
         void samplingFinished();
         void scored(boolean alignmentsChanged);
+
+        /**
+         * The first scoring adopted after a run finished: {@code cache} holds every landmark that
+         * run found, to be written to {@code file} — the cache file of the project the run was
+         * started for, captured then, never looked up again. Never called with an empty cache.
+         */
+        void cacheSettled(Path file, AlignmentModel.Cache cache);
     }
 
     private final CohortSession session;
@@ -35,6 +44,10 @@ final class CohortCoordinator {
     private volatile long sampleGeneration;
     private volatile long scoreGeneration;
     private boolean sampling;
+    /** Where the running (or just finished) run's landmarks belong; null when they are not to be written. */
+    private Path cacheFile;
+    /** A run finished and its landmarks wait for the next adopted scoring, which includes its last slide. */
+    private boolean cacheDue;
 
     CohortCoordinator(CohortSession session, Executor background, Executor fxThread, Host host) {
         this.session = Objects.requireNonNull(session);
@@ -46,8 +59,21 @@ final class CohortCoordinator {
     boolean sampling() { return sampling; }
 
     void start(List<SlideSource> sources, GateTree tree, int cellsPerSlide) {
+        start(sources, tree, cellsPerSlide, null);
+    }
+
+    /**
+     * Sample {@code sources}, superseding any run in flight.
+     *
+     * @param cacheFile the project's alignment cache, captured now so a run that finishes after
+     *                  the user has moved to another project still writes into its own; null to
+     *                  write nothing
+     */
+    void start(List<SlideSource> sources, GateTree tree, int cellsPerSlide, Path cacheFile) {
         long generation = ++sampleGeneration;
         sampling = true;
+        this.cacheFile = cacheFile;
+        cacheDue = false;
         session.samplingStarted();
         next(generation, List.copyOf(sources), 0, tree.deepCopy(), cellsPerSlide);
     }
@@ -55,6 +81,7 @@ final class CohortCoordinator {
     void cancel() {
         sampleGeneration++;
         scoreGeneration++;
+        cacheDue = false;
         if (sampling) {
             sampling = false;
             session.samplingFinished();
@@ -64,6 +91,9 @@ final class CohortCoordinator {
     private void next(long generation, List<SlideSource> sources, int i, GateTree tree, int cells) {
         if (i >= sources.size()) {
             sampling = false;
+            // Not written from here: the rescore the last slide asked for has not landed yet, so
+            // the model still lacks that slide's landmarks. The next adopted scoring has them.
+            cacheDue = cacheFile != null;
             session.samplingFinished();
             host.samplingFinished();
             return;
@@ -92,6 +122,11 @@ final class CohortCoordinator {
                 fxThread.execute(() -> {
                     if (generation != scoreGeneration) return;
                     host.scored(session.adopt(scored));
+                    if (cacheDue) {
+                        cacheDue = false;
+                        AlignmentModel.Cache cache = session.model().cache();
+                        if (!cache.isEmpty()) host.cacheSettled(cacheFile, cache);
+                    }
                 });
             } catch (Exception | Error ex) {
                 // Error too: scoring walks every sample; an OutOfMemoryError must not escape the

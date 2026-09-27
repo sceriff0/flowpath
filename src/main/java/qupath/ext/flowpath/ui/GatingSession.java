@@ -12,6 +12,7 @@ import qupath.lib.objects.PathObject;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -382,15 +383,21 @@ final class GatingSession {
      * Undoing this step restores the pre-state honestly (no reference: every slide gates on the
      * reference numbers) and redo restores the reference; the next cohort refresh calls this
      * again and, finding no reference, re-applies the default as a fresh step.
+     * <p>
+     * The project's id → name map is recorded in the same step: entry ids restart in every
+     * project, so the names are what later tells this tree's reference and slide settings apart
+     * from another project's images (see {@code cohort/CohortIdentity}).
      *
-     * @param openSlideId the project id of the slide whose cells the session holds; null outside
-     *                    a project, when nothing is set
+     * @param openSlideId  the project id of the slide whose cells the session holds; null outside
+     *                     a project, when nothing is set
+     * @param projectNames the project's images, id → name
      * @return whether the reference was set (and a step recorded)
      */
-    boolean applyDefaultReference(String openSlideId) {
+    boolean applyDefaultReference(String openSlideId, Map<String, String> projectNames) {
         if (openSlideId == null || tree.getReferenceSlideId() != null) return false;
         undoHistory.record(tree);
         tree.setReferenceSlideId(openSlideId);
+        tree.setSlideNames(projectNames);
         settle();
         return true;
     }
