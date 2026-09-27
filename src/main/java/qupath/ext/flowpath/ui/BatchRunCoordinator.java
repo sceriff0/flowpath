@@ -5,13 +5,13 @@ import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
 import qupath.ext.flowpath.batch.FlowPathBatch;
 import qupath.ext.flowpath.batch.RunState;
-import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -37,7 +37,10 @@ import java.util.concurrent.Executor;
  * The tree is frozen by {@link BatchRunner.Settings} when the run starts (a deep copy), so gate
  * edits made while it runs never reach it — which is why editing stays allowed during a run
  * ({@link BusyState#editingBlocked()} does not include it). Cancelling stops before the next
- * slide; the slides already gated are still written out and the outcome says it was cancelled.
+ * slide (spec §7, pre-flight ruling A2): the slide in flight finishes, no further slide is
+ * started once cancel is set — the next is submitted only after asking — and the slides already
+ * gated are still written out, with an outcome that says it was cancelled. A headless run
+ * ({@link FlowPathBatch}) stops the same way.
  * <p>
  * {@link #close()} — the pane going away — abandons the run: the executor is shut down with
  * {@code shutdownNow()}, which interrupts the slide in flight, so that slide's phenotype CSV or
@@ -110,10 +113,10 @@ final class BatchRunCoordinator {
      * @param unreviewed the review items still open ({@code CohortState.remaining()})
      */
     static Start check(GateTree tree, List<BatchSlide> slides, int unreviewed) {
-        if (!hasEnabledGate(tree)) return new Refused("No enabled gates to run.");
+        // BatchRunner.refusal is the rule a headless run applies too: no enabled gate, a foreign tree.
+        String refused = BatchRunner.refusal(tree, slides);
+        if (refused != null) return new Refused(refused);
         if (slides.isEmpty()) return new Refused("This project has no images.");
-        String foreign = BatchRunner.refusal(tree, slides);
-        if (foreign != null) return new Refused(foreign);
         StringBuilder sb = new StringBuilder()
                 .append("Gate all ").append(slides.size()).append(" slide(s) of this project, each with its own ")
                 .append("applied thresholds, and save the phenotypes into each slide's data file — except the ")
@@ -124,11 +127,6 @@ final class BatchRunCoordinator {
               .append(": the slides they concern run on the thresholds shown now.");
         }
         return new Confirm(sb.toString());
-    }
-
-    /** Whether {@code tree} has anything to run: the one rule both {@link #check} and the button use. */
-    static boolean hasEnabledGate(GateTree tree) {
-        return tree.getRoots().stream().anyMatch(GateNode::isEnabled);
     }
 
     /** A run is going: the caller offers Cancel instead of starting another. */
@@ -175,7 +173,9 @@ final class BatchRunCoordinator {
         BatchSlide slide = slides.get(i);
         background.execute(() -> {
             // `used` is only touched here, one task at a time, each submitted after the last landed.
-            FlowPathBatch.SlideRun r = FlowPathBatch.step(slide, BatchRunner.fileBase(slide.name(), used), settings, state);
+            // No detection fingerprints in hand: the GUI sampled long ago, so each is read afresh.
+            FlowPathBatch.SlideRun r = FlowPathBatch.step(slide, BatchRunner.fileBase(slide.name(), used), settings, state,
+                    Map.of());
             fxThread.execute(() -> {
                 if (closed) return;
                 runs.add(r);

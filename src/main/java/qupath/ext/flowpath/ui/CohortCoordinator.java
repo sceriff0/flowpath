@@ -31,9 +31,11 @@ final class CohortCoordinator {
         /**
          * The first scoring adopted after a run finished: {@code cache} holds every landmark that
          * run found, to be written to {@code file} — the cache file of the project the run was
-         * started for, captured then, never looked up again. Never called with an empty cache.
+         * started for, captured then, never looked up again — and {@code sampledCellsPerSlide},
+         * the sample size that run used, recorded beside it so a headless run can sample alike.
+         * Never called with an empty cache.
          */
-        void cacheSettled(Path file, AlignmentModel.Cache cache);
+        void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide);
     }
 
     private final CohortSession session;
@@ -48,6 +50,8 @@ final class CohortCoordinator {
     private Path cacheFile;
     /** A run finished and its landmarks wait for the next adopted scoring, which includes its last slide. */
     private boolean cacheDue;
+    /** The sample size of the last run started, -1 before any: what the session's samples were drawn with. */
+    private int sampledCellsPerSlide = -1;
 
     CohortCoordinator(CohortSession session, Executor background, Executor fxThread, Host host) {
         this.session = Objects.requireNonNull(session);
@@ -57,6 +61,13 @@ final class CohortCoordinator {
     }
 
     boolean sampling() { return sampling; }
+
+    /**
+     * The cells per slide the session's samples — and so the model scored from them — were drawn
+     * with, or -1 before any sampling started. What a run reports as its sample size: the
+     * preference may have changed since.
+     */
+    int sampledCellsPerSlide() { return sampledCellsPerSlide; }
 
     void start(List<SlideSource> sources, GateTree tree, int cellsPerSlide) {
         start(sources, tree, cellsPerSlide, null);
@@ -73,6 +84,7 @@ final class CohortCoordinator {
         long generation = ++sampleGeneration;
         sampling = true;
         this.cacheFile = cacheFile;
+        this.sampledCellsPerSlide = cellsPerSlide;
         cacheDue = false;
         session.samplingStarted();
         next(generation, List.copyOf(sources), 0, tree.deepCopy(), cellsPerSlide);
@@ -125,7 +137,7 @@ final class CohortCoordinator {
                     if (cacheDue) {
                         cacheDue = false;
                         AlignmentModel.Cache cache = session.model().cache();
-                        if (!cache.isEmpty()) host.cacheSettled(cacheFile, cache);
+                        if (!cache.isEmpty()) host.cacheSettled(cacheFile, cache, sampledCellsPerSlide);
                     }
                 });
             } catch (Exception | Error ex) {

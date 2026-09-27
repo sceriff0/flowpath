@@ -40,6 +40,44 @@ class FlowPathBatchTest {
         };
     }
 
+    /** Every call a run makes on its slides, and failures to inject into {@code read()}. */
+    static final class Log {
+        final List<String> reads = new ArrayList<>(), saves = new ArrayList<>(), hierarchyReads = new ArrayList<>();
+        final Map<String, Throwable> readFailures = new java.util.HashMap<>();
+        final java.util.Set<String> hierarchyFailures = new java.util.HashSet<>();
+    }
+
+    static BatchSlide slide(String id, Cells cells, Log log) {
+        ImageData<BufferedImage> data = new ImageData<>(new WrappedBufferedImageServer(id,
+                new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB)));
+        data.getHierarchy().addObjects(cells.detections());
+        return new BatchSlide() {
+            @Override public String id() { return id; }
+            @Override public String name() { return id + ".tif"; }
+            @Override public ImageData<BufferedImage> read() throws Exception {
+                log.reads.add(id);
+                Throwable t = log.readFailures.get(id);
+                if (t instanceof Error e) throw e;
+                if (t != null) throw (Exception) t;
+                return data;
+            }
+            @Override public PathObjectHierarchy readHierarchy() throws java.io.IOException {
+                log.hierarchyReads.add(id);
+                if (log.hierarchyFailures.contains(id)) throw new java.io.IOException("no hierarchy");
+                return data.getHierarchy();
+            }
+            @Override public void save(ImageData<BufferedImage> d) { log.saves.add(id); }
+        };
+    }
+
+    static List<BatchSlide> slides(Log log) {
+        return List.of(slide("a", cells(200), log), slide("b", cells(200), log), slide("c", cells(200), log));
+    }
+
+    static List<String> runInfo(Path dir) throws Exception {
+        return Files.readAllLines(dir.resolve(FlowPathBatch.RUN_INFO));
+    }
+
     static Cells cells(int n) {
         return Cells.of(n).atGrid(10, 10).marker("CD3", i -> i).marker("CD8", i -> 2.0 * i).area(100.0);
     }
@@ -237,6 +275,8 @@ class FlowPathBatchTest {
         List<String> info = Files.readAllLines(dir.resolve("run_info.txt"));
         assertTrue(info.contains("sampled_cells_per_slide=0"), info.toString());
         assertTrue(info.contains("reference_slide=a"), info.toString());
+        assertTrue(info.contains("reference_slide_name=a.tif"), info.toString());
+        assertTrue(info.contains("sample_size_source=argument"), info.toString());
         assertTrue(info.contains("slides=3"), info.toString());
         assertTrue(info.stream().anyMatch(l -> l.matches("date=\\d{4}-\\d\\d-\\d\\dT.*Z")), info.toString());
         assertEquals(List.of("a", "b", "c"), saves, "no open slide headless: every image is written back");
@@ -249,6 +289,164 @@ class FlowPathBatchTest {
         java.util.Set<String> used = BatchRunner.newFileBases();
         assertEquals("batch_2", BatchRunner.fileBase("batch", used));
         assertNotEquals(BatchRunner.COMBINED_FILE, BatchRunner.fileBase("batch", used) + FlowPathBatch.POPULATIONS_SUFFIX);
+    }
+
+    // ---- fix round 1 ------------------------------------------------------------------------
+
+    /** I1: re-quantified in place — same centroids, new values — so neither resume nor cache may hit. */
+    @Test
+    void aReQuantifiedSlideIsGatedAgainAndRealigned(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        FlowPathBatch.Run first = run(slides(log), tree(), dir.toFile(), new AtomicBoolean());
+        log.reads.clear();
+        Cells requantified = Cells.of(200).atGrid(10, 10).marker("CD3", i -> 1.5 * i + 5).marker("CD8", i -> 2.0 * i)
+                .area(100.0);
+        FlowPathBatch.Run second = FlowPathBatch.run(
+                List.of(slide("a", cells(200), log), slide("b", requantified, log), slide("c", cells(200), log)),
+                tree(), dir.toFile(), first.cache(), 0, null, (i, n) -> {}, () -> false);
+        assertEquals(List.of("b"), log.reads, "only the re-quantified slide is gated again");
+        assertNotEquals(first.cache().slides().get("b").fingerprint(), second.cache().slides().get("b").fingerprint());
+        assertEquals(first.cache().slides().get("a").fingerprint(), second.cache().slides().get("a").fingerprint());
+        assertTrue(runInfo(dir).contains("alignment_cache_hits=2/3"), "b's landmarks were recomputed: " + runInfo(dir));
+    }
+
+    /** I2: a cache seeded by an earlier run (the GUI's, say) is reused for every slide. */
+    @Test
+    void aSeededMatchingCacheIsReusedForEverySlide(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        FlowPathBatch.Run seed = run(slides(log), tree(), dir.resolve("1").toFile(), new AtomicBoolean());
+        assertTrue(runInfo(dir.resolve("1")).contains("alignment_cache_hits=0/3"), runInfo(dir.resolve("1")).toString());
+        FlowPathBatch.Run reused = FlowPathBatch.run(slides(log), tree(), dir.resolve("2").toFile(), seed.cache(), 0, null,
+                (i, n) -> {}, () -> false);
+        assertTrue(runInfo(dir.resolve("2")).contains("alignment_cache_hits=3/3"), runInfo(dir.resolve("2")).toString());
+        assertEquals(seed.cache(), reused.cache());
+    }
+
+    /**
+     * I3: v1 run; v2 with b open (b re-gated with v2 numbers but never recorded); back to v1. The old
+     * v1 entry for b must not survive the v2 re-gate, or b would "resume" with v2's files.
+     */
+    @Test
+    void aReGateThatEndsUnrecordedNeverLeavesItsFilesUnderTheOldEntry(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        GateTree tree = tree();
+        run(slides(log), tree, dir.toFile(), new AtomicBoolean());
+        tree.getRoots().get(0).setThreshold(120);
+        FlowPathBatch.run(slides(log), tree, dir.toFile(), AlignmentModel.Cache.empty(), 0, "b", (i, n) -> {}, () -> false);
+        tree.getRoots().get(0).setThreshold(100);
+        log.reads.clear();
+        run(slides(log), tree, dir.toFile(), new AtomicBoolean());
+        assertTrue(log.reads.contains("b"), "b holds v2 files, so it is gated again: " + log.reads);
+    }
+
+    @Test
+    void aSlideThatFailsLeavesNoPerSlideFilesBehind(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        GateTree tree = tree();
+        run(slides(log), tree, dir.toFile(), new AtomicBoolean());
+        assertTrue(dir.resolve("b.tif" + FlowPathBatch.POPULATIONS_SUFFIX).toFile().isFile());
+        tree.getRoots().get(0).setThreshold(120);
+        log.readFailures.put("b", new java.io.IOException("unreadable"));
+        FlowPathBatch.Run r = run(slides(log), tree, dir.toFile(), new AtomicBoolean());
+        assertEquals("unreadable", r.slides().get(1).result().failure());
+        for (String suffix : List.of(FlowPathBatch.PHENO_SUFFIX, FlowPathBatch.POPULATIONS_SUFFIX, FlowPathBatch.QC_SUFFIX)) {
+            assertFalse(dir.resolve("b.tif" + suffix).toFile().exists(), suffix);
+        }
+        assertNull(RunState.load(dir.toFile()).entry("b"));
+    }
+
+    /** The step's own catch (its fingerprint read failing) forgets the slide and deletes its files too. */
+    @Test
+    void aSlideWhoseFingerprintReadFailsLeavesNoPerSlideFilesBehind(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        GateTree noReference = tree();
+        noReference.setReferenceSlideId(null);   // nothing sampled: step reads each hierarchy itself
+        run(slides(log), noReference, dir.toFile(), new AtomicBoolean());
+        log.hierarchyFailures.add("b");
+        FlowPathBatch.Run r = run(slides(log), noReference, dir.toFile(), new AtomicBoolean());
+        assertEquals("no hierarchy", r.slides().get(1).result().failure());
+        assertFalse(dir.resolve("b.tif" + FlowPathBatch.POPULATIONS_SUFFIX).toFile().exists());
+        assertNull(RunState.load(dir.toFile()).entry("b"));
+        assertTrue(r.slides().get(2).resumed(), "c still resumes");
+    }
+
+    /** I4: the sampler's read yields the resume fingerprint; no second hierarchy read of a sampled slide. */
+    @Test
+    void aSampledSlidesHierarchyIsReadOnceAndAnUnsampledOneOnceForItsFingerprint(@TempDir Path dir) throws Exception {
+        Log sampled = new Log();
+        run(slides(sampled), tree(), dir.resolve("1").toFile(), new AtomicBoolean());
+        assertEquals(List.of("a", "b", "c"), sampled.hierarchyReads);
+
+        Log unsampled = new Log();
+        GateTree noReference = tree();
+        noReference.setReferenceSlideId(null);
+        run(slides(unsampled), noReference, dir.resolve("2").toFile(), new AtomicBoolean());
+        assertEquals(List.of("a", "b", "c"), unsampled.hierarchyReads, "nothing to align: one read each, in step");
+    }
+
+    /** M2: cancel reaches sampling too. */
+    @Test
+    void aCancelBeforeTheRunReadsNothing(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        FlowPathBatch.Run r = run(slides(log), tree(), dir.toFile(), new AtomicBoolean(true));
+        assertEquals(List.of(), log.hierarchyReads);
+        assertEquals(List.of(), r.slides());
+    }
+
+    /** M2: an interrupt caught as one slide's failure still cancels the rest, and the bundle is still written. */
+    @Test
+    void anInterruptCaughtAsASlidesFailureStillStopsTheRun(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        log.readFailures.put("b", new InterruptedException("killed"));
+        boolean interrupted;
+        try {
+            FlowPathBatch.run(slides(log), tree(), dir.toFile(), AlignmentModel.Cache.empty(), 0, null, (i, n) -> {},
+                    Thread.currentThread()::isInterrupted);
+        } finally {
+            interrupted = Thread.interrupted();
+        }
+        assertTrue(interrupted, "the interrupt survives the slide's catch");
+        assertEquals(List.of("a", "b"), log.reads, "c is not started");
+        assertTrue(Files.readAllLines(dir.resolve("batch_populations.csv")).stream().anyMatch(l -> l.startsWith("a.tif,")));
+    }
+
+    /** M3: headless refuses what the button refuses. */
+    @Test
+    void aTreeWithNoEnabledGateIsRefusedHeadless(@TempDir Path dir) {
+        GateTree tree = tree();
+        tree.getRoots().forEach(g -> g.setEnabled(false));
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> run(slides(new Log()), tree, dir.toFile(), new AtomicBoolean()));
+        assertEquals(BatchRunner.NO_ENABLED_GATE, refused.getMessage());
+    }
+
+    /** M4: the colour root decides the classes written back. */
+    @Test
+    void theColourRootIsPartOfTheResumeFingerprint() {
+        GateTree tree = tree();
+        assertNotEquals(RunState.fingerprint(tree, "a", "d", "v", -1), RunState.fingerprint(tree, "a", "d", "v", 1));
+        assertEquals(RunState.fingerprint(tree, "a", "d", "v", 1), RunState.fingerprint(tree, "a", "d", "v", 1));
+    }
+
+    /** M6: a done slide whose file has gone is gated again, and a file gone mid-run never aborts the bundle. */
+    @Test
+    void aMissingPerSlideFileMeansGateAgainNeverAnAbortedBundle(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        FlowPathBatch.Run first = run(slides(log), tree(), dir.toFile(), new AtomicBoolean());
+        Files.delete(dir.resolve("a.tif" + FlowPathBatch.POPULATIONS_SUFFIX));
+        log.reads.clear();
+        run(slides(log), tree(), dir.toFile(), new AtomicBoolean());
+        assertEquals(List.of("a"), log.reads);
+
+        Files.delete(dir.resolve("c.tif" + FlowPathBatch.QC_SUFFIX));
+        CohortEvidence none = new CohortEvidence(AlignmentModel.empty(),
+                new qupath.ext.flowpath.cohort.ReviewScorer.Result(List.of(), List.of()), null,
+                new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null));
+        BatchRunner.Settings settings = new BatchRunner.Settings(tree(), null, dir.toFile(), (String) null, true);
+        FlowPathBatch.finish(dir.toFile(), settings.tree(), first.slides(), none);
+        List<String> combined = Files.readAllLines(dir.resolve("batch_populations.csv"));
+        assertTrue(combined.stream().anyMatch(l -> l.startsWith("a.tif,")));
+        assertTrue(combined.stream().noneMatch(l -> l.startsWith("c.tif,")), "left out, not fatal");
     }
 
     /** Headless alignment is recomputed from the same seed, so two runs from an empty cache agree to the byte. */

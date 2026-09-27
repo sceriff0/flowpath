@@ -786,10 +786,10 @@ public class FlowPathPane extends BorderPane {
          * cache file captured when that run started (see {@link CohortCoordinator#start}).
          */
         @Override
-        public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+        public void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) {
             backgroundExecutor.execute(() -> {
                 try {
-                    AlignmentCacheFile.write(file, cache);
+                    AlignmentCacheFile.write(file, cache, sampledCellsPerSlide);
                 } catch (Exception | Error ex) {
                     // Error too: an OutOfMemoryError serialising a large cache must be logged, not
                     // left to kill the shared executor's task silently.
@@ -1354,7 +1354,7 @@ public class FlowPathPane extends BorderPane {
         runAllButton.setManaged(shown);
         runAllButton.setText(running ? "Cancel run" : "Run on all slides…");
         runAllButton.setDisable(!running && (busy.batchBlocked()
-                || !BatchRunCoordinator.hasEnabledGate(session.tree())));
+                || !BatchRunner.hasEnabledGate(session.tree())));
     }
 
     /** What the background workers are doing right now; see {@link BusyState}. */
@@ -2599,10 +2599,15 @@ public class FlowPathPane extends BorderPane {
                 id -> id.equals(viewerSlideId), true, previewService.getColorRootIndex());
         // What the user reviewed, never recomputed: the model, its review (and marker-rule rates)
         // and the lookup bound to that model — the run gates with exactly these alignments.
-        CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup);
-        int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
+        // The sample size recorded is the one those samples were drawn with, not the preference
+        // now (which may have changed since); the preference only when nothing was sampled.
+        int sampled = cohortCoordinator.sampledCellsPerSlide();
+        CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup, new CohortEvidence.Provenance(
+                sampled >= 0 ? sampled : CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()),
+                sampled >= 0 ? CohortEvidence.FROM_REVIEWED_MODEL : CohortEvidence.FROM_PREFERENCE,
+                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId())));
         cohort.batchStarted();
-        batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence, cells));
+        batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence));
         updateBusyControls();
     }
 

@@ -178,13 +178,15 @@ class BatchRunCoordinatorTest {
 
     @Test
     void hasEnabledGateIsTheOneRuleForTheButtonAndTheCheck() {
-        assertFalse(BatchRunCoordinator.hasEnabledGate(new GateTree()));
+        assertFalse(BatchRunner.hasEnabledGate(new GateTree()));
         GateTree tree = GateTreeFixtures.twoRootsOnCd3AndCd8(3, 5);
-        assertTrue(BatchRunCoordinator.hasEnabledGate(tree));
+        assertTrue(BatchRunner.hasEnabledGate(tree));
         tree.getRoots().get(0).setEnabled(false);
-        assertTrue(BatchRunCoordinator.hasEnabledGate(tree), "one enabled root is enough");
+        assertTrue(BatchRunner.hasEnabledGate(tree), "one enabled root is enough");
         tree.getRoots().get(1).setEnabled(false);
-        assertFalse(BatchRunCoordinator.hasEnabledGate(tree));
+        assertFalse(BatchRunner.hasEnabledGate(tree));
+        assertEquals(BatchRunner.NO_ENABLED_GATE, BatchRunner.refusal(tree, List.of(slide("a"))),
+                "the refusal a headless run applies too");
     }
 
     /** The button runs {@code FlowPathBatch.step}, as a headless run does: a second run into one folder resumes. */

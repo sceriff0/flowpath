@@ -11,8 +11,8 @@ import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestResult;
 import qupath.ext.flowpath.io.PhenotypeCsvExporter;
-import qupath.ext.flowpath.io.PopulationStatsExporter;
 import qupath.ext.flowpath.model.CellIndex;
+import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PopulationStats;
@@ -21,26 +21,21 @@ import qupath.lib.images.ImageData;
 import qupath.lib.objects.PathObject;
 
 import java.awt.image.BufferedImage;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
-import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 /**
- * Runs the gate tree over every slide, headlessly: no JavaFX, no {@code QuPathGUI}, no
- * {@code Project} — slides arrive through {@link BatchSlide}. Each slide is gated on
+ * Gates one slide at a time, headlessly: no JavaFX, no {@code QuPathGUI}, no {@code Project} —
+ * slides arrive through {@link BatchSlide}, and the run around them is {@link FlowPathBatch}'s.
+ * Each slide is gated on
  * {@code TreeResolver.resolve(tree, slide.id(), alignments)}, the same applied values the
  * user saw (CLAUDE.md "one resolution point"), not a shared {@code deepCopy()} — so a
  * misalignment correction, a manual override or a skipped gate all follow the slide it was
@@ -85,42 +80,6 @@ public final class BatchRunner {
     public record Gated(BatchResult result, CellIndex index, GatingEngine.AssignmentResult assignment, MarkerStats stats,
                         boolean[] qualityMask, boolean[] roi, boolean roiWithoutAnnotation) {}
 
-    /**
-     * Gate every slide in order, reporting progress before each one starts and honoring
-     * cancellation between slides. Per spec §7, cancellation "stops before the next slide":
-     * a slide whose progress has already been announced is still gated.
-     */
-    public static List<BatchResult> run(List<BatchSlide> slides, Settings settings,
-                                        BiConsumer<Integer, String> progress, BooleanSupplier cancelled) {
-        return eachSlide(slides, progress, cancelled, false,
-                (slide, fileBase) -> gateOne(slide, fileBase + PHENO_SUFFIX, settings));
-    }
-
-    /**
-     * The one synchronous slide loop, shared by {@link #run} and {@link FlowPathBatch}: slides in
-     * order, each with its own {@link #fileBase}, progress announced before each, cancellation
-     * asked before each announcement.
-     *
-     * @param announcedSlideCancels whether a cancel set <em>during</em> a slide's announcement
-     *                              stops that slide before it starts ({@link FlowPathBatch}) or lets
-     *                              it run ({@link #run}) — the two callers' tests pin opposite
-     *                              answers (pre-flight ruling A2), so the difference is named here
-     *                              rather than hidden in two copies of the loop
-     */
-    static <R> List<R> eachSlide(List<BatchSlide> slides, BiConsumer<Integer, String> progress, BooleanSupplier cancelled,
-                                 boolean announcedSlideCancels, BiFunction<BatchSlide, String, R> gate) {
-        List<R> out = new ArrayList<>();
-        Set<String> used = newFileBases();
-        for (int i = 0; i < slides.size(); i++) {
-            if (cancelled.getAsBoolean()) break;
-            BatchSlide slide = slides.get(i);
-            progress.accept(i, slide.name());
-            if (announcedSlideCancels && cancelled.getAsBoolean()) break;
-            out.add(gate.apply(slide, fileBase(slide.name(), used)));
-        }
-        return out;
-    }
-
     public static BatchResult gateOne(BatchSlide slide, String phenoFileName, Settings settings) {
         return gateDetailed(slide, phenoFileName, settings).result();
     }
@@ -163,6 +122,7 @@ public final class BatchRunner {
                     quality, roi, tree.isRoiFilterEnabled() && regions == null);
         } catch (Exception | Error ex) {
             // Error too: gating every cell of a large slide is where an OutOfMemoryError is plausible.
+            restoreInterrupt(ex);
             logger.warn("Batch gating failed for {}", slide.name(), ex);
             return failed(slide, describe(ex));
         }
@@ -170,6 +130,15 @@ public final class BatchRunner {
 
     private static Gated failed(BatchSlide slide, String reason) {
         return new Gated(BatchResult.failed(slide.id(), slide.name(), reason), null, null, null, null, null, false);
+    }
+
+    /**
+     * Re-set the thread's interrupt flag when {@code ex} is an {@link InterruptedException}: caught
+     * and recorded as a slide's failure, it would otherwise swallow the cancel a script's
+     * "Kill running script" (a thread interrupt) is asking for.
+     */
+    static void restoreInterrupt(Throwable ex) {
+        if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
     }
 
     /** What a failure says: its message, or its type when it has none (an {@code OutOfMemoryError} may not). */
@@ -202,6 +171,7 @@ public final class BatchRunner {
         } catch (Exception | Error ex) {
             // Error too: the slide was already gated and exported, so a save failure (or an
             // OutOfMemoryError writing a large .qpdata) is a write-back failure, not a slide failure.
+            restoreInterrupt(ex);
             logger.warn("Could not save phenotypes into {}", slide.name(), ex);
             return ok.withWriteBack(BatchResult.WriteBack.FAILED, describe(ex));
         }
@@ -209,60 +179,50 @@ public final class BatchRunner {
 
     /**
      * A fresh {@code used} set for {@link #fileBase}, one per run. It starts out holding
-     * {@code "batch"}: an image of that name would otherwise write its per-slide
+     * {@code "batch"}: an image of that name, in any case, would otherwise write its per-slide
      * {@code batch_populations.csv} over the run's combined table of the same name.
      */
     public static Set<String> newFileBases() {
         Set<String> used = new HashSet<>();
-        used.add(COMBINED_FILE.substring(0, COMBINED_FILE.indexOf("_populations.csv")));
+        used.add(COMBINED_FILE.substring(0, COMBINED_FILE.indexOf("_populations.csv")).toLowerCase(Locale.ROOT));
         return used;
     }
 
-    public static String phenoFileName(String imageName, Set<String> used) {
-        return fileBase(imageName, used) + PHENO_SUFFIX;
-    }
-
     /**
-     * A file-system-safe name for {@code imageName}, unique among {@code used} (which it joins):
+     * A file-system-safe name for {@code imageName}, unique among {@code used} (which it joins, lower-cased):
      * the stem every per-slide output of one run shares. Deterministic in slide order, so a
      * resumed run gives each slide the same stem as the run it resumes.
      */
     public static String fileBase(String imageName, Set<String> used) {
         String base = (imageName == null || imageName.isBlank() ? "image" : imageName).replaceAll("[^A-Za-z0-9._-]", "_");
         String candidate = base;
-        for (int k = 2; !used.add(candidate); k++) candidate = base + "_" + k;
+        // Compared case-insensitively: macOS and Windows file systems are, so "A.tif" and "a.tif"
+        // would otherwise share every per-slide file.
+        for (int k = 2; !used.add(candidate.toLowerCase(Locale.ROOT)); k++) candidate = base + "_" + k;
         return candidate;
     }
 
-    /** One header, then every successful slide's rows stamped with its image name. */
-    public static void writeCombined(File file, List<BatchResult> results) throws IOException {
-        try (BufferedWriter w = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
-            PopulationStatsExporter.writeHeader(w, true);
-            for (BatchResult r : results) {
-                if (r.succeeded()) PopulationStatsExporter.writeRows(w, r.stats(), r.imageName());
-            }
-        }
+    public static final String NO_ENABLED_GATE = "No enabled gates to run.";
+
+    /** Whether {@code tree} has anything to run: the one rule the GUI's button and every run's {@link #refusal} use. */
+    public static boolean hasEnabledGate(GateTree tree) {
+        return tree.getRoots().stream().anyMatch(GateNode::isEnabled);
     }
 
     /**
-     * Why a run of {@code tree} over {@code slides} must not start, or null. A tree whose recorded
+     * Why a run of {@code tree} over {@code slides} must not start, or null: the tree has no
+     * enabled gate ({@value #NO_ENABLED_GATE}), or it belongs to another project. A tree whose recorded
      * slide names contradict these slides' names ({@link CohortIdentity}) carries another project's
      * per-slide settings: entry ids restart in every project, so they would land on different
      * images here. The live view merely switches them off; a run would write them into files.
      */
     public static String refusal(GateTree tree, List<BatchSlide> slides) {
+        if (!hasEnabledGate(tree)) return NO_ENABLED_GATE;
         Map<String, String> names = new LinkedHashMap<>();
         for (BatchSlide s : slides) names.put(s.id(), s.name());
         if (CohortIdentity.matches(tree, names)) return null;
         return CohortSession.FOREIGN_TREE + ".\n\nRunning it on this project would apply those settings to other "
                 + "images, so the run was not started. Load this project's gate tree to run it here.";
-    }
-
-    /** {@value #COMBINED_FILE}, then {@value GatingManifestExporter#FILE}, into {@code dir}. */
-    public static void writeOutputs(File dir, GateTree tree, List<BatchResult> results,
-                                    GatingManifestExporter.Annotations annotations) throws IOException {
-        writeCombined(new File(dir, COMBINED_FILE), results);
-        GatingManifestExporter.write(new File(dir, GatingManifestExporter.FILE), tree, results, annotations);
     }
 
     /** {@link #summary(File, List, int, boolean, Predicate)} with every skipped slide taken as still open. */

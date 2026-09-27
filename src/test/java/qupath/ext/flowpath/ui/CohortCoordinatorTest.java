@@ -42,7 +42,7 @@ class CohortCoordinatorTest {
         @Override public void sampled(CohortSampler.Outcome o) { events.add("sampled " + o.slideId()); }
         @Override public void samplingFinished() { events.add("finished"); }
         @Override public void scored(boolean changed) { events.add("scored"); }
-        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) {
             events.add("cache " + file.getFileName() + " " + cache.slides().keySet().stream().sorted().toList());
         }
     }
@@ -112,7 +112,7 @@ class CohortCoordinatorTest {
         }
         @Override public void samplingFinished() { events.add("finished"); }
         @Override public void scored(boolean changed) { events.add("scored"); }
-        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache) {
+        @Override public void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) {
             events.add("cache " + file + " " + cache.slides().keySet().stream().sorted().toList());
         }
     }

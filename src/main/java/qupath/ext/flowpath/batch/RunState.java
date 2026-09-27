@@ -99,6 +99,20 @@ public final class RunState {
     /** Record {@code slideId} as done and rewrite the file atomically. */
     public synchronized void record(String slideId, Entry entry) throws IOException {
         entries.put(slideId, entry);
+        persist();
+    }
+
+    /**
+     * {@code slideId} is about to be gated again: drop its entry and persist that <em>before</em>
+     * its files are overwritten. Otherwise a re-gate that ends unrecorded — skipped as open,
+     * failed, killed — would leave new files under the old "done" entry, and a later run under
+     * the old fingerprint would resume those new numbers as if they were the old ones.
+     */
+    public synchronized void forget(String slideId) throws IOException {
+        if (entries.remove(slideId) != null) persist();
+    }
+
+    private void persist() throws IOException {
         JsonObject slides = new JsonObject();
         entries.forEach((id, e) -> {
             JsonObject o = new JsonObject();
@@ -124,7 +138,9 @@ public final class RunState {
 
     /**
      * SHA-256 of what {@code slideId} is gated under: its resolved tree as canonical JSON, the
-     * detection fingerprint, and the FlowPath version. The JSON is {@link FlowPathSerializer#toJson},
+     * detection fingerprint (centroids and a bounded sample of values,
+     * {@code CohortSampler.detectionFingerprint}), the FlowPath version and the colour root, which
+     * decides the classes written back into the slide. The JSON is {@link FlowPathSerializer#toJson},
      * which carries no {@code meta} block — {@code meta.savedAt} would make a resume never match
      * (ruling B20) — and it is stripped of everything that belongs to other slides:
      * <ul>
@@ -135,11 +151,13 @@ public final class RunState {
      * This slide's own setting stays: the resolved tree carries a {@code Skip} only as a transient
      * flag the JSON does not write, so its setting is what makes a new {@code Skip} change the hash.
      */
-    public static String fingerprint(GateTree resolvedTree, String slideId, String detectionFingerprint, String version) {
+    public static String fingerprint(GateTree resolvedTree, String slideId, String detectionFingerprint, String version,
+                                     int colorRootIndex) {
         GateTree canonical = resolvedTree.deepCopy();
         canonical.setSlideNames(null);
         keepOnly(canonical.getRoots(), slideId);
-        String text = FlowPathSerializer.toJson(canonical) + "\n" + detectionFingerprint + "\n" + version;
+        String text = FlowPathSerializer.toJson(canonical) + "\n" + detectionFingerprint + "\n" + version
+                + "\ncolorRoot=" + colorRootIndex;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return java.util.HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));

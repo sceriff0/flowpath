@@ -19,7 +19,6 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -71,9 +70,9 @@ class BatchRunnerTest {
 
     @Test
     void eachSlideIsGatedWithItsOwnAppliedValuesAndTwoSameChannelRootsStayApart(@TempDir Path dir) {
-        List<BatchResult> results = BatchRunner.run(
+        List<BatchResult> results = gateAll(
                 List.of(slide("ref", cells(), new ArrayList<>()), slide("s1", cells(), new ArrayList<>())),
-                settings(tree(), dir.toFile()), (i, n) -> {}, () -> false);
+                settings(tree(), dir.toFile()));
 
         assertEquals(10, count(results.get(0), 0, "CD3+"), "reference: CD3 >= 10 is cells 10..19");
         long corrected = java.util.stream.IntStream.range(0, 20).filter(i -> i >= SHIFT.apply(10.0)).count();
@@ -87,8 +86,7 @@ class BatchRunnerTest {
     void theCallersTreeIsNeverMutated(@TempDir Path dir) {
         GateTree tree = tree();
         tree.getRoots().get(0).getBranches().get(0).setCount(999);
-        BatchRunner.run(List.of(slide("s1", cells(), new ArrayList<>())), settings(tree, dir.toFile()),
-                (i, n) -> {}, () -> false);
+        gateAll(List.of(slide("s1", cells(), new ArrayList<>())), settings(tree, dir.toFile()));
         assertEquals(999, tree.getRoots().get(0).getBranches().get(0).getCount());
         assertEquals(10.0, tree.getRoots().get(0).getThreshold());
     }
@@ -100,8 +98,8 @@ class BatchRunnerTest {
         GateNode ghost = new GateNode("CD99", 1.0);
         ghost.setStatistic(Statistic.MEAN);
         tree.addRoot(ghost);
-        BatchResult r = BatchRunner.run(List.of(slide("s1", cells(), new ArrayList<>())),
-                settings(tree, dir.toFile()), (i, n) -> {}, () -> false).get(0);
+        BatchResult r = gateAll(List.of(slide("s1", cells(), new ArrayList<>())),
+                settings(tree, dir.toFile())).get(0);
         assertTrue(r.succeeded(), String.valueOf(r.failure()));
         assertEquals(0, count(r, 3, "CD99+"));
         assertEquals(0, count(r, 3, "CD99-"), "unmeasured is not negative");
@@ -116,48 +114,58 @@ class BatchRunnerTest {
             @Override public ImageData<BufferedImage> read() { throw new OutOfMemoryError("Java heap space"); }
             @Override public void save(ImageData<BufferedImage> d) {}
         };
-        List<BatchResult> results = BatchRunner.run(
+        List<BatchResult> results = gateAll(
                 List.of(slide("a", cells(), new ArrayList<>()), broken, slide("e", Cells.of(0), new ArrayList<>()),
                         slide("c", cells(), new ArrayList<>())),
-                settings(tree(), dir.toFile()), (i, n) -> {}, () -> false);
+                settings(tree(), dir.toFile()));
         assertEquals(4, results.size());
         assertTrue(results.get(1).failure().contains("Java heap space"));
         assertEquals("no detections on this slide", results.get(2).failure());
         assertTrue(results.get(3).succeeded());
     }
 
-    @Test
-    void cancellationStopsBeforeTheNextSlideAndProgressIsInOrder(@TempDir Path dir) {
-        AtomicBoolean cancel = new AtomicBoolean();
-        List<String> seen = new ArrayList<>();
-        List<BatchResult> results = BatchRunner.run(
-                List.of(slide("a", cells(), new ArrayList<>()), slide("b", cells(), new ArrayList<>())),
-                settings(tree(), dir.toFile()), (i, n) -> { seen.add(i + ":" + n); cancel.set(true); }, cancel::get);
-        assertEquals(1, results.size());
-        assertEquals(List.of("0:a.tif"), seen);
+    /** Every slide through {@link BatchRunner#gateOne}, one stem each, as a run names them. */
+    static List<BatchResult> gateAll(List<BatchSlide> slides, BatchRunner.Settings settings) {
+        Set<String> used = BatchRunner.newFileBases();
+        return slides.stream().map(s -> BatchRunner.gateOne(s,
+                BatchRunner.fileBase(s.name(), used) + BatchRunner.PHENO_SUFFIX, settings)).toList();
     }
 
     @Test
-    void theCombinedTableHasOneHeaderAndOmitsFailures(@TempDir Path dir) throws Exception {
-        List<BatchResult> results = new ArrayList<>(BatchRunner.run(
-                List.of(slide("a", cells(), new ArrayList<>()), slide("b", cells(), new ArrayList<>())),
-                settings(tree(), dir.toFile()), (i, n) -> {}, () -> false));
-        results.add(BatchResult.failed("x", "x.tif", "no server"));
-        File out = dir.resolve(BatchRunner.COMBINED_FILE).toFile();
-        BatchRunner.writeCombined(out, results);
-        List<String> lines = Files.readAllLines(out.toPath());
+    void fileStemsAreSafeAndUniqueIgnoringCase() {
+        Set<String> used = BatchRunner.newFileBases();
+        assertEquals("slide_01.ome.tiff", BatchRunner.fileBase("slide 01.ome.tiff", used));
+        assertEquals("slide_01.ome.tiff_2", BatchRunner.fileBase("slide/01.ome.tiff", used));
+        assertEquals("SLIDE_01.ome.tiff_3", BatchRunner.fileBase("SLIDE 01.ome.tiff", used),
+                "one file on a case-insensitive file system");
+        assertEquals("Batch_2", BatchRunner.fileBase("Batch", used), "the combined table's stem is reserved in any case");
+    }
+
+    /** The combined table: one header, every successful slide's rows, failures left out. */
+    @Test
+    void finishWritesOneCombinedTableAndTheManifest(@TempDir Path dir) throws Exception {
+        BatchRunner.Settings s = settings(tree(), dir.toFile());
+        RunState state = RunState.load(dir.toFile());
+        List<FlowPathBatch.SlideRun> runs = new ArrayList<>();
+        for (String id : List.of("a", "b")) {
+            runs.add(FlowPathBatch.step(slide(id, cells(), new ArrayList<>()), id + ".tif", s, state, java.util.Map.of()));
+        }
+        runs.add(new FlowPathBatch.SlideRun(BatchResult.failed("x", "x.tif", "no server"), "x.tif", List.of(), false));
+        // The tree the results were resolved from: Settings froze its own copy.
+        FlowPathBatch.finish(dir.toFile(), s.tree(), runs, NO_COHORT);
+
+        List<String> lines = Files.readAllLines(dir.resolve(BatchRunner.COMBINED_FILE));
         assertEquals(1, lines.stream().filter(l -> l.startsWith("image,")).count());
         assertTrue(lines.stream().anyMatch(l -> l.startsWith("a.tif,")));
         assertTrue(lines.stream().anyMatch(l -> l.startsWith("b.tif,")));
         assertTrue(lines.stream().noneMatch(l -> l.startsWith("x.tif,")));
+        List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
+        assertEquals(1 + 2 * 3, manifest.size(), "header + one row per enabled gate axis on each gated slide");
     }
 
-    @Test
-    void phenoFileNamesAreSafeAndUnique() {
-        Set<String> used = new HashSet<>();
-        assertEquals("slide_01.ome.tiff_gate_pheno.csv", BatchRunner.phenoFileName("slide 01.ome.tiff", used));
-        assertEquals("slide_01.ome.tiff_2_gate_pheno.csv", BatchRunner.phenoFileName("slide/01.ome.tiff", used));
-    }
+    static final CohortEvidence NO_COHORT = new CohortEvidence(qupath.ext.flowpath.cohort.AlignmentModel.empty(),
+            new qupath.ext.flowpath.cohort.ReviewScorer.Result(List.of(), List.of()), AlignmentLookup.NONE,
+            new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null));
 
     /** Review Focus 4. */
     @Test
@@ -165,10 +173,9 @@ class BatchRunnerTest {
         List<String> saved = new ArrayList<>();
         Cells open = cells();
         Cells other = cells();
-        List<BatchResult> results = BatchRunner.run(
+        List<BatchResult> results = gateAll(
                 List.of(slide("open", open, saved), slide("s1", other, saved)),
-                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), "open", true),
-                (i, n) -> {}, () -> false);
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), "open", true));
 
         assertEquals(List.of("s1"), saved, "only the closed slide's .qpdata is written");
         assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, results.get(0).writeBack());
@@ -187,9 +194,8 @@ class BatchRunnerTest {
             @Override public ImageData<BufferedImage> read() throws Exception { return inner.read(); }
             @Override public void save(ImageData<BufferedImage> d) throws Exception { throw new java.io.IOException("disk full"); }
         };
-        BatchResult r = BatchRunner.run(List.of(unsavable),
-                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), null, true),
-                (i, n) -> {}, () -> false).get(0);
+        BatchResult r = gateAll(List.of(unsavable),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), null, true)).get(0);
         assertTrue(r.succeeded());
         assertEquals(BatchResult.WriteBack.FAILED, r.writeBack());
         assertEquals("disk full", r.writeBackError());
@@ -218,18 +224,6 @@ class BatchRunnerTest {
         String s = BatchRunner.summary(dir.toFile(), results, 1, false);
         assertTrue(s.startsWith("1 of 1 slide(s) processed. 1 gated."), s);
         assertFalse(s.contains("Skipped:") || s.contains("Not saved") || s.contains("Could not save"), s);
-    }
-
-    @Test
-    void writeOutputsWritesTheTableAndTheManifest(@TempDir Path dir) throws Exception {
-        BatchRunner.Settings s = settings(tree(), dir.toFile());
-        List<BatchResult> results = BatchRunner.run(List.of(slide("s1", cells(), new ArrayList<>())),
-                s, (i, n) -> {}, () -> false);
-        // The tree the results were resolved from: Settings froze its own copy.
-        BatchRunner.writeOutputs(dir.toFile(), s.tree(), results, GatingManifestExporter.Annotations.NONE);
-        assertTrue(new File(dir.toFile(), BatchRunner.COMBINED_FILE).isFile());
-        List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
-        assertEquals(1 + 3, manifest.size(), "header + one row per enabled gate axis on the one slide");
     }
 
     /**
@@ -269,9 +263,8 @@ class BatchRunnerTest {
         AtomicBoolean open = new AtomicBoolean(false);
         List<String> saved = new ArrayList<>();
         Cells cells = cells();
-        BatchResult r = BatchRunner.run(List.of(slideThat("s1", cells, saved, () -> open.set(true))),
-                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1),
-                (i, n) -> {}, () -> false).get(0);
+        BatchResult r = gateAll(List.of(slideThat("s1", cells, saved, () -> open.set(true))),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1)).get(0);
 
         assertTrue(r.succeeded(), "still gated and exported");
         assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, r.writeBack());
@@ -286,11 +279,10 @@ class BatchRunnerTest {
     void aSlideOpenWhenTheRunStartedButClosedBeforeItIsReachedIsSaved(@TempDir Path dir) {
         AtomicReference<String> viewer = new AtomicReference<>("s1");
         List<String> saved = new ArrayList<>();
-        List<BatchResult> results = BatchRunner.run(List.of(
+        List<BatchResult> results = gateAll(List.of(
                         slideThat("a", cells(), saved, () -> viewer.set(null)),   // the user closes s1 meanwhile
                         slide("s1", cells(), saved)),
-                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> id.equals(viewer.get()), true, -1),
-                (i, n) -> {}, () -> false);
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> id.equals(viewer.get()), true, -1));
 
         assertEquals(BatchResult.WriteBack.SAVED, results.get(1).writeBack());
         assertEquals(List.of("a", "s1"), saved);
@@ -303,9 +295,8 @@ class BatchRunnerTest {
         AtomicBoolean open = new AtomicBoolean(true);
         List<String> saved = new ArrayList<>();
         // Closed during the read: QuPath may have saved it between the check and the close.
-        BatchResult r = BatchRunner.run(List.of(slideThat("s1", cells(), saved, () -> open.set(false))),
-                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1),
-                (i, n) -> {}, () -> false).get(0);
+        BatchResult r = gateAll(List.of(slideThat("s1", cells(), saved, () -> open.set(false))),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1)).get(0);
         assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, r.writeBack());
         assertEquals(List.of(), saved);
     }

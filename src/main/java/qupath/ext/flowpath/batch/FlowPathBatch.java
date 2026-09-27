@@ -20,7 +20,6 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.lib.images.ImageData;
-import qupath.lib.objects.PathObject;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.projects.Project;
 
@@ -39,6 +38,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
@@ -93,94 +94,185 @@ public final class FlowPathBatch {
     private FlowPathBatch() {}
 
     /**
-     * The headless entry point, sampling {@link CohortPrefs}'s number of cells per slide. See
-     * {@link #run(Project, File, File, int)}.
+     * The headless entry point, with no slide open in any viewer: every image is written back. See
+     * {@link #run(Project, File, File, int, String)}; the sample size is the one the project's
+     * alignment cache records (the GUI's), else this machine's preference.
      */
     public static Run run(Project<?> project, File treeJson, File outDir) throws IOException {
-        return run(project, treeJson, outDir, CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
+        return runProject(project, treeJson, outDir, null, null);
     }
 
     /**
-     * The headless entry point: gate every image of {@code project} with the tree saved in
-     * {@code treeJson}, into {@code outDir}. There is no open slide headless, so every image is
-     * written back. A tree from another project is refused before anything is read (the
-     * {@link BatchRunner#refusal} the GUI shows). Alignment reuses the project's alignment cache
-     * where its sample fingerprints match and recomputes the rest from the same fixed seed, so
-     * it reproduces what the GUI showed; the cache is written back afterwards. Interrupting the
-     * calling thread (QuPath's "Kill running script") stops before the next slide; what was
-     * done is kept and the next run resumes after it.
-     *
-     * @param cellsPerSlide the cohort sample size; pass the one the GUI used (its preference
-     *                      {@code sampledCellsPerSlide}, default {@value CohortPrefs#DEFAULT_SAMPLED_CELLS})
-     *                      when this machine's preferences are not that GUI's — a cluster's are not
-     * @throws IllegalStateException when the tree belongs to another project
+     * As {@link #run(Project, File, File)}, from QuPath's script editor with an image open: that
+     * image is gated but never written behind QuPath's back. See
+     * {@link #run(Project, File, File, int, String)} for the Groovy idiom.
      */
-    @SuppressWarnings("unchecked")
+    public static Run run(Project<?> project, File treeJson, File outDir, String openSlideId) throws IOException {
+        return runProject(project, treeJson, outDir, null, openSlideId);
+    }
+
+    /** As {@link #run(Project, File, File)}, sampling {@code cellsPerSlide}; see {@link #run(Project, File, File, int, String)}. */
     public static Run run(Project<?> project, File treeJson, File outDir, int cellsPerSlide) throws IOException {
+        return runProject(project, treeJson, outDir, cellsPerSlide, null);
+    }
+
+    /**
+     * Gate every image of {@code project} with the tree saved in {@code treeJson}, into
+     * {@code outDir} — resumably: a slide an earlier run into {@code outDir} finished under the
+     * same fingerprint is not gated again.
+     * <ul>
+     *   <li><b>Refusals</b> ({@link BatchRunner#refusal}, the GUI's rule) happen before anything is
+     *       read: a tree with no enabled gate, or one from another project.</li>
+     *   <li><b>Alignment</b> reuses the project's alignment cache where its sample fingerprints
+     *       match and recomputes the rest from the same fixed seed, so it reproduces what the GUI
+     *       showed; the cache is written back afterwards, with the sample size.</li>
+     *   <li><b>Cancel:</b> interrupting the calling thread (QuPath's "Kill running script") stops
+     *       before the next slide; what was done is kept and the next run resumes after it.</li>
+     * </ul>
+     * <b>From QuPath's script editor</b>, pass the image open in the viewer, so its data file is
+     * never written behind QuPath's back (QuPath would overwrite it on its next save) — it is still
+     * gated, and the next run writes it once it is closed:
+     * <pre>{@code
+     * import qupath.ext.flowpath.batch.FlowPathBatch
+     * FlowPathBatch.run(getProject(), new File('/path/tree.json'), new File('/path/out'), getProjectEntry()?.getID())
+     * }</pre>
+     * Run the script once, with <b>Run</b> — <b>never "Run for project"</b>: that runs the script
+     * once per image, with each image open in turn, so the whole project would be gated once per
+     * image and the image QuPath has open would not be the one named here. On a cluster
+     * ({@code QuPath script ... --project=...}) nothing is open: pass null or use the 3-argument form.
+     *
+     * @param cellsPerSlide the cohort sample size. Leave it to the 3-argument forms unless you know
+     *                      better: they use the size the project's alignment cache records — the
+     *                      one the GUI's alignments were found with. An argument that disagrees
+     *                      with that recorded size is used, with a warning in the log, since the
+     *                      alignments will then differ from what was reviewed.
+     * @param openSlideId   the project entry id of the image open in the viewer, or null
+     * @throws IllegalStateException when the tree has no enabled gate or belongs to another project
+     */
+    public static Run run(Project<?> project, File treeJson, File outDir, int cellsPerSlide, String openSlideId)
+            throws IOException {
+        return runProject(project, treeJson, outDir, cellsPerSlide, openSlideId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Run runProject(Project<?> project, File treeJson, File outDir, Integer explicitCells,
+                                  String openSlideId) throws IOException {
         Project<BufferedImage> p = (Project<BufferedImage>) project;
         Path cacheFile = AlignmentCacheFile.pathFor(project.getPath().getParent());
+        OptionalInt recorded = AlignmentCacheFile.sampledCellsPerSlide(cacheFile);
+        int cells;
+        String source;
+        if (explicitCells != null) {
+            cells = Math.max(0, explicitCells);
+            source = CohortEvidence.FROM_ARGUMENT;
+            if (recorded.isPresent() && recorded.getAsInt() != cells) {
+                logger.warn("FlowPath batch: sampling {} cells per slide, but the alignment cache was built from {}; "
+                        + "the alignments will differ from those reviewed in the GUI", cells, recorded.getAsInt());
+            }
+        } else if (recorded.isPresent()) {
+            cells = recorded.getAsInt();
+            source = CohortEvidence.FROM_CACHE;
+        } else {
+            cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
+            source = CohortEvidence.FROM_PREFERENCE;
+        }
         List<BatchSlide> slides = batchSlides(p);
         Thread caller = Thread.currentThread();
-        Run run = run(slides, FlowPathSerializer.load(treeJson), outDir, AlignmentCacheFile.read(cacheFile),
-                Math.max(0, cellsPerSlide), null,
-                (i, name) -> logger.info("FlowPath batch: slide {} of {} — {}", i + 1, slides.size(), name),
+        Run run = run(slides, FlowPathSerializer.load(treeJson), outDir, AlignmentCacheFile.read(cacheFile), cells, source,
+                openSlideId, (i, name) -> logger.info("FlowPath batch: slide {} of {} — {}", i + 1, slides.size(), name),
                 caller::isInterrupted);
         try {
-            AlignmentCacheFile.write(cacheFile, run.cache());
+            AlignmentCacheFile.write(cacheFile, run.cache(), cells);
         } catch (IOException | RuntimeException e) {
             // Derived data: the next run recomputes it; the run itself succeeded.
             logger.warn("Could not write the alignment cache {}", cacheFile, e);
         }
         logger.info("FlowPath batch finished.\n{}", summary(outDir, run.slides(), slides.size(),
-                run.slides().size() < slides.size()));
+                run.slides().size() < slides.size(), openSlideId == null ? id -> false : openSlideId::equals));
         return run;
     }
 
-    /**
-     * Sample the cohort, gate every slide (resuming what {@code outDir} records as done), then
-     * {@link #finish}. Cancellation is asked before each slide's progress is announced and again
-     * after it: a slide whose progress was announced is <em>not started</em> once cancel is set
-     * (pre-flight ruling A2) — unlike {@link BatchRunner#run}, which gates it.
-     *
-     * @param openSlideId the slide open in a viewer, never written back; null headless
-     */
+    /** {@link #run(List, GateTree, File, AlignmentModel.Cache, int, String, String, BiConsumer, BooleanSupplier)} with an explicit sample size. */
     static Run run(List<BatchSlide> slides, GateTree tree, File outDir, AlignmentModel.Cache cache, int cellsPerSlide,
                    String openSlideId, BiConsumer<Integer, String> progress, BooleanSupplier cancelled)
             throws IOException {
+        return run(slides, tree, outDir, cache, cellsPerSlide, CohortEvidence.FROM_ARGUMENT, openSlideId, progress,
+                cancelled);
+    }
+
+    /**
+     * Sample the cohort, gate every slide in order (resuming what {@code outDir} records as done),
+     * then {@link #finish}. Cancellation "stops before the next slide" (spec §7, pre-flight ruling
+     * A2): it is asked before each slide's progress is announced and again after it, so a slide
+     * whose progress was announced is <em>not started</em> once cancel is set — the same meaning
+     * the GUI's {@code BatchRunCoordinator} gives it, which submits the next slide only after asking.
+     *
+     * @param openSlideId the slide open in a viewer, gated but never written back; null headless
+     */
+    static Run run(List<BatchSlide> slides, GateTree tree, File outDir, AlignmentModel.Cache cache, int cellsPerSlide,
+                   String sampleSizeSource, String openSlideId, BiConsumer<Integer, String> progress,
+                   BooleanSupplier cancelled) throws IOException {
         String refusal = BatchRunner.refusal(tree, slides);
         if (refusal != null) throw new IllegalStateException(refusal);
         Files.createDirectories(outDir.toPath());
-        CohortEvidence evidence = CohortEvidence.sample(slides, tree, cache, cellsPerSlide);
+        CohortEvidence.Sampled sampled = CohortEvidence.sample(slides, tree, cache, cellsPerSlide, sampleSizeSource,
+                cancelled);
+        CohortEvidence evidence = sampled.evidence();
         BatchRunner.Settings settings = new BatchRunner.Settings(tree, evidence.lookup(), outDir, openSlideId, true);
         RunState state = RunState.load(outDir);
-        List<SlideRun> runs = BatchRunner.eachSlide(slides, progress, cancelled, true,
-                (slide, fileBase) -> step(slide, fileBase, settings, state));
-        finish(outDir, settings.tree(), runs, evidence, cellsPerSlide);
+        List<SlideRun> runs = new ArrayList<>();
+        Set<String> used = BatchRunner.newFileBases();
+        for (int i = 0; i < slides.size(); i++) {
+            if (cancelled.getAsBoolean()) break;
+            BatchSlide slide = slides.get(i);
+            progress.accept(i, slide.name());
+            if (cancelled.getAsBoolean()) break;
+            runs.add(step(slide, BatchRunner.fileBase(slide.name(), used), settings, state,
+                    sampled.detectionFingerprints()));
+        }
+        finish(outDir, settings.tree(), runs, evidence);
         return new Run(runs, evidence.model().cache());
     }
 
     /**
-     * One slide, the unit both the GUI and a headless run are made of: skipped when {@code state}
-     * records it done under the same fingerprint with its files present, else gated and its
-     * per-slide files written. It is recorded done only once its phenotypes are in its data file
-     * too (or no write-back was asked for): a slide skipped for being open in the viewer, or whose
-     * save failed, still owes that write, and a resume must not skip it. Never throws — a failure
-     * of any kind, an {@code OutOfMemoryError} included, is a failed {@link SlideRun}.
+     * One slide, the unit both the GUI and a headless run are made of.
+     * <ul>
+     *   <li>Skipped when {@code state} records it done under the same fingerprint with its files
+     *       present.</li>
+     *   <li>Otherwise its entry is forgotten — persisted before anything is overwritten — then it
+     *       is gated and its per-slide files written.</li>
+     *   <li>It is recorded done only once its phenotypes are in its data file too (or no
+     *       write-back was asked for): a slide skipped for being open in the viewer, or whose save
+     *       failed, still owes that write, and a resume must not skip it.</li>
+     *   <li>A slide that fails has its per-slide files deleted, so nothing half-written can be
+     *       mistaken for a result.</li>
+     * </ul>
+     * Never throws — a failure of any kind, an {@code OutOfMemoryError} included, is a failed
+     * {@link SlideRun}.
+     *
+     * @param detectionFingerprints each slide's {@link CohortSampler#detectionFingerprint}, taken
+     *                              while the sampler held its hierarchy; a slide missing from it
+     *                              is read once more for its fingerprint
      */
-    public static SlideRun step(BatchSlide slide, String fileBase, BatchRunner.Settings settings, RunState state) {
+    public static SlideRun step(BatchSlide slide, String fileBase, BatchRunner.Settings settings, RunState state,
+                                Map<String, String> detectionFingerprints) {
         try {
-            PathObjectHierarchy hierarchy = slide.readHierarchy();
-            List<PathObject> detections = new ArrayList<>(hierarchy.getDetectionObjects());
+            String detections = detectionFingerprints.get(slide.id());
+            if (detections == null) detections = detectionFingerprint(slide);
             TreeResolver.ResolvedTree resolved = TreeResolver.resolve(settings.tree(), slide.id(), settings.alignments());
-            String fingerprint = RunState.fingerprint(resolved.tree(), slide.id(),
-                    CohortSampler.fingerprint(0, detections.size(), detections), version());
+            String fingerprint = RunState.fingerprint(resolved.tree(), slide.id(), detections, version(),
+                    settings.colorRootIndex());
             if (state.isDone(slide.id(), fingerprint, settings.outputDir(), fileBase)) {
                 RunState.Entry e = state.entry(slide.id());
                 return new SlideRun(new BatchResult(slide.id(), slide.name(), e.cells(), e.markers(), null, resolved,
                         null, BatchResult.WriteBack.NOT_REQUESTED, null, null), fileBase, e.sanity(), true);
             }
+            state.forget(slide.id());
             BatchRunner.Gated g = BatchRunner.gateDetailed(slide, fileBase + PHENO_SUFFIX, settings);
-            if (!g.result().succeeded()) return new SlideRun(g.result(), fileBase, List.of(), false);
+            if (!g.result().succeeded()) {
+                deleteOutputs(settings.outputDir(), fileBase);
+                return new SlideRun(g.result(), fileBase, List.of(), false);
+            }
             List<String> sanity = sanity(settings.tree(), g);
             try (Writer w = writer(new File(settings.outputDir(), fileBase + POPULATIONS_SUFFIX))) {
                 PopulationStatsExporter.writeHeader(w, true);
@@ -202,9 +294,37 @@ public final class FlowPathBatch {
             return new SlideRun(g.result(), fileBase, sanity, false);
         } catch (Exception | Error ex) {
             // Error too: one slide's OutOfMemoryError is that slide's failure, not the run's.
+            BatchRunner.restoreInterrupt(ex);
             logger.warn("Batch step failed for {}", slide.name(), ex);
+            try {
+                state.forget(slide.id());
+            } catch (IOException | RuntimeException e) {
+                logger.warn("Could not forget {} in the run state", slide.name(), e);
+            }
+            deleteOutputs(settings.outputDir(), fileBase);
             return new SlideRun(BatchResult.failed(slide.id(), slide.name(), BatchRunner.describe(ex)),
                     fileBase, List.of(), false);
+        }
+    }
+
+    /**
+     * The slide's detection fingerprint from a read of its own. A method of its own so the
+     * hierarchy is unreachable once it returns: gating reads the slide again, and a million-cell
+     * hierarchy must not be held twice.
+     */
+    private static String detectionFingerprint(BatchSlide slide) throws Exception {
+        PathObjectHierarchy hierarchy = slide.readHierarchy();
+        return CohortSampler.detectionFingerprint(new ArrayList<>(hierarchy.getDetectionObjects()));
+    }
+
+    /** Remove a slide's per-slide files: a failed slide must leave nothing to be taken for its result. */
+    private static void deleteOutputs(File outDir, String fileBase) {
+        for (String suffix : List.of(PHENO_SUFFIX, POPULATIONS_SUFFIX, QC_SUFFIX)) {
+            try {
+                Files.deleteIfExists(new File(outDir, fileBase + suffix).toPath());
+            } catch (IOException | RuntimeException e) {
+                logger.warn("Could not delete {}{}", fileBase, suffix, e);
+            }
         }
     }
 
@@ -263,11 +383,14 @@ public final class FlowPathBatch {
      *
      * @param tree     the tree as run, {@code BatchRunner.Settings.tree()}: each result's resolved
      *                 tree is identity-keyed on its nodes
-     * @param evidence the cohort the run was gated against; see {@link CohortEvidence}
+     * @param evidence the cohort the run was gated against, and how it was sampled; see {@link CohortEvidence}
      */
-    public static void finish(File outDir, GateTree tree, List<SlideRun> runs, CohortEvidence evidence, int cellsPerSlide)
+    public static void finish(File outDir, GateTree tree, List<SlideRun> runs, CohortEvidence evidence)
             throws IOException {
-        List<SlideRun> done = runs.stream().filter(r -> r.result().succeeded()).toList();
+        // A slide whose per-slide file vanished since its step (deleted by hand, a full disk
+        // mid-write) is left out and logged, never the end of the bundle; the run state still
+        // checks the files, so the next run gates it again.
+        List<SlideRun> done = runs.stream().filter(r -> r.result().succeeded() && outputsExist(outDir, r)).toList();
         try (Writer w = writer(new File(outDir, BatchRunner.COMBINED_FILE))) {
             PopulationStatsExporter.writeHeader(w, true);
             for (SlideRun r : done) appendAfterHeader(w, new File(outDir, r.fileBase() + POPULATIONS_SUFFIX), true);
@@ -285,8 +408,12 @@ public final class FlowPathBatch {
         try (Writer w = writer(new File(outDir, RUN_INFO))) {
             w.write("flowpath_version=" + version() + "\n");
             w.write("date=" + Instant.now().truncatedTo(ChronoUnit.SECONDS) + "\n");
-            w.write("sampled_cells_per_slide=" + cellsPerSlide + "\n");
+            CohortEvidence.Provenance p = evidence.provenance();
+            w.write("sampled_cells_per_slide=" + p.cellsPerSlide() + "\n");
+            w.write("sample_size_source=" + p.sampleSizeSource() + "\n");
+            if (p.cacheHits() >= 0) w.write("alignment_cache_hits=" + p.cacheHits() + "/" + p.sampled() + "\n");
             w.write("reference_slide=" + (tree.getReferenceSlideId() == null ? "none" : tree.getReferenceSlideId()) + "\n");
+            if (p.referenceSlideName() != null) w.write("reference_slide_name=" + p.referenceSlideName() + "\n");
             w.write("slides=" + runs.size() + "\n");
         }
     }
@@ -405,6 +532,17 @@ public final class FlowPathBatch {
             text = nl < 0 ? "" : text.substring(nl + 1);
         }
         w.write(text);
+    }
+
+    private static boolean outputsExist(File outDir, SlideRun r) {
+        for (String suffix : List.of(PHENO_SUFFIX, POPULATIONS_SUFFIX, QC_SUFFIX)) {
+            if (!new File(outDir, r.fileBase() + suffix).isFile()) {
+                logger.warn("{}{} is missing; {} is left out of the combined outputs and will be gated again next run",
+                        r.fileBase(), suffix, r.result().imageName());
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int countFalse(boolean[] mask) {

@@ -62,6 +62,20 @@ class CohortSamplerTest {
         assertEquals(500, a.detectionCount());
     }
 
+    /** Re-quantified in place: same centroids, new values. Neither fingerprint may match the old one. */
+    @Test
+    void bothFingerprintsSeeValuesNotJustCentroids() {
+        Cells before = cells(3000);
+        Cells after = Cells.of(3000).atGrid(10, 10).marker("CD3", i -> i).marker("CD8", i -> 2.0 * i + 0.5)
+                .area(i -> i % 2 == 0 ? 50 : 100);
+        assertNotEquals(sampled(CohortSampler.sampleOne(slide("s1", before), tree(), 100)).fingerprint(),
+                sampled(CohortSampler.sampleOne(slide("s1", after), tree(), 100)).fingerprint(), "the cache key");
+        assertNotEquals(CohortSampler.detectionFingerprint(before.detections()),
+                CohortSampler.detectionFingerprint(after.detections()), "the resume key");
+        assertEquals(CohortSampler.detectionFingerprint(before.detections()),
+                CohortSampler.detectionFingerprint(cells(3000).detections()), "and it is deterministic");
+    }
+
     @Test
     void zeroMeansEveryCellAndTheSettingIsInTheFingerprint() {
         Cells population = cells(300);

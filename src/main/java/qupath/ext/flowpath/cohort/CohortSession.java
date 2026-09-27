@@ -322,7 +322,7 @@ public final class CohortSession {
      * is unavailable. "Ready to run" reports the cohort's own readiness — sampling finished and no
      * batch of its own going — the same {@code !batchRunning} rule {@link CohortState#canRunBatch}
      * already states; whether the run button is also blocked by an unrelated background worker or
-     * an empty tree is {@code BusyState.batchBlocked()} / {@code BatchRunCoordinator.hasEnabledGate}'s
+     * an empty tree is {@code BusyState.batchBlocked()} / {@code BatchRunner.hasEnabledGate}'s
      * decision, not a second one made here.
      */
     public String statusLine() {

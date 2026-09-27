@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.OptionalInt;
 
 /**
  * {@code <project>/flowpath/alignment-cache.json}: derived data, safe to delete, never in undo.
@@ -23,6 +24,7 @@ public final class AlignmentCacheFile {
 
     private static final Logger logger = LoggerFactory.getLogger(AlignmentCacheFile.class);
     private static final int VERSION = 1;
+    private static final String SAMPLED_CELLS = "sampledCellsPerSlide";
 
     private AlignmentCacheFile() {}
 
@@ -57,14 +59,32 @@ public final class AlignmentCacheFile {
     }
 
     /**
-     * Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed. An
-     * empty cache is never written: it holds nothing worth keeping, and over an existing file it
-     * would throw away every landmark and the fixed per-column cofactors.
+     * The cells-per-slide sample size the cache at {@code file} was built from, when it records
+     * one. A headless run samples with it, so it reproduces the alignments the GUI showed rather
+     * than whatever the machine it runs on has in its preferences.
      */
-    public static void write(Path file, AlignmentModel.Cache cache) throws IOException {
+    public static OptionalInt sampledCellsPerSlide(Path file) {
+        if (!Files.isRegularFile(file)) return OptionalInt.empty();
+        try {
+            JsonObject root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
+            return root.has(SAMPLED_CELLS) ? OptionalInt.of(root.get(SAMPLED_CELLS).getAsInt()) : OptionalInt.empty();
+        } catch (IOException | RuntimeException e) {
+            logger.warn("Ignoring unreadable alignment cache {}", file, e);
+            return OptionalInt.empty();
+        }
+    }
+
+    /**
+     * Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed,
+     * recording the sample size its landmarks were found from. An empty cache is never written: it
+     * holds nothing worth keeping, and over an existing file it would throw away every landmark
+     * and the fixed per-column cofactors.
+     */
+    public static void write(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) throws IOException {
         if (cache.isEmpty()) return;
         JsonObject root = new JsonObject();
         root.addProperty("version", VERSION);
+        root.addProperty(SAMPLED_CELLS, sampledCellsPerSlide);
         JsonObject cofactors = new JsonObject();
         cache.cofactors().forEach(cofactors::addProperty);
         root.add("cofactors", cofactors);
