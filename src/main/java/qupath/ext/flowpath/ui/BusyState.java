@@ -3,7 +3,7 @@ package qupath.ext.flowpath.ui;
 import java.util.Optional;
 
 /**
- * What the panel may offer while these three background workers are busy — not whether
+ * What the panel may offer while its background workers are busy — not whether
  * anything is running at all; see the note below on {@code FlowPathPane.updateSpinner}.
  * <p>
  * The pane's three background workers each used to decide for themselves what to disable:
@@ -27,11 +27,19 @@ import java.util.Optional;
  *
  * @param loading   a new image's cells are being read: the session has none yet
  * @param deriving  the masks and statistics are being recomputed for a tree edit already made
- * @param exporting the CSV writer is running, from a snapshot taken when it started
+ * <p>
+ * Two cohort workers joined later, and neither blocks editing: sampling the project's other
+ * slides and a batch run over all of them each work from a copy of the tree taken when they
+ * started. Both can last minutes, so neither replaces the status bar's counts either — their
+ * progress is appended to it from {@code CohortState.message()}.
+ *
+ * @param exporting    the CSV writer is running, from a snapshot taken when it started
+ * @param sampling     the project's slides are being sampled for staining alignment
+ * @param batchRunning the gate tree is being run on every slide of the project
  */
-record BusyState(boolean loading, boolean deriving, boolean exporting) {
+record BusyState(boolean loading, boolean deriving, boolean exporting, boolean sampling, boolean batchRunning) {
 
-    static final BusyState IDLE = new BusyState(false, false, false);
+    static final BusyState IDLE = new BusyState(false, false, false, false, false);
 
     /**
      * Whether the gate the editor shows may be edited.
@@ -41,6 +49,9 @@ record BusyState(boolean loading, boolean deriving, boolean exporting) {
      * that would run against statistics the session is in the middle of replacing — a
      * re-pointed legacy z-score gate would be converted through the outgoing statistics and
      * keep the wrong threshold for good.
+     * <p>
+     * Sampling other slides and a batch run never block editing: neither reads the live tree
+     * after it starts.
      */
     boolean editingBlocked() {
         return loading || deriving;
@@ -49,10 +60,19 @@ record BusyState(boolean loading, boolean deriving, boolean exporting) {
     /**
      * Whether a CSV export may start. The export snapshots the tree, the statistics, the ROI
      * mask and the regions together; mid-derivation those describe two different states, so
-     * the file would be gated against masks the tree it names never saw.
+     * the file would be gated against masks the tree it names never saw. Not during a batch
+     * run either: one background writer at a time.
      */
     boolean exportBlocked() {
-        return loading || deriving || exporting;
+        return loading || deriving || exporting || batchRunning;
+    }
+
+    /**
+     * Whether a batch run may start. One background writer at a time: a batch run waits for an
+     * export, a read or a derivation, and for the batch run already going.
+     */
+    boolean batchBlocked() {
+        return loading || deriving || exporting || batchRunning;
     }
 
     /**
@@ -66,6 +86,8 @@ record BusyState(boolean loading, boolean deriving, boolean exporting) {
     Optional<String> message() {
         if (loading) return Optional.of("Reading detections…");
         if (deriving) return Optional.of("Recomputing statistics…");
+        // Sampling and a batch run can last minutes: their progress is appended to the normal
+        // status line from CohortState.message() rather than replacing the cell counts.
         return Optional.empty();
     }
 }

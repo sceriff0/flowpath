@@ -16,10 +16,15 @@ import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
+import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.CohortPrefs;
+import qupath.ext.flowpath.cohort.CohortSampler;
+import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.engine.TreeResolver;
+import qupath.ext.flowpath.io.AlignmentCacheFile;
 import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
@@ -48,12 +53,16 @@ import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.PixelCalibration;
+import qupath.lib.projects.Project;
 
 import java.util.List;
 import qupath.lib.objects.PathObject;
 import qupath.lib.roi.interfaces.ROI;
 
+import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -139,11 +148,28 @@ public class FlowPathPane extends BorderPane {
     private final GatingSession session;
 
     /**
-     * Where the open slide's applied values come from, assigned directly by a later task
-     * (cohort alignment) once one is computed; {@link AlignmentLookup#NONE} until then, which
-     * makes every gate resolve to its reference number.
+     * Where the open slide's applied values come from: {@link #cohort}'s one stable lookup,
+     * assigned in the constructor. It reads the cohort's current alignment model on every pass
+     * and answers null — every gate on its reference number — until one is computed.
      */
     private AlignmentLookup alignments = AlignmentLookup.NONE;
+
+    /**
+     * The project id of the slide whose cells {@link GatingSession#index()} holds, taken with the
+     * index when it lands (see {@link IngestHost#ingested}) rather than read from the viewer. The
+     * viewer switches images before the read is even submitted, so reading the id there let a
+     * Ctrl+E — or a gating pass — pair the new slide's id with the previous slide's cells.
+     */
+    private String indexSlideId;
+
+    /** The project's slides, their samples, the alignment model and the review; see {@link #refreshCohort()}. */
+    private final CohortSession cohort = new CohortSession();
+
+    /** Samples the project's slides and scores them on {@link #backgroundExecutor}. */
+    private final CohortCoordinator cohortCoordinator;
+
+    /** The slide ids and sample size the running or last sampling run was started for. */
+    private String lastSampledKey;
 
     private List<String> markerNames;
     private CompartmentCapability compartmentCapability = CompartmentCapability.empty();
@@ -412,6 +438,15 @@ public class FlowPathPane extends BorderPane {
         // so it never races an ingest for the session's inputs.
         csvExport = new CsvExportCoordinator(backgroundExecutor, Platform::runLater, new CsvExportHost());
 
+        // The same executor again, one slide per task: a pass, a derivation or an export queued
+        // meanwhile runs between two slides rather than after the whole project.
+        cohortCoordinator = new CohortCoordinator(cohort, backgroundExecutor, Platform::runLater, new CohortHost());
+
+        // A plain assignment, once: the lookup is one stable instance that reads the cohort's
+        // current model on every pass, so nothing has to hand the pass a new one later.
+        alignments = cohort.lookup();
+        applySlideContext();
+
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
 
@@ -457,6 +492,7 @@ public class FlowPathPane extends BorderPane {
          */
         @Override
         public void cleared(IngestCoordinator.Cleared why) {
+            indexSlideId = null;
             markerNames = Collections.emptyList();
             ingestReport = IngestReport.empty();
             previewService.setImageData(null);
@@ -473,6 +509,7 @@ public class FlowPathPane extends BorderPane {
             if (why == IngestCoordinator.Cleared.NO_DETECTIONS) {
                 Dialogs.showWarningNotification("FlowPath", "No detections found. Import GeoJSON cells first.");
             }
+            refreshCohort();
         }
 
         /**
@@ -496,6 +533,8 @@ public class FlowPathPane extends BorderPane {
             // from the index's discovered morphology.
             qualityFilterPane.setCellIndex(result.index());
             previewService.setImageData(imageData);
+            indexSlideId = slideIdOf(imageData);
+            refreshCohort();
         }
 
         @Override
@@ -565,6 +604,86 @@ public class FlowPathPane extends BorderPane {
         }
     }
 
+    /** What {@link #cohortCoordinator} asks of this pane. Every call arrives on the FX thread. */
+    private final class CohortHost implements CohortCoordinator.Host {
+
+        @Override
+        public void sampled(CohortSampler.Outcome outcome) {
+            cohortCoordinator.rescore(session.tree());
+            updateBusyControls();
+        }
+
+        /** The landmarks found are derived data: written to the project's cache in the background. */
+        @Override
+        public void samplingFinished() {
+            Project<BufferedImage> project = qupath.getProject();
+            if (project != null) {
+                AlignmentModel.Cache cache = cohort.model().cache();
+                Path file = AlignmentCacheFile.pathFor(ProjectSlides.projectDir(project));
+                backgroundExecutor.execute(() -> {
+                    try {
+                        AlignmentCacheFile.write(file, cache);
+                    } catch (IOException e) {
+                        logger.warn("Could not write the alignment cache", e);
+                    }
+                });
+            }
+            updateBusyControls();
+        }
+
+        /**
+         * A pass is requested only when an alignment changed: every pass rescores (see
+         * {@link #onPreviewUpdated()}), so requesting one on every rescore would never stop.
+         */
+        @Override
+        public void scored(boolean alignmentsChanged) {
+            if (alignmentsChanged) {
+                refreshAncestorMask();
+                requestPreviewUpdate();
+            }
+            updateBusyControls();
+            onCohortScored();
+        }
+    }
+
+    /** A rescore was adopted. The review list and the editor's cohort view hook in here. */
+    private void onCohortScored() {
+    }
+
+    /**
+     * Bring {@link #cohort} in line with the project: its slides, the default reference slide,
+     * a sampling run when the slides or the sample size changed, and a rescore. Called when an
+     * ingest lands or clears, before its resync requests the pass.
+     */
+    private void refreshCohort() {
+        Project<BufferedImage> project = qupath.getProject();
+        if (project == null) {
+            cohort.setProjectSlides(List.of());
+            cohortCoordinator.cancel();
+            lastSampledKey = null;
+            updateBusyControls();
+            return;
+        }
+        List<CohortSession.SlideRef> refs = ProjectSlides.refs(project);
+        cohort.setProjectSlides(refs);
+        if (refs.size() < 2) {
+            updateBusyControls();
+            return;
+        }
+        // The open slide becomes the reference the first time the cohort is seen (spec §3), as
+        // one undo step (ruling C9). The resync this ingest ends in requests the pass.
+        session.applyDefaultReference(currentSlideId());
+        int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
+        String key = refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
+        if (!key.equals(lastSampledKey)) {
+            lastSampledKey = key;
+            cohort.setCache(AlignmentCacheFile.read(AlignmentCacheFile.pathFor(ProjectSlides.projectDir(project))));
+            cohortCoordinator.start(ProjectSlides.sources(project), session.tree(), cells);
+        }
+        cohortCoordinator.rescore(session.tree());
+        updateBusyControls();
+    }
+
     /**
      * The one place that applies {@link BusyState} to the widgets — every background worker
      * reports its state here rather than each disabling its own set of controls, and the rule
@@ -590,10 +709,11 @@ public class FlowPathPane extends BorderPane {
         updateStatusBar();
     }
 
-    /** What the three background workers are doing right now; see {@link BusyState}. */
+    /** What the background workers are doing right now; see {@link BusyState}. */
     private BusyState busyState() {
         return new BusyState(ingest.busy() == IngestCoordinator.Busy.LOADING,
-                derivations.deriving(), csvExport.exporting());
+                derivations.deriving(), csvExport.exporting(), cohortCoordinator.sampling(),
+                cohort.state().batchRunning());
     }
 
     /**
@@ -610,7 +730,7 @@ public class FlowPathPane extends BorderPane {
 
     private void updateSpinner() {
         spinner.setVisible(previewRunning || ingest.busy() != IngestCoordinator.Busy.IDLE
-                || derivations.deriving() || csvExport.exporting());
+                || derivations.deriving() || csvExport.exporting() || cohortCoordinator.sampling());
     }
 
     /**
@@ -959,13 +1079,22 @@ public class FlowPathPane extends BorderPane {
                 session.combinedMask());
     }
 
-    /** The open image's project id, or null outside a project (then every number is the reference). */
+    /**
+     * The project id of the slide whose cells the session holds, or null outside a project
+     * (then every number is the reference). Taken with the index, never from the viewer; see
+     * {@link #indexSlideId}.
+     */
     private String currentSlideId() {
+        return indexSlideId;
+    }
+
+    /** {@code data}'s project id, or null when there is no project or it holds no entry for it. */
+    @SuppressWarnings("unchecked")
+    private String slideIdOf(ImageData<?> data) {
         try {
-            var project = qupath.getProject();
-            var data = qupath.getImageData();
+            Project<BufferedImage> project = qupath.getProject();
             if (project == null || data == null) return null;
-            var entry = project.getEntry(data);
+            var entry = project.getEntry((ImageData<BufferedImage>) data);
             return entry == null ? null : entry.getID();
         } catch (Exception e) {
             logger.debug("No project entry for the open image", e);
@@ -1198,6 +1327,9 @@ public class FlowPathPane extends BorderPane {
                 analysisWindow.push(input);
             }
         }
+
+        // A rescore requests a pass only when an alignment changed, so this cannot loop.
+        if (cohort.state().available()) cohortCoordinator.rescore(session.tree());
     }
 
     // --- UMAP handoff ---
@@ -1594,8 +1726,11 @@ public class FlowPathPane extends BorderPane {
         int excluded = previewService.getLastExcludedCount();
         int gateCount = countGates(session.tree().getRoots());
         String roiInfo = session.tree().isRoiFilterEnabled() ? describeRegions() : "";
-        statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s%s",
-            total, excluded, gateCount, roiInfo, ingestWarning()));
+        // Sampling and a batch run last minutes: their progress rides on the counts, not over them.
+        String cohortMessage = cohort.state().message();
+        statusBar.setText(String.format("Total: %,d cells | Excluded: %,d | Gates: %d%s%s%s",
+            total, excluded, gateCount, roiInfo, ingestWarning(),
+            cohortMessage == null ? "" : " | " + cohortMessage));
         // The full report goes in the tooltip rather than a dialog: an ingest finding is
         // context for reading the histograms, not an event that should block the user.
         statusBar.setTooltip(session.index() == null ? null : new Tooltip(ingestReport.describe()));
@@ -1966,6 +2101,7 @@ public class FlowPathPane extends BorderPane {
      * past this point would only be a leak — see {@code AnalysisWindow.dispose()}'s own javadoc.
      */
     public void shutdown() {
+        cohortCoordinator.cancel();
         ingest.close();
         derivations.close();
         umapWindow.close();

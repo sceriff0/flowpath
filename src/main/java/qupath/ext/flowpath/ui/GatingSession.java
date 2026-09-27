@@ -372,6 +372,30 @@ final class GatingSession {
     }
 
     /**
+     * The first time a cohort is seen with a tree that names no reference slide, the open slide
+     * becomes the reference (spec §3) — as one undo step recorded before the change, then
+     * settled (pre-flight ruling C9). It changes no number on the open slide, but it switches
+     * correction on for every other slide; left out of the undo history, every snapshot taken
+     * before it would hold no reference, and undoing past this moment would switch correction
+     * off without anything having recorded that it was ever on.
+     * <p>
+     * Undoing this step restores the pre-state honestly (no reference: every slide gates on the
+     * reference numbers) and redo restores the reference; the next cohort refresh calls this
+     * again and, finding no reference, re-applies the default as a fresh step.
+     *
+     * @param openSlideId the project id of the slide whose cells the session holds; null outside
+     *                    a project, when nothing is set
+     * @return whether the reference was set (and a step recorded)
+     */
+    boolean applyDefaultReference(String openSlideId) {
+        if (openSlideId == null || tree.getReferenceSlideId() != null) return false;
+        undoHistory.record(tree);
+        tree.setReferenceSlideId(openSlideId);
+        settle();
+        return true;
+    }
+
+    /**
      * Record the tree before a gate is replaced by one of another type (a shape of another
      * kind drawn over it), as one undo step. The editor writes the drawn shape and reports the
      * change straight after, through {@link #recordAppliedEdit}{@code (GATE)}; that report is

@@ -59,6 +59,8 @@ public final class Alignment {
     public Kind kind() { return kind; }
     public double cofactor() { return cofactor; }
     public double stretch() { return stretch; }
+    /** The asinh-space offset of g(u) = stretch * u + offset; 0 for identity. */
+    public double offset() { return offset; }
     /** Slide L1 minus reference L1, asinh units; 0 for identity. */
     public double shift() { return shift; }
 }
