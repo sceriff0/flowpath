@@ -35,6 +35,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 /**
  * Runs the gate tree over every slide, headlessly: no JavaFX, no {@code QuPathGUI}, no
@@ -50,22 +51,29 @@ public final class BatchRunner {
 
     public static final String COMBINED_FILE = "batch_populations.csv";
 
-    public record Settings(GateTree tree, AlignmentLookup alignments, File outputDir, String openSlideId,
+    /**
+     * @param isOpen whether a slide id is open in the viewer <em>now</em> — asked live, from the
+     *               background thread, at every write-back check (see {@link #writeBack}), because
+     *               the user can open or close slides while the run goes. Must be thread-safe.
+     */
+    public record Settings(GateTree tree, AlignmentLookup alignments, File outputDir, Predicate<String> isOpen,
                            boolean writeBack, int colorRootIndex) {
         public Settings {
             Objects.requireNonNull(tree, "tree");
             Objects.requireNonNull(outputDir, "outputDir");
             tree = tree.deepCopy();   // frozen once: an edit made while the run goes never reaches it
             alignments = alignments == null ? AlignmentLookup.NONE : alignments;
+            isOpen = isOpen == null ? id -> false : isOpen;
         }
 
         /**
-         * Same as the 6-arg form with colour root -1 (a root's own colours, or the last enabled
-         * root's when none is chosen) — the default for a caller with no open viewer to match.
+         * For a caller whose open slide cannot change during the run — headless, where it is
+         * null: one fixed id (or none), and colour root -1 (a root's own colours, or the last
+         * enabled root's when none is chosen), the default for a caller with no viewer to match.
          */
         public Settings(GateTree tree, AlignmentLookup alignments, File outputDir, String openSlideId,
                         boolean writeBack) {
-            this(tree, alignments, outputDir, openSlideId, writeBack, -1);
+            this(tree, alignments, outputDir, openSlideId == null ? null : openSlideId::equals, writeBack, -1);
         }
     }
 
@@ -91,6 +99,9 @@ public final class BatchRunner {
 
     public static BatchResult gateOne(BatchSlide slide, String phenoFileName, Settings settings) {
         try {
+            // Asked before the read: a slide open now may be saved from QuPath after this read,
+            // and writing back what was read would then lose those edits.
+            boolean openAtRead = settings.isOpen().test(slide.id());
             ImageData<BufferedImage> data = slide.read();
             List<PathObject> detections = new ArrayList<>(data.getHierarchy().getDetectionObjects());
             if (detections.isEmpty()) return BatchResult.failed(slide.id(), slide.name(), "no detections on this slide");
@@ -117,7 +128,7 @@ public final class BatchRunner {
 
             BatchResult ok = new BatchResult(slide.id(), slide.name(), index.size(), ingest.markerNames(), population,
                     resolved, ingest.report(), BatchResult.WriteBack.NOT_REQUESTED, null, null);
-            return writeBack(ok, slide, data, index, result, settings);
+            return writeBack(ok, slide, data, index, result, settings, openAtRead);
         } catch (Exception | Error ex) {
             // Error too: gating every cell of a large slide is where an OutOfMemoryError is plausible.
             logger.warn("Batch gating failed for {}", slide.name(), ex);
@@ -127,16 +138,25 @@ public final class BatchRunner {
     }
 
     /**
-     * Phenotypes into the slide's own .qpdata — except the slide open in the viewer, whose file is
-     * never written behind QuPath's back (QuPath would overwrite it on its next save); the live
-     * pass has already classified it with the same resolved tree.
+     * Phenotypes into the slide's own .qpdata — except a slide open in the viewer, whose file is
+     * never written behind QuPath's back (QuPath would overwrite it on its next save, and a save
+     * from QuPath between this run's read and its write would be lost); the live pass classifies
+     * an open slide itself.
+     * <p>
+     * "Open" is asked live, three times: before the read ({@code openAtRead}), before the classes
+     * are written, and right before the save. A slide open at any of them is skipped. What remains
+     * is the gap between the last check and the end of {@code slide.save} — milliseconds to write
+     * one file — during which a slide opened <em>and</em> saved from QuPath would still be
+     * overwritten; closing it entirely would need a lock QuPath does not offer.
      */
     static BatchResult writeBack(BatchResult ok, BatchSlide slide, ImageData<BufferedImage> data, CellIndex index,
-                                 GatingEngine.AssignmentResult result, Settings settings) {
+                                 GatingEngine.AssignmentResult result, Settings settings, boolean openAtRead) {
         if (!settings.writeBack()) return ok;
-        if (slide.id().equals(settings.openSlideId())) return ok.withWriteBack(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null);
+        BatchResult skipped = ok.withWriteBack(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null);
+        if (openAtRead || settings.isOpen().test(slide.id())) return skipped;
         try {
             PhenotypeClassWriter.apply(result, index, settings.colorRootIndex());
+            if (settings.isOpen().test(slide.id())) return skipped;
             slide.save(data);
             return ok.withWriteBack(BatchResult.WriteBack.SAVED, null);
         } catch (Exception | Error ex) {
@@ -186,8 +206,20 @@ public final class BatchRunner {
         GatingManifestExporter.write(new File(dir, GatingManifestExporter.FILE), tree, results, annotations);
     }
 
-    /** Plain words for the run report: a silently short table would hide which slides are missing and why. */
+    /** {@link #summary(File, List, int, boolean, Predicate)} with every skipped slide taken as still open. */
     public static String summary(File dir, List<BatchResult> results, int total, boolean cancelled) {
+        return summary(dir, results, total, cancelled, id -> true);
+    }
+
+    /**
+     * Plain words for the run report: a silently short table would hide which slides are missing
+     * and why.
+     *
+     * @param openNow whether a slide is open in the viewer as the report is shown: a slide skipped
+     *                for being open, but closed since, can no longer be saved from QuPath
+     */
+    public static String summary(File dir, List<BatchResult> results, int total, boolean cancelled,
+                                 Predicate<String> openNow) {
         long ok = results.stream().filter(BatchResult::succeeded).count();
         StringBuilder sb = new StringBuilder();
         sb.append(cancelled ? "Cancelled after " + results.size() + " of " + total + " slide(s). "
@@ -198,7 +230,9 @@ public final class BatchRunner {
                 .map(r -> r.imageName() + " — " + r.failure()).toList());
         section(sb, "Not saved, open in the viewer:", results.stream()
                 .filter(r -> r.writeBack() == BatchResult.WriteBack.SKIPPED_OPEN_SLIDE)
-                .map(r -> r.imageName() + " — already classified; save it from QuPath").toList());
+                .map(r -> r.imageName() + (openNow.test(r.slideId())
+                        ? " — already classified; save it from QuPath"
+                        : " — closed since; its phenotypes were not written, run again to write them")).toList());
         section(sb, "Could not save:", results.stream()
                 .filter(r -> r.writeBack() == BatchResult.WriteBack.FAILED)
                 .map(r -> r.imageName() + " — " + r.writeBackError()).toList());

@@ -1,5 +1,8 @@
 package qupath.ext.flowpath.batch;
 
+import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.ReviewScorer;
+import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.CellTable;
 import qupath.ext.flowpath.model.GateTree;
@@ -39,6 +42,28 @@ public final class GatingManifestExporter {
             @Override public Landmarks slide(String slideId, String columnKey) { return null; }
             @Override public String flags(String slideId, int rootIndex, String gatePath) { return ""; }
         };
+
+        /**
+         * The cohort's model and review as they stood when the run started. The landmark columns
+         * describe the correction the run applied, so they are blank when {@code lookup} — the
+         * run's alignments — is {@link AlignmentLookup#NONE}: correction disabled, a foreign
+         * tree, or a model built for another reference would otherwise put landmarks beside
+         * thresholds they never moved. The review flags stand either way.
+         */
+        static Annotations of(AlignmentModel model, ReviewScorer.Result review, AlignmentLookup lookup) {
+            boolean corrected = lookup != null && lookup != AlignmentLookup.NONE;
+            return new Annotations() {
+                @Override public Landmarks reference(String columnKey) {
+                    return corrected ? model.referenceLandmarks(columnKey) : null;
+                }
+                @Override public Landmarks slide(String slideId, String columnKey) {
+                    return corrected ? model.landmarks(slideId, columnKey) : null;
+                }
+                @Override public String flags(String slideId, int rootIndex, String gatePath) {
+                    return review.flagsFor(slideId, rootIndex, gatePath);
+                }
+            };
+        }
     }
 
     private GatingManifestExporter() {}

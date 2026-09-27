@@ -19,7 +19,9 @@ import java.util.concurrent.Executor;
  * One "Run on all slides" at a time on the shared background executor, one slide per task, so
  * the rest of FlowPath's background work — an edit's derivation, a re-ingest, a sampling step —
  * interleaves between two slides instead of waiting for the whole project. The next slide is
- * submitted only after the previous one has landed on the FX thread.
+ * submitted only after the previous one has landed on the FX thread, so a derivation or an ingest
+ * queued during a run waits at most for the one slide being gated (plus the final write, which
+ * runs as one task after the last slide).
  * <p>
  * Same shape as {@link CsvExportCoordinator}: a second {@link #run} while one is going is
  * ignored, and the finishing write catches {@code Error} as well as {@code Exception}, so an
@@ -31,6 +33,11 @@ import java.util.concurrent.Executor;
  * edits made while it runs never reach it — which is why editing stays allowed during a run
  * ({@link BusyState#editingBlocked()} does not include it). Cancelling stops before the next
  * slide; the slides already gated are still written out and the outcome says it was cancelled.
+ * <p>
+ * {@link #close()} — the pane going away — abandons the run: the executor is shut down with
+ * {@code shutdownNow()}, which interrupts the slide in flight, so that slide's phenotype CSV or
+ * its {@code .qpdata} save may be left unwritten or incomplete, and the combined outputs are never
+ * written.
  * <p>
  * Toolkit-free: both executors are injected and a test drives them by hand. {@link #check} is
  * the decision the pane shows before a run — refused, or confirmed with the unreviewed count —
@@ -96,7 +103,7 @@ final class BatchRunCoordinator {
      * @param unreviewed the review items still open ({@code CohortState.remaining()})
      */
     static Start check(GateTree tree, List<BatchSlide> slides, int unreviewed) {
-        if (tree.getRoots().stream().noneMatch(GateNode::isEnabled)) return new Refused("No enabled gates to run.");
+        if (!hasEnabledGate(tree)) return new Refused("No enabled gates to run.");
         if (slides.isEmpty()) return new Refused("This project has no images.");
         String foreign = BatchRunner.refusal(tree, slides);
         if (foreign != null) return new Refused(foreign);
@@ -107,9 +114,14 @@ final class BatchRunCoordinator {
         if (unreviewed > 0) {
             sb.append("\n\n").append(unreviewed)
               .append(unreviewed == 1 ? " review item is still unreviewed" : " review items are still unreviewed")
-              .append(": those slides run on the thresholds shown now.");
+              .append(": the slides they concern run on the thresholds shown now.");
         }
         return new Confirm(sb.toString());
+    }
+
+    /** Whether {@code tree} has anything to run: the one rule both {@link #check} and the button use. */
+    static boolean hasEnabledGate(GateTree tree) {
+        return tree.getRoots().stream().anyMatch(GateNode::isEnabled);
     }
 
     /** A run is going: the caller offers Cancel instead of starting another. */

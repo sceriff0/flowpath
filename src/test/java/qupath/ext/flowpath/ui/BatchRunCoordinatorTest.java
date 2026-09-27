@@ -118,6 +118,52 @@ class BatchRunCoordinatorTest {
         assertTrue(c.running(), "a failed run does not block the next one");
     }
 
+    private static int count(qupath.ext.flowpath.batch.BatchResult r, int rootIndex, String branch) {
+        return r.stats().rows(qupath.ext.flowpath.model.PopulationStats.Scope.WHOLE_SLIDE).stream()
+                .filter(row -> row.rootIndex() == rootIndex && row.branchName().equals(branch))
+                .findFirst().orElseThrow().count();
+    }
+
+    @Test
+    void aTreeEditMadeMidRunNeverReachesTheRun(@TempDir Path dir) {
+        // CD3 (0), CD8 (1), a second CD3 root (2): two roots on one channel.
+        GateTree live = GateTreeFixtures.twoRootsOnCd3AndCd8(3, 5);
+        qupath.ext.flowpath.model.GateNode second = new qupath.ext.flowpath.model.GateNode("CD3", 3);
+        second.setStatistic(qupath.ext.flowpath.model.Statistic.MEAN);
+        live.addRoot(second);
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        Host host = new Host();
+        BatchRunCoordinator c = new BatchRunCoordinator(bg, fx, host);
+        c.run(List.of(slide("a"), slide("b")),
+                new BatchRunner.Settings(live, AlignmentLookup.NONE, dir.toFile(), null, false), (d, r) -> {});
+        bg.runNext(); fx.runAll();
+
+        live.getRoots().get(0).setThreshold(8);      // the user edits while slide b waits
+        live.getRoots().get(2).setThreshold(9);
+        bg.runNext(); fx.runAll(); bg.runAll(); fx.runAll();
+
+        qupath.ext.flowpath.batch.BatchResult b = host.outcome.results().get(1);
+        assertEquals(7, count(b, 0, "CD3+"), "slide b is gated at the threshold the run started with (CD3 = 3..9)");
+        assertEquals(7, count(b, 2, "CD3+"), "and so is the same-channel sibling");
+    }
+
+    @Test
+    void closeBetweenASlideAndItsLandingReportsNothingAndSubmitsNothing(@TempDir Path dir) {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        Host host = new Host();
+        BatchRunCoordinator c = new BatchRunCoordinator(bg, fx, host);
+        c.run(List.of(slide("a"), slide("b")), settings(dir), (d, r) -> fail("no outputs after close"));
+        bg.runNext();                 // slide a gated; its landing is queued on the FX thread
+        c.close();
+        fx.runAll();
+
+        assertEquals(List.of(), host.events, "no progress, finished or failed");
+        assertTrue(bg.queue.isEmpty(), "no further slide or write submitted");
+        assertTrue(fx.queue.isEmpty());
+        c.run(List.of(slide("z")), settings(dir), (d, r) -> fail("a closed coordinator starts nothing"));
+        assertTrue(bg.queue.isEmpty());
+    }
+
     // ---- starting a run: refusal and confirmation ------------------------------------------
 
     @Test
@@ -127,6 +173,17 @@ class BatchRunCoordinatorTest {
         BatchRunCoordinator.Start start = BatchRunCoordinator.check(tree, List.of(slide("a"), slide("b")), 0);
         BatchRunCoordinator.Refused refused = assertInstanceOf(BatchRunCoordinator.Refused.class, start);
         assertTrue(refused.message().startsWith(CohortSession.FOREIGN_TREE), refused.message());
+    }
+
+    @Test
+    void hasEnabledGateIsTheOneRuleForTheButtonAndTheCheck() {
+        assertFalse(BatchRunCoordinator.hasEnabledGate(new GateTree()));
+        GateTree tree = GateTreeFixtures.twoRootsOnCd3AndCd8(3, 5);
+        assertTrue(BatchRunCoordinator.hasEnabledGate(tree));
+        tree.getRoots().get(0).setEnabled(false);
+        assertTrue(BatchRunCoordinator.hasEnabledGate(tree), "one enabled root is enough");
+        tree.getRoots().get(1).setEnabled(false);
+        assertFalse(BatchRunCoordinator.hasEnabledGate(tree));
     }
 
     @Test
@@ -157,5 +214,6 @@ class BatchRunCoordinatorTest {
         String five = assertInstanceOf(BatchRunCoordinator.Confirm.class,
                 BatchRunCoordinator.check(tree, slides, 5)).message();
         assertTrue(five.contains("5 review items are still unreviewed"), five);
+        assertTrue(five.contains("the slides they concern run on the thresholds shown now"), five);
     }
 }

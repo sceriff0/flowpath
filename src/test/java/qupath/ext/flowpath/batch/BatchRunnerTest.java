@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -248,5 +249,112 @@ class BatchRunnerTest {
         String refusal = BatchRunner.refusal(tree, slides);
         assertNotNull(refusal);
         assertTrue(refusal.startsWith(qupath.ext.flowpath.cohort.CohortSession.FOREIGN_TREE), refusal);
+    }
+
+    // ---- the open slide, asked live (review fix round 1) -----------------------------------
+
+    /** A slide whose {@code read()} runs {@code onRead} first, recording saves into {@code saved}. */
+    static BatchSlide slideThat(String id, Cells cells, List<String> saved, Runnable onRead) {
+        BatchSlide inner = slide(id, cells, saved);
+        return new BatchSlide() {
+            @Override public String id() { return id; }
+            @Override public String name() { return inner.name(); }
+            @Override public ImageData<BufferedImage> read() throws Exception { onRead.run(); return inner.read(); }
+            @Override public void save(ImageData<BufferedImage> d) throws Exception { inner.save(d); }
+        };
+    }
+
+    @Test
+    void aSlideOpenedAfterItsReadIsNeitherClassifiedNorSaved(@TempDir Path dir) {
+        AtomicBoolean open = new AtomicBoolean(false);
+        List<String> saved = new ArrayList<>();
+        Cells cells = cells();
+        BatchResult r = BatchRunner.run(List.of(slideThat("s1", cells, saved, () -> open.set(true))),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1),
+                (i, n) -> {}, () -> false).get(0);
+
+        assertTrue(r.succeeded(), "still gated and exported");
+        assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, r.writeBack());
+        assertEquals(List.of(), saved, "save is never called for a slide the viewer now holds");
+        assertTrue(cells.detections().stream().allMatch(o -> o.getPathClass() == null), "no class written either");
+        // Both same-channel CD3 roots were still gated on it.
+        assertEquals(10, count(r, 0, "CD3+"));
+        assertEquals(10, count(r, 2, "CD3+"));
+    }
+
+    @Test
+    void aSlideOpenWhenTheRunStartedButClosedBeforeItIsReachedIsSaved(@TempDir Path dir) {
+        AtomicReference<String> viewer = new AtomicReference<>("s1");
+        List<String> saved = new ArrayList<>();
+        List<BatchResult> results = BatchRunner.run(List.of(
+                        slideThat("a", cells(), saved, () -> viewer.set(null)),   // the user closes s1 meanwhile
+                        slide("s1", cells(), saved)),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> id.equals(viewer.get()), true, -1),
+                (i, n) -> {}, () -> false);
+
+        assertEquals(BatchResult.WriteBack.SAVED, results.get(1).writeBack());
+        assertEquals(List.of("a", "s1"), saved);
+        assertEquals(10, count(results.get(1), 0, "CD3+"));
+        assertEquals(10, count(results.get(1), 2, "CD3+"));
+    }
+
+    @Test
+    void aSlideOpenWhenItWasReadIsNotSavedEvenIfClosedBeforeTheWrite(@TempDir Path dir) {
+        AtomicBoolean open = new AtomicBoolean(true);
+        List<String> saved = new ArrayList<>();
+        // Closed during the read: QuPath may have saved it between the check and the close.
+        BatchResult r = BatchRunner.run(List.of(slideThat("s1", cells(), saved, () -> open.set(false))),
+                new BatchRunner.Settings(tree(), AlignmentLookup.NONE, dir.toFile(), id -> open.get(), true, -1),
+                (i, n) -> {}, () -> false).get(0);
+        assertEquals(BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, r.writeBack());
+        assertEquals(List.of(), saved);
+    }
+
+    @Test
+    void theSummaryDoesNotSendTheUserToQuPathForASlideClosedSince(@TempDir Path dir) {
+        List<BatchResult> results = List.of(
+                new BatchResult("o", "open.tif", 10, List.of(), null, null, null,
+                        BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null, null),
+                new BatchResult("c", "closed.tif", 10, List.of(), null, null, null,
+                        BatchResult.WriteBack.SKIPPED_OPEN_SLIDE, null, null));
+        String s = BatchRunner.summary(dir.toFile(), results, 2, false, "o"::equals);
+        assertTrue(s.contains("open.tif — already classified; save it from QuPath"), s);
+        assertTrue(s.contains("closed.tif — closed since"), s);
+        assertFalse(s.contains("closed.tif — already classified"), s);
+    }
+
+    // ---- manifest landmarks follow the run's alignments ------------------------------------
+
+    static qupath.ext.flowpath.cohort.SlideSample sample(String id, long seed, double shift) {
+        java.util.Random r = new java.util.Random(seed);
+        int n = 3000;
+        double[] raw = new double[n];
+        for (int i = 0; i < n; i++) raw[i] = 100 * Math.sinh((r.nextDouble() < 0.3 ? 4.0 : 1.0) + shift + 0.3 * r.nextGaussian());
+        qupath.ext.flowpath.model.CellIndex index = Cells.of(n).marker("CD3", raw).marker("CD8", raw).build();
+        boolean[] clean = Cells.allTrue(n);
+        return new qupath.ext.flowpath.cohort.SlideSample(id, id + ".tif", index, clean,
+                qupath.ext.flowpath.model.MarkerStats.compute(index, clean), n, "f-" + id);
+    }
+
+    @Test
+    void theManifestReportsLandmarksOnlyWhenTheRunCorrectedWithThatModel() {
+        GateTree tree = tree();
+        List<qupath.ext.flowpath.cohort.SlideSample> samples = List.of(sample("ref", 1, 0.0), sample("s1", 2, 0.2));
+        qupath.ext.flowpath.cohort.AlignmentModel model = qupath.ext.flowpath.cohort.AlignmentModel.build("ref", samples,
+                qupath.ext.flowpath.cohort.AlignmentModel.columnsOf(tree), qupath.ext.flowpath.cohort.AlignmentModel.Cache.empty());
+        String column = qupath.ext.flowpath.cohort.AlignmentModel.columnsOf(tree).stream()
+                .map(qupath.ext.flowpath.cohort.AlignmentModel.ColumnRef::key)
+                .filter(k -> model.landmarks("s1", k) != null && model.referenceLandmarks(k) != null)
+                .findFirst().orElseThrow(() -> new AssertionError("fixture check: the model found landmarks"));
+        qupath.ext.flowpath.cohort.ReviewScorer.Result review = new qupath.ext.flowpath.cohort.ReviewScorer.Result(List.of(), List.of());
+
+        GatingManifestExporter.Annotations corrected = GatingManifestExporter.Annotations.of(model, review, model::alignment);
+        assertNotNull(corrected.reference(column));
+        assertNotNull(corrected.slide("s1", column));
+
+        GatingManifestExporter.Annotations off = GatingManifestExporter.Annotations.of(model, review, AlignmentLookup.NONE);
+        assertNull(off.reference(column), "correction off: no landmarks beside thresholds they never moved");
+        assertNull(off.slide("s1", column));
+        assertEquals("", off.flags("s1", 0, "CD3"));
     }
 }

@@ -30,7 +30,6 @@ import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
-import qupath.ext.flowpath.cohort.ReviewScorer;
 import qupath.ext.flowpath.cohort.SlideSample;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -57,7 +56,6 @@ import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.cohort.Alignment;
-import qupath.ext.flowpath.model.cohort.Landmarks;
 import qupath.ext.flowpath.ui.editor.EditorAlignment;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
@@ -180,6 +178,15 @@ public class FlowPathPane extends BorderPane {
      * Ctrl+E — or a gating pass — pair the new slide's id with the previous slide's cells.
      */
     private String indexSlideId;
+
+    /**
+     * The project id of the image open in the viewer, which a running batch asks from its
+     * background thread before every write-back ({@code BatchRunner.Settings.isOpen}). Written
+     * only on the FX thread, from the viewer's image property; volatile so the run never has to
+     * touch {@code qupath.getImageData()} off the FX thread. Unlike {@link #indexSlideId}, this is
+     * the viewer's image whether or not its cells were read: its file is the one QuPath saves.
+     */
+    private volatile String viewerSlideId;
 
     /** The project's slides, their samples, the alignment model and the review; see {@link #refreshCohort()}. */
     private final CohortSession cohort = new CohortSession();
@@ -569,7 +576,10 @@ public class FlowPathPane extends BorderPane {
         Platform.runLater(this::initializeFromImage);
 
         // Listen for image changes
+        viewerSlideId = slideIdOf(qupath.getImageData());
         qupath.imageDataProperty().addListener((obs, oldImg, newImg) -> {
+            // At once, not in the runLater: a batch run asks it between two slides.
+            viewerSlideId = slideIdOf(newImg);
             Platform.runLater(this::initializeFromImage);
         });
     }
@@ -743,7 +753,7 @@ public class FlowPathPane extends BorderPane {
             cohort.batchFinished();
             updateBusyControls();
             Dialogs.showPlainMessage("Run on all slides", BatchRunner.summary(outcome.outputDir(),
-                    outcome.results(), outcome.total(), outcome.cancelled()));
+                    outcome.results(), outcome.total(), outcome.cancelled(), id -> id.equals(viewerSlideId)));
         }
 
         @Override
@@ -1341,7 +1351,7 @@ public class FlowPathPane extends BorderPane {
         runAllButton.setManaged(shown);
         runAllButton.setText(running ? "Cancel run" : "Run on all slides…");
         runAllButton.setDisable(!running && (busy.batchBlocked()
-                || session.tree().getRoots().stream().noneMatch(GateNode::isEnabled)));
+                || !BatchRunCoordinator.hasEnabledGate(session.tree())));
     }
 
     /** What the background workers are doing right now; see {@link BusyState}. */
@@ -2578,19 +2588,14 @@ public class FlowPathPane extends BorderPane {
             return;
         }
         AlignmentModel model = cohort.model();
-        ReviewScorer.Result reviewed = cohort.review();
-        // The viewer's image, not the index's: its .qpdata is the file QuPath would overwrite on
-        // its next save, whether or not its cells were read.
-        String openSlideId = slideIdOf(qupath.getImageData());
-        BatchRunner.Settings settings = new BatchRunner.Settings(session.tree(), cohort.lookupOn(model), dir,
-                openSlideId, true, previewService.getColorRootIndex());
-        GatingManifestExporter.Annotations annotations = new GatingManifestExporter.Annotations() {
-            @Override public Landmarks reference(String column) { return model.referenceLandmarks(column); }
-            @Override public Landmarks slide(String slideId, String column) { return model.landmarks(slideId, column); }
-            @Override public String flags(String slideId, int rootIndex, String gatePath) {
-                return reviewed.flagsFor(slideId, rootIndex, gatePath);
-            }
-        };
+        AlignmentLookup lookup = cohort.lookupOn(model);
+        // The viewer's image, asked live at every write-back: the user may open another slide
+        // while the run goes, and its file must not be written behind QuPath's back either.
+        viewerSlideId = slideIdOf(qupath.getImageData());
+        BatchRunner.Settings settings = new BatchRunner.Settings(session.tree(), lookup, dir,
+                id -> id.equals(viewerSlideId), true, previewService.getColorRootIndex());
+        GatingManifestExporter.Annotations annotations =
+                GatingManifestExporter.Annotations.of(model, cohort.review(), lookup);
         cohort.batchStarted();
         batchRun.run(slides, settings,
                 (d, results) -> BatchRunner.writeOutputs(d, settings.tree(), results, annotations));
