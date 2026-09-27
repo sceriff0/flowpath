@@ -38,8 +38,26 @@ final class ReviewFlow {
     /** The columns the gate cut when opened; an edit that changes them is no longer this item's. */
     private List<String> columns;
 
+    /** Told when an edit outside the item closed it (see {@link #ReviewFlow}). */
+    private Runnable onEnded = () -> {};
+
+    /**
+     * Listens to {@code session}: any undo step that is not a gate edit — a quality-filter drag,
+     * the ROI toggle, an enabled checkbox, adding or moving a gate — closes the open item first,
+     * so the item's answer can never fold that edit into its one undo step.
+     */
     ReviewFlow(GatingSession session) {
         this.session = session;
+        session.setOnNonGateEdit(() -> {
+            if (active == null) return;
+            end();
+            onEnded.run();
+        });
+    }
+
+    /** Called when an edit outside the item closed it, so the host can take its visuals down. */
+    void setOnEnded(Runnable callback) {
+        this.onEnded = callback == null ? () -> {} : callback;
     }
 
     /**
@@ -76,6 +94,20 @@ final class ReviewFlow {
     GateNode gate(String openSlideId) {
         if (active == null || !active.slideId().equals(openSlideId)) return null;
         return CohortSession.liveGate(session.tree(), active);
+    }
+
+    /**
+     * Whether the editor may move {@code shown}'s cut on {@code openSlideId}. Not when This slide
+     * view shows a gate that has its own Manual or Skip here and is not the open item's: a drag
+     * would move the reference — every other slide's cut — while this slide's applied cut, the
+     * one drawn, stays put. Inside the open item a drag is this slide's Manual, so it is editable
+     * even though its first tick writes one.
+     */
+    boolean cutEditable(GateNode shown, String openSlideId, boolean thisSlideView) {
+        if (!thisSlideView || shown == null || openSlideId == null || !adjustable(shown)) return true;
+        SlideSetting setting = shown.slideSetting(openSlideId);
+        if (!(setting instanceof SlideSetting.Manual) && !(setting instanceof SlideSetting.Skip)) return true;
+        return gate(openSlideId) == shown;
     }
 
     /** Whether a drag on the open item's gate is a per-slide Adjust: threshold and quadrant gates only. */

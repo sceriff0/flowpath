@@ -107,9 +107,24 @@ final class GatingSession {
      */
     private String lastUnchangedMigrationNotice;
 
+    /** Told before any undo step that is not a gate edit is recorded; see {@link #setOnNonGateEdit}. */
+    private Runnable onNonGateEdit = () -> {};
+
     GatingSession(LongSupplier clock, GatingPass gatingPass) {
         this.undoHistory = new UndoHistory<>(UndoHistory.DEFAULT_MAX_DEPTH, GateTree::deepCopy, clock);
         this.gatingPass = Objects.requireNonNull(gatingPass, "gatingPass");
+    }
+
+    /**
+     * Called before every undo step recorded for something other than an edit of a gate's own
+     * cut: a load, a discrete edit (add, duplicate, delete, move, a quality-filter reset, a
+     * cleared slide setting), a quality-filter drag, the ROI toggle, an enabled checkbox, a
+     * default reference. An open review item listens and closes, so its answer can never fold
+     * such an edit into the item's one undo step. Gate edits and the review answers themselves
+     * ({@link #recordSlideEdit}) do not call it.
+     */
+    void setOnNonGateEdit(Runnable callback) {
+        this.onNonGateEdit = callback == null ? () -> {} : callback;
     }
 
     // ---- state -------------------------------------------------------------------------
@@ -342,6 +357,7 @@ final class GatingSession {
      */
     void replaceTree(GateTree loaded) {
         Objects.requireNonNull(loaded, "loaded");
+        onNonGateEdit.run();
         undoHistory.record(tree);
         GateTree.transferCountsIfStructureMatches(loaded.getRoots(), tree.getRoots());
         this.tree = loaded;
@@ -370,6 +386,7 @@ final class GatingSession {
      * {@linkplain #settle settles} once the edit is written.
      */
     void recordEdit() {
+        onNonGateEdit.run();
         undoHistory.record(tree);
     }
 
@@ -388,13 +405,14 @@ final class GatingSession {
 
     /**
      * A slide-setting edit — a review answer, or a reference rebase — as one undo step: the tree
-     * is recorded as it is now ({@link #recordEdit}), {@code edit} runs, and {@code slideId}'s
+     * is recorded as it is now (as {@link #recordEdit} does, but without telling an open review
+     * item to close: this is that item's own answer), {@code edit} runs, and {@code slideId}'s
      * image name is recorded in the same step when the tree has none for it (see
      * {@code cohort/CohortIdentity}), so undo takes the setting and the name back together.
      * Settled; follow with {@link #resync}.
      */
     void recordSlideEdit(String slideId, String slideName, Runnable edit) {
-        recordEdit();
+        undoHistory.record(tree);
         edit.run();
         ReviewAnswers.recordSlideName(tree, slideId, slideName);
         settle();
@@ -423,6 +441,7 @@ final class GatingSession {
      */
     boolean applyDefaultReference(String openSlideId, Map<String, String> projectNames) {
         if (openSlideId == null || tree.getReferenceSlideId() != null) return false;
+        onNonGateEdit.run();
         undoHistory.record(tree);
         tree.setReferenceSlideId(openSlideId);
         tree.setSlideNames(projectNames);
@@ -450,6 +469,7 @@ final class GatingSession {
      * which is the tree just before this one. Coalesced by source, so a drag is one step.
      */
     void recordAppliedEdit(EditSource source) {
+        if (source != EditSource.GATE) onNonGateEdit.run();
         undoHistory.recordCoalesced(settled, source);
         settle();
     }
@@ -459,6 +479,7 @@ final class GatingSession {
      * the settled tree, as one uncoalesced step.
      */
     void recordAppliedDiscreteEdit() {
+        onNonGateEdit.run();
         undoHistory.record(settled);
         settle();
     }
@@ -479,6 +500,7 @@ final class GatingSession {
      * its write (the quality-filter panel's before-change hook).
      */
     void recordEditCoalesced(EditSource source) {
+        if (source != EditSource.GATE) onNonGateEdit.run();
         undoHistory.recordCoalesced(tree, source);
     }
 
@@ -489,6 +511,7 @@ final class GatingSession {
      */
     void setRoiFilterEnabled(boolean enabled) {
         if (tree.isRoiFilterEnabled() == enabled) return;
+        onNonGateEdit.run();
         undoHistory.record(tree);
         tree.setRoiFilterEnabled(enabled);
     }

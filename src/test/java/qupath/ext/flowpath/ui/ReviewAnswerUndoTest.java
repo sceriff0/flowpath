@@ -169,4 +169,65 @@ class ReviewAnswerUndoTest {
         assertFalse(flow.answerEnter("s2", "s2.tif", LOOKUP));
         assertNull(root(1).slideSetting("s1"));
     }
+
+    /**
+     * The three states of a This slide cut, with two roots on one channel: a plain slide is
+     * editable; a gate with its own Manual here is locked outside its review item — a drag would
+     * move every other slide's cut and not this one's — while its same-channel sibling is not;
+     * inside the item it is editable again, its first tick being what writes the Manual.
+     */
+    @Test
+    void theCutIsLockedOnlyOnAGateWithItsOwnSettingHereOutsideItsReview() {
+        assertTrue(flow.cutEditable(root(1), "s1", true), "plain slide");
+        root(1).setSlideSetting("s1", new SlideSetting.Manual(qupath.ext.flowpath.model.GateValues.of(new double[]{800})));
+        assertFalse(flow.cutEditable(root(1), "s1", true), "Manual, no item open");
+        assertTrue(flow.cutEditable(root(0), "s1", true), "the same-channel sibling has no setting");
+        assertTrue(flow.cutEditable(root(1), "s1", false), "All slides edits the reference, as designed");
+        assertTrue(flow.cutEditable(root(1), "s2", true), "the setting is s1's only");
+        flow.open(SECOND);
+        assertTrue(flow.cutEditable(root(1), "s1", true), "inside its review item");
+        flow.end();
+        root(1).setSlideSetting("s1", new SlideSetting.Skip());
+        assertFalse(flow.cutEditable(root(1), "s1", true), "Skip, no item open");
+    }
+
+    /** An edit that is not the item's own closes it, so the answer's one step never reverts it. */
+    @Test
+    void aQualityFilterEditDuringAnItemClosesItAndSurvivesTheNextAnswersUndo() {
+        java.util.concurrent.atomic.AtomicInteger ended = new java.util.concurrent.atomic.AtomicInteger();
+        flow.setOnEnded(ended::incrementAndGet);
+        flow.open(SECOND);
+        drag(650, true);
+
+        session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
+        session.tree().getQualityFilter().setMinArea(25);
+        session.settle();
+        assertNull(flow.active(), "the filter edit closed the item");
+        assertEquals(1, ended.get());
+        assertFalse(flow.answerEnter("s1", "s1.tif", LOOKUP), "nothing open to answer");
+
+        flow.open(SECOND);
+        drag(700, true);
+        assertTrue(flow.answerEnter("s1", "s1.tif", LOOKUP));
+        assertTrue(session.undo());
+        assertEquals(25, session.tree().getQualityFilter().range(qupath.ext.flowpath.model.QualityFilter.AREA).min(),
+                "the answer's undo step stops at the filter edit");
+        assertEquals(SHIFT.apply(650), ((SlideSetting.Manual) root(1).slideSetting("s1")).values().axis(0)[0], 1e-9,
+                "and at the tree the item was reopened on");
+    }
+
+    @Test
+    void theItemsOwnDragsAndAnswerDoNotCloseIt() {
+        java.util.concurrent.atomic.AtomicInteger ended = new java.util.concurrent.atomic.AtomicInteger();
+        flow.setOnEnded(ended::incrementAndGet);
+        flow.open(SECOND);
+        drag(650, true);
+        assertEquals(SECOND, flow.active());
+        session.recordAppliedDiscreteEdit();          // an enabled checkbox, say
+        assertNull(flow.active());
+        assertEquals(1, ended.get());
+        flow.open(SECOND);
+        assertTrue(flow.answerEnter("s1", "s1.tif", LOOKUP));
+        assertEquals(1, ended.get(), "the answer is the item's own step");
+    }
 }

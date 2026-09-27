@@ -71,7 +71,13 @@ public class GateEditorPane extends VBox {
     /** Per-gate "Correct staining" (U2); shown only while a cohort is available. */
     private final CheckBox correctStainingBox;
     /** A slide Manual/Skip, shown as a banner rather than drawn: its number is this slide's own raw value. */
+    static final String CUT_LOCKED_HINT =
+            "This slide has its own threshold — open it from Needs a look, or use the cohort value";
+
     private final Label slideSettingLabel;
+    /** Shown while the cut is locked; see {@link #setCutEditable}. */
+    private final Label cutLockedLabel = new Label(CUT_LOCKED_HINT);
+    private boolean cutEditable = true;
     /** The shown gate's setting on the open slide, as last handed to {@link #setSlideSetting}. */
     private SlideSetting slideSetting;
     private final Button clearSlideSettingButton;
@@ -149,6 +155,10 @@ public class GateEditorPane extends VBox {
         slideSettingRow.setVisible(false);
         slideSettingRow.managedProperty().bind(slideSettingRow.visibleProperty());
         HBox.setHgrow(slideSettingLabel, Priority.ALWAYS);
+        cutLockedLabel.getStyleClass().add("fp-hint");
+        cutLockedLabel.setWrapText(true);
+        cutLockedLabel.setVisible(false);
+        cutLockedLabel.managedProperty().bind(cutLockedLabel.visibleProperty());
 
         thisSlideButton.setToggleGroup(viewModeGroup);
         allSlidesButton.setToggleGroup(viewModeGroup);
@@ -237,6 +247,7 @@ public class GateEditorPane extends VBox {
             header,
             viewModeRow,
             slideSettingRow,
+            cutLockedLabel,
             gateSpecificArea,
             createSectionHeader("Outlier Clipping"), clipRow, clipInfoLabel,
             new Separator(),
@@ -262,10 +273,15 @@ public class GateEditorPane extends VBox {
             typeEditor.dispose();
             typeEditor = null;
         }
+        boolean anotherGate = node != this.currentNode;
         this.currentNode = node;
         // The last gate's setting on the open slide is not this one's: the host hands the new
-        // gate's in after showing it, and the editor built below must not draw the old cut.
-        setSlideSetting(null);
+        // gate's in after showing it, and the editor built below must not draw the old cut. The
+        // same gate rebuilt (a channel or column switch) keeps its setting: it still applies.
+        if (anotherGate) {
+            setSlideSetting(null);
+            setCutEditable(true);
+        }
         if (node == null) {
             withSuppressedEvents(() -> setDisabled(true));
             gateTypeLabel.setText("No gate selected");
@@ -552,6 +568,19 @@ public class GateEditorPane extends VBox {
         slideSettingRow.setVisible(text != null);
     }
 
+    /**
+     * Whether the shown gate's cut may be moved (see {@code EditorContext.cutEditable}). Locked,
+     * the type editor disables its cut controls and a hint says why and what to do instead.
+     */
+    public void setCutEditable(boolean editable) {
+        cutLockedLabel.setVisible(!editable);
+        if (editable == cutEditable) return;
+        cutEditable = editable;
+        if (typeEditor != null) typeEditor.slideSettingChanged();
+    }
+
+    public boolean isCutEditable() { return cutEditable; }
+
     /** Called by "Use the cohort value": drop the open slide's setting for the shown gate. */
     public void setOnClearSlideSetting(Runnable callback) { this.onClearSlideSetting = callback; }
 
@@ -643,6 +672,7 @@ public class GateEditorPane extends VBox {
         @Override public Alignment displayAlignment(GateNode gate, int axis) { return editorAlignment.forAxis(gate, axis); }
         @Override public String referenceName() { return editorAlignment.referenceName(); }
         @Override public SlideSetting slideSetting() { return slideSetting; }
+        @Override public boolean cutEditable() { return cutEditable; }
         @Override public List<CohortCurves.SlideValues> cohortValues(GateNode gate) {
             return viewMode == CohortSession.ViewMode.ALL_SLIDES && cohortAvailable
                 ? cohortValues.apply(gate) : List.of();

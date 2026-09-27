@@ -163,6 +163,10 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
     private void syncCut() {
         if (isDisposed()) return;
         GateNode cut = cutGate();
+        boolean editable = context.cutEditable();
+        slider.setDisable(!editable);
+        valueField.setDisable(!editable);
+        histogram.setDraggable(editable);
         histogram.setUnjudged(cut == null);
         histogram.setGate(cut == null ? gate : cut);
         double t = shownThreshold();

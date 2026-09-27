@@ -31,6 +31,8 @@ public class HistogramCanvas extends Canvas {
     private GateNode gate;
     /** The gate judges no cell here (a Skip on this slide): grey bars, no threshold, no drag. */
     private boolean unjudged;
+    /** Whether a press on the plot may move the threshold (off while the cut is locked). */
+    private boolean draggable = true;
     private static final Color UNJUDGED = Color.gray(0.5);
     private Color posColor = Color.rgb(0, 200, 0);
     private Color negColor = Color.rgb(160, 160, 160);
@@ -213,6 +215,16 @@ public class HistogramCanvas extends Canvas {
     public void setUnjudged(boolean unjudged) {
         this.unjudged = unjudged;
         repaint();
+    }
+
+    /** Whether a press on the plot may move the threshold. */
+    public void setDraggable(boolean draggable) {
+        this.draggable = draggable;
+        if (!draggable) dragging = false;
+    }
+
+    public boolean isDraggable() {
+        return draggable;
     }
 
     /** Package-private for the display/classification agreement test. */
@@ -460,7 +472,7 @@ public class HistogramCanvas extends Canvas {
     }
 
     private void handleMousePressed(MouseEvent e) {
-        if (binEdges == null || unjudged) return;
+        if (binEdges == null || unjudged || !draggable) return;
         dragging = true;
         double val = xToValue(e.getX());
         threshold = val;

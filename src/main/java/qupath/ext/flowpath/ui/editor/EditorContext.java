@@ -49,6 +49,13 @@ public interface EditorContext {
     SlideSetting slideSetting();
 
     /**
+     * Whether the editor may move the shown gate's cut. False in This slide view when the gate
+     * has its own Manual or Skip on the open slide and is not the open review item: a drag would
+     * move every other slide's cut and not this one's. The editor then locks its cut controls.
+     */
+    boolean cutEditable();
+
+    /**
      * Every sampled slide's values for {@code gate}, in reference units, for the All slides
      * view; empty unless the pane is in All slides with a cohort available. A view only: the
      * editor still edits the gate's reference numbers.

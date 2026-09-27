@@ -486,7 +486,15 @@ public class FlowPathPane extends BorderPane {
         editorPane.setCohortValues(g -> cohortCurves.get(session.tree(), g, cohort.samples(), cohort.model(),
                 alignments, currentSlideId()));
         editorPane.setViewMode(cohort.viewMode());
-        editorPane.setOnViewModeChanged(cohort::setViewMode);
+        editorPane.setOnViewModeChanged(mode -> {
+            cohort.setViewMode(mode);
+            showSlideSetting();
+        });
+        // An edit outside the open item (a filter drag, the ROI toggle, …) closed it.
+        review.setOnEnded(() -> {
+            hideBoundaryOverlay();
+            showSlideSetting();
+        });
 
         needsALook.setOnItemChosen(this::openReviewItem);
         needsALook.setOnStep(this::stepReview);
@@ -791,7 +799,12 @@ public class FlowPathPane extends BorderPane {
     /** The shown gate's Manual/Skip on the open slide as the editor's banner, or none. */
     private void showSlideSetting() {
         GateNode shown = editorPane.getGateNode();
-        editorPane.setSlideSetting(shown == null ? null : shown.slideSetting(currentSlideId()));
+        String slideId = currentSlideId();
+        editorPane.setSlideSetting(shown == null ? null : shown.slideSetting(slideId));
+        // Whether a drag may move the cut: not on a gate with its own setting here, outside its
+        // review item — the drag would move every other slide's cut and not this one's.
+        editorPane.setCutEditable(review.cutEditable(shown, slideId,
+                editorPane.viewMode() == CohortSession.ViewMode.THIS_SLIDE));
     }
 
     /** "Use the cohort value": drop the open slide's setting for the shown gate, as one undo step. */
@@ -943,6 +956,7 @@ public class FlowPathPane extends BorderPane {
         cohort.select(null);
         cohort.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
         editorPane.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
+        showSlideSetting();
         renderNeedsALook();
     }
 
@@ -954,6 +968,7 @@ public class FlowPathPane extends BorderPane {
     private void endActiveReview() {
         review.end();
         hideBoundaryOverlay();
+        showSlideSetting();
     }
 
     private void hideBoundaryOverlay() {

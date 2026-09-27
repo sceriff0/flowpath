@@ -208,4 +208,72 @@ class GateEditorAlignmentSeamTest {
         assertEquals("This gate is skipped on this slide — its cells are unmeasured",
                 rawThresholdTooltip(new SlideSetting.Skip()));
     }
+
+    private static GateEditorPane thresholdPane(GateNode gate) {
+        CellIndex index = Cells.of(100).marker("CD3", i -> i).area(50.0).build();
+        GateEditorPane pane = new GateEditorPane();
+        pane.setChannelNames(List.of("CD3"));
+        pane.setCompartmentCapability(CompartmentCapability.scan(Arrays.asList(index.getObjects())));
+        pane.setCellIndex(index);
+        pane.setMarkerStats(MarkerStats.compute(index, Cells.allTrue(100)));
+        pane.setEditorAlignment(new EditorAlignment() {
+            @Override public Alignment forAxis(GateNode g, int axis) { return BRIGHTER; }
+            @Override public String referenceName() { return "slide_01"; }
+        });
+        pane.setGateNode(gate);
+        return pane;
+    }
+
+    /** A locked cut: slider, field and histogram drag off, and a hint says what to do instead. */
+    @Test
+    void aLockedCutDisablesEveryWayToMoveItAndSaysWhy() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        boolean[][] states = FxTestSupport.onFx(() -> {
+            GateEditorPane pane = thresholdPane(Type.THRESHOLD.create.get());
+            pane.setSlideSetting(new SlideSetting.Manual(GateValues.of(new double[]{12.5})));
+            Slider slider = find(pane, Slider.class, x -> true);
+            javafx.scene.control.TextField field = find(pane, javafx.scene.control.TextField.class,
+                    f -> f.getStyleClass().contains("fp-mono-field"));
+            qupath.ext.flowpath.ui.widgets.HistogramCanvas h =
+                    find(pane, qupath.ext.flowpath.ui.widgets.HistogramCanvas.class, x -> true);
+            Label hint = find(pane, Label.class, l -> GateEditorPane.CUT_LOCKED_HINT.equals(l.getText()));
+            boolean[] editable = {slider.isDisable(), field.isDisable(), h.isDraggable(), hint.isVisible()};
+            pane.setCutEditable(false);
+            boolean[] locked = {slider.isDisable(), field.isDisable(), h.isDraggable(), hint.isVisible()};
+            pane.setCutEditable(true);
+            boolean[] again = {slider.isDisable(), field.isDisable(), h.isDraggable(), hint.isVisible()};
+            return new boolean[][]{editable, locked, again};
+        });
+        assertArrayEquals(new boolean[]{false, false, true, false}, states[0]);
+        assertArrayEquals(new boolean[]{true, true, false, true}, states[1]);
+        assertArrayEquals(new boolean[]{false, false, true, false}, states[2]);
+    }
+
+    /**
+     * The same gate rebuilt (a channel or column switch shows it again) keeps its setting on this
+     * slide: the banner stays and the cut stays the Manual's, as the engine applies it.
+     */
+    @Test
+    void rebuildingTheSameGateKeepsItsSlideSetting() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        Object[] out = FxTestSupport.onFx(() -> {
+            GateNode gate = Type.THRESHOLD.create.get();
+            GateEditorPane pane = thresholdPane(gate);
+            pane.setSlideSetting(new SlideSetting.Manual(GateValues.of(new double[]{12.5})));
+            pane.setCutEditable(false);
+            pane.setGateNode(gate);
+            Label banner = find(pane, Label.class, l -> l.getText() != null && l.getText().startsWith("Adjusted on this slide"));
+            Slider slider = find(pane, Slider.class, x -> true);
+            boolean kept = banner.getParent().isVisible();
+            double thumb = slider.getValue();
+            boolean locked = !pane.isCutEditable();
+            pane.setGateNode(Type.THRESHOLD.create.get());
+            return new Object[]{kept, thumb, locked, banner.getParent().isVisible(), pane.isCutEditable()};
+        });
+        assertEquals(true, out[0], "the banner stays");
+        assertEquals(BRIGHTER.inverse(12.5), (double) out[1], 1e-9, "the thumb is the Manual's cut");
+        assertEquals(true, out[2]);
+        assertEquals(false, out[3], "another gate starts without the last one's setting");
+        assertEquals(true, out[4]);
+    }
 }

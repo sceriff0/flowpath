@@ -104,6 +104,11 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
     private void syncCut() {
         if (isDisposed()) return;
         GateNode cut = cutGate();
+        boolean editable = context.cutEditable();
+        sliderX.setDisable(!editable);
+        sliderY.setDisable(!editable);
+        valX.setDisable(!editable);
+        valY.setDisable(!editable);
         if (scatter != null) {
             scatter.setUnjudged(cut == null);
             scatter.setGateOverlay(cut == null ? gate : cut);
