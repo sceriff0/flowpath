@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.ui;
 
 import qupath.ext.flowpath.cohort.ReviewAnswers;
+import qupath.ext.flowpath.engine.CleanMask;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
@@ -298,31 +299,16 @@ final class GatingSession {
     private static Derived derive(DerivationInputs in, boolean[] reusableMask, MarkerStats reusable) {
         CellIndex idx = in.index();
         if (idx == null) return Derived.NONE;
-        RegionMask regions = in.roiFilterEnabled() ? usableRegions(idx, in.annotations()) : null;
-        boolean[] roi = regions != null ? regions.included() : null;
-        boolean[] quality = qualityMaskOf(idx, in.qualityFilter());
-        boolean[] combined = quality == null ? roi
-                : roi == null ? quality
-                : GatingEngine.combineMasks(quality, roi);
-        MarkerStats stats = reusable != null && Arrays.equals(combined, reusableMask)
+        // The one quality-then-ROI composition, shared with a batch run and the cohort's samples.
+        CleanMask clean = CleanMask.of(idx, in.qualityFilter(), in.roiFilterEnabled(), in.annotations());
+        MarkerStats stats = reusable != null && Arrays.equals(clean.combined(), reusableMask)
                 ? reusable
-                : MarkerStats.compute(idx, combined);
-        return new Derived(idx, in.roiFilterEnabled(), regions, quality, stats);
+                : MarkerStats.compute(idx, clean.combined());
+        return new Derived(idx, in.roiFilterEnabled(), clean.regions(), clean.quality(), stats);
     }
 
     private static boolean[] qualityMaskOf(CellIndex idx, QualityFilter filter) {
         return filter == null ? null : GatingEngine.computeQualityMask(idx, filter);
-    }
-
-    /**
-     * The regions to filter by, or {@code null} when there is nothing usable. Treated as "no
-     * filter" rather than "exclude everything": annotations that enclose no area answer
-     * {@code contains()} false everywhere, so the old behaviour emptied the entire view
-     * whenever the only annotation on the image was a point or a line.
-     */
-    private static RegionMask usableRegions(CellIndex index, List<PathObject> annotations) {
-        RegionMask computed = RegionMask.compute(index, annotations);
-        return computed.isEmpty() ? null : computed;
     }
 
     // ---- what changes the inputs -------------------------------------------------------

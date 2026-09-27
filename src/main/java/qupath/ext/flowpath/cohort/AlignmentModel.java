@@ -43,10 +43,16 @@ public final class AlignmentModel {
         }
     }
 
-    /** One slide's cached landmarks, keyed by column, tagged with the sample fingerprint they were found from. */
+    /**
+     * One slide's cached landmarks, keyed by column, tagged with the {@link SlideSample#cacheKey}
+     * they were found from; each {@link Landmarks} carries the cofactor it was found with.
+     */
     public record SlideEntry(String fingerprint, Map<String, Landmarks> columns) {}
 
-    /** The persisted alignment cache: one fixed cofactor per column, one {@link SlideEntry} per slide. */
+    /**
+     * The persisted alignment cache: one {@link SlideEntry} per slide, and the cofactor each column
+     * had in the build that wrote it (a record — every build recomputes it from the reference).
+     */
     public record Cache(Map<String, Double> cofactors, Map<String, SlideEntry> slides) {
         public static Cache empty() {
             return new Cache(Map.of(), Map.of());
@@ -110,45 +116,56 @@ public final class AlignmentModel {
         }
     }
 
+    /**
+     * Align every sample to {@code referenceSlideId}'s for each of {@code columns}.
+     * <p>
+     * A column's asinh cofactor is the median |x| over the <b>reference slide's</b> clean sample
+     * for that column ({@link Landmarks#cofactor}) — a function of the reference alone, so it does
+     * not depend on which samples happened to have arrived first, and a run with no cache
+     * reproduces a cached one exactly. With the reference not sampled (missing, failed, not yet
+     * landed) no cofactor is known and no landmark is found for any slide: there is nothing to
+     * align to.
+     * <p>
+     * A slide's cached landmarks are reused when its {@link SlideSample#cacheKey} — the sample
+     * fingerprint plus the filter and ROI its clean mask came from — matches and they were found
+     * with the cofactor in force now; anything else is found again.
+     */
     public static AlignmentModel build(String referenceSlideId, List<SlideSample> samples,
                                        Set<ColumnRef> columns, Cache cache) {
-        Map<String, Double> cofactors = new HashMap<>(cache.cofactors());
         Map<String, SlideEntry> cachedSlides = new HashMap<>(cache.slides());
         Map<String, Map<String, Landmarks>> landmarks = new HashMap<>();
-        boolean referenceSampled = samples.stream().anyMatch(s -> s.slideId().equals(referenceSlideId));
+        SlideSample reference = null;
+        for (SlideSample s : samples) if (s.slideId().equals(referenceSlideId)) reference = s;
+        boolean referenceSampled = reference != null;
 
-        // The cofactor is fixed once per column, from the cache when present, else the pooled
-        // median over every sample's clean cells, then written back — so adding a slide later
-        // never moves every other slide's landmarks (spec: fixed per-column cofactors).
+        Map<String, Double> cofactors = new HashMap<>();
         for (ColumnRef col : columns) {
-            String key = col.key();
-            if (!cofactors.containsKey(key)) {
-                List<double[]> pooled = new ArrayList<>();
-                for (SlideSample s : samples) {
-                    double[] v = cleanValues(s, col);
-                    if (v != null) pooled.add(v);
-                }
-                cofactors.put(key, Landmarks.cofactor(pooled));
-            }
+            double[] v = reference == null ? null : cleanValues(reference, col);
+            if (v != null) cofactors.put(col.key(), Landmarks.cofactor(v));
         }
 
         for (SlideSample s : samples) {
             SlideEntry cached = cachedSlides.get(s.slideId());
-            boolean fresh = cached != null && cached.fingerprint().equals(s.fingerprint());
-            Map<String, Landmarks> perColumn = new HashMap<>(fresh ? cached.columns() : Map.of());
+            boolean fresh = cached != null && cached.fingerprint().equals(s.cacheKey());
+            Map<String, Landmarks> kept = new HashMap<>(fresh ? cached.columns() : Map.of());
+            Map<String, Landmarks> perColumn = new HashMap<>();
             for (ColumnRef col : columns) {
                 String key = col.key();
-                if (s.index().getMarkerIndex(col.channel()) < 0) {
-                    perColumn.remove(key);
+                Double c = cofactors.get(key);
+                if (s.index().getMarkerIndex(col.channel()) < 0 || c == null) {
+                    kept.remove(key);
                     continue;
                 }
-                if (!perColumn.containsKey(key)) {
+                Landmarks lm = kept.get(key);
+                if (lm == null || Double.compare(lm.cofactor(), c) != 0) {
                     double[] raw = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats()).values();
-                    perColumn.put(key, Landmarks.find(raw, s.clean(), cofactors.get(key)));
+                    lm = Landmarks.find(raw, s.clean(), c);
+                    kept.put(key, lm);
                 }
+                perColumn.put(key, lm);
             }
             landmarks.put(s.slideId(), perColumn);
-            cachedSlides.put(s.slideId(), new SlideEntry(s.fingerprint(), Map.copyOf(perColumn)));
+            cachedSlides.put(s.slideId(), new SlideEntry(s.cacheKey(), Map.copyOf(kept)));
         }
 
         Map<String, Map<String, Alignment>> alignments = new HashMap<>();
@@ -231,7 +248,7 @@ public final class AlignmentModel {
         return referenceMissing ? null : landmarks(referenceSlideId, columnKey);
     }
 
-    /** The fixed cofactor for {@code columnKey}; NaN when unknown. */
+    /** The cofactor for {@code columnKey} (the reference slide's median |x|); NaN when unknown. */
     public double cofactor(String columnKey) {
         Double c = cofactors.get(columnKey);
         return c == null ? Double.NaN : c;

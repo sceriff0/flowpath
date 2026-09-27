@@ -31,8 +31,17 @@ public final class CohortSession {
 
     public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache) {}
 
+    /**
+     * One scoring: the model, the review, the columns scored, the most typical slide, and the
+     * samples as scored — each {@linkplain SlideSample#scopedTo scoped} to the scored tree's quality
+     * filter and ROI, which {@link #adopt} keeps so the curves and crops read the same clean cells.
+     */
     public record Scored(AlignmentModel model, ReviewScorer.Result review, List<String> columnKeys,
-                         String suggestedReferenceId) {}
+                         String suggestedReferenceId, List<SlideSample> samples) {
+        public Scored {
+            samples = List.copyOf(samples);
+        }
+    }
 
     /** One slide's state on the slide strip (spec §6 "Slide strip and status line"). */
     public enum SlideStatus { SAMPLING, READY, NEEDS_LOOK, FAILED }
@@ -186,17 +195,24 @@ public final class CohortSession {
         return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache);
     }
 
+    /**
+     * Align and review the cohort for {@code treeCopy}. Every sample is first
+     * {@linkplain SlideSample#scopedTo scoped} to the tree's own quality filter and ROI (spec §3:
+     * landmarks come from the slide's clean cells), so a filter loaded or edited after sampling
+     * reaches every landmark, flag and rule — a no-op per sample while the filter is unchanged.
+     */
     public static Scored score(Snapshot snapshot, GateTree treeCopy) {
-        if (snapshot.referenceSlideId() == null || snapshot.samples().size() < 2) {
-            // Nothing to align, but the persisted landmarks and fixed cofactors carry through:
-            // adopting an empty cache here would throw them away and the next write would lose them.
-            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), null);
+        List<SlideSample> samples = snapshot.samples().stream().map(s -> s.scopedTo(treeCopy)).toList();
+        if (snapshot.referenceSlideId() == null || samples.size() < 2) {
+            // Nothing to align, but the persisted landmarks carry through: adopting an empty cache
+            // here would throw them away and the next write would lose them.
+            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), null, samples);
         }
         Set<AlignmentModel.ColumnRef> columns = AlignmentModel.columnsOf(treeCopy);
-        AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), snapshot.samples(), columns, snapshot.cache());
-        ReviewScorer.Result review = ReviewScorer.score(treeCopy, snapshot.samples(), model);
+        AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache());
+        ReviewScorer.Result review = ReviewScorer.score(treeCopy, samples, model);
         List<String> keys = columns.stream().map(AlignmentModel.ColumnRef::key).toList();
-        return new Scored(model, review, keys, mostTypical(model, snapshot.samples(), keys));
+        return new Scored(model, review, keys, mostTypical(model, samples, keys), samples);
     }
 
     /** The slide whose L1 shifts sit closest to the cohort median across every column; null under 3 slides. */
@@ -230,6 +246,12 @@ public final class CohortSession {
         }
         model = scored.model();
         cache = scored.model().cache();
+        // The scoped samples replace the ones they were scoped from — only those: a slide
+        // re-sampled while this scoring ran keeps its newer sample (a different index).
+        for (SlideSample scopedSample : scored.samples()) {
+            SlideSample current = samples.get(scopedSample.slideId());
+            if (current != null && current.index() == scopedSample.index()) samples.put(scopedSample.slideId(), scopedSample);
+        }
         review = scored.review();
         suggestedReferenceId = scored.suggestedReferenceId();
         return changed;

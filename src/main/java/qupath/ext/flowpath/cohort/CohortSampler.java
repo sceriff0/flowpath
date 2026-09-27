@@ -2,15 +2,13 @@ package qupath.ext.flowpath.cohort;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.ingest.DetectionIngest;
 import qupath.ext.flowpath.ingest.IngestOptions;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
-import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasurementKeySample;
-import qupath.ext.flowpath.model.RegionMask;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.roi.interfaces.ROI;
 
@@ -20,6 +18,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -74,10 +73,11 @@ public final class CohortSampler {
             if (detections.isEmpty()) return new Failed(source.id(), source.name(), "no detections on this slide");
             List<PathObject> sampled = draw(detections, cellsPerSlide, SEED ^ source.id().hashCode());
             CellIndex index = DetectionIngest.read(sampled, IngestOptions.none()).index();
-            boolean[] clean = cleanMask(index, tree, new ArrayList<>(hierarchy.getAnnotationObjects()));
-            return new Sampled(new SlideSample(source.id(), source.name(), index, clean,
-                    MarkerStats.compute(index, clean), detections.size(),
-                    fingerprint(cellsPerSlide, detections.size(), sampled)));
+            SlideSample unscoped = new SlideSample(source.id(), source.name(), index, null, null, detections.size(),
+                    fingerprint(cellsPerSlide, detections.size(), sampled),
+                    detached(hierarchy.getAnnotationObjects()), null);
+            // Scoped to the tree it was sampled under; every rescore re-scopes it to the tree scored.
+            return new Sampled(unscoped.scopedTo(tree));
         } catch (Exception | Error ex) {
             // Error too: sampling every cell of a million-cell slide is where an OutOfMemoryError
             // is plausible, and it must not end the run or strand the sampler flag.
@@ -89,16 +89,20 @@ public final class CohortSampler {
         }
     }
 
-    /** The clean mask exactly as {@code GatingSession.derive} builds it: quality filter, then ROI. */
-    static boolean[] cleanMask(CellIndex index, GateTree tree, List<PathObject> annotations) {
-        boolean[] mask = new boolean[index.size()];
-        Arrays.fill(mask, true);
-        if (tree.getQualityFilter() != null) mask = GatingEngine.computeQualityMask(index, tree.getQualityFilter());
-        if (tree.isRoiFilterEnabled()) {
-            RegionMask regions = RegionMask.compute(index, annotations);
-            if (!regions.isEmpty()) mask = GatingEngine.combineMasks(mask, regions.included());
+    /**
+     * The slide's annotations as the ROI filter reads them — shape, class and name — detached from
+     * the hierarchy, so a sample kept for the session does not keep the slide's annotation
+     * objects (and through them its hierarchy) alive.
+     */
+    static List<PathObject> detached(Collection<PathObject> annotations) {
+        List<PathObject> out = new ArrayList<>(annotations.size());
+        for (PathObject ann : annotations) {
+            if (ann == null || ann.getROI() == null) continue;
+            PathObject copy = PathObjects.createAnnotationObject(ann.getROI(), ann.getPathClass());
+            copy.setName(ann.getName());
+            out.add(copy);
         }
-        return mask;
+        return out;
     }
 
     /** A fixed-seed sample of {@code cellsPerSlide} detections, in their original order; all when 0 or more. */

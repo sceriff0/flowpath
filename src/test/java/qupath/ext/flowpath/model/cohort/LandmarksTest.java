@@ -73,9 +73,17 @@ class LandmarksTest {
     }
 
     @Test
-    void cofactorIsThePooledMedianMagnitude() {
-        assertEquals(3.0, Landmarks.cofactor(List.of(new double[]{1, -2, 3}, new double[]{4, 5, Double.NaN})), 1e-12);
-        assertEquals(1.0, Landmarks.cofactor(List.of(new double[]{0, 0})), 1e-12);
+    void cofactorIsTheMedianMagnitudeOfFiniteNonZeroValues() {
+        assertEquals(3.0, Landmarks.cofactor(new double[]{1, -2, 3, 4, 5, Double.NaN, 0}), 1e-12);
+        assertEquals(1.0, Landmarks.cofactor(new double[]{0, 0}), 1e-12);
+    }
+
+    /** Ruling C6 / M3: an even count takes the mean of the two middle values, as CohortStats.median does. */
+    @Test
+    void cofactorUsesTheOneCohortMedian() {
+        double[] values = {-1, 2, 3, 10, Double.POSITIVE_INFINITY};
+        assertEquals(2.5, Landmarks.cofactor(values), 1e-12);
+        assertEquals(CohortStats.median(new double[]{1, 2, 3, 10}), Landmarks.cofactor(values), 0.0);
     }
 
     @Test

@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.engine.AlignmentLookup;
+import qupath.ext.flowpath.engine.CleanMask;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.PhenotypeClassWriter;
 import qupath.ext.flowpath.engine.TreeResolver;
@@ -99,17 +100,13 @@ public final class BatchRunner {
             TreeResolver.ResolvedTree resolved = TreeResolver.resolve(settings.tree(), slide.id(), settings.alignments());
             GateTree tree = resolved.tree();
 
-            RegionMask regions = null;
-            if (tree.isRoiFilterEnabled()) {
-                RegionMask computed = RegionMask.compute(index, new ArrayList<>(data.getHierarchy().getAnnotationObjects()));
-                regions = computed.isEmpty() ? null : computed;
-            }
-            boolean[] roi = regions == null ? null : regions.included();
-            boolean[] quality = tree.getQualityFilter() == null ? null
-                    : GatingEngine.computeQualityMask(index, tree.getQualityFilter());
-            MarkerStats stats = tree.getQualityFilter() == null
-                    ? MarkerStats.compute(index, roi)
-                    : GatingEngine.recomputeStats(index, tree.getQualityFilter(), roi);
+            // The one quality-then-ROI composition the live pass and the cohort's samples use too.
+            CleanMask clean = CleanMask.of(index, tree.getQualityFilter(), tree.isRoiFilterEnabled(),
+                    tree.isRoiFilterEnabled() ? new ArrayList<>(data.getHierarchy().getAnnotationObjects()) : List.of());
+            RegionMask regions = clean.regions();
+            boolean[] roi = clean.roi();
+            boolean[] quality = clean.quality();
+            MarkerStats stats = MarkerStats.compute(index, clean.combined());
             GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats, roi,
                     regions == null ? null : regions.regionOf(), regions == null ? 0 : regions.regionNames().size());
             PopulationStats population = PopulationStats.of(tree, result.getTally(),

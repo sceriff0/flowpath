@@ -97,9 +97,11 @@ public final class ReviewScorer {
                     String column = applied.columns().get(k);
                     String channel = gate.getChannels().get(k);
 
+                    // Not while correction is off for want of a reference sample: nothing is
+                    // corrected then, so "not corrected" would single this slide out for nothing.
                     Landmarks lm = model.landmarks(s.slideId(), column);
                     if (gate.isCorrectStaining() && !s.slideId().equals(model.referenceSlideId())
-                            && lm != null && !lm.hasL1()) {
+                            && !model.referenceMissing() && lm != null && !lm.hasL1()) {
                         flags.add(ReviewItem.Flag.NO_LANDMARK);
                         reasons.add("No clear negative peak — not corrected");
                     }
@@ -131,7 +133,11 @@ public final class ReviewScorer {
                     }
 
                     if (oneDimensionalCut) {
+                        // The reference's cofactor; with no reference sample (missing from the
+                        // project, not sampled yet) this slide's own, which only sets the scale
+                        // the density is estimated on.
                         double c = model.cofactor(column);
+                        if (!Double.isFinite(c)) c = Landmarks.cofactor(raw);
                         if (Double.isFinite(c)) {
                             Density density = Density.of(Landmarks.toAsinh(raw, parent, c));
                             double u = Landmarks.asinh(applied.applied().axis(k)[0], c);

@@ -98,6 +98,29 @@ class ReviewScorerTest {
         assertTrue(itemsFor(score(tree, samples), "flat", 0).stream().noneMatch(i -> i.flags().contains(NO_LANDMARK)));
     }
 
+    /**
+     * Final review M9: with the reference slide not in the project, correction is off for every
+     * slide, so "No clear negative peak — not corrected" would single one slide out for nothing.
+     */
+    @Test
+    void noLandmarkIsNotFlaggedWhileTheReferenceIsNotInTheProject() {
+        List<SlideSample> samples = new ArrayList<>(cohort().subList(1, 4));
+        Random r = new Random(9);
+        double[] flat = new double[3000];
+        for (int i = 0; i < flat.length; i++) flat[i] = 100 * Math.sinh(-Math.log(1 - r.nextDouble()));
+        CellIndex index = Cells.of(flat.length).marker("CD3", i -> 1.0).marker("CD8", flat).build();
+        samples.add(new SlideSample("flat", "flat.tif", index, Cells.allTrue(flat.length),
+                MarkerStats.compute(index), flat.length, "f"));
+        GateTree tree = tree();
+        assertTrue(samples.stream().noneMatch(s -> s.slideId().equals(tree.getReferenceSlideId())));
+        ReviewScorer.Result result = score(tree, samples);
+        for (int root = 0; root < 2; root++) {
+            assertTrue(itemsFor(result, "flat", root).stream().noneMatch(i -> i.flags().contains(NO_LANDMARK)),
+                    "root " + root);
+        }
+        assertFalse(itemsFor(result, "s1", 1).isEmpty(), "the other flags still judge the slides");
+    }
+
     @Test
     void tooFewParentCellsCannotBeJudged() {
         List<SlideSample> samples = cohort();

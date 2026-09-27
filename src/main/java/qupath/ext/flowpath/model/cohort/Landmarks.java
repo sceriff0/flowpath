@@ -50,13 +50,14 @@ public record Landmarks(double cofactor, double l1, double l2) {
         return u;
     }
 
-    /** The pooled median of |x| over finite non-zero values; 1.0 when there are none. */
-    public static double cofactor(List<double[]> pooledRaw) {
-        double[] all = pooledRaw.stream().flatMapToDouble(Arrays::stream)
-                .filter(v -> Double.isFinite(v) && v != 0).map(Math::abs).sorted().toArray();
-        if (all.length == 0) return 1.0;
-        int m = all.length / 2;
-        return all.length % 2 == 1 ? all[m] : (all[m - 1] + all[m]) / 2;
+    /**
+     * The asinh cofactor for one column: the median of |x| over its finite non-zero values, through
+     * the one cohort median ({@link CohortStats#median}, ruling C6); 1.0 when there are none. The
+     * cohort passes the reference slide's clean sample for the column.
+     */
+    public static double cofactor(double[] raw) {
+        double[] magnitudes = Arrays.stream(raw).filter(v -> Double.isFinite(v) && v != 0).map(Math::abs).toArray();
+        return magnitudes.length == 0 ? 1.0 : CohortStats.median(magnitudes);
     }
 
     public static double asinh(double raw, double cofactor) {
