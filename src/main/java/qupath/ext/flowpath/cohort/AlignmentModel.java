@@ -89,8 +89,8 @@ public final class AlignmentModel {
 
     /**
      * No alignments, but carrying {@code cache}: what a score that could not align anything
-     * (no reference, fewer than two samples) hands back, so the persisted landmarks and the
-     * fixed cofactors survive it rather than being replaced by nothing.
+     * (no reference, fewer than two samples) hands back, so the persisted landmarks survive it
+     * rather than being replaced by nothing.
      */
     public static AlignmentModel empty(Cache cache) {
         return new AlignmentModel(null, false, Map.of(), Map.of(), Map.of(), Map.of(), cache);

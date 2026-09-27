@@ -75,8 +75,8 @@ public final class BoundaryHotspot {
      * {@link TreeResolver#correctionFor}; nothing here computes an applied value.
      *
      * @param base      quality + ROI mask the parent population starts from; null for every cell
-     * @param cofactors a column key's fixed cofactor, NaN when unknown (the column's own pooled
-     *                  cofactor is used then)
+     * @param cofactors a column key's cofactor (the reference slide's, {@code AlignmentModel.cofactor}),
+     *                  NaN when unknown (this slide's own median |value| is used then)
      */
     public static Boundary of(GateTree live, GateNode gate, String slideId, AlignmentLookup lookup,
                               CellIndex index, MarkerStats stats, boolean[] base,

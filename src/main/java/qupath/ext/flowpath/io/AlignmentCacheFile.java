@@ -46,7 +46,10 @@ public final class AlignmentCacheFile {
                 Map<String, Landmarks> columns = new HashMap<>();
                 for (var col : s.getAsJsonObject("columns").entrySet()) {
                     JsonObject c = col.getValue().getAsJsonObject();
-                    double cofactor = cofactors.getOrDefault(col.getKey(), 1.0);
+                    // Each landmark's own cofactor; a file written before it was recorded falls
+                    // back to the column's, which is the one those landmarks were found with.
+                    double cofactor = c.has("cofactor") ? c.get("cofactor").getAsDouble()
+                            : cofactors.getOrDefault(col.getKey(), 1.0);
                     columns.put(col.getKey(), new Landmarks(cofactor, optDouble(c, "l1"), optDouble(c, "l2")));
                 }
                 slides.put(slide.getKey(), new AlignmentModel.SlideEntry(s.get("fingerprint").getAsString(), columns));
@@ -76,9 +79,11 @@ public final class AlignmentCacheFile {
 
     /**
      * Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed,
-     * recording the sample size its landmarks were found from. An empty cache is never written: it
-     * holds nothing worth keeping, and over an existing file it would throw away every landmark
-     * and the fixed per-column cofactors.
+     * recording the sample size its landmarks were found from and each landmark's own cofactor —
+     * a slide not sampled in the build that wrote the file keeps landmarks found under an earlier
+     * reference's cofactor, and labelling them with the current column cofactor would let them be
+     * reused as if found under it. An empty cache is never written: it holds nothing worth
+     * keeping, and over an existing file it would throw away every landmark.
      */
     public static void write(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) throws IOException {
         if (cache.isEmpty()) return;
@@ -95,6 +100,7 @@ public final class AlignmentCacheFile {
             JsonObject columns = new JsonObject();
             entry.columns().forEach((key, lm) -> {
                 JsonObject c = new JsonObject();
+                c.addProperty("cofactor", lm.cofactor());
                 if (lm.hasL1()) c.addProperty("l1", lm.l1());
                 if (lm.hasL2()) c.addProperty("l2", lm.l2());
                 columns.add(key, c);

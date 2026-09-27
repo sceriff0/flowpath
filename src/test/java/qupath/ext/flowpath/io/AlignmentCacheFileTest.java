@@ -31,6 +31,33 @@ class AlignmentCacheFileTest {
                 "the sample size the landmarks were found from is recorded");
     }
 
+    /**
+     * Final ruling I2: a slide not sampled in the build that wrote the cache keeps landmarks found
+     * under an earlier reference's cofactor. Each landmark keeps its own cofactor through the file,
+     * so AlignmentModel's "found under the cofactor in force now" check still sees the old one.
+     */
+    @Test
+    void eachLandmarkKeepsTheCofactorItWasFoundWith(@TempDir Path project) throws Exception {
+        Path file = AlignmentCacheFile.pathFor(project);
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8", 200.0),
+                Map.of("now", new AlignmentModel.SlideEntry("f1", Map.of("CD8", new Landmarks(200.0, 1.0, 3.0))),
+                        "earlier", new AlignmentModel.SlideEntry("f2", Map.of("CD8", new Landmarks(90.0, 1.5, 3.5)))));
+        AlignmentCacheFile.write(file, cache, 5000);
+        AlignmentModel.Cache back = AlignmentCacheFile.read(file);
+        assertEquals(200.0, back.slides().get("now").columns().get("CD8").cofactor());
+        assertEquals(90.0, back.slides().get("earlier").columns().get("CD8").cofactor());
+    }
+
+    /** A file written before landmarks carried their own cofactor reads the column's. */
+    @Test
+    void anOlderFileFallsBackToTheColumnCofactor(@TempDir Path project) throws Exception {
+        Path file = AlignmentCacheFile.pathFor(project);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, "{\"version\":1,\"cofactors\":{\"CD8\":77.0},"
+                + "\"slides\":{\"a\":{\"fingerprint\":\"f\",\"columns\":{\"CD8\":{\"l1\":1.0}}}}}");
+        assertEquals(77.0, AlignmentCacheFile.read(file).slides().get("a").columns().get("CD8").cofactor());
+    }
+
     @Test
     void aMissingOrCorruptFileIsAnEmptyCache(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
@@ -41,7 +68,7 @@ class AlignmentCacheFileTest {
         assertTrue(AlignmentCacheFile.sampledCellsPerSlide(file).isEmpty());
     }
 
-    /** An empty cache never overwrites landmarks and fixed cofactors already on disk. */
+    /** An empty cache never overwrites landmarks and cofactors already on disk. */
     @Test
     void anEmptyCacheNeverOverwritesAStoredOne(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
