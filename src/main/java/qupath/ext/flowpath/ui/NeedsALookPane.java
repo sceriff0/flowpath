@@ -8,12 +8,16 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
+import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.WritableImage;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.model.Region2DGate;
@@ -33,7 +37,7 @@ final class NeedsALookPane extends TitledPane {
 
     /** The review keys; see {@link #of}. */
     enum ReviewKey {
-        LOOKS_RIGHT, SKIP, NEXT, PREVIOUS, BACK, TOGGLE_OVERLAY, REVIEW_GROUP;
+        LOOKS_RIGHT, SKIP, NEXT, PREVIOUS, BACK, TOGGLE_OVERLAY, REVIEW_GROUP, OPEN_IN_VIEWER;
 
         /**
          * As {@link #of(KeyCode, boolean, boolean)}, with Shift told apart: Shift+Enter (and no
@@ -59,6 +63,7 @@ final class NeedsALookPane extends TitledPane {
                 case P -> PREVIOUS;
                 case ESCAPE -> BACK;
                 case B -> TOGGLE_OVERLAY;
+                case V -> OPEN_IN_VIEWER;
                 default -> null;
             };
         }
@@ -79,6 +84,11 @@ final class NeedsALookPane extends TitledPane {
     final Label adjustHint = new Label(ADJUST_HINT);
     final Label referenceLabel = new Label("Reference: none");
     final Label infoLabel = new Label();
+    static final String CROP_LOADING = "Loading crop…";
+    /** The selected item's evidence crop (spec §6); its pixels are fixed swatches, not themed text. */
+    final ImageView cropView = new ImageView();
+    final Label cropStatusLabel = new Label();
+    final Button openInViewerButton = new Button("Open in viewer (V)");
 
     private Consumer<ReviewItem.Key> onItemChosen = k -> {};
     private Consumer<ReviewGroup.Key> onGroupChosen = k -> {};
@@ -88,6 +98,7 @@ final class NeedsALookPane extends TitledPane {
     private IntConsumer onStep = d -> {};
     private Runnable onUseReference = () -> {};
     private IntConsumer onSampleSizeChanged = n -> {};
+    private Runnable onOpenInViewer = () -> {};
 
     /** True while {@link #render} sets controls, so the selection it restores is not reported as a click. */
     private boolean rendering;
@@ -141,9 +152,18 @@ final class NeedsALookPane extends TitledPane {
         HBox answerRow = new HBox(4, previousButton, nextButton, looksRightButton, skipButton, reviewGroupButton);
         answerRow.setAlignment(Pos.CENTER_LEFT);
         adjustHint.getStyleClass().add("fp-hint");
+
+        cropView.setFitWidth(256);
+        cropView.setPreserveRatio(true);
+        cropStatusLabel.getStyleClass().add("fp-hint");
+        cropStatusLabel.setWrapText(true);
+        openInViewerButton.setOnAction(e -> onOpenInViewer.run());
+        VBox cropSide = new VBox(4, cropStatusLabel, openInViewerButton);
+        HBox cropRow = new HBox(6, cropView, cropSide);
+        HBox.setHgrow(cropSide, Priority.ALWAYS);
         updateAnswerButtons();
 
-        setContent(new VBox(4, headerRow, infoLabel, groupList, itemList, answerRow, adjustHint));
+        setContent(new VBox(4, headerRow, infoLabel, groupList, itemList, cropRow, answerRow, adjustHint));
     }
 
     /**
@@ -214,6 +234,33 @@ final class NeedsALookPane extends TitledPane {
         }
     }
 
+    /** A crop is being read for the selected item: no image, and a line saying so. */
+    void showCropLoading() {
+        cropView.setImage(null);
+        cropStatusLabel.setText(CROP_LOADING);
+    }
+
+    /** The selected item's crop, or its error text when it failed; the item stays answerable either way. */
+    void showCrop(EvidenceCrop.Crop crop) {
+        if (crop.ok()) {
+            WritableImage img = new WritableImage(crop.width(), crop.height());
+            img.getPixelWriter().setPixels(0, 0, crop.width(), crop.height(), PixelFormat.getIntArgbInstance(),
+                    crop.argb(), 0, crop.width());
+            cropView.setImage(img);
+            cropStatusLabel.setText("");
+        } else {
+            cropView.setImage(null);
+            cropStatusLabel.setText(crop.error());
+        }
+    }
+
+    /** No item selected: no crop. */
+    void clearCrop() {
+        cropView.setImage(null);
+        cropStatusLabel.setText("");
+    }
+
+    void setOnOpenInViewer(Runnable callback) { onOpenInViewer = Objects.requireNonNull(callback); }
     void setOnGroupChosen(Consumer<ReviewGroup.Key> callback) { onGroupChosen = Objects.requireNonNull(callback); }
     void setOnReviewGroup(Runnable callback) { onReviewGroup = Objects.requireNonNull(callback); }
     void setOnItemChosen(Consumer<ReviewItem.Key> callback) { onItemChosen = Objects.requireNonNull(callback); }
@@ -244,6 +291,7 @@ final class NeedsALookPane extends TitledPane {
         boolean none = itemList.getSelectionModel().getSelectedItem() == null;
         looksRightButton.setDisable(none);
         skipButton.setDisable(none);
+        openInViewerButton.setDisable(none);
         boolean empty = itemList.getItems().isEmpty();
         previousButton.setDisable(empty);
         nextButton.setDisable(empty);

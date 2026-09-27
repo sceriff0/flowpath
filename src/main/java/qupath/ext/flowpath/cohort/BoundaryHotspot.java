@@ -14,6 +14,7 @@ import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.util.List;
@@ -26,11 +27,10 @@ public final class BoundaryHotspot {
 
     /** Half-width of the boundary band, in aligned asinh units — the same meaning on every slide. */
     public static final double BAND = 0.1;
-    /**
-     * The viewer's centring tile, in level-0 pixels. Not yet the evidence crop's 200 µm field:
-     * the two are unified in a later task, so the viewer and a crop may centre differently.
-     */
-    public static final double TILE_PIXELS = 1024;
+    /** The evidence field, and the hotspot grid's tile: 200 µm (spec §6). */
+    public static final double FIELD_MICRONS = 200;
+    /** The evidence crop's side in output pixels, and the field in level-0 pixels when uncalibrated. */
+    public static final int CROP_PIXELS = 512;
 
     /** Grey for a boundary cell the gate cannot judge. */
     static final int UNJUDGED_RGB = 0x808080;
@@ -113,6 +113,16 @@ public final class BoundaryHotspot {
             rgb[i] = b >= 0 ? target.getBranches().get(b).getColor() & 0xFFFFFF : UNJUDGED_RGB;
         }
         return new Boundary(cells, rgb);
+    }
+
+    /**
+     * {@link #FIELD_MICRONS} in level-0 pixels, or {@link #CROP_PIXELS} when the image has no pixel
+     * size. The one tile the viewer's click-through and the evidence crop both centre on, so the
+     * two show the same cells.
+     */
+    public static double fieldPixels(PixelCalibration cal) {
+        return cal != null && cal.hasPixelSizeMicrons() && cal.getAveragedPixelSizeMicrons() > 0
+                ? FIELD_MICRONS / cal.getAveragedPixelSizeMicrons() : CROP_PIXELS;
     }
 
     /** ROI centroids are level-0 pixels — the space {@code QuPathViewer.setCenterPixelLocation} takes. */

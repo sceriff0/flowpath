@@ -10,6 +10,7 @@ import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 import qupath.ext.flowpath.testing.Cells;
+import qupath.lib.images.servers.PixelCalibration;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,12 +37,18 @@ class BoundaryHotspotTest {
     void theHotspotIsTheCentreOfTheTileWithMostFlaggedCells() {
         CellIndex index = Cells.of(5).at(new double[]{10, 20, 1500, 1600, 1700}, new double[]{10, 20, 1500, 1550, 1600})
                 .marker("CD3", 1.0).build();
-        BoundaryHotspot.Hotspot h = BoundaryHotspot.hotspot(index, new boolean[]{true, true, true, true, true},
-                BoundaryHotspot.TILE_PIXELS);
+        BoundaryHotspot.Hotspot h = BoundaryHotspot.hotspot(index, new boolean[]{true, true, true, true, true}, 1024);
         assertEquals(1536.0, h.centerX());
         assertEquals(1536.0, h.centerY());
         assertEquals(3, h.cells());
-        assertNull(BoundaryHotspot.hotspot(index, new boolean[5], BoundaryHotspot.TILE_PIXELS));
+        assertNull(BoundaryHotspot.hotspot(index, new boolean[5], 1024));
+    }
+
+    @Test
+    void theFieldIsTwoHundredMicronsOrFiveHundredTwelvePixelsUncalibrated() {
+        assertEquals(400.0, BoundaryHotspot.fieldPixels(new PixelCalibration.Builder().pixelSizeMicrons(0.5, 0.5).build()));
+        assertEquals(512.0, BoundaryHotspot.fieldPixels(PixelCalibration.getDefaultInstance()));
+        assertEquals(512.0, BoundaryHotspot.fieldPixels(null));
     }
 
     static final double[] CD8 = {0.5, 1.0, 2.0, 2.9, 3.0, 3.1, 5.0, 6.9, 7.0, 7.1};

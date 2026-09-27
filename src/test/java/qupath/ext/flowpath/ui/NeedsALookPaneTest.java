@@ -4,6 +4,7 @@ import javafx.scene.input.KeyCode;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateValues;
@@ -148,6 +149,8 @@ class NeedsALookPaneTest {
         assertEquals(NeedsALookPane.ReviewKey.PREVIOUS, NeedsALookPane.ReviewKey.of(KeyCode.P, false, false));
         assertEquals(NeedsALookPane.ReviewKey.BACK, NeedsALookPane.ReviewKey.of(KeyCode.ESCAPE, false, false));
         assertEquals(NeedsALookPane.ReviewKey.TOGGLE_OVERLAY, NeedsALookPane.ReviewKey.of(KeyCode.B, false, false));
+        assertEquals(NeedsALookPane.ReviewKey.OPEN_IN_VIEWER, NeedsALookPane.ReviewKey.of(KeyCode.V, false, false));
+        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.V, true, false), "Ctrl+V is Paste, not Open in viewer");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, true, false), "Ctrl+S is Save, not Skip");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, false, true), "Enter in a text field is the field's");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, false, true), "typing an S is not Skip");
@@ -197,5 +200,40 @@ class NeedsALookPaneTest {
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, false, true), "never in a text field");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, true, false, false), "Shift+S is not Skip");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.Z, true, false, false));
+    }
+
+    @Test
+    void aCropShowsItsPixelsAFailureItsTextAndTheButtonOpensTheViewer() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        NeedsALookPane pane = FxTestSupport.onFx(NeedsALookPane::new);
+        AtomicInteger opened = new AtomicInteger();
+        CohortState state = new CohortState(true, false, 3, 3, 0, 2, "ref.tif", null, false, null, false, true);
+        Object[] shown = FxTestSupport.onFx(() -> {
+            pane.setOnOpenInViewer(opened::incrementAndGet);
+            boolean disabledWithoutSelection = pane.openInViewerButton.isDisable();
+            pane.render(state, List.of(item("s1", 0), item("s1", 1)), List.of(), new ReviewItem.Key("s1", 1, "CD8"), 500);
+            boolean disabledWithSelection = pane.openInViewerButton.isDisable();
+            pane.showCropLoading();
+            String loading = pane.cropStatusLabel.getText();
+            pane.showCrop(new EvidenceCrop.Crop(2, 1, new int[]{0xFF00FF00, 0xFF0000FF}, null));
+            int pixel = pane.cropView.getImage().getPixelReader().getArgb(0, 0);
+            double width = pane.cropView.getImage().getWidth();
+            String okText = pane.cropStatusLabel.getText();
+            pane.showCrop(EvidenceCrop.Crop.failed("server gone"));
+            boolean imageCleared = pane.cropView.getImage() == null;
+            pane.openInViewerButton.fire();
+            return new Object[]{disabledWithoutSelection, disabledWithSelection, loading, pixel, width, okText,
+                    imageCleared, pane.cropStatusLabel.getText(), pane.cropStatusLabel.getStyleClass().contains("fp-hint")};
+        });
+        assertEquals(true, shown[0], "nothing selected: nothing to open");
+        assertEquals(false, shown[1]);
+        assertEquals(NeedsALookPane.CROP_LOADING, shown[2]);
+        assertEquals(0xFF00FF00, shown[3]);
+        assertEquals(2.0, shown[4]);
+        assertEquals("", shown[5]);
+        assertEquals(true, shown[6], "a failed crop shows no stale image");
+        assertEquals("server gone", shown[7]);
+        assertEquals(true, shown[8]);
+        assertEquals(1, opened.get());
     }
 }
