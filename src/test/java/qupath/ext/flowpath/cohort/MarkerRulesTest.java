@@ -94,6 +94,23 @@ class MarkerRulesTest {
                 "the twin is told apart from root 0 by its root index");
     }
 
+    /**
+     * Final ruling I5: a gate and its duplicate under one branch state the same rule; their keys
+     * and their qc_summary subjects carry GateWalk's ordinal, so the two stay apart.
+     */
+    @Test
+    void aGateAndItsDuplicateStateDistinctRules() {
+        GateTree tree = tree();
+        List<GateNode> underCd3 = tree.getRoots().get(0).getBranches().get(0).getChildren();
+        underCd3.add(underCd3.get(0).deepCopy());
+        List<MarkerRules.Rule> implies = MarkerRules.rulesOf(tree).stream()
+                .filter(r -> r.kind() == MarkerRules.Kind.IMPLIES).toList();
+        assertEquals(List.of(new MarkerRules.GateRef(0, "CD3+/CD8"), new MarkerRules.GateRef(0, "CD3+/CD8#2")),
+                implies.stream().map(MarkerRules.Rule::aRef).toList());
+        assertEquals(List.of("0:CD8+ => 0:CD3+", "0:CD8+#2 => 0:CD3+"),
+                implies.stream().map(MarkerRules.Rule::indexedLabel).toList());
+    }
+
     @Test
     void onlyThresholdGatesTakePartInExclusiveRules() {
         GateTree tree = tree();

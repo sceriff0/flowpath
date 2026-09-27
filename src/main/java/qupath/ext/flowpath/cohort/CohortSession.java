@@ -383,12 +383,21 @@ public final class CohortSession {
         return selected;
     }
 
-    /** The live gate an item names, by value: the enabled gate at {@code (rootIndex, gatePath)}. */
+    /**
+     * The live gate an item names, by value: the enabled gate at {@code (rootIndex, gatePath)}.
+     * {@link GateWalk} numbers same-label siblings so every path is unique; should two gates still
+     * answer to one key, the key is refused (null) rather than an answer landing on whichever
+     * came first.
+     */
     public static GateNode liveGate(GateTree live, ReviewItem.Key key) {
+        GateNode found = null;
         for (GateWalk.Entry e : GateWalk.enabled(live)) {
-            if (e.rootIndex() == key.rootIndex() && e.gatePath().equals(key.gatePath())) return e.gate();
+            if (e.rootIndex() == key.rootIndex() && e.gatePath().equals(key.gatePath())) {
+                if (found != null) return null;
+                found = e.gate();
+            }
         }
-        return null;
+        return found;
     }
 
     public ViewMode viewMode() { return viewMode; }

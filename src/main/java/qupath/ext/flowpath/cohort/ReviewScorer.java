@@ -179,7 +179,7 @@ public final class ReviewScorer {
             TreeResolver.Applied applied = resolved.get(s.slideId()).applied(gate);
             if (answered(gate, s.slideId(), applied.applied())) continue;
             ReviewItem.Key key = new ReviewItem.Key(s.slideId(), f.gateRef().rootIndex(), f.gateRef().gatePath());
-            // Matched by gate identity, not by key: two sibling gates on one channel share a path.
+            // Matched by gate identity: the one fact a finding and an item both carry for certain.
             int at = -1;
             for (int i = 0; i < items.size() && at < 0; i++) {
                 ReviewItem item = items.get(i);

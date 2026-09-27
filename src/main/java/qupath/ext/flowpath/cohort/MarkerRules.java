@@ -61,19 +61,15 @@ public final class MarkerRules {
      * ({@code bBranch} is 0). The gates are nodes of the tree {@link #rulesOf} was given;
      * {@code aRef}/{@code bRef} name them by value.
      */
-    public record Rule(Kind kind, GateNode a, GateNode b, int bBranch, String label, GateRef aRef, GateRef bRef) {
-        /**
-         * {@link #label} with each side prefixed by its gate's root index — {@code 0:CD8+ => 0:CD3+}
-         * — for a reader that lists rules by name ({@code qc_summary.csv}): two roots on one
-         * channel state byte-identical labels, and only the root index tells them apart.
-         */
-        public String indexedLabel() {
-            String left = aRef.rootIndex() + ":" + positiveName(a);
-            return kind == Kind.IMPLIES
-                    ? left + " => " + bRef.rootIndex() + ":" + branchName(b, bBranch)
-                    : left + " & " + bRef.rootIndex() + ":" + positiveName(b);
-        }
-    }
+    /**
+     * @param indexedLabel {@link #label} with each side prefixed by its gate's root index —
+     *                     {@code 0:CD8+ => 0:CD3+} — and a branch repeated among sibling gates
+     *                     numbered as {@link GateWalk} numbers it ({@code 0:CD8+#2 => 0:CD3+}), for
+     *                     a reader that lists rules by name ({@code qc_summary.csv}): two roots on
+     *                     one channel, or a gate and its duplicate, state byte-identical labels
+     */
+    public record Rule(Kind kind, GateNode a, GateNode b, int bBranch, String label, GateRef aRef, GateRef bRef,
+                       String indexedLabel) {}
 
     /**
      * One rule on one slide: {@code violations} of {@code judged} cells, {@code rate} their ratio
@@ -102,8 +98,10 @@ public final class MarkerRules {
             for (GateWalk.Entry up = e; up.parentGate() != null; up = byGate.get(up.parentGate())) {
                 GateNode ancestor = up.parentGate();
                 int under = ancestor.getBranches().indexOf(up.parentBranch());
+                GateWalk.Entry anc = byGate.get(ancestor);
                 rules.add(new Rule(Kind.IMPLIES, e.gate(), ancestor, under,
-                        positive + " => " + branchName(ancestor, under), ref(e), ref(byGate.get(ancestor))));
+                        positive + " => " + branchName(ancestor, under), ref(e), ref(anc),
+                        indexed(e, 0) + " => " + indexed(anc, under)));
             }
         }
         List<GateWalk.Entry> lineage = walk.stream()
@@ -119,7 +117,8 @@ public final class MarkerRules {
                 // pair it would contradict that rule and read ~100% on every slide.
                 if (isAncestor(a, b, byGate) || isAncestor(b, a, byGate)) continue;
                 rules.add(new Rule(Kind.EXCLUSIVE, a.gate(), b.gate(), 0,
-                        positiveName(a.gate()) + " & " + positiveName(b.gate()), ref(a), ref(b)));
+                        positiveName(a.gate()) + " & " + positiveName(b.gate()), ref(a), ref(b),
+                        indexed(a, 0) + " & " + indexed(b, 0)));
             }
         }
         return rules;
@@ -269,6 +268,13 @@ public final class MarkerRules {
     /** The column a threshold gate reads, as {@code TreeResolver} names it. */
     private static String columnKey(GateNode gate) {
         return CellIndex.keyFor(gate.getChannel(), gate.compartmentAt(0), gate.statisticAt(0));
+    }
+
+    /** {@code rootIndex:branch}, the branch carrying {@link GateWalk}'s ordinal when it is a repeat. */
+    private static String indexed(GateWalk.Entry e, int branch) {
+        String segment = e.branchSegments().get(branch);
+        String ordinal = segment.substring(e.gate().getBranches().get(branch).getName().length());
+        return e.rootIndex() + ":" + branchName(e.gate(), branch) + ordinal;
     }
 
     private static GateRef ref(GateWalk.Entry e) {
