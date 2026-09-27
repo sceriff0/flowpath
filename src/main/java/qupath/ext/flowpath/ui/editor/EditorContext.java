@@ -1,11 +1,14 @@
 package qupath.ext.flowpath.ui.editor;
 
 import javafx.collections.ObservableList;
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.cohort.Alignment;
+
+import java.util.List;
 
 /**
  * What a {@link GateTypeEditor} reads from, and reports to, the pane that hosts it.
@@ -36,6 +39,13 @@ public interface EditorContext {
 
     /** The reference slide's name, or null outside a cohort. */
     String referenceName();
+
+    /**
+     * Every sampled slide's values for {@code gate}, in reference units, for the All slides
+     * view; empty unless the pane is in All slides with a cohort available. A view only: the
+     * editor still edits the gate's reference numbers.
+     */
+    List<CohortCurves.SlideValues> cohortValues(GateNode gate);
 
     /** The live channel list; channel pickers share it rather than copy it. */
     ObservableList<String> channelNames();

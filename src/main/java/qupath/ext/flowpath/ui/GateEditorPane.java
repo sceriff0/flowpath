@@ -11,12 +11,16 @@ import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import qupath.ext.flowpath.cohort.CohortCurves;
+import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
@@ -39,6 +43,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -71,6 +76,16 @@ public class GateEditorPane extends VBox {
     private final HBox slideSettingRow;
     private EditorAlignment editorAlignment = EditorAlignment.IDENTITY;
     private Runnable onClearSlideSetting;
+
+    /** "This slide" / "All slides" (U1); shown only while a cohort is available. */
+    final ToggleGroup viewModeGroup = new ToggleGroup();
+    final ToggleButton thisSlideButton = new ToggleButton("This slide");
+    final ToggleButton allSlidesButton = new ToggleButton("All slides");
+    private final HBox viewModeRow;
+    private boolean cohortAvailable;
+    private CohortSession.ViewMode viewMode = CohortSession.ViewMode.THIS_SLIDE;
+    private Function<GateNode, List<CohortCurves.SlideValues>> cohortValues = g -> List.of();
+    private Consumer<CohortSession.ViewMode> onViewModeChanged;
 
     private final ObservableList<String> channelNames = FXCollections.observableArrayList();
 
@@ -133,6 +148,31 @@ public class GateEditorPane extends VBox {
         slideSettingRow.managedProperty().bind(slideSettingRow.visibleProperty());
         HBox.setHgrow(slideSettingLabel, Priority.ALWAYS);
 
+        thisSlideButton.setToggleGroup(viewModeGroup);
+        allSlidesButton.setToggleGroup(viewModeGroup);
+        thisSlideButton.setSelected(true);
+        thisSlideButton.setTooltip(new Tooltip("Plot the open slide's cells only"));
+        allSlidesButton.setTooltip(new Tooltip(
+            "Also plot every sampled slide's cells for this gate, in the reference slide's units.\n" +
+            "A child gate shows each slide's own parent population. You still edit the reference values."));
+        viewModeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
+            if (val == null) {
+                // Clicking the selected toggle deselects it; one of the two is always on.
+                if (old != null) viewModeGroup.selectToggle(old);
+                return;
+            }
+            if (suppressEvents) return;
+            CohortSession.ViewMode mode = val == allSlidesButton
+                ? CohortSession.ViewMode.ALL_SLIDES : CohortSession.ViewMode.THIS_SLIDE;
+            if (mode == viewMode) return;
+            viewMode = mode;
+            refreshForNewData();
+            if (onViewModeChanged != null) onViewModeChanged.accept(mode);
+        });
+        viewModeRow = new HBox(0, thisSlideButton, allSlidesButton);
+        viewModeRow.setVisible(false);
+        viewModeRow.managedProperty().bind(viewModeRow.visibleProperty());
+
         // --- Outlier clipping ---
         clipLowSpinner = new Spinner<>(0.0, 50.0, 1.0, 0.5);
         clipLowSpinner.setPrefWidth(75);
@@ -193,6 +233,7 @@ public class GateEditorPane extends VBox {
 
         getChildren().addAll(
             header,
+            viewModeRow,
             slideSettingRow,
             gateSpecificArea,
             createSectionHeader("Outlier Clipping"), clipRow, clipInfoLabel,
@@ -442,9 +483,46 @@ public class GateEditorPane extends VBox {
         refreshForNewData();
     }
 
-    /** Whether a cohort is available; the "Correct staining" switch is offered only then. */
+    /**
+     * Whether a cohort is available; the "Correct staining" switch and the This slide / All
+     * slides toggle are offered only then. Losing the cohort while in All slides drops the
+     * other slides' values from the plot at once (a refresh, not a rebuild).
+     */
     public void setCohortAvailable(boolean available) {
         correctStainingBox.setVisible(available);
+        viewModeRow.setVisible(available);
+        boolean changed = available != cohortAvailable;
+        cohortAvailable = available;
+        if (changed && viewMode == CohortSession.ViewMode.ALL_SLIDES) refreshForNewData();
+    }
+
+    /**
+     * Where the All slides view gets a gate's per-slide values (the host answers from
+     * {@code CohortCurves.of}); asked only while in All slides with a cohort available.
+     */
+    public void setCohortValues(Function<GateNode, List<CohortCurves.SlideValues>> provider) {
+        this.cohortValues = provider == null ? g -> List.of() : provider;
+        refreshForNewData();
+    }
+
+    /** Show {@code mode}. Programmatic, so not reported to {@link #setOnViewModeChanged}. */
+    public void setViewMode(CohortSession.ViewMode mode) {
+        CohortSession.ViewMode m = mode == null ? CohortSession.ViewMode.THIS_SLIDE : mode;
+        withSuppressedEvents(() ->
+            viewModeGroup.selectToggle(m == CohortSession.ViewMode.ALL_SLIDES ? allSlidesButton : thisSlideButton));
+        if (m == viewMode) return;
+        viewMode = m;
+        refreshForNewData();
+    }
+
+    public CohortSession.ViewMode viewMode() { return viewMode; }
+
+    /** Called when the user switches between This slide and All slides. */
+    public void setOnViewModeChanged(Consumer<CohortSession.ViewMode> callback) { this.onViewModeChanged = callback; }
+
+    /** Re-read the shown gate's data (the cohort's values included) without a rebuild. */
+    public void refreshEditor() {
+        refreshForNewData();
     }
 
     /**
@@ -556,6 +634,10 @@ public class GateEditorPane extends VBox {
         @Override public ObservableList<String> channelNames() { return channelNames; }
         @Override public Alignment displayAlignment(GateNode gate, int axis) { return editorAlignment.forAxis(gate, axis); }
         @Override public String referenceName() { return editorAlignment.referenceName(); }
+        @Override public List<CohortCurves.SlideValues> cohortValues(GateNode gate) {
+            return viewMode == CohortSession.ViewMode.ALL_SLIDES && cohortAvailable
+                ? cohortValues.apply(gate) : List.of();
+        }
         @Override public GateNode shownGate() { return currentNode; }
         @Override public boolean eventsSuppressed() { return suppressEvents; }
         @Override public void withSuppressedEvents(Runnable action) { GateEditorPane.this.withSuppressedEvents(action); }

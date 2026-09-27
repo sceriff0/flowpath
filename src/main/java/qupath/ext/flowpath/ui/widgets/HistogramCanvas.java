@@ -7,6 +7,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import qupath.ext.flowpath.model.GateNode;
 
+import java.util.List;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -35,6 +36,11 @@ public class HistogramCanvas extends Canvas {
     // Used to distinguish "truly empty" from "all values outside clip range"
     // when rendering the empty-histogram message.
     private int inputCount;
+
+    /** All slides view: one value array per sampled slide, in reference units; empty when off. */
+    private List<double[]> cohortCurves = List.of();
+    /** Which of {@link #cohortCurves} is the open slide, or -1. */
+    private int cohortCurrent = -1;
 
     private int posCount = -1;
     private int negCount = -1;
@@ -214,8 +220,68 @@ public class HistogramCanvas extends Canvas {
         repaint();
     }
 
+    /**
+     * The All slides view: each sampled slide's values (already in the axis's reference units)
+     * drawn as one ridge over the open slide's bars, the {@code currentIndex}th highlighted.
+     * The bars, the threshold and dragging are unchanged — this is a view only.
+     */
+    public void setCohortCurves(List<double[]> values, int currentIndex) {
+        cohortCurves = List.copyOf(values);
+        cohortCurrent = currentIndex;
+        repaint();
+    }
+
+    public void clearCohortCurves() {
+        setCohortCurves(List.of(), -1);
+    }
+
+    /** How many slide curves are held. Package-private for tests. */
+    int cohortCurveCount() {
+        return cohortCurves.size();
+    }
+
     public void setOnMouseHover(DoubleConsumer callback) {
         this.onMouseHover = callback;
+    }
+
+    /**
+     * One ridge per slide, binned like the bars over the same window, normalised to that
+     * slide's own peak and stacked bottom-up in the order given; other slides first, the open
+     * slide last and heavier so it reads on top. Fixed canvas swatches, like the bars.
+     */
+    private void drawCohortCurves(GraphicsContext gc, double plotW, double plotH) {
+        if (binEdges == null || cohortCurves.isEmpty()) return;
+        int k = cohortCurves.size();
+        double step = k > 1 ? plotH * 0.6 / (k - 1) : 0;
+        double amplitude = plotH * 0.4;
+        double binWidth = (displayMax - displayMin) / NUM_BINS;
+        double binPixelWidth = plotW / NUM_BINS;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < k; i++) {
+                boolean current = i == cohortCurrent;
+                if (current != (pass == 1)) continue;
+                double[] counts = new double[NUM_BINS];
+                double peak = 0;
+                for (double v : cohortCurves.get(i)) {
+                    if (Double.isNaN(v) || v < displayMin || v > displayMax) continue;
+                    int bin = (int) ((v - displayMin) / binWidth);
+                    if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+                    peak = Math.max(peak, ++counts[bin]);
+                }
+                if (peak <= 0) continue;
+                double baseline = PADDING_TOP + plotH - i * step;
+                double[] xs = new double[NUM_BINS];
+                double[] ys = new double[NUM_BINS];
+                for (int b = 0; b < NUM_BINS; b++) {
+                    xs[b] = PADDING_LEFT + (b + 0.5) * binPixelWidth;
+                    ys[b] = baseline - counts[b] / peak * amplitude;
+                }
+                gc.setStroke(current ? posColor : Color.gray(0.5, 0.7));
+                gc.setLineWidth(current ? 2 : 1);
+                gc.strokePolyline(xs, ys, NUM_BINS);
+            }
+        }
+        gc.setLineWidth(1);
     }
 
     private void repaint() {
@@ -262,6 +328,8 @@ public class HistogramCanvas extends Canvas {
 
             gc.fillRect(x, y, Math.max(binPixelWidth - 0.5, 1), barH);
         }
+
+        drawCohortCurves(gc, plotW, plotH);
 
         // Draw threshold line
         if (!Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {

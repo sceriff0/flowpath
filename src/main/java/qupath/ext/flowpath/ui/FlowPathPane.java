@@ -17,6 +17,7 @@ import qupath.ext.flowpath.analysis.AnalysisWindow;
 import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
@@ -450,6 +451,11 @@ public class FlowPathPane extends BorderPane {
         alignments = cohort.lookup();
         applySlideContext();
         editorPane.setEditorAlignment(editorAlignment);
+        // All slides (U1): each sample's values for the shown gate, aligned through the same
+        // correctionFor the pass gates with; read live, like the alignment seam above.
+        editorPane.setCohortValues(g -> CohortCurves.of(session.tree(), g, cohort.samples(), alignments, currentSlideId()));
+        editorPane.setViewMode(cohort.viewMode());
+        editorPane.setOnViewModeChanged(cohort::setViewMode);
 
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
@@ -657,6 +663,8 @@ public class FlowPathPane extends BorderPane {
 
     /** A rescore was adopted. The review list and the editor's cohort view hook in here. */
     private void onCohortScored() {
+        // New samples or alignments: the All slides view re-reads them (a refresh, not a rebuild).
+        if (cohort.viewMode() == CohortSession.ViewMode.ALL_SLIDES) editorPane.refreshEditor();
     }
 
     /**

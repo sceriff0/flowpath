@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui.editor;
 
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
@@ -62,7 +63,29 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
         // Drawn in reference units (identity unless this slide is corrected); the overlay is the
         // live gate's reference numbers, so positions and outline share one space.
         scatter.setData(inReference(0, filtered[0]), inReference(1, filtered[1]), axisLabel(0), axisLabel(1));
+        showCohortPoints();
         if (context.markerStats() != null) applyAxisRange();
+    }
+
+    /** The All slides view: every other sampled slide's points, pooled, under the open slide's. */
+    private void showCohortPoints() {
+        List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
+        int n = 0;
+        for (CohortCurves.SlideValues v : cohort) if (!v.current() && v.y() != null) n += v.x().length;
+        if (n == 0) {
+            scatter.clearCohortPoints();
+            return;
+        }
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        int at = 0;
+        for (CohortCurves.SlideValues v : cohort) {
+            if (v.current() || v.y() == null) continue;
+            System.arraycopy(v.x(), 0, xs, at, v.x().length);
+            System.arraycopy(v.y(), 0, ys, at, v.y().length);
+            at += v.x().length;
+        }
+        scatter.setCohortPoints(xs, ys);
     }
 
     /**

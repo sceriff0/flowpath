@@ -47,6 +47,10 @@ public class ScatterPlotCanvas extends Canvas {
      */
     private GateNode overlayGate;
 
+    /** All slides view: the other slides' points, pooled, in reference units; empty when off. */
+    private double[] cohortX = new double[0];
+    private double[] cohortY = new double[0];
+
     // Axis range overrides (null = use auto-computed from data)
     private Double overrideMinX, overrideMaxX, overrideMinY, overrideMaxY;
 
@@ -128,6 +132,27 @@ public class ScatterPlotCanvas extends Canvas {
         minY -= padY; maxY += padY;
 
         repaint();
+    }
+
+    /**
+     * The All slides view: the other sampled slides' points (already in reference units),
+     * pooled and drawn faintly under the open slide's dots. A view only — {@link #branchAt},
+     * the dot colours and the axis window still come from the open slide alone.
+     */
+    public void setCohortPoints(double[] xs, double[] ys) {
+        if (xs.length != ys.length) throw new IllegalArgumentException("unpaired cohort points");
+        cohortX = xs.clone();
+        cohortY = ys.clone();
+        repaint();
+    }
+
+    public void clearCohortPoints() {
+        setCohortPoints(new double[0], new double[0]);
+    }
+
+    /** How many pooled cohort points are held. Package-private for tests. */
+    int cohortPointCount() {
+        return cohortX.length;
     }
 
     /**
@@ -557,6 +582,19 @@ public class ScatterPlotCanvas extends Canvas {
         int step = Math.max(1, xValues.length / MAX_DISPLAY_POINTS);
         double eMinX = effectiveMinX(), eMaxX = effectiveMaxX();
         double eMinY = effectiveMinY(), eMaxY = effectiveMaxY();
+
+        // Other slides first, so the open slide's coloured dots sit on top. Strided like the
+        // open slide's dots, so a large cohort costs no more than MAX_DISPLAY_POINTS squares.
+        gc.setFill(Color.gray(0.55, 0.35));
+        int cohortStep = Math.max(1, cohortX.length / MAX_DISPLAY_POINTS);
+        for (int i = 0; i < cohortX.length; i += cohortStep) {
+            double cx = cohortX[i], cy = cohortY[i];
+            if (!(cx >= eMinX && cx <= eMaxX && cy >= eMinY && cy <= eMaxY)) continue;
+            double px = PADDING_LEFT + valueToPixel(cx, eMinX, eMaxX, plotW);
+            double py = PADDING_TOP + plotH - valueToPixel(cy, eMinY, eMaxY, plotH);
+            gc.fillRect(px - 1, py - 1, 2, 2);
+        }
+
         int validInput = 0;
         int pointsDrawn = 0;
         for (int i = 0; i < xValues.length; i += step) {

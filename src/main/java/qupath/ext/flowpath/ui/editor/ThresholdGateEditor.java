@@ -9,6 +9,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
@@ -18,6 +19,7 @@ import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.ui.widgets.HistogramCanvas;
 import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleUnaryOperator;
@@ -107,6 +109,22 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
      * handle, so the histogram shows exactly what {@code GatingEngine} compares against —
      * mapped into reference units when this slide is corrected, as the gate's threshold is.
      */
+    /** The All slides ridges over the bars, or none; the open slide's entry is highlighted. */
+    private void showCohortCurves() {
+        List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
+        if (cohort.isEmpty()) {
+            histogram.clearCohortCurves();
+            return;
+        }
+        int current = -1;
+        List<double[]> curves = new ArrayList<>(cohort.size());
+        for (int i = 0; i < cohort.size(); i++) {
+            curves.add(cohort.get(i).x());
+            if (cohort.get(i).current()) current = i;
+        }
+        histogram.setCohortCurves(curves, current);
+    }
+
     @Override
     public void refresh() {
         if (isDisposed()) return;
@@ -131,6 +149,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
 
         histogram.setData(displayValues, window[0], window[1]);
         histogram.setThreshold(gate.getThreshold());
+        showCohortCurves();
         // Suppressed, so a clamping range move cannot write a corrupted value back to the gate.
         context.withSuppressedEvents(() -> {
             slider.setMin(window[0]);
