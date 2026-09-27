@@ -57,4 +57,20 @@ class CohortCanvasTest {
             assertEquals(3, h.cohortBinPasses());
         });
     }
+
+    @Test
+    void flaggedCurvesAreHeld() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        FxTestSupport.onFxRun(() -> {
+            HistogramCanvas h = new HistogramCanvas();
+            h.setData(new double[]{1, 2, 3}, 0, 4);
+            h.setCohortCurves(List.of(new double[]{1}, new double[]{2}, new double[]{3}), 0);
+            int binned = h.cohortBinPasses();
+            h.setFlaggedCurves(java.util.Set.of(1, 2));
+            assertEquals(2, h.flaggedCurveCount());
+            assertEquals(binned, h.cohortBinPasses(), "flagging a ridge only strokes it; it never re-bins");
+            h.clearCohortCurves();
+            assertEquals(0, h.flaggedCurveCount(), "clearing the curves clears their flags");
+        });
+    }
 }

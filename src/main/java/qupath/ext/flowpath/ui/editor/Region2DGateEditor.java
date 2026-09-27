@@ -116,7 +116,7 @@ final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
             case EllipseGate _ -> plot.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
         }
 
-        root.getChildren().add(plot);
+        root.getChildren().addAll(plot, flaggedLegend);
         return root;
     }
 

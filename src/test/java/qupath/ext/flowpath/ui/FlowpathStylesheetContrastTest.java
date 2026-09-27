@@ -42,7 +42,7 @@ class FlowpathStylesheetContrastTest {
 
     /** Primary text: must read clearly on its own, so held to the full 4.5:1 floor. */
     private static final List<String> FULL_CONTRAST_CLASSES =
-            List.of("fp-primary-text", "fp-section-header", "fp-mono-field");
+            List.of("fp-primary-text", "fp-section-header", "fp-mono-field", "fp-flagged");
 
     /**
      * Secondary/supplementary text — a count beside a name, a hover read-out beside the

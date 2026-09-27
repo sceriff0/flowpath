@@ -153,4 +153,49 @@ class NeedsALookPaneTest {
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, false, true), "typing an S is not Skip");
         assertNull(NeedsALookPane.ReviewKey.of(KeyCode.X, false, false));
     }
+
+    /** Groups: one per gate, same-channel roots apart; a click reports the key; the button needs a group. */
+    @Test
+    void groupsRenderByValueAndAClickReportsTheKey() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        List<qupath.ext.flowpath.cohort.ReviewGroup.Key> chosen = new ArrayList<>();
+        AtomicInteger reviewGroup = new AtomicInteger();
+        NeedsALookPane pane = FxTestSupport.onFx(NeedsALookPane::new);
+        List<qupath.ext.flowpath.cohort.ReviewGroup> groups =
+                qupath.ext.flowpath.cohort.ReviewGroup.of(List.of(item("s1", 0), item("s1", 1), item("s2", 1)));
+        Object[] shown = FxTestSupport.onFx(() -> {
+            pane.setOnGroupChosen(chosen::add);
+            pane.setOnReviewGroup(reviewGroup::incrementAndGet);
+            pane.renderGroups(groups, null);
+            boolean disabledWithout = pane.reviewGroupButton.isDisable();
+            // Fresh groups on every rescore: the selection is restored by key, and not reported.
+            pane.renderGroups(qupath.ext.flowpath.cohort.ReviewGroup.of(List.of(item("s1", 0), item("s1", 1), item("s2", 1))),
+                    new qupath.ext.flowpath.cohort.ReviewGroup.Key(1, "CD8"));
+            int selected = pane.groupList.getSelectionModel().getSelectedIndex();
+            boolean disabledWith = pane.reviewGroupButton.isDisable();
+            pane.reviewGroupButton.fire();
+            return new Object[]{disabledWithout, selected, disabledWith, pane.groupList.getItems().size(),
+                    pane.reviewGroupButton.getText()};
+        });
+        assertEquals(true, shown[0], "no group selected, nothing to answer");
+        assertEquals(1, shown[1]);
+        assertEquals(false, shown[2]);
+        assertEquals(2, shown[3], "two same-channel roots are two groups");
+        assertEquals("All look right (Shift+Enter)", shown[4]);
+        assertTrue(chosen.isEmpty(), "a render is not a click");
+        assertEquals(1, reviewGroup.get());
+        FxTestSupport.onFxRun(() -> pane.groupList.getSelectionModel().select(0));
+        assertEquals(List.of(new qupath.ext.flowpath.cohort.ReviewGroup.Key(0, "CD8")), chosen);
+    }
+
+    /** Shift+Enter answers the group; Shift with any other key, or another modifier, is nothing. */
+    @Test
+    void shiftEnterIsTheGroupsAnswerAndNothingElseTakesShift() {
+        assertEquals(NeedsALookPane.ReviewKey.REVIEW_GROUP, NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, false, false));
+        assertEquals(NeedsALookPane.ReviewKey.LOOKS_RIGHT, NeedsALookPane.ReviewKey.of(KeyCode.ENTER, false, false, false));
+        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, true, false), "Ctrl+Shift+Enter is not a review key");
+        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, false, true), "never in a text field");
+        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, true, false, false), "Shift+S is not Skip");
+        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.Z, true, false, false));
+    }
 }

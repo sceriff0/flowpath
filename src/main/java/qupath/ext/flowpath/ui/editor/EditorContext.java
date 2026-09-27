@@ -10,6 +10,7 @@ import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * What a {@link GateTypeEditor} reads from, and reports to, the pane that hosts it.
@@ -61,6 +62,12 @@ public interface EditorContext {
      * editor still edits the gate's reference numbers.
      */
     List<CohortCurves.SlideValues> cohortValues(GateNode gate);
+
+    /**
+     * The ids of the slides the review flagged on {@code gate}, for the All slides view to mark;
+     * empty unless the pane is in All slides.
+     */
+    Set<String> flaggedSlides(GateNode gate);
 
     /** The live channel list; channel pickers share it rather than copy it. */
     ObservableList<String> channelNames();

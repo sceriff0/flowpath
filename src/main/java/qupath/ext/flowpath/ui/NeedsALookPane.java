@@ -14,6 +14,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.model.Region2DGate;
 
@@ -32,7 +33,17 @@ final class NeedsALookPane extends TitledPane {
 
     /** The review keys; see {@link #of}. */
     enum ReviewKey {
-        LOOKS_RIGHT, SKIP, NEXT, PREVIOUS, BACK, TOGGLE_OVERLAY;
+        LOOKS_RIGHT, SKIP, NEXT, PREVIOUS, BACK, TOGGLE_OVERLAY, REVIEW_GROUP;
+
+        /**
+         * As {@link #of(KeyCode, boolean, boolean)}, with Shift told apart: Shift+Enter (and no
+         * other modifier) answers the selected gate's whole group. It is matched before the plain
+         * keys, so it can never answer a single item; Shift with any other key is nothing.
+         */
+        static ReviewKey of(KeyCode code, boolean shift, boolean otherModifier, boolean textFieldFocused) {
+            if (shift && !otherModifier && !textFieldFocused && code == KeyCode.ENTER) return REVIEW_GROUP;
+            return of(code, shift || otherModifier, textFieldFocused);
+        }
 
         /**
          * The review action a key press asks for, or null. Plain keys only — every existing
@@ -53,12 +64,14 @@ final class NeedsALookPane extends TitledPane {
         }
     }
 
+    final ListView<ReviewGroup> groupList = new ListView<>();
     final ListView<ReviewItem> itemList = new ListView<>();
     final TextField sampleSizeField = new TextField();
     final Button looksRightButton = new Button("Looks right (Enter)");
     final Button skipButton = new Button("Skip slide for this gate (S)");
     final Button previousButton = new Button("Previous (P)");
     final Button nextButton = new Button("Next (N)");
+    final Button reviewGroupButton = new Button("All look right (Shift+Enter)");
     final Button useReferenceButton = new Button();
     static final String ADJUST_HINT = "Adjust: drag the threshold, then Enter";
     static final String NO_REGION_ADJUST_HINT = "Per-slide shapes aren't supported yet: Looks right or Skip";
@@ -68,6 +81,8 @@ final class NeedsALookPane extends TitledPane {
     final Label infoLabel = new Label();
 
     private Consumer<ReviewItem.Key> onItemChosen = k -> {};
+    private Consumer<ReviewGroup.Key> onGroupChosen = k -> {};
+    private Runnable onReviewGroup = () -> {};
     private Runnable onLooksRight = () -> {};
     private Runnable onSkip = () -> {};
     private IntConsumer onStep = d -> {};
@@ -104,6 +119,14 @@ final class NeedsALookPane extends TitledPane {
         infoLabel.setVisible(false);
         infoLabel.setManaged(false);
 
+        groupList.setPrefHeight(90);
+        groupList.setCellFactory(lv -> new GroupCell());
+        groupList.getSelectionModel().selectedItemProperty().addListener((obs, old, sel) -> {
+            updateAnswerButtons();
+            if (!rendering && sel != null) onGroupChosen.accept(sel.key());
+        });
+        reviewGroupButton.setOnAction(e -> onReviewGroup.run());
+
         itemList.setPrefHeight(160);
         itemList.setCellFactory(lv -> new ItemCell());
         itemList.getSelectionModel().selectedItemProperty().addListener((obs, old, sel) -> {
@@ -115,12 +138,12 @@ final class NeedsALookPane extends TitledPane {
         nextButton.setOnAction(e -> onStep.accept(+1));
         looksRightButton.setOnAction(e -> onLooksRight.run());
         skipButton.setOnAction(e -> onSkip.run());
-        HBox answerRow = new HBox(4, previousButton, nextButton, looksRightButton, skipButton);
+        HBox answerRow = new HBox(4, previousButton, nextButton, looksRightButton, skipButton, reviewGroupButton);
         answerRow.setAlignment(Pos.CENTER_LEFT);
         adjustHint.getStyleClass().add("fp-hint");
         updateAnswerButtons();
 
-        setContent(new VBox(4, headerRow, infoLabel, itemList, answerRow, adjustHint));
+        setContent(new VBox(4, headerRow, infoLabel, groupList, itemList, answerRow, adjustHint));
     }
 
     /**
@@ -173,6 +196,26 @@ final class NeedsALookPane extends TitledPane {
         }
     }
 
+    /**
+     * Show the review grouped by gate, top-down; the selection is restored by value
+     * ({@code selected}), since every rescore hands in fresh groups, and is not reported.
+     */
+    void renderGroups(List<ReviewGroup> groups, ReviewGroup.Key selected) {
+        rendering = true;
+        try {
+            groupList.getItems().setAll(groups);
+            int at = -1;
+            for (int i = 0; i < groups.size(); i++) if (groups.get(i).key().equals(selected)) at = i;
+            if (at >= 0) groupList.getSelectionModel().select(at);
+            else groupList.getSelectionModel().clearSelection();
+            updateAnswerButtons();
+        } finally {
+            rendering = false;
+        }
+    }
+
+    void setOnGroupChosen(Consumer<ReviewGroup.Key> callback) { onGroupChosen = Objects.requireNonNull(callback); }
+    void setOnReviewGroup(Runnable callback) { onReviewGroup = Objects.requireNonNull(callback); }
     void setOnItemChosen(Consumer<ReviewItem.Key> callback) { onItemChosen = Objects.requireNonNull(callback); }
     void setOnLooksRight(Runnable callback) { onLooksRight = Objects.requireNonNull(callback); }
     void setOnSkip(Runnable callback) { onSkip = Objects.requireNonNull(callback); }
@@ -204,6 +247,28 @@ final class NeedsALookPane extends TitledPane {
         boolean empty = itemList.getItems().isEmpty();
         previousButton.setDisable(empty);
         nextButton.setDisable(empty);
+        reviewGroupButton.setDisable(groupList.getSelectionModel().getSelectedItem() == null);
+    }
+
+    /** One gate: its root's number (two same-channel roots read apart), its path and how many slides. */
+    private static final class GroupCell extends ListCell<ReviewGroup> {
+        private final Label title = new Label();
+
+        GroupCell() {
+            title.getStyleClass().add("fp-primary-text");
+        }
+
+        @Override
+        protected void updateItem(ReviewGroup group, boolean empty) {
+            super.updateItem(group, empty);
+            setText(null);
+            if (empty || group == null) {
+                setGraphic(null);
+                return;
+            }
+            title.setText("#" + (group.rootIndex() + 1) + "  " + group.gatePath() + " — " + group.items().size() + " slide(s)");
+            setGraphic(title);
+        }
     }
 
     /** Slide and gate over the reasons, in words. */

@@ -8,6 +8,7 @@ import javafx.scene.text.Font;
 import qupath.ext.flowpath.model.GateNode;
 
 import java.util.List;
+import java.util.Set;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -56,6 +57,10 @@ public class HistogramCanvas extends Canvas {
     private double ridgeMin = Double.NaN;
     private double ridgeMax = Double.NaN;
     private int cohortBinPasses;
+    /** Indices into {@link #cohortCurves} of the slides flagged on the shown gate; stroked amber. */
+    private Set<Integer> flaggedCurves = Set.of();
+    /** A flagged slide's ridge: a fixed canvas swatch, like the bars and the grey ridges. */
+    private static final Color FLAGGED = Color.rgb(230, 140, 0);
 
     private int posCount = -1;
     private int negCount = -1;
@@ -270,6 +275,7 @@ public class HistogramCanvas extends Canvas {
         boolean sameCurves = values.size() == cohortCurves.size();
         for (int i = 0; sameCurves && i < values.size(); i++) sameCurves = values.get(i) == cohortCurves.get(i);
         cohortCurrent = currentIndex;
+        flaggedCurves = Set.of();
         if (!sameCurves || cohortRidges == null || displayMin != ridgeMin || displayMax != ridgeMax) {
             cohortCurves = List.copyOf(values);
             binCohortCurves();
@@ -279,6 +285,21 @@ public class HistogramCanvas extends Canvas {
 
     public void clearCohortCurves() {
         setCohortCurves(List.of(), -1);
+    }
+
+    /**
+     * Mark the slides at {@code indices} (into the curves last set) as flagged on the shown gate:
+     * their ridges are stroked amber. A view only — the ridges already binned are re-stroked, never
+     * re-binned. {@link #setCohortCurves} clears the flags, so set them after the curves.
+     */
+    public void setFlaggedCurves(Set<Integer> indices) {
+        flaggedCurves = Set.copyOf(indices);
+        repaint();
+    }
+
+    /** How many slide curves are flagged. Package-private for tests. */
+    int flaggedCurveCount() {
+        return flaggedCurves.size();
     }
 
     /** How many slide curves are held. Package-private for tests. */
@@ -329,8 +350,9 @@ public class HistogramCanvas extends Canvas {
 
     /**
      * One ridge per slide (binned and normalised ahead of time, see {@link #binCohortCurves}),
-     * stacked bottom-up in the order given; other slides first, the open slide last and heavier
-     * so it reads on top. Fixed canvas swatches, like the bars.
+     * stacked bottom-up in the order given; other slides first, flagged ones over them in amber,
+     * the open slide last and heavier so it reads on top. The open slide is drawn as the open
+     * slide even when flagged: the legend under the canvas names it. Fixed canvas swatches, like the bars.
      */
     private void drawCohortCurves(GraphicsContext gc, double plotW, double plotH) {
         if (binEdges == null || cohortRidges == null) return;
@@ -341,14 +363,16 @@ public class HistogramCanvas extends Canvas {
         double[] xs = new double[NUM_BINS];
         for (int b = 0; b < NUM_BINS; b++) xs[b] = PADDING_LEFT + (b + 0.5) * binPixelWidth;
         double[] ys = new double[NUM_BINS];
-        for (int pass = 0; pass < 2; pass++) {
+        // Three passes: the grey ridges, then the flagged ones over them, then the open slide on top.
+        for (int pass = 0; pass < 3; pass++) {
             for (int i = 0; i < k; i++) {
                 boolean current = i == cohortCurrent;
-                if (current != (pass == 1) || cohortRidges[i] == null) continue;
+                int layer = current ? 2 : flaggedCurves.contains(i) ? 1 : 0;
+                if (layer != pass || cohortRidges[i] == null) continue;
                 double baseline = PADDING_TOP + plotH - i * step;
                 for (int b = 0; b < NUM_BINS; b++) ys[b] = baseline - cohortRidges[i][b] * amplitude;
-                gc.setStroke(current ? posColor : Color.gray(0.5, 0.7));
-                gc.setLineWidth(current ? 2 : 1);
+                gc.setStroke(layer == 2 ? posColor : layer == 1 ? FLAGGED : Color.gray(0.5, 0.7));
+                gc.setLineWidth(layer == 2 ? 2 : layer == 1 ? 1.5 : 1);
                 gc.strokePolyline(xs, ys, NUM_BINS);
             }
         }

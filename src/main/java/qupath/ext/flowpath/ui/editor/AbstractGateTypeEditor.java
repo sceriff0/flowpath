@@ -10,6 +10,7 @@ import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.util.StringConverter;
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
@@ -21,7 +22,9 @@ import qupath.ext.flowpath.model.ValueMode;
 import qupath.ext.flowpath.model.cohort.Alignment;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.DoubleUnaryOperator;
 
 /**
@@ -45,6 +48,11 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
     final HBox modeRow;
     /** The mode the gate is in, so a selection change knows what it is changing <em>from</em>. */
     private ValueMode currentMode;
+    /**
+     * "Flagged: a.tif, c.tif" under the canvas: the slides the review flagged on this gate, while
+     * All slides shows any of them (spec §6 "Reviewing by gate"); hidden and unmanaged otherwise.
+     */
+    final Label flaggedLegend = new Label();
 
     AbstractGateTypeEditor(G gate, EditorContext context) {
         this.gate = gate;
@@ -54,6 +62,10 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
         // Built empty; syncModeSelection fills it from what the file turns out to carry.
         modeRow = new HBox(12, valuesLabel);
         modeRow.setAlignment(Pos.CENTER_LEFT);
+        flaggedLegend.getStyleClass().add("fp-flagged");
+        flaggedLegend.setWrapText(true);
+        flaggedLegend.setVisible(false);
+        flaggedLegend.setManaged(false);
         modeGroup.selectedToggleProperty().addListener((obs, old, val) -> {
             if (!accepting() || val == null) return;
             if (val.getUserData() instanceof ValueMode selected) onModeSelected(selected);
@@ -421,6 +433,28 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
     abstract void afterSignalChange();
 
     // ---- layout helpers ---------------------------------------------------------------------
+
+    /**
+     * Name, in {@link #flaggedLegend}, the entries of {@code cohort} (the All slides values shown)
+     * whose slide the review flagged on this gate.
+     *
+     * @return their indices into {@code cohort}, for the canvas to mark
+     */
+    final Set<Integer> showFlagged(List<CohortCurves.SlideValues> cohort) {
+        Set<String> flagged = cohort.isEmpty() ? Set.of() : context.flaggedSlides(gate);
+        Set<Integer> indices = new LinkedHashSet<>();
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < cohort.size(); i++) {
+            if (!flagged.contains(cohort.get(i).slideId())) continue;
+            indices.add(i);
+            names.add(cohort.get(i).name());
+        }
+        boolean any = !indices.isEmpty();
+        flaggedLegend.setText(any ? "Flagged: " + String.join(", ", names) : "");
+        flaggedLegend.setVisible(any);
+        flaggedLegend.setManaged(any);
+        return indices;
+    }
 
     static Label sectionHeader(String text) {
         return EditorLabels.sectionHeader(text);

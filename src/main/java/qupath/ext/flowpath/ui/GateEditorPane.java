@@ -41,6 +41,7 @@ import qupath.ext.flowpath.ui.editor.GateTypeEditors;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -95,6 +96,8 @@ public class GateEditorPane extends VBox {
     private boolean cohortAvailable;
     private CohortSession.ViewMode viewMode = CohortSession.ViewMode.THIS_SLIDE;
     private Function<GateNode, List<CohortCurves.SlideValues>> cohortValues = g -> List.of();
+    /** Which slides the review flagged on a gate (by the host, by value); asked only in All slides. */
+    private Function<GateNode, Set<String>> flaggedSlides = g -> Set.of();
     private Consumer<CohortSession.ViewMode> onViewModeChanged;
 
     private final ObservableList<String> channelNames = FXCollections.observableArrayList();
@@ -546,6 +549,15 @@ public class GateEditorPane extends VBox {
         refreshForNewData();
     }
 
+    /**
+     * Where the All slides view learns which slides the review flagged on a gate, to mark their
+     * ridges and name them (spec §6 "Reviewing by gate"). A view only: a refresh, not a rebuild.
+     */
+    public void setFlaggedSlides(Function<GateNode, Set<String>> provider) {
+        this.flaggedSlides = provider == null ? g -> Set.of() : provider;
+        refreshForNewData();
+    }
+
     /** Show {@code mode}. Programmatic, so not reported to {@link #setOnViewModeChanged}. */
     public void setViewMode(CohortSession.ViewMode mode) {
         CohortSession.ViewMode m = mode == null ? CohortSession.ViewMode.THIS_SLIDE : mode;
@@ -714,6 +726,9 @@ public class GateEditorPane extends VBox {
         @Override public List<CohortCurves.SlideValues> cohortValues(GateNode gate) {
             return viewMode == CohortSession.ViewMode.ALL_SLIDES && cohortAvailable
                 ? cohortValues.apply(gate) : List.of();
+        }
+        @Override public Set<String> flaggedSlides(GateNode gate) {
+            return viewMode == CohortSession.ViewMode.ALL_SLIDES ? flaggedSlides.apply(gate) : Set.of();
         }
         @Override public GateNode shownGate() { return currentNode; }
         @Override public boolean eventsSuppressed() { return suppressEvents; }

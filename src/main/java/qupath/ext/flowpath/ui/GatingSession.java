@@ -121,7 +121,7 @@ final class GatingSession {
      * cleared slide setting), a quality-filter drag, the ROI toggle, an enabled checkbox, a
      * default reference. An open review item listens and closes, so its answer can never fold
      * such an edit into the item's one undo step. Gate edits and the review answers themselves
-     * ({@link #recordSlideEdit}) do not call it.
+     * ({@link #recordSlideEdit}, {@link #recordSlideEdits}) do not call it.
      */
     void setOnNonGateEdit(Runnable callback) {
         this.onNonGateEdit = callback == null ? () -> {} : callback;
@@ -415,6 +415,21 @@ final class GatingSession {
         undoHistory.record(tree);
         edit.run();
         ReviewAnswers.recordSlideName(tree, slideId, slideName);
+        settle();
+    }
+
+    /**
+     * {@link #recordSlideEdit} for an edit of several slides' settings at once — a gate's whole
+     * review group (Shift+Enter): the tree is recorded ONCE, {@code edit} writes every setting,
+     * and every slide's name in {@code slideNames} (id → name) is recorded in that same step, so
+     * one undo takes every setting and every name back together. Like {@link #recordSlideEdit} it
+     * does not tell an open review item to close: the caller decides what the answer does to it.
+     * Settled; follow with {@link #resync}.
+     */
+    void recordSlideEdits(Map<String, String> slideNames, Runnable edit) {
+        undoHistory.record(tree);
+        edit.run();
+        slideNames.forEach((id, name) -> ReviewAnswers.recordSlideName(tree, id, name));
         settle();
     }
 

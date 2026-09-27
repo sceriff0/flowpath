@@ -2,6 +2,7 @@ package qupath.ext.flowpath.ui;
 
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.ReviewAnswers;
+import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.model.CellIndex;
@@ -12,7 +13,10 @@ import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.SlideSetting;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
 /**
  * One open review item and what editing and answering it does to the tree — toolkit-free, so the
@@ -172,6 +176,35 @@ final class ReviewFlow {
         session.recordSlideEdit(openSlideId, slideName, () -> ReviewAnswers.skip(gate, openSlideId));
         close();
         return true;
+    }
+
+    /**
+     * Shift+Enter: every item of {@code group} reviewed at its applied number, each slide's name
+     * recorded, as ONE undo step ({@link GatingSession#recordSlideEdits}). It is this flow's own
+     * answer, never an edit "outside" the open item, so {@code onEnded} is not told. An open item
+     * is always closed by it:
+     * <ul>
+     *   <li>one of the group's own items is answered with the group — an Adjust its drags wrote
+     *       stands as its slide's answer (it is already answered, so the group leaves it), and its
+     *       drags fold into the group's one step, which undo takes back to the item as opened;</li>
+     *   <li>an item of another gate is closed unanswered, as Esc closes it: its drags stay as the
+     *       steps they were, and its later answer can no longer fold the group's step into its own.</li>
+     * </ul>
+     *
+     * @param slideName a slide id's image name, or null when unknown
+     * @return how many items were marked {@code Reviewed}
+     */
+    int answerGroup(ReviewGroup group, Function<String, String> slideName, AlignmentLookup lookup) {
+        boolean ownItem = active != null && active.rootIndex() == group.rootIndex()
+                && active.gatePath().equals(group.gatePath()) && group.slideIds().contains(active.slideId());
+        long foldMark = mark;
+        end();
+        Map<String, String> names = new LinkedHashMap<>();
+        for (String id : group.slideIds()) names.put(id, slideName.apply(id));
+        int[] reviewed = {0};
+        session.recordSlideEdits(names, () -> reviewed[0] = ReviewAnswers.looksRightAll(session.tree(), group, lookup));
+        if (ownItem) session.collapseSince(foldMark);
+        return reviewed[0];
     }
 
     /** Each axis's column key, in order: what "the same item" means across edits. */

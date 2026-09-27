@@ -24,6 +24,7 @@ import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -43,6 +44,7 @@ import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
@@ -486,6 +488,14 @@ public class FlowPathPane extends BorderPane {
         // memoised, because the editor asks on every refresh (every resync, filter tick, pass).
         editorPane.setCohortValues(g -> cohortCurves.get(session.tree(), g, cohort.samples(), cohort.model(),
                 alignments, currentSlideId()));
+        // Reviewing by gate (spec §6): the slides flagged on the shown gate, asked by value —
+        // the enabled gate's (rootIndex, gatePath) — so two same-channel roots never share flags.
+        editorPane.setFlaggedSlides(g -> {
+            for (GateWalk.Entry e : GateWalk.enabled(session.tree())) {
+                if (e.gate() == g) return cohort.flaggedSlides(e.rootIndex(), e.gatePath());
+            }
+            return Set.of();
+        });
         editorPane.setViewMode(cohort.viewMode());
         editorPane.setOnViewModeChanged(mode -> {
             cohort.setViewMode(mode);
@@ -498,6 +508,8 @@ public class FlowPathPane extends BorderPane {
         });
 
         needsALook.setOnItemChosen(this::openReviewItem);
+        needsALook.setOnGroupChosen(this::showGroup);
+        needsALook.setOnReviewGroup(this::answerGroup);
         needsALook.setOnStep(this::stepReview);
         needsALook.setOnLooksRight(() -> answerOrReopen(this::answerEnter));
         needsALook.setOnSkip(() -> answerOrReopen(this::answerSkip));
@@ -822,8 +834,10 @@ public class FlowPathPane extends BorderPane {
 
     /** The review list as the cohort now stands; it renders and decides nothing. */
     private void renderNeedsALook() {
+        ReviewGroup group = cohort.selectedGroup();
+        needsALook.renderGroups(cohort.groups(), group == null ? null : group.key());
         ReviewItem selected = cohort.selected();
-        needsALook.render(cohort.state(), cohort.review().items(), cohort.review().infos(),
+        needsALook.render(cohort.state(), group == null ? cohort.review().items() : group.items(), cohort.review().infos(),
                 selected == null ? null : selected.key(), CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
     }
 
@@ -951,6 +965,49 @@ public class FlowPathPane extends BorderPane {
         }
     }
 
+    /**
+     * A gate's group chosen: that gate shown in All slides, its flagged slides' ridges marked, and
+     * the list narrowed to its items. An open item is left as Esc leaves it (its drags stay, as the
+     * edits they were) — the group is looked at across slides, not on this one.
+     */
+    private void showGroup(ReviewGroup.Key key) {
+        endActiveReview();
+        cohort.select(null);
+        cohort.selectGroup(key);
+        cohort.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
+        editorPane.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
+        GateNode gate = CohortSession.liveGate(session.tree(), new ReviewItem.Key(null, key.rootIndex(), key.gatePath()));
+        if (gate != null) {
+            currentNode = gate;
+            render(Optional.empty(), false);   // selects the gate and shows it, as focusReviewItem does
+            syncViewerChannels(gate);
+        } else {
+            renderNeedsALook();
+        }
+    }
+
+    /**
+     * Shift+Enter / "All look right": every flagged slide of the selected gate reviewed at its
+     * applied number, as ONE undo step holding every slide's name (see {@link ReviewFlow#answerGroup},
+     * which also decides what the answer does to an open item). Then the one resync path and a
+     * rescore, as any answer.
+     */
+    private void answerGroup() {
+        ReviewGroup group = cohort.selectedGroup();
+        if (group == null) return;
+        review.answerGroup(group, cohort::slideName, alignments);
+        cohort.selectGroup(null);
+        ReviewItem selected = cohort.selected();
+        if (selected != null && selected.key().rootIndex() == group.rootIndex()
+                && selected.key().gatePath().equals(group.gatePath())) {
+            cohort.select(null);
+        }
+        endActiveReview();
+        resyncToTree();
+        cohortCoordinator.rescore(session.tree());
+        renderNeedsALook();
+    }
+
     /** Esc: back to All slides, the overlay off. A drag made meanwhile stays, as the edit it is. */
     private void leaveReview() {
         endActiveReview();
@@ -1001,8 +1058,8 @@ public class FlowPathPane extends BorderPane {
     private boolean onReviewKey(javafx.scene.input.KeyEvent e) {
         boolean textFocused = e.getTarget() instanceof TextInputControl
                 || (getScene() != null && getScene().getFocusOwner() instanceof TextInputControl);
-        boolean modifier = e.isShortcutDown() || e.isControlDown() || e.isMetaDown() || e.isAltDown() || e.isShiftDown();
-        NeedsALookPane.ReviewKey key = NeedsALookPane.ReviewKey.of(e.getCode(), modifier, textFocused);
+        boolean otherModifier = e.isShortcutDown() || e.isControlDown() || e.isMetaDown() || e.isAltDown();
+        NeedsALookPane.ReviewKey key = NeedsALookPane.ReviewKey.of(e.getCode(), e.isShiftDown(), otherModifier, textFocused);
         if (key == null) return false;
         switch (key) {
             case LOOKS_RIGHT -> {
@@ -1018,8 +1075,19 @@ public class FlowPathPane extends BorderPane {
                 stepReview(key == NeedsALookPane.ReviewKey.NEXT ? +1 : -1);
             }
             case BACK -> {
-                if (review.active() == null) return false;
-                leaveReview();
+                if (review.active() != null) {
+                    leaveReview();
+                } else if (cohort.selectedGroup() != null) {
+                    // Out of the gate's group: the list shows every item again.
+                    cohort.selectGroup(null);
+                    renderNeedsALook();
+                } else {
+                    return false;
+                }
+            }
+            case REVIEW_GROUP -> {
+                if (cohort.selectedGroup() == null) return false;
+                answerGroup();
             }
             case TOGGLE_OVERLAY -> {
                 if (activeGate() == null) return false;

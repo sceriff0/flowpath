@@ -102,7 +102,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
 
         VBox root = new VBox(4,
                 channelRows.get(0), modeRow,
-                sectionHeader("Histogram"), histogram, alignmentLabel, hoverLabel,
+                sectionHeader("Histogram"), histogram, flaggedLegend, alignmentLabel, hoverLabel,
                 sectionHeader("Threshold"), threshRow, populationLabel);
         refresh();
         syncCut();
@@ -188,11 +188,15 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         syncCut();
     }
 
-    /** The All slides ridges over the bars, or none; the open slide's entry is highlighted. */
+    /**
+     * The All slides ridges over the bars, or none; the open slide's entry is highlighted, and the
+     * slides the review flagged on this gate are stroked amber and named under the canvas.
+     */
     private void showCohortCurves() {
         List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
         if (cohort.isEmpty()) {
             histogram.clearCohortCurves();
+            showFlagged(cohort);
             return;
         }
         int current = -1;
@@ -202,6 +206,8 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             if (cohort.get(i).current()) current = i;
         }
         histogram.setCohortCurves(curves, current);
+        // After the curves, which clear the flags; marking a ridge never re-bins it.
+        histogram.setFlaggedCurves(showFlagged(cohort));
     }
 
     /**

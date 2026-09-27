@@ -62,6 +62,14 @@
     -fx-font-style: italic;
 }
 
+/* A flagged slide's name in the gate editor's All slides legend: themed text, marked by weight
+   and underline so it keeps full contrast on both bases. */
+.fp-flagged {
+    -fx-text-fill: -fx-text-background-color;
+    -fx-font-weight: bold;
+    -fx-underline: true;
+}
+
 .fp-mono-field {
     /* -fx-text-inner-color, not -fx-text-background-color: Modena's own modena.css names
        it explicitly as "text on top of -fx-control-inner-color" (read: the field's own

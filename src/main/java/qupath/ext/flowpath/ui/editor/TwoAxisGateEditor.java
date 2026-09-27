@@ -67,9 +67,13 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
         if (context.markerStats() != null) applyAxisRange();
     }
 
-    /** The All slides view: every other sampled slide's points, pooled, under the open slide's. */
+    /**
+     * The All slides view: every other sampled slide's points, pooled, under the open slide's;
+     * the slides the review flagged on this gate are named under the plot.
+     */
     private void showCohortPoints() {
         List<CohortCurves.SlideValues> cohort = context.cohortValues(gate);
+        showFlagged(cohort);
         int n = 0;
         for (CohortCurves.SlideValues v : cohort) if (!v.current() && v.y() != null) n += v.x().length;
         if (n == 0) {

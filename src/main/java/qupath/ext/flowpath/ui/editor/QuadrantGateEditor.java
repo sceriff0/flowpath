@@ -74,7 +74,7 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
                 sectionHeader("Threshold Y"), growRow(sliderY, valY));
 
         if (hasPlottableAxes()) {
-            root.getChildren().addAll(sectionHeader("Scatter Plot"), newScatter());
+            root.getChildren().addAll(sectionHeader("Scatter Plot"), newScatter(), flaggedLegend);
         }
         syncCut();
         return root;

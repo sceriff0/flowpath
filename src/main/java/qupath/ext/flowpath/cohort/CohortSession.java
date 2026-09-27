@@ -60,6 +60,8 @@ public final class CohortSession {
     private volatile String referenceSlideId;
     private String suggestedReferenceId;
     private ReviewItem.Key selected;
+    /** The gate whose group is being reviewed, as a value; see {@link #selectGroup}. */
+    private ReviewGroup.Key selectedGroup;
     private ViewMode viewMode = ViewMode.THIS_SLIDE;
     private boolean batchRunning;
     private String batchProgress;
@@ -100,6 +102,7 @@ public final class CohortSession {
             review = NO_REVIEW;
             suggestedReferenceId = null;
             selected = null;
+            selectedGroup = null;
         }
         setProjectSlides(refs);
     }
@@ -242,6 +245,30 @@ public final class CohortSession {
         if (selected == null) return null;
         for (ReviewItem i : review.items()) if (i.key().equals(selected)) return i;
         return null;
+    }
+
+    /** The review items grouped by gate, top-down (spec §6 "Reviewing by gate"). */
+    public List<ReviewGroup> groups() {
+        return ReviewGroup.of(review.items());
+    }
+
+    /** Review {@code key}'s gate as a group; null clears. Kept by value, so a rescore keeps it. */
+    public void selectGroup(ReviewGroup.Key key) {
+        selectedGroup = key;
+    }
+
+    /** The selected group as the review now stands, or null when none is selected or it has no items left. */
+    public ReviewGroup selectedGroup() {
+        if (selectedGroup == null) return null;
+        for (ReviewGroup g : groups()) if (g.key().equals(selectedGroup)) return g;
+        return null;
+    }
+
+    /** The slides flagged on the gate at {@code (rootIndex, gatePath)}; empty when none. */
+    public Set<String> flaggedSlides(int rootIndex, String gatePath) {
+        ReviewGroup.Key key = new ReviewGroup.Key(rootIndex, gatePath);
+        for (ReviewGroup g : groups()) if (g.key().equals(key)) return g.slideIds();
+        return Set.of();
     }
 
     public ReviewItem.Key step(int delta) {

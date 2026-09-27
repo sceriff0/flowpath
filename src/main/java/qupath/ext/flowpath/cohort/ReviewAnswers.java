@@ -29,6 +29,29 @@ public final class ReviewAnswers {
         gate.setSlideSetting(slideId, new SlideSetting.Reviewed(applied));
     }
 
+    /**
+     * "All look right" for one gate (Shift+Enter): every flagged slide of {@code group} reviewed at
+     * the number applied on it now. A slide answered since the group was scored — the list is the
+     * last rescore's — keeps its answer (an Adjust's {@code Manual}, a {@code Skip}, a current
+     * {@code Reviewed}) and is not counted; "answered" is {@link ReviewScorer#answered}'s rule.
+     * The caller records the one undo step, and every slide's name in it.
+     *
+     * @return how many items were marked {@code Reviewed}
+     */
+    public static int looksRightAll(GateTree tree, ReviewGroup group, AlignmentLookup lookup) {
+        int n = 0;
+        for (ReviewItem item : group.items()) {
+            GateNode gate = CohortSession.liveGate(tree, item.key());
+            if (gate == null) continue;
+            String slideId = item.key().slideId();
+            GateValues applied = TreeResolver.resolve(tree, slideId, lookup).applied(gate).applied();
+            if (ReviewScorer.answered(gate, slideId, applied)) continue;
+            looksRight(tree, gate, slideId, lookup);
+            n++;
+        }
+        return n;
+    }
+
     /** "Skip slide for this gate": the gate does not judge this slide; its cells are unmeasured. */
     public static void skip(GateNode gate, String slideId) {
         gate.setSlideSetting(slideId, new SlideSetting.Skip());
