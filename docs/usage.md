@@ -138,12 +138,19 @@ per slide, and a manifest of the exact threshold used on every slide.
 ### Reference slide
 
 The reference slide is whichever slide was open when FlowPath first saw the project — not
-necessarily the most representative one. When a more typical slide exists (its staining
-landmarks sit closest to the cohort's median), the **Needs a look** header offers
-**Use *\<slide\>* as reference**; clicking it rebases every gate's numbers onto that slide, in
-one undo step. A tree loaded into a project that does not contain its reference slide falls
-back to using the reference numbers as raw thresholds, with correction disabled and a status-bar
-message — nothing is silently recomputed.
+necessarily the most representative one. That first choice is one undo step, made once per
+project. When a more typical slide exists (its staining landmarks sit closest to the cohort's
+median), the **Needs a look** header offers **Use *\<slide\>* as reference**; clicking it
+rebases every gate's numbers onto that slide, in one undo step.
+
+A tree you **load** that names no reference slide gets the open slide as its reference, inside
+the load's own undo step — one ++ctrl+z++ takes back the load and the reference together. A tree
+with no reference at all (for instance after undoing past that first choice) is never shown as
+an all-clear: the status bar says **No reference slide** — correction is off and every slide uses
+the tree's own numbers — and the header offers **Use *\<open slide\>* as reference** to turn it
+on. A tree loaded into a project that does not contain its reference slide falls back to using
+the reference numbers as raw thresholds, with correction disabled and a status-bar message —
+nothing is silently recomputed.
 
 ### All slides
 
@@ -162,6 +169,13 @@ negative peak, and the positive peak when the slide has one — in asinh space, 
 percentiles: percentile matching assumes every slide has the same % positive, which is exactly
 what gating is measuring.
 
+Landmarks are found on each slide's **clean** cells — those passing the tree's quality filter
+and, when it is on, the annotation (ROI) filter — the same cells the gate tree counts as clean.
+Change the quality filter or switch the ROI filter and the landmarks, the review list, the marker
+rules, the All slides curves and the crops all follow it. The asinh scale for a marker column is
+set by the reference slide alone (the median |value| of its clean cells for that column), so it
+does not depend on which slides were sampled first, or on whether the alignment cache existed.
+
 For a threshold or quadrant gate the cut moves exactly with the correction. For a polygon
 rectangle or ellipse gate, a rectangle or polygon is corrected exactly (every vertex or bound
 mapped individually); an ellipse is carried by its bounding box, so it and a polygon's edges
@@ -175,7 +189,7 @@ its reason:
 
 | Reason shown | Why it's flagged |
 |---|---|
-| "No clear negative peak — not corrected" | The slide has no landmark to align this column on. |
+| "No clear negative peak — not corrected" | The slide has no landmark to align this column on. Not shown while the reference slide is missing from the project, since nothing is corrected then. |
 | "Staining *N*× brighter/dimmer than typical" (or "contrast … higher/lower than typical") | This slide's alignment offset or stretch is far from the cohort's (median ± 3 MAD). |
 | "Threshold sits on a peak, not in a valley" | The applied threshold falls on a density peak in the parent population, not between two populations. |
 | "Only *N* cells reach this gate" / "Only *N*% of cells reaching this gate are measured on *marker*" | Too few sampled cells reach this gate, or too few of them carry a measurement for it, to judge. |
@@ -214,7 +228,9 @@ The sample size used for alignment and review — default **20 000** cells per s
 every cell — is a preference, editable in the Needs-a-look header. Changing it invalidates the
 sample and re-samples in the background; alignments are cached in
 `<project>/flowpath/alignment-cache.json` (safe to delete — it is entirely derived data and is
-never part of undo).
+never part of undo). A slide's cached landmarks are reused only while its sample and the quality
+and ROI filters they were found under are unchanged; deleting the cache reproduces the same
+numbers.
 
 ### Marker rules — lineage marker
 
@@ -244,18 +260,28 @@ of that group **Looks right**, in one undo step — the common case, once the al
 visibly line up. Fixing a parent gate re-scores its descendants immediately, so drilling into one
 slide is only needed when a curve alone cannot settle it.
 
+Two gates with the same marker under one branch — what **Duplicate** makes — are told apart by a
+number: the first keeps its plain path (`CD3+/CD8`), the second is `CD3+/CD8#2`, and its own
+branches and children follow (`CD3+/CD8+#2/CD4`). That path is what the list, the groups, the
+manifest's `gate_path` and `qc_summary.csv` show, so an answer always lands on the gate it names.
+
 ### Slide strip
 
 A row of small squares sits above the list, one per slide — grey while it is still being
 sampled, green once it is ready with nothing to review, amber with items to review, red if
 sampling failed — with a tooltip giving the slide's name and counts. Click a square to filter the
 list to that slide; click it again to clear the filter. A status line beneath it summarises the
-whole cohort, e.g. `38/40 sampled · 5 to review · Ready to run`.
+whole cohort, e.g. `38/40 sampled · 5 to review · Ready to run`. **Ready to run** appears only
+when **Run on all slides** can actually start; otherwise the line says why not — `Sampling…`,
+`Running…`, `Not ready to run` (FlowPath is busy, or the tree has no enabled gate),
+`No reference slide`, or `Tree from another project`.
 
 ### Run on all slides
 
 The toolbar's **Run on all slides…** button gates every image in the project and writes, into a
-folder you pick:
+folder you pick. It waits until sampling has finished — a run started mid-sampling would gate the
+slides not yet sampled uncorrected. Its confirmation says how many review items are still open,
+and names any slide whose sampling failed: those run on the tree's own numbers, uncorrected.
 
 | File | Contents |
 |---|---|
@@ -273,7 +299,7 @@ folder you pick:
 | `reference_value`, `applied_value` | `412.0`, `538.6` |
 | `source` | `reference` \| `corrected` \| `uncorrected` \| `manual` \| `skipped` |
 | `ref_L1`, `ref_L2`, `slide_L1`, `slide_L2` | landmarks, asinh units, blank if absent |
-| `review`, `flags` | `ok` / blank; `unusual-staining` |
+| `review`, `flags` | `ok` when the item is answered (Looks right at today's value, an Adjust, or a Skip), else blank; `unusual-staining` |
 
 This is what makes per-slide thresholds acceptable in a methods section: every difference
 between slides is written down with its cause.
@@ -282,7 +308,9 @@ Phenotypes are also **written back into every slide's `.qpdata`** — every cell
 `PathClass` the live preview would give it under that slide's resolved tree — with one
 exception: **the slide open in the viewer is never written behind QuPath's back.** It has
 already been classified live under the same resolved tree; save it from QuPath as usual once
-you're done, the same way you always have.
+you're done, the same way you always have. Its `<image>_gate_pheno.csv` and population rows come
+from its **last saved file**, like every other slide's, so they do not include edits made in
+QuPath since that save — the run's report says so.
 
 ### Running headless
 

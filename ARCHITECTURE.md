@@ -370,15 +370,34 @@ per slide (`SEED`, xor'd with the slide id, so the same setting always gives the
 `cohort/AlignmentModel` turns the sample into `model/cohort/Landmarks` per (slide, column) —
 L1 the lowest-intensity *prominent* density peak (never the mode, which on a tumour-rich slide is
 the positive peak), L2 the highest peak at least two density bandwidths above L1 — and composes
-them into a `model/cohort/Alignment`. The per-column cofactor for the asinh transform is fixed
-once (pooled median of the column, computed the first time that column is seen) and cached
-alongside the landmarks, so adding a slide to the project never moves every other slide's
-landmarks. The cache (`io/AlignmentCacheFile`, `<project>/flowpath/alignment-cache.json`) is
-keyed by each slide's sample fingerprint and the recorded sample size; the live view
+them into a `model/cohort/Alignment`. The per-column cofactor for the asinh transform is the
+**reference slide's** median |x| over its clean sample for that column (`Landmarks.cofactor`,
+through `CohortStats.median`) — a function of the reference alone, so it does not depend on the
+order samples arrived in, a build with no cache reproduces a cached one exactly, and the GUI and a
+headless run agree. With no reference sample there is no cofactor and no landmark: nothing to
+align to. The cache (`io/AlignmentCacheFile`, `<project>/flowpath/alignment-cache.json`) is keyed
+by each slide's `SlideSample.cacheKey()` — the sample fingerprint plus the digest of the filter
+and ROI inputs its clean mask came from — and the recorded sample size; a cached landmark is
+reused only under that key and the cofactor in force now. The live view
 (`ui/CohortCoordinator`), the review list and the batch run (`batch/FlowPathBatch`,
 `batch/CohortEvidence`) all read the same model through `engine/AlignmentLookup` — the batch run
 reuses it exactly, recomputing only when the cache is missing or its fingerprint has moved,
 deterministically, from the same seed.
+
+### The clean mask is the scored tree's
+
+Landmarks, review flags, marker rules, the All slides curves and the evidence crops all read a
+sample's **clean** cells, and "clean" is the quality filter and ROI of the tree being *scored* —
+not of the tree the slide happened to be sampled under. `cohort/SlideSample` keeps what that
+needs (detached copies of the slide's annotations, shape and class) and `scopedTo(tree)`
+re-derives its mask and statistics whenever the tree's filter inputs differ from its `scope`
+(`engine/CleanMask.inputsDigest`); `CohortSession.score` scopes every sample first and
+`adopt` keeps the scoped samples, so the curves and crops read the same cells the review did.
+The mask itself is built by `engine/CleanMask.of` — quality filter, then ROI, an ROI with no area
+filtering nothing — the one composition `ui/GatingSession.derive` (the open slide) and
+`batch/BatchRunner` (a run's slide) use too; `ui/CleanMaskAgreementTest` pins the live session and
+a sample to the same mask. A filter change therefore re-derives the landmarks, in the background,
+and misses the alignment cache; nothing else does.
 
 ### A review is of a number
 
@@ -430,6 +449,15 @@ everywhere — every gate on its reference numbers, no slide setting honoured �
 refuses a foreign tree outright rather than apply one project's per-slide corrections to another
 project's slides.
 
+The reference slide itself is chosen in exactly two places. `GatingSession.applyDefaultReference`
+makes the open slide the reference the first time a project's cohort is seen — one undo step,
+**once per project**: an ingest after undoing it records nothing, because recording a step there
+wipes the redo stack. And `GatingSession.replaceTree(loaded, openSlideId, names)` gives a loaded
+tree that names none the open slide inside the load's own undo step. A tree with no reference
+(`TreeResolver` then gates every slide on the tree's own numbers) is reported by
+`CohortSession.state()` as `NO_REFERENCE`, never as an all-clear, and its status line never says
+"Ready to run".
+
 ### The batch run never writes a slide it did not check live
 
 `batch/BatchRunner.writeBack` asks its `isOpen` predicate — fed a volatile field the FX thread
@@ -438,7 +466,10 @@ between the read and the write is not silently discarded), again right before th
 classes are applied, and again right before `ProjectImageEntry.saveImageData`. Any of the three
 answering "open" turns the slide's `WriteBack` outcome into `SKIPPED_OPEN_SLIDE` rather than a
 write: QuPath owns that file while it is open, and the live preview has already classified it
-under the same resolved tree, so nothing is lost — the user saves it from QuPath as usual.
+under the same resolved tree, so nothing is lost — the user saves it from QuPath as usual. Every
+slide, the open one included, is read from its data file, so the open slide's phenotype CSV and
+population rows describe its last save, not edits made in the viewer since; `BatchRunner.summary`
+says so whenever a slide was skipped for being open.
 
 ### Layers
 
@@ -446,18 +477,26 @@ under the same resolved tree, so nothing is lost — the user saves it from QuPa
   `TreeResolver` reads, maps and writes back
 - `model/SlideSetting` — `Manual` / `Skip` / `Reviewed`, sealed, on `GateNode`
 - `model/GateWalk` — enabled-root, path-qualified iteration shared by the manifest exporter,
-  the marker rules and the review scorer
+  the marker rules, `qc_summary.csv` and the review scorer. A label repeated among enabled
+  siblings carries its ordinal (`CD3+/CD8#2`), and so does a repeated branch name among those
+  siblings' branches (`CD3+/CD8+#2/CD4`), so every `(rootIndex, gatePath)` names one gate;
+  `CohortSession.liveGate` refuses a key two gates still answer to
 - `model/cohort/Density`, `Landmarks`, `Alignment` — peak-finding in asinh space and the
   monotone map (and inverse) it produces; toolkit-free, no `PathObject`
 - `engine/TreeResolver`, `engine/AlignmentLookup` — the one resolution point (above), and the
   narrow `(slideId, column) → Alignment` interface it and every cohort reader depend on instead
   of `AlignmentModel` directly
-- `engine/PhenotypeClassWriter` — the one place a gating result becomes `PathClass`es (above)
+- `engine/PhenotypeClassWriter` — the one place a gating result becomes `PathClass`es (above);
+  its javadoc records why the batch recolouring the shared `PathClass` instances from a background
+  thread is benign
+- `engine/CleanMask` — the one quality-then-ROI composition of a slide's clean cells, and the
+  digest of its inputs (above)
 - `cohort/CohortSampler`, `SlideSource`, `SlideSample`, `CohortPrefs` — the fixed-seed per-slide
-  sample, its source of detections (project or headless), and the sampled-cells-per-slide
-  preference (default 20 000; `CohortPrefs.DEFAULT_SAMPLED_CELLS`)
-- `cohort/AlignmentModel` — `(slide, column) → Alignment`, the per-column cofactor cache and the
-  cohort-median/MAD unusual-staining check
+  sample (scoped to the scored tree's filters, above), its source of detections (project or
+  headless), and the sampled-cells-per-slide preference (default 20 000;
+  `CohortPrefs.DEFAULT_SAMPLED_CELLS`)
+- `cohort/AlignmentModel` — `(slide, column) → Alignment`, the reference-slide cofactor per
+  column, the landmark cache and the cohort-median/MAD unusual-staining check
 - `cohort/ReviewScorer`, `ReviewItem`, `ReviewAnswers`, `BoundaryHotspot` — the four review flags
   (no landmark, unusual staining, on a peak, can't judge), the three answers and their undo
   handling, and the sample-tile hotspot both the viewer centring and the evidence crop use
@@ -484,7 +523,8 @@ under the same resolved tree, so nothing is lost — the user saves it from QuPa
   `model/MeasurementKeySample`'s bounded sample of values, so a re-quantification confined to
   unsampled cells' values is not detected and the slide resumes unchanged
 - `io/AlignmentCacheFile` — `<project>/flowpath/alignment-cache.json`; derived, safe to delete,
-  never in undo
+  never in undo; each landmark is stored with the cofactor it was found with, so one found under
+  an earlier reference is never reused as if found under the current one
 - `ui/CohortCoordinator`, `BatchRunCoordinator` — one background worker each, one slide per task
   for the batch run, so other work (a gating pass, an export) interleaves rather than queuing
   behind a 50-slide run
@@ -496,11 +536,20 @@ under the same resolved tree, so nothing is lost — the user saves it from QuPa
 - `ui/BoundaryOverlay` — the paints-never-writes overlay (above)
 - `ui/editor/EditorAlignment` — the editor's display seam onto `TreeResolver.correctionFor`
 
-`io/FlowPathSerializer` is now **version 4**: `slideSettings` and `correctStaining` per gate
-(`correctStaining` false for a v1–v3 tree, so opening an old tree never changes a number),
-`referenceSlideId` and `slideNames` on the tree. `ui/BusyState` gained two more workers,
-`(loading, deriving, exporting, sampling, batchRunning)`: sampling and a batch run each read from
-a copy of the tree taken when they started, so neither blocks editing the live one.
+`io/FlowPathSerializer` reads **version 4**: `slideSettings`, `lineageMarker` and
+`correctStaining` per gate, `referenceSlideId` and `slideNames` on the tree. It *writes* version 4
+only when a tree carries cohort state an older reader would drop with a consequence (a reference
+slide, slide names, a slide setting or a lineage tick — `versionFor`), and version 3 otherwise, so
+FlowPath 0.9.4 still opens every tree saved by someone who never used a cohort. `correctStaining`
+is written on every gate at either version and read whenever present; only a gate with no key at
+all — a file written before v4 — loads with correction off, so opening an old tree never changes
+a number. `ui/BusyState` gained two more workers, `(loading, deriving, exporting, sampling,
+batchRunning)`: sampling and a batch run each read from a copy of the tree taken when they
+started, so neither blocks editing the live one. Sampling does block *starting* a run
+(`batchBlocked`): mid-sampling the alignments lack the slides not sampled yet. `batchAllowed`
+(not blocked, and an enabled gate) is the one predicate the Run button and the status line's
+"Ready to run" both read; the run's confirmation names the slides whose sampling failed, which
+run uncorrected.
 
 ## Putting It All Together
 
