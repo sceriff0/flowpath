@@ -854,10 +854,12 @@ public class FlowPathPane extends BorderPane {
             updateBusyControls();
             return;
         }
-        // The open slide becomes the reference the first time the cohort is seen (spec §3), as
-        // one undo step (ruling C9), recording the project's slide names with it. The resync
-        // this ingest ends in requests the pass.
-        session.applyDefaultReference(indexSlideId, cohort.projectNames());
+        cohort.setOpenSlide(indexSlideId);
+        // The open slide becomes the reference the first time this project's cohort is seen
+        // (spec §3), as one undo step (ruling C9), recording the project's slide names with it —
+        // once per project, never again on a later ingest (M6: that re-recorded a step, wiping
+        // redo). The resync this ingest ends in requests the pass.
+        session.applyDefaultReference(indexSlideId, projectDir.toString(), cohort.projectNames());
         int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
         String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
         if (!key.equals(lastSampledKey)) {
@@ -918,7 +920,7 @@ public class FlowPathPane extends BorderPane {
     private void renderNeedsALook() {
         ReviewGroup group = cohort.selectedGroup();
         needsALook.renderGroups(cohort.groups(), group == null ? null : group.key());
-        needsALook.renderStrip(cohort.slideStrip(), cohort.statusLine(), cohort.slideFilter());
+        needsALook.renderStrip(cohort.slideStrip(), cohort.statusLine(runAllowed(busyState())), cohort.slideFilter());
         ReviewItem selected = cohort.selected();
         List<ReviewItem> items = cohort.visibleItems();
         needsALook.render(cohort.state(), items, cohort.review().infos(),
@@ -1353,8 +1355,16 @@ public class FlowPathPane extends BorderPane {
         runAllButton.setVisible(shown);
         runAllButton.setManaged(shown);
         runAllButton.setText(running ? "Cancel run" : "Run on all slides…");
-        runAllButton.setDisable(!running && (busy.batchBlocked()
-                || !BatchRunner.hasEnabledGate(session.tree())));
+        runAllButton.setDisable(!running && !runAllowed(busy));
+    }
+
+    /**
+     * Whether "Run on all slides" may start: {@link BusyState#batchAllowed}, over whether the tree
+     * has an enabled gate. The one answer the button and the status line's "Ready to run" both
+     * read, so the line can never call a run ready that the button refuses.
+     */
+    private boolean runAllowed(BusyState busy) {
+        return busy.batchAllowed(BatchRunner.hasEnabledGate(session.tree()));
     }
 
     /** What the background workers are doing right now; see {@link BusyState}. */
@@ -2506,7 +2516,11 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptForFile("Load FlowPath", null, "JSON", ".json");
         if (file == null) return;
         try {
-            session.replaceTree(FlowPathSerializer.load(file));
+            // A tree with no reference gets the open slide as its default inside the load's own
+            // undo step (final ruling I3), whenever there is a cohort to anchor it in.
+            boolean anchor = cohort.state().available() && indexSlideId != null
+                    && cohort.projectNames().containsKey(indexSlideId);
+            session.replaceTree(FlowPathSerializer.load(file), anchor ? indexSlideId : null, cohort.projectNames());
             endActiveReview();
             resyncToTree();
 
@@ -2570,7 +2584,7 @@ public class FlowPathPane extends BorderPane {
         Project<BufferedImage> project = qupath.getProject();
         if (project == null || busyState().batchBlocked()) return;
         BatchRunCoordinator.Start start = BatchRunCoordinator.check(session.tree(),
-                ProjectSlides.batchSlides(project), cohort.state().remaining());
+                ProjectSlides.batchSlides(project), cohort.state().remaining(), cohort.failedSlideNames());
         if (start instanceof BatchRunCoordinator.Refused refused) {
             Dialogs.showPlainMessage("Run on all slides", refused.message());
             return;
@@ -2586,7 +2600,7 @@ public class FlowPathPane extends BorderPane {
             return;
         }
         List<BatchSlide> slides = ProjectSlides.batchSlides(project);
-        if (BatchRunCoordinator.check(session.tree(), slides, 0) instanceof BatchRunCoordinator.Refused refused) {
+        if (BatchRunCoordinator.check(session.tree(), slides, 0, List.of()) instanceof BatchRunCoordinator.Refused refused) {
             Dialogs.showPlainMessage("Run on all slides", refused.message());
             return;
         }

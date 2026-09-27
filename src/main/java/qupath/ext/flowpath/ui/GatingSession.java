@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.ReviewAnswers;
 import qupath.ext.flowpath.engine.CleanMask;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -13,6 +14,7 @@ import qupath.ext.flowpath.model.UndoHistory;
 import qupath.lib.objects.PathObject;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -107,6 +109,9 @@ final class GatingSession {
      * and load. Cleared when a new index is adopted.
      */
     private String lastUnchangedMigrationNotice;
+
+    /** The project whose first sighting {@link #applyDefaultReference} has already answered. */
+    private String defaultReferenceProject;
 
     /** Told before any undo step that is not a gate edit is recorded; see {@link #setOnNonGateEdit}. */
     private Runnable onNonGateEdit = () -> {};
@@ -342,11 +347,39 @@ final class GatingSession {
      * seconds long.
      */
     void replaceTree(GateTree loaded) {
+        replaceTree(loaded, null, Map.of());
+    }
+
+    /**
+     * {@link #replaceTree(GateTree)}, giving a loaded tree that names no reference slide the
+     * default one — {@code openSlideId}, the slide whose cells the session holds — inside the
+     * load's own undo step, with the project's image names (final ruling I3). One undo takes the
+     * load and its default back together; recorded as a step of its own, it would leave the tree
+     * just loaded with no reference, and the cohort list would read "all clear" over slides no
+     * alignment was ever computed for. A tree whose recorded names contradict the project
+     * ({@code cohort/CohortIdentity}) is left as loaded: it is another project's.
+     *
+     * @param openSlideId  the default reference, or null when there is no cohort to anchor it in
+     * @param projectNames the project's images, id → name
+     */
+    void replaceTree(GateTree loaded, String openSlideId, Map<String, String> projectNames) {
         Objects.requireNonNull(loaded, "loaded");
         onNonGateEdit.run();
         undoHistory.record(tree);
+        if (openSlideId != null && loaded.getReferenceSlideId() == null
+                && CohortIdentity.matches(loaded, projectNames)) {
+            setDefaultReference(loaded, openSlideId, projectNames);
+        }
         GateTree.transferCountsIfStructureMatches(loaded.getRoots(), tree.getRoots());
         this.tree = loaded;
+    }
+
+    /** {@code referenceId} becomes {@code target}'s reference, the project's names recorded beside it. */
+    private static void setDefaultReference(GateTree target, String referenceId, Map<String, String> projectNames) {
+        Map<String, String> names = new LinkedHashMap<>(target.getSlideNames());
+        names.putAll(projectNames);
+        target.setReferenceSlideId(referenceId);
+        target.setSlideNames(names);
     }
 
     /** Step back one edit; {@code true} if there was one. Follow with {@link #resync}. */
@@ -420,32 +453,37 @@ final class GatingSession {
     }
 
     /**
-     * The first time a cohort is seen with a tree that names no reference slide, the open slide
-     * becomes the reference (spec §3) — as one undo step recorded before the change, then
-     * settled (pre-flight ruling C9). It changes no number on the open slide, but it switches
+     * The first time a project's cohort is seen with a tree that names no reference slide, the
+     * open slide becomes the reference (spec §3) — as one undo step recorded before the change,
+     * then settled (pre-flight ruling C9). It changes no number on the open slide, but it switches
      * correction on for every other slide; left out of the undo history, every snapshot taken
      * before it would hold no reference, and undoing past this moment would switch correction
      * off without anything having recorded that it was ever on.
      * <p>
-     * Undoing this step restores the pre-state honestly (no reference: every slide gates on the
-     * reference numbers) and redo restores the reference; the next cohort refresh calls this
-     * again and, finding no reference, re-applies the default as a fresh step.
+     * <b>Once per project</b> (final review M6): undoing past it restores the pre-state honestly —
+     * no reference, which the cohort then reports as "No reference slide" — and the next ingest
+     * of the same project does <em>not</em> apply it again. Re-applying it recorded a fresh step on
+     * every ingest after such an undo, and recording a step clears the redo stack: the undone
+     * work could never be redone. A tree loaded later gets its default inside the load's own step
+     * ({@link #replaceTree(GateTree, String, Map)}).
      * <p>
      * The project's id → name map is recorded in the same step: entry ids restart in every
      * project, so the names are what later tells this tree's reference and slide settings apart
      * from another project's images (see {@code cohort/CohortIdentity}).
      *
      * @param openSlideId  the project id of the slide whose cells the session holds; null outside
-     *                     a project, when nothing is set
+     *                     a project, when nothing is set (and nothing is marked as seen)
+     * @param projectKey   which project the cohort is ({@code ui/ProjectSlides.projectDir})
      * @param projectNames the project's images, id → name
      * @return whether the reference was set (and a step recorded)
      */
-    boolean applyDefaultReference(String openSlideId, Map<String, String> projectNames) {
-        if (openSlideId == null || tree.getReferenceSlideId() != null) return false;
+    boolean applyDefaultReference(String openSlideId, String projectKey, Map<String, String> projectNames) {
+        if (openSlideId == null || Objects.equals(projectKey, defaultReferenceProject)) return false;
+        defaultReferenceProject = projectKey;
+        if (tree.getReferenceSlideId() != null) return false;
         onNonGateEdit.run();
         undoHistory.record(tree);
-        tree.setReferenceSlideId(openSlideId);
-        tree.setSlideNames(projectNames);
+        setDefaultReference(tree, openSlideId, projectNames);
         settle();
         return true;
     }

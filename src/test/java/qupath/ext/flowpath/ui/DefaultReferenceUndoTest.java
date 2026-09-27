@@ -24,10 +24,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>
  * The chosen behaviour is the honest one: undo restores the pre-state — no reference, so every
  * slide gates on the reference numbers, which is what {@link TreeResolver} does with no
- * reference and what the cohort's state then reports — redo puts the reference back, and the
- * next cohort refresh (the next ingest) re-applies the default as a fresh undo step. Re-applying
- * it inside the resync instead would record a new step on every undo into the pre-state and
- * wipe the redo stack, so the step could never be undone at all.
+ * reference and what the cohort's state then reports ("No reference slide") — and redo puts the
+ * reference back. The default is applied once per project (final review M6): an ingest after the
+ * undo does not apply it again, since recording a step there wipes the redo stack. A tree loaded
+ * with no reference gets the default inside the load's own step (final ruling I3).
  */
 class DefaultReferenceUndoTest {
 
@@ -72,8 +72,8 @@ class DefaultReferenceUndoTest {
         cohort.landed(new CohortSampler.Sampled(slide("s1", 2, 0.4)));
         cohort.samplingFinished();
 
-        assertTrue(session.applyDefaultReference("ref", cohort.projectNames()));
-        assertFalse(session.applyDefaultReference("s1", cohort.projectNames()), "only the first sighting picks a reference");
+        assertTrue(session.applyDefaultReference("ref", "p", cohort.projectNames()));
+        assertFalse(session.applyDefaultReference("s1", "p", cohort.projectNames()), "only the first sighting picks a reference");
         assertEquals(Map.of("ref", "ref.tif", "s1", "s1.tif"), session.tree().getSlideNames(),
                 "the project's names are recorded in the same step");
         rescore(cohort, session.tree());
@@ -102,18 +102,107 @@ class DefaultReferenceUndoTest {
         rescore(cohort, session.tree());
         assertEquals(List.of(TreeResolver.Source.CORRECTED), sourcesOn(session.tree(), "s1", cohort, 1));
 
-        // Undone again, the next cohort refresh re-applies the default, as its own undo step.
+        // Undone again, the next cohort refresh (an ingest) leaves it undone: the cohort says so.
         assertTrue(session.undo());
-        assertTrue(session.applyDefaultReference("ref", cohort.projectNames()));
+        assertFalse(session.applyDefaultReference("ref", "p", cohort.projectNames()));
+        assertNull(session.tree().getReferenceSlideId());
+        cohort.setLiveTree(session.tree());
+        assertEquals(CohortSession.NO_REFERENCE, cohort.state().message());
+    }
+
+    /** Final review M6: an ingest after undoing the default reference must not wipe redo. */
+    @Test
+    void redoSurvivesAnIngestAfterUndoingTheDefault() {
+        GatingSession session = new GatingSession(() -> 0L, input -> {});
+        session.replaceTree(tree());
+        Map<String, String> names = Map.of("ref", "ref.tif", "s1", "s1.tif");
+        assertTrue(session.applyDefaultReference("ref", "p", names));
+        assertTrue(session.undo());
+        // What every later ingest of the same project calls.
+        assertFalse(session.applyDefaultReference("ref", "p", names));
+        assertFalse(session.applyDefaultReference("s1", "p", names));
+        assertTrue(session.redo(), "the redo stack survived the ingests");
         assertEquals("ref", session.tree().getReferenceSlideId());
+    }
+
+    /** Another project's first sighting is a first sighting again. */
+    @Test
+    void aNewProjectIsSeenAfresh() {
+        GatingSession session = new GatingSession(() -> 0L, input -> {});
+        session.replaceTree(tree());
+        assertTrue(session.applyDefaultReference("ref", "p", Map.of("ref", "ref.tif", "s1", "s1.tif")));
+        GateTree fresh = tree();
+        session.replaceTree(fresh);
+        assertTrue(session.applyDefaultReference("1", "q", Map.of("1", "a.tif", "2", "b.tif")));
+        assertEquals("1", session.tree().getReferenceSlideId());
+    }
+
+    /**
+     * Final ruling I3: a tree loaded into an available cohort with no reference gets the open slide
+     * as its default inside the load's own undo step — one undo takes the load and the default
+     * back together, and the tree before the load (two same-channel roots, its own reference)
+     * comes back exactly.
+     */
+    @Test
+    void aLoadedTreeGetsTheDefaultReferenceInsideTheLoadStep() {
+        GatingSession session = new GatingSession(() -> 0L, input -> {});
+        session.replaceTree(tree());
+        Map<String, String> names = Map.of("ref", "ref.tif", "s1", "s1.tif");
+        assertTrue(session.applyDefaultReference("ref", "p", names));
+        session.tree().getRoots().get(1).setThreshold(999.0);
+        session.settle();
+
+        GateTree loaded = tree();
+        loaded.getRoots().get(0).setThreshold(111.0);
+        session.replaceTree(loaded, "s1", names);
+        assertEquals("s1", session.tree().getReferenceSlideId(), "the open slide anchors the loaded tree");
+        assertEquals(names, session.tree().getSlideNames());
+        assertEquals(111.0, session.tree().getRoots().get(0).getThreshold());
+
         assertTrue(session.undo());
-        assertNull(session.tree().getReferenceSlideId(), "the re-applied default is one step, not folded away");
+        assertEquals("ref", session.tree().getReferenceSlideId(), "one undo: the load and its default together");
+        assertEquals(400.0, session.tree().getRoots().get(0).getThreshold());
+        assertEquals(999.0, session.tree().getRoots().get(1).getThreshold());
+        assertTrue(session.redo());
+        assertEquals("s1", session.tree().getReferenceSlideId());
+    }
+
+    /** A loaded tree that names its own reference, or belongs to another project, is left as loaded. */
+    @Test
+    void aLoadedTreeKeepsItsOwnReferenceAndAForeignOneIsNotAnchored() {
+        GatingSession session = new GatingSession(() -> 0L, input -> {});
+        Map<String, String> names = Map.of("ref", "ref.tif", "s1", "s1.tif");
+        GateTree own = tree();
+        own.setReferenceSlideId("ref");
+        session.replaceTree(own, "s1", names);
+        assertEquals("ref", session.tree().getReferenceSlideId());
+
+        GateTree foreign = tree();
+        foreign.setSlideNames(Map.of("s1", "another-project.tif"));
+        session.replaceTree(foreign, "s1", names);
+        assertNull(session.tree().getReferenceSlideId());
+        assertEquals(Map.of("s1", "another-project.tif"), session.tree().getSlideNames());
+    }
+
+    /** Final ruling I3: with no reference the cohort says so, and offers the open slide as one. */
+    @Test
+    void noReferenceIsReportedWithTheOpenSlideOffered() {
+        CohortSession cohort = new CohortSession();
+        cohort.setProjectSlides(List.of(new CohortSession.SlideRef("ref", "ref.tif"),
+                new CohortSession.SlideRef("s1", "s1.tif")));
+        cohort.setOpenSlide("s1");
+        cohort.setLiveTree(tree());
+        assertEquals(CohortSession.NO_REFERENCE, cohort.state().message());
+        assertFalse(cohort.state().correctionDisabled(), "no reference is not a missing reference");
+        assertEquals("s1", cohort.suggestedReferenceId());
+        assertEquals("s1.tif", cohort.state().suggestedReferenceName());
+        assertFalse(cohort.statusLine(true).contains("Ready to run"));
     }
 
     @Test
     void noOpenSlideSetsNothingAndRecordsNothing() {
         GatingSession session = new GatingSession(() -> 0L, input -> {});
-        assertFalse(session.applyDefaultReference(null, Map.of("1", "a.tif")));
+        assertFalse(session.applyDefaultReference(null, "p", Map.of("1", "a.tif")));
         assertNull(session.tree().getReferenceSlideId());
         assertFalse(session.undo(), "no step was recorded");
     }

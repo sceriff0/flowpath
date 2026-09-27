@@ -28,9 +28,31 @@ class CohortSessionStripTest {
         assertEquals(SAMPLING, strip.get(5).status());
         assertEquals(3000, strip.get(1).cells());
         int remaining = s.review().items().size();
-        assertEquals("4/6 sampled · " + remaining + " to review · Sampling…", s.statusLine());
+        assertEquals("4/6 sampled · " + remaining + " to review · Sampling…", s.statusLine(true));
         s.samplingFinished();
-        assertTrue(s.statusLine().endsWith(" · Ready to run"));
+        assertTrue(s.statusLine(true).endsWith(" · Ready to run"));
+    }
+
+    /**
+     * Final ruling I4 (deferred item 36): "Ready to run" is the run button's own predicate, handed
+     * in — the line never calls a run ready that the button refuses (busy, or no enabled gate).
+     */
+    @Test
+    void readyToRunIsTheButtonsOwnAnswer() {
+        CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree());
+        assertTrue(s.statusLine(true).endsWith(" · Ready to run"));
+        assertTrue(s.statusLine(false).endsWith(" · Not ready to run"));
+        assertFalse(s.statusLine(false).contains("Ready to run"));
+    }
+
+    /** Final ruling I3: a tree naming no reference slide is never "Ready to run". */
+    @Test
+    void aTreeWithNoReferenceIsNotReadyToRun() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = CohortSessionTest.sampledSession(tree);
+        tree.setReferenceSlideId(null);
+        s.setLiveTree(tree);
+        assertTrue(s.statusLine(true).endsWith(" · No reference slide"), s.statusLine(true));
     }
 
     @Test
@@ -47,7 +69,7 @@ class CohortSessionStripTest {
     @Test
     void anUnavailableCohortHasNoStatusLine() {
         CohortSession s = new CohortSession();
-        assertEquals("", s.statusLine());
+        assertEquals("", s.statusLine(true));
         assertTrue(s.slideStrip().isEmpty());
     }
 

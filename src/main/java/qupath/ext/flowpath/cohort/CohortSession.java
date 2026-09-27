@@ -59,6 +59,15 @@ public final class CohortSession {
     public static final String FOREIGN_TREE =
             "This gate tree's per-slide settings belong to another project — correction and slide settings are off";
 
+    /**
+     * The live tree names no reference slide — after an undo past the default one, say (final
+     * ruling I3). Every slide then gates on the tree's own numbers, uncorrected, and there is no
+     * review: said in words, never left to look like an all-clear.
+     */
+    public static final String NO_REFERENCE =
+            "No reference slide — correction is off and every slide uses the tree's own numbers; "
+                    + "use the open slide as the reference to turn it on";
+
     private static final ReviewScorer.Result NO_REVIEW = new ReviewScorer.Result(List.of(), List.of());
 
     /** Which project {@link #slides} belong to; a change drops everything sampled for the last one. */
@@ -79,6 +88,8 @@ public final class CohortSession {
     /** The live tree's reference slide, as last handed in by {@link #setLiveTree} or {@link #snapshot}. */
     private volatile String referenceSlideId;
     private String suggestedReferenceId;
+    /** The slide whose cells the panel holds: what a tree with no reference is offered as one. */
+    private String openSlideId;
     private ReviewItem.Key selected;
     /** The gate whose group is being reviewed, as a value; see {@link #selectGroup}. */
     private ReviewGroup.Key selectedGroup;
@@ -170,6 +181,11 @@ public final class CohortSession {
         referenceSlideId = tree.getReferenceSlideId();
         foreign = !CohortIdentity.matches(tree, projectNames);
         updateCorrectionDisabled();
+    }
+
+    /** The slide open in the viewer, by project id; null when none (or outside a project). */
+    public void setOpenSlide(String slideId) {
+        openSlideId = slideId;
     }
 
     public void setCache(AlignmentModel.Cache cache) { this.cache = cache == null ? AlignmentModel.Cache.empty() : cache; }
@@ -280,7 +296,20 @@ public final class CohortSession {
      * {@link CohortState#suggestedReferenceName()} names, by id, since two images may share a name.
      */
     public String suggestedReferenceId() {
+        if (noReference()) return openSlideId != null && projectNames.containsKey(openSlideId) ? openSlideId : null;
         return suggestedReferenceId != null && !suggestedReferenceId.equals(referenceSlideId) ? suggestedReferenceId : null;
+    }
+
+    /** A tree of this project that names no reference slide, while the cohort is available. */
+    private boolean noReference() {
+        return slides.size() >= 2 && !foreign && referenceSlideId == null;
+    }
+
+    /** The names of the slides whose sampling failed, in project order: they run uncorrected. */
+    public List<String> failedSlideNames() {
+        List<String> out = new ArrayList<>();
+        for (SlideRef r : slides) if (failures.containsKey(r.id())) out.add(r.name());
+        return out;
     }
 
     public String slideName(String slideId) {
@@ -341,16 +370,22 @@ public final class CohortSession {
 
     /**
      * {@code "38/40 sampled · 5 to review · Ready to run"} (spec §6); {@code ""} while the cohort
-     * is unavailable. "Ready to run" reports the cohort's own readiness — sampling finished and no
-     * batch of its own going — the same {@code !batchRunning} rule {@link CohortState#canRunBatch}
-     * already states; whether the run button is also blocked by an unrelated background worker or
-     * an empty tree is {@code BusyState.batchBlocked()} / {@code BatchRunner.hasEnabledGate}'s
-     * decision, not a second one made here.
+     * is unavailable. The last part says why a run is not ready when it is not: a batch going,
+     * sampling, {@code runAllowed} false, or a tree with no reference slide or from another
+     * project. {@code runAllowed} is the run button's own predicate
+     * ({@code BusyState.batchAllowed}), handed in rather than decided a second time here, so the
+     * line can never call a run ready that the button refuses.
      */
-    public String statusLine() {
+    public String statusLine(boolean runAllowed) {
         if (slides.size() < 2) return "";
+        String run = batchRunning ? "Running…"
+                : sampling ? "Sampling…"
+                : !runAllowed ? "Not ready to run"
+                : foreign ? "Tree from another project"
+                : referenceSlideId == null ? "No reference slide"
+                : "Ready to run";
         return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(), slides.size(),
-                review.items().size(), batchRunning ? "Running…" : sampling ? "Sampling…" : "Ready to run");
+                review.items().size(), run);
     }
 
     /**
@@ -421,11 +456,12 @@ public final class CohortSession {
         String message = batchRunning ? batchProgress
                 : foreign ? FOREIGN_TREE
                 : correctionDisabled ? REFERENCE_MISSING
+                : referenceSlideId == null ? NO_REFERENCE
                 : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), slides.size())
                 : !failures.isEmpty() ? String.format(Locale.US, "%d slide(s) could not be sampled", failures.size())
                 : null;
-        String suggested = suggestedReferenceId != null && !suggestedReferenceId.equals(referenceSlideId)
-                ? slideName(suggestedReferenceId) : null;
+        String suggestedId = suggestedReferenceId();
+        String suggested = suggestedId == null ? null : slideName(suggestedId);
         return new CohortState(true, sampling, samples.size(), slides.size(), failures.size(), review.items().size(),
                 referenceSlideId == null || foreign ? null : slideName(referenceSlideId), suggested,
                 correctionDisabled || foreign, message,

@@ -236,4 +236,26 @@ class BatchRunCoordinatorTest {
         assertTrue(five.contains("5 review items are still unreviewed"), five);
         assertTrue(five.contains("the slides they concern run on the thresholds shown now"), five);
     }
+
+    /** Final ruling I4: slides whose sampling failed are named before the run as running uncorrected. */
+    @Test
+    void theConfirmationNamesTheSlidesThatWillRunUncorrected() {
+        GateTree tree = GateTreeFixtures.twoRootsOnCd3AndCd8(3, 5);
+        tree.setReferenceSlideId("a");
+        List<BatchSlide> slides = List.of(slide("a"), slide("b"), slide("c"));
+        String none = assertInstanceOf(BatchRunCoordinator.Confirm.class,
+                BatchRunCoordinator.check(tree, slides, 0, List.of())).message();
+        assertFalse(none.contains("uncorrected"), none);
+
+        String two = assertInstanceOf(BatchRunCoordinator.Confirm.class,
+                BatchRunCoordinator.check(tree, slides, 0, List.of("b.tif", "c.tif"))).message();
+        assertTrue(two.contains("These slides could not be sampled and will run uncorrected"), two);
+        assertTrue(two.contains("\n  b.tif\n  c.tif"), two);
+
+        tree.setReferenceSlideId(null);
+        String noReference = assertInstanceOf(BatchRunCoordinator.Confirm.class,
+                BatchRunCoordinator.check(tree, slides, 0, List.of())).message();
+        assertTrue(noReference.contains("No reference slide: every slide runs on the tree's own numbers, uncorrected."),
+                noReference);
+    }
 }

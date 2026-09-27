@@ -30,7 +30,7 @@ import java.util.Optional;
  * <p>
  * Two cohort workers joined later, and neither blocks editing: sampling the project's other
  * slides and a batch run over all of them each work from a copy of the tree taken when they
- * started. Both can last minutes, so neither replaces the status bar's counts either — their
+ * started. Sampling does block starting a batch run (see {@link #batchBlocked()}). Both can last minutes, so neither replaces the status bar's counts either — their
  * progress is appended to it from {@code CohortState.message()}.
  *
  * @param exporting    the CSV writer is running, from a snapshot taken when it started
@@ -69,10 +69,22 @@ record BusyState(boolean loading, boolean deriving, boolean exporting, boolean s
 
     /**
      * Whether a batch run may start. One background writer at a time: a batch run waits for an
-     * export, a read or a derivation, and for the batch run already going.
+     * export, a read or a derivation, and for the batch run already going. And not while the
+     * cohort is being sampled (final ruling I4): the run gates with the alignments the review was
+     * built from, and mid-sampling those lack every slide not sampled yet, which would run
+     * uncorrected without anyone having been told.
      */
     boolean batchBlocked() {
-        return loading || deriving || exporting || batchRunning;
+        return loading || deriving || exporting || sampling || batchRunning;
+    }
+
+    /**
+     * Whether "Run on all slides" may start — not {@link #batchBlocked()}, and a tree with an
+     * enabled gate ({@code BatchRunner.hasEnabledGate}) — the one predicate the button and the
+     * status line's "Ready to run" both read.
+     */
+    boolean batchAllowed(boolean hasEnabledGate) {
+        return !batchBlocked() && hasEnabledGate;
     }
 
     /**

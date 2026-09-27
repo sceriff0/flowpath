@@ -44,6 +44,7 @@ class CohortSessionTest {
     void samplingProgressIsReportedAndFailuresCounted() {
         CohortSession s = new CohortSession();
         s.setProjectSlides(refs("ref", "s1", "s2"));
+        s.setLiveTree(ReviewScorerTest.tree());
         s.samplingStarted();
         s.landed(new CohortSampler.Failed("s2", "s2.tif", "no detections on this slide"));
         CohortState st = s.state();
@@ -52,6 +53,7 @@ class CohortSessionTest {
         s.samplingFinished();
         assertEquals("1 slide(s) could not be sampled", s.state().message());
         assertEquals(1, s.state().failed());
+        assertEquals(List.of("s2.tif"), s.failedSlideNames(), "what the run's confirmation names as uncorrected");
     }
 
     /** Review Focus 5. */

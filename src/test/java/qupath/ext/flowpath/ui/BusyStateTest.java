@@ -55,10 +55,14 @@ class BusyStateTest {
     }
 
     @Test
-    void samplingNeverBlocksAndABatchRunBlocksExportButNotEditing() {
+    void samplingBlocksOnlyABatchRunAndABatchRunBlocksExportButNotEditing() {
         BusyState sampling = new BusyState(false, false, false, true, false);
         assertFalse(sampling.editingBlocked());
         assertFalse(sampling.exportBlocked());
+        // Final ruling I4: a run started mid-sampling would gate the slides not yet sampled
+        // uncorrected, against alignments the review never showed.
+        assertTrue(sampling.batchBlocked());
+        assertFalse(sampling.batchAllowed(true));
         assertEquals(Optional.empty(), sampling.message(),
                 "long-running: its progress rides on the normal status line (CohortState.message), not over it");
 
@@ -68,5 +72,18 @@ class BusyStateTest {
         assertTrue(batch.batchBlocked());
         assertEquals(Optional.empty(), batch.message());
         assertTrue(new BusyState(false, false, true, false, false).batchBlocked(), "one background writer at a time");
+    }
+
+    /** The one run predicate the button and the status line read: not blocked, and a gate to run. */
+    @Test
+    void aRunIsAllowedOnlyWhenIdleWithAnEnabledGate() {
+        assertTrue(BusyState.IDLE.batchAllowed(true));
+        assertFalse(BusyState.IDLE.batchAllowed(false));
+        for (BusyState busy : List.of(new BusyState(true, false, false, false, false),
+                new BusyState(false, true, false, false, false), new BusyState(false, false, true, false, false),
+                new BusyState(false, false, false, true, false), new BusyState(false, false, false, false, true))) {
+            assertTrue(busy.batchBlocked(), busy.toString());
+            assertFalse(busy.batchAllowed(true), busy.toString());
+        }
     }
 }

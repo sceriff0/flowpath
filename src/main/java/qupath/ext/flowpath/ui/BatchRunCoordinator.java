@@ -113,6 +113,17 @@ final class BatchRunCoordinator {
      * @param unreviewed the review items still open ({@code CohortState.remaining()})
      */
     static Start check(GateTree tree, List<BatchSlide> slides, int unreviewed) {
+        return check(tree, slides, unreviewed, List.of());
+    }
+
+    /**
+     * {@link #check(GateTree, List, int)}, naming too the slides whose sampling failed
+     * ({@code CohortSession.failedSlideNames()}): no alignment was computed for them, so they run
+     * on the tree's own numbers, uncorrected — allowed, but said before the run rather than found
+     * in the manifest afterwards (final ruling I4). A tree with no reference slide says the same
+     * of every slide.
+     */
+    static Start check(GateTree tree, List<BatchSlide> slides, int unreviewed, List<String> samplingFailed) {
         // BatchRunner.refusal is the rule a headless run applies too: no enabled gate, a foreign tree.
         String refused = BatchRunner.refusal(tree, slides);
         if (refused != null) return new Refused(refused);
@@ -125,6 +136,13 @@ final class BatchRunCoordinator {
             sb.append("\n\n").append(unreviewed)
               .append(unreviewed == 1 ? " review item is still unreviewed" : " review items are still unreviewed")
               .append(": the slides they concern run on the thresholds shown now.");
+        }
+        if (tree.getReferenceSlideId() == null && slides.size() >= 2) {
+            sb.append("\n\nNo reference slide: every slide runs on the tree's own numbers, uncorrected.");
+        } else if (!samplingFailed.isEmpty()) {
+            sb.append("\n\n").append(samplingFailed.size() == 1 ? "This slide" : "These slides")
+              .append(" could not be sampled and will run uncorrected, on the tree's own numbers:\n  ")
+              .append(String.join("\n  ", samplingFailed));
         }
         return new Confirm(sb.toString());
     }
