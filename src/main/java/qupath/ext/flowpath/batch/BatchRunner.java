@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
@@ -50,6 +51,7 @@ public final class BatchRunner {
     private static final Logger logger = LoggerFactory.getLogger(BatchRunner.class);
 
     public static final String COMBINED_FILE = "batch_populations.csv";
+    public static final String PHENO_SUFFIX = "_gate_pheno.csv";
 
     /**
      * @param isOpen whether a slide id is open in the viewer <em>now</em> — asked live, from the
@@ -79,6 +81,10 @@ public final class BatchRunner {
 
     private BatchRunner() {}
 
+    /** One slide, gated, with what {@link FlowPathBatch} reports beyond the {@link BatchResult}; nulls on failure. */
+    public record Gated(BatchResult result, CellIndex index, GatingEngine.AssignmentResult assignment, MarkerStats stats,
+                        boolean[] qualityMask, boolean[] roi, boolean roiWithoutAnnotation) {}
+
     /**
      * Gate every slide in order, reporting progress before each one starts and honoring
      * cancellation between slides. Per spec §7, cancellation "stops before the next slide":
@@ -86,25 +92,48 @@ public final class BatchRunner {
      */
     public static List<BatchResult> run(List<BatchSlide> slides, Settings settings,
                                         BiConsumer<Integer, String> progress, BooleanSupplier cancelled) {
-        List<BatchResult> results = new ArrayList<>();
-        Set<String> used = new HashSet<>();
+        return eachSlide(slides, progress, cancelled, false,
+                (slide, fileBase) -> gateOne(slide, fileBase + PHENO_SUFFIX, settings));
+    }
+
+    /**
+     * The one synchronous slide loop, shared by {@link #run} and {@link FlowPathBatch}: slides in
+     * order, each with its own {@link #fileBase}, progress announced before each, cancellation
+     * asked before each announcement.
+     *
+     * @param announcedSlideCancels whether a cancel set <em>during</em> a slide's announcement
+     *                              stops that slide before it starts ({@link FlowPathBatch}) or lets
+     *                              it run ({@link #run}) — the two callers' tests pin opposite
+     *                              answers (pre-flight ruling A2), so the difference is named here
+     *                              rather than hidden in two copies of the loop
+     */
+    static <R> List<R> eachSlide(List<BatchSlide> slides, BiConsumer<Integer, String> progress, BooleanSupplier cancelled,
+                                 boolean announcedSlideCancels, BiFunction<BatchSlide, String, R> gate) {
+        List<R> out = new ArrayList<>();
+        Set<String> used = newFileBases();
         for (int i = 0; i < slides.size(); i++) {
             if (cancelled.getAsBoolean()) break;
             BatchSlide slide = slides.get(i);
             progress.accept(i, slide.name());
-            results.add(gateOne(slide, phenoFileName(slide.name(), used), settings));
+            if (announcedSlideCancels && cancelled.getAsBoolean()) break;
+            out.add(gate.apply(slide, fileBase(slide.name(), used)));
         }
-        return results;
+        return out;
     }
 
     public static BatchResult gateOne(BatchSlide slide, String phenoFileName, Settings settings) {
+        return gateDetailed(slide, phenoFileName, settings).result();
+    }
+
+    /** {@link #gateOne}, keeping the index, masks and assignment for a caller that reports more than the result. */
+    public static Gated gateDetailed(BatchSlide slide, String phenoFileName, Settings settings) {
         try {
             // Asked before the read: a slide open now may be saved from QuPath after this read,
             // and writing back what was read would then lose those edits.
             boolean openAtRead = settings.isOpen().test(slide.id());
             ImageData<BufferedImage> data = slide.read();
             List<PathObject> detections = new ArrayList<>(data.getHierarchy().getDetectionObjects());
-            if (detections.isEmpty()) return BatchResult.failed(slide.id(), slide.name(), "no detections on this slide");
+            if (detections.isEmpty()) return failed(slide, "no detections on this slide");
             IngestResult ingest = DetectionIngest.read(detections, data);
             CellIndex index = ingest.index();
 
@@ -117,6 +146,8 @@ public final class BatchRunner {
                 regions = computed.isEmpty() ? null : computed;
             }
             boolean[] roi = regions == null ? null : regions.included();
+            boolean[] quality = tree.getQualityFilter() == null ? null
+                    : GatingEngine.computeQualityMask(index, tree.getQualityFilter());
             MarkerStats stats = tree.getQualityFilter() == null
                     ? MarkerStats.compute(index, roi)
                     : GatingEngine.recomputeStats(index, tree.getQualityFilter(), roi);
@@ -128,13 +159,22 @@ public final class BatchRunner {
 
             BatchResult ok = new BatchResult(slide.id(), slide.name(), index.size(), ingest.markerNames(), population,
                     resolved, ingest.report(), BatchResult.WriteBack.NOT_REQUESTED, null, null);
-            return writeBack(ok, slide, data, index, result, settings, openAtRead);
+            return new Gated(writeBack(ok, slide, data, index, result, settings, openAtRead), index, result, stats,
+                    quality, roi, tree.isRoiFilterEnabled() && regions == null);
         } catch (Exception | Error ex) {
             // Error too: gating every cell of a large slide is where an OutOfMemoryError is plausible.
             logger.warn("Batch gating failed for {}", slide.name(), ex);
-            return BatchResult.failed(slide.id(), slide.name(),
-                    ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+            return failed(slide, describe(ex));
         }
+    }
+
+    private static Gated failed(BatchSlide slide, String reason) {
+        return new Gated(BatchResult.failed(slide.id(), slide.name(), reason), null, null, null, null, null, false);
+    }
+
+    /** What a failure says: its message, or its type when it has none (an {@code OutOfMemoryError} may not). */
+    static String describe(Throwable ex) {
+        return ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
     }
 
     /**
@@ -163,16 +203,35 @@ public final class BatchRunner {
             // Error too: the slide was already gated and exported, so a save failure (or an
             // OutOfMemoryError writing a large .qpdata) is a write-back failure, not a slide failure.
             logger.warn("Could not save phenotypes into {}", slide.name(), ex);
-            return ok.withWriteBack(BatchResult.WriteBack.FAILED,
-                    ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+            return ok.withWriteBack(BatchResult.WriteBack.FAILED, describe(ex));
         }
     }
 
+    /**
+     * A fresh {@code used} set for {@link #fileBase}, one per run. It starts out holding
+     * {@code "batch"}: an image of that name would otherwise write its per-slide
+     * {@code batch_populations.csv} over the run's combined table of the same name.
+     */
+    public static Set<String> newFileBases() {
+        Set<String> used = new HashSet<>();
+        used.add(COMBINED_FILE.substring(0, COMBINED_FILE.indexOf("_populations.csv")));
+        return used;
+    }
+
     public static String phenoFileName(String imageName, Set<String> used) {
+        return fileBase(imageName, used) + PHENO_SUFFIX;
+    }
+
+    /**
+     * A file-system-safe name for {@code imageName}, unique among {@code used} (which it joins):
+     * the stem every per-slide output of one run shares. Deterministic in slide order, so a
+     * resumed run gives each slide the same stem as the run it resumes.
+     */
+    public static String fileBase(String imageName, Set<String> used) {
         String base = (imageName == null || imageName.isBlank() ? "image" : imageName).replaceAll("[^A-Za-z0-9._-]", "_");
         String candidate = base;
         for (int k = 2; !used.add(candidate); k++) candidate = base + "_" + k;
-        return candidate + "_gate_pheno.csv";
+        return candidate;
     }
 
     /** One header, then every successful slide's rows stamped with its image name. */

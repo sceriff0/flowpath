@@ -3,13 +3,14 @@ package qupath.ext.flowpath.ui;
 import qupath.ext.flowpath.batch.BatchResult;
 import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
+import qupath.ext.flowpath.batch.FlowPathBatch;
+import qupath.ext.flowpath.batch.RunState;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -27,7 +28,11 @@ import java.util.concurrent.Executor;
  * ignored, and the finishing write catches {@code Error} as well as {@code Exception}, so an
  * {@code OutOfMemoryError} cannot leave {@link #running()} stuck {@code true} and the button
  * disabled with no explanation. Per-slide failures never reach here:
- * {@link BatchRunner#gateOne} turns each one (an {@code Error} included) into a value.
+ * {@link FlowPathBatch#step} turns each one (an {@code Error} included) into a value.
+ * <p>
+ * Each slide is {@link FlowPathBatch#step} — the per-slide unit a headless run is made of too —
+ * against the {@link RunState} of the output folder, loaded once per run: a slide done by an
+ * earlier run into the same folder under the same fingerprint is not gated again.
  * <p>
  * The tree is frozen by {@link BatchRunner.Settings} when the run starts (a deep copy), so gate
  * edits made while it runs never reach it — which is why editing stays allowed during a run
@@ -57,12 +62,14 @@ final class BatchRunCoordinator {
         void failed(Throwable error);
     }
 
-    record Outcome(File outputDir, List<BatchResult> results, int total, boolean cancelled) {}
+    /** {@code results} is {@code runs}' results, in order, for a reader that needs no more. */
+    record Outcome(File outputDir, List<BatchResult> results, List<FlowPathBatch.SlideRun> runs, int total,
+                   boolean cancelled) {}
 
-    /** Writes the run's combined outputs; {@link BatchRunner#writeOutputs}, injectable for tests. */
+    /** Writes the run's combined outputs; {@link FlowPathBatch#finish}, injectable for tests. */
     @FunctionalInterface
     interface Finisher {
-        void write(File dir, List<BatchResult> results) throws IOException;
+        void write(File dir, List<FlowPathBatch.SlideRun> runs) throws IOException;
     }
 
     /** Whether a run may start, and what to say either way; see {@link #check}. */
@@ -153,40 +160,42 @@ final class BatchRunCoordinator {
         if (running || closed) return;
         running = true;
         cancelled = false;
-        next(List.copyOf(slides), 0, settings, finisher, new ArrayList<>(), new HashSet<>());
+        RunState state = RunState.load(settings.outputDir());
+        next(List.copyOf(slides), 0, settings, state, finisher, new ArrayList<>(), BatchRunner.newFileBases());
     }
 
     /** On the FX thread: submit slide {@code i}, or finish. */
-    private void next(List<BatchSlide> slides, int i, BatchRunner.Settings settings, Finisher finisher,
-                      List<BatchResult> results, Set<String> used) {
+    private void next(List<BatchSlide> slides, int i, BatchRunner.Settings settings, RunState state, Finisher finisher,
+                      List<FlowPathBatch.SlideRun> runs, Set<String> used) {
         if (closed) return;
         if (i >= slides.size() || cancelled) {
-            finish(slides.size(), settings, finisher, results);
+            finish(slides.size(), settings, finisher, runs);
             return;
         }
         BatchSlide slide = slides.get(i);
         background.execute(() -> {
             // `used` is only touched here, one task at a time, each submitted after the last landed.
-            BatchResult r = BatchRunner.gateOne(slide, BatchRunner.phenoFileName(slide.name(), used), settings);
+            FlowPathBatch.SlideRun r = FlowPathBatch.step(slide, BatchRunner.fileBase(slide.name(), used), settings, state);
             fxThread.execute(() -> {
                 if (closed) return;
-                results.add(r);
+                runs.add(r);
                 host.progress(i + 1, slides.size(), slide.name());
-                next(slides, i + 1, settings, finisher, results, used);
+                next(slides, i + 1, settings, state, finisher, runs, used);
             });
         });
     }
 
-    private void finish(int total, BatchRunner.Settings settings, Finisher finisher, List<BatchResult> results) {
+    private void finish(int total, BatchRunner.Settings settings, Finisher finisher, List<FlowPathBatch.SlideRun> runs) {
         // Cancelled only if a slide was actually left out: a cancel after the last slide landed
         // stopped nothing.
-        boolean wasCancelled = cancelled && results.size() < total;
-        List<BatchResult> frozen = List.copyOf(results);
+        boolean wasCancelled = cancelled && runs.size() < total;
+        List<FlowPathBatch.SlideRun> frozen = List.copyOf(runs);
+        List<BatchResult> results = frozen.stream().map(FlowPathBatch.SlideRun::result).toList();
         File dir = settings.outputDir();
         background.execute(() -> {
             try {
                 finisher.write(dir, frozen);
-                fxThread.execute(() -> land(() -> host.finished(new Outcome(dir, frozen, total, wasCancelled))));
+                fxThread.execute(() -> land(() -> host.finished(new Outcome(dir, results, frozen, total, wasCancelled))));
             } catch (Exception | Error ex) {
                 // Error too, as CsvExportCoordinator: an OutOfMemoryError must not leave `running`
                 // stuck true and the button disabled with no explanation.

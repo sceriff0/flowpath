@@ -18,7 +18,8 @@ import qupath.ext.flowpath.analysis.session.AnalysisSession;
 import qupath.ext.flowpath.analysis.ui.PopulationRef;
 import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
-import qupath.ext.flowpath.batch.GatingManifestExporter;
+import qupath.ext.flowpath.batch.CohortEvidence;
+import qupath.ext.flowpath.batch.FlowPathBatch;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
@@ -753,8 +754,8 @@ public class FlowPathPane extends BorderPane {
         public void finished(BatchRunCoordinator.Outcome outcome) {
             cohort.batchFinished();
             updateBusyControls();
-            Dialogs.showPlainMessage("Run on all slides", BatchRunner.summary(outcome.outputDir(),
-                    outcome.results(), outcome.total(), outcome.cancelled(), id -> id.equals(viewerSlideId)));
+            Dialogs.showPlainMessage("Run on all slides", FlowPathBatch.summary(outcome.outputDir(),
+                    outcome.runs(), outcome.total(), outcome.cancelled(), id -> id.equals(viewerSlideId)));
         }
 
         @Override
@@ -2596,11 +2597,12 @@ public class FlowPathPane extends BorderPane {
         viewerSlideId = slideIdOf(qupath.getImageData());
         BatchRunner.Settings settings = new BatchRunner.Settings(session.tree(), lookup, dir,
                 id -> id.equals(viewerSlideId), true, previewService.getColorRootIndex());
-        GatingManifestExporter.Annotations annotations =
-                GatingManifestExporter.Annotations.of(model, cohort.review(), lookup);
+        // What the user reviewed, never recomputed: the model, its review (and marker-rule rates)
+        // and the lookup bound to that model — the run gates with exactly these alignments.
+        CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup);
+        int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
         cohort.batchStarted();
-        batchRun.run(slides, settings,
-                (d, results) -> BatchRunner.writeOutputs(d, settings.tree(), results, annotations));
+        batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence, cells));
         updateBusyControls();
     }
 

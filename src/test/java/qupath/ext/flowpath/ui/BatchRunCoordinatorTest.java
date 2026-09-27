@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
+import qupath.ext.flowpath.batch.FlowPathBatch;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.model.GateTree;
@@ -184,6 +185,23 @@ class BatchRunCoordinatorTest {
         assertTrue(BatchRunCoordinator.hasEnabledGate(tree), "one enabled root is enough");
         tree.getRoots().get(1).setEnabled(false);
         assertFalse(BatchRunCoordinator.hasEnabledGate(tree));
+    }
+
+    /** The button runs {@code FlowPathBatch.step}, as a headless run does: a second run into one folder resumes. */
+    @Test
+    void aSecondRunIntoTheSameFolderResumesWhatTheFirstFinished(@TempDir Path dir) {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        Host host = new Host();
+        BatchRunCoordinator c = new BatchRunCoordinator(bg, fx, host);
+        c.run(List.of(slide("a"), slide("b")), settings(dir), (d, r) -> {});
+        bg.runNext(); c.cancel();
+        fx.runAll(); bg.runAll(); fx.runAll();
+        assertEquals(List.of(false), host.outcome.runs().stream().map(FlowPathBatch.SlideRun::resumed).toList());
+
+        c.run(List.of(slide("a"), slide("b")), settings(dir), (d, r) -> {});
+        bg.runAll(); fx.runAll(); bg.runAll(); fx.runAll(); bg.runAll(); fx.runAll();
+        assertEquals(List.of(true, false), host.outcome.runs().stream().map(FlowPathBatch.SlideRun::resumed).toList());
+        assertEquals(host.outcome.runs().stream().map(FlowPathBatch.SlideRun::result).toList(), host.outcome.results());
     }
 
     @Test

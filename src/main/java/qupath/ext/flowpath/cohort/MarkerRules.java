@@ -61,7 +61,19 @@ public final class MarkerRules {
      * ({@code bBranch} is 0). The gates are nodes of the tree {@link #rulesOf} was given;
      * {@code aRef}/{@code bRef} name them by value.
      */
-    public record Rule(Kind kind, GateNode a, GateNode b, int bBranch, String label, GateRef aRef, GateRef bRef) {}
+    public record Rule(Kind kind, GateNode a, GateNode b, int bBranch, String label, GateRef aRef, GateRef bRef) {
+        /**
+         * {@link #label} with each side prefixed by its gate's root index — {@code 0:CD8+ => 0:CD3+}
+         * — for a reader that lists rules by name ({@code qc_summary.csv}): two roots on one
+         * channel state byte-identical labels, and only the root index tells them apart.
+         */
+        public String indexedLabel() {
+            String left = aRef.rootIndex() + ":" + positiveName(a);
+            return kind == Kind.IMPLIES
+                    ? left + " => " + bRef.rootIndex() + ":" + branchName(b, bBranch)
+                    : left + " & " + bRef.rootIndex() + ":" + positiveName(b);
+        }
+    }
 
     /**
      * One rule on one slide: {@code violations} of {@code judged} cells, {@code rate} their ratio

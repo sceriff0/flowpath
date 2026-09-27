@@ -112,9 +112,28 @@ public class FlowPathSerializer {
      * @throws IOException if writing fails
      */
     public static void save(GateTree tree, File file, Provenance provenance) throws IOException {
+        JsonObject root = serializeTree(tree, serializeMeta(provenance));
+        Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
+            writer.write(gson.toJson(root));
+        }
+    }
+
+    /**
+     * The tree exactly as {@link #save} writes it, but with no {@code meta} block: what the tree
+     * says, and nothing about when or where it was saved. {@code meta.savedAt} changes every
+     * second, so a hash of the saved text would never match itself across two runs — a batch
+     * run's resume fingerprint hashes this instead (pre-flight ruling B20).
+     */
+    public static String toJson(GateTree tree) {
+        return new GsonBuilder().setPrettyPrinting().create().toJson(serializeTree(tree, null));
+    }
+
+    /** The saved document; {@code meta} is omitted when null. */
+    private static JsonObject serializeTree(GateTree tree, JsonObject meta) {
         JsonObject root = new JsonObject();
         root.addProperty("version", CURRENT_VERSION);
-        root.add("meta", serializeMeta(provenance));
+        if (meta != null) root.add("meta", meta);
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
         if (tree.getReferenceSlideId() != null) root.addProperty("referenceSlideId", tree.getReferenceSlideId());
@@ -124,11 +143,7 @@ public class FlowPathSerializer {
             root.add("slideNames", names);
         }
         root.add("gates", serializeNodeList(tree.getRoots()));
-
-        Gson gson = new GsonBuilder().setPrettyPrinting().create();
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
-            writer.write(gson.toJson(root));
-        }
+        return root;
     }
 
     /**
