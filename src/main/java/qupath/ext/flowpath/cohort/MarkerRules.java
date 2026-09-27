@@ -132,8 +132,12 @@ public final class MarkerRules {
         return false;
     }
 
-    /** Evaluate every rule of {@code tree} on every sample, each slide gated through its own resolved tree. */
-    public static Evaluation evaluate(GateTree tree, List<SlideSample> samples, AlignmentLookup lookup) {
+    /**
+     * Evaluate every rule of {@code tree} on every sample, each slide gated through its own resolved
+     * tree. For tests: production reads the rates the review was built from
+     * ({@link ReviewScorer.Result#rules()}), never a second evaluation.
+     */
+    static Evaluation evaluate(GateTree tree, List<SlideSample> samples, AlignmentLookup lookup) {
         Map<String, TreeResolver.ResolvedTree> resolved = new HashMap<>();
         for (SlideSample s : samples) resolved.put(s.slideId(), TreeResolver.resolve(tree, s.slideId(), lookup));
         return evaluate(tree, samples, resolved);

@@ -7,7 +7,6 @@ import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.CellTable;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
-import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
 import java.io.BufferedWriter;
@@ -84,8 +83,9 @@ public final class GatingManifestExporter {
                 for (GateWalk.Entry e : gates) {
                     TreeResolver.Applied applied = r.resolved().applied(e.gate());
                     if (applied == null) continue;
-                    boolean reviewed = e.gate().slideSetting(r.slideId()) instanceof SlideSetting.Reviewed rv
-                            && rv.appliedValues().matches(applied.applied());
+                    // The one "answered" rule (Skip, Manual, or a Reviewed still matching the
+                    // applied values) — the one the review list and qc_summary's reviewed_flags use.
+                    boolean reviewed = ReviewScorer.answered(e.gate(), r.slideId(), applied.applied());
                     String flags = annotations.flags(r.slideId(), e.rootIndex(), e.gatePath());
                     List<String> channels = e.gate().getChannels();
                     for (int k = 0; k < applied.sources().size(); k++) {

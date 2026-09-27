@@ -54,10 +54,23 @@ public class FlowPathSerializer {
     //
     // v4 adds per-slide cohort settings (SlideSetting, keyed by slide id) and the flag
     // controlling whether a gate corrects for staining, on every node, plus an optional
-    // tree-level reference slide id. A v1-v3 file carries none of this: correction loads
-    // off (see deserializeNode) so opening an old tree never changes a number, and a gate
+    // tree-level reference slide id. A file written before v4 carries none of this: correction
+    // loads off (see deserializeNode) so opening an old tree never changes a number, and a gate
     // with no "slideSettings" key simply has none.
+    //
+    // A tree that uses none of v4's cohort state is still written as version 3 (final review
+    // M2), so FlowPath 0.9.4 — which refuses anything above 3 — opens every tree a user who
+    // never touched a cohort saves. "Uses cohort state" means a field an older reader would drop
+    // with a consequence: a reference slide, recorded slide names, any per-slide setting (a Manual
+    // or Skip silently lost would move that slide's number), a lineage tick. See versionFor.
+    // correctStaining is deliberately not among them: it is written on every gate at every
+    // version, and a reader reads the key whenever it is present, whatever the version. Without a
+    // reference slide it changes no number anywhere, so an old reader ignoring it loses nothing,
+    // while this reader keeps the gate's own setting (new gates default on) instead of reading a
+    // tree it wrote itself as a legacy one. Only a gate with no key at all — a file written
+    // before v4 — loads with correction off, so opening an old tree still never changes a number.
     private static final int CURRENT_VERSION = 4;
+    private static final int PRE_COHORT_VERSION = 3;
 
     private FlowPathSerializer() {
         // static utility class
@@ -132,7 +145,7 @@ public class FlowPathSerializer {
     /** The saved document; {@code meta} is omitted when null. */
     private static JsonObject serializeTree(GateTree tree, JsonObject meta) {
         JsonObject root = new JsonObject();
-        root.addProperty("version", CURRENT_VERSION);
+        root.addProperty("version", versionFor(tree));
         if (meta != null) root.add("meta", meta);
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
@@ -144,6 +157,28 @@ public class FlowPathSerializer {
         }
         root.add("gates", serializeNodeList(tree.getRoots()));
         return root;
+    }
+
+    /**
+     * The version a tree is written as: {@value #CURRENT_VERSION} when it carries any cohort state
+     * an older reader would drop with a consequence — a reference slide, recorded slide names, a
+     * per-slide setting or a lineage tick on any gate, enabled or not — else
+     * {@value #PRE_COHORT_VERSION}, which FlowPath 0.9.4 still opens. See the note on
+     * {@code CURRENT_VERSION} for why {@code correctStaining} is not in the list.
+     */
+    static int versionFor(GateTree tree) {
+        if (tree.getReferenceSlideId() != null || !tree.getSlideNames().isEmpty()) return CURRENT_VERSION;
+        return usesCohortState(tree.getRoots()) ? CURRENT_VERSION : PRE_COHORT_VERSION;
+    }
+
+    private static boolean usesCohortState(List<GateNode> nodes) {
+        for (GateNode node : nodes) {
+            if (!node.getSlideSettings().isEmpty() || node.isLineageMarker()) return true;
+            for (Branch b : node.getBranches()) {
+                if (usesCohortState(b.getChildren())) return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -552,7 +587,9 @@ public class FlowPathSerializer {
                     + "This file may have been created by a newer version of FlowPath.");
         }
         result.setEnabled(enabled);
-        // Absent means a v1-v3 file: correction off, so opening an old tree never changes a number.
+        // Absent means a file written before v4 (every such gate lacks the key; this version writes
+        // it on every gate, a version-3 file included): correction off, so opening an old tree
+        // never changes a number.
         result.setCorrectStaining(obj.has("correctStaining") && obj.get("correctStaining").getAsBoolean());
         // Optional v4 field: absent (every older file, and every unticked gate) reads off.
         result.setLineageMarker(obj.has("lineageMarker") && obj.get("lineageMarker").getAsBoolean());

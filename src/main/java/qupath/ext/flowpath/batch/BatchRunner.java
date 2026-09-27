@@ -81,7 +81,8 @@ public final class BatchRunner {
     public record Gated(BatchResult result, CellIndex index, GatingEngine.AssignmentResult assignment, MarkerStats stats,
                         boolean[] qualityMask, boolean[] roi, boolean roiWithoutAnnotation) {}
 
-    public static BatchResult gateOne(BatchSlide slide, String phenoFileName, Settings settings) {
+    /** {@link #gateDetailed}'s result alone; for tests (final review M5: no production caller). */
+    static BatchResult gateOne(BatchSlide slide, String phenoFileName, Settings settings) {
         return gateDetailed(slide, phenoFileName, settings).result();
     }
 
@@ -222,8 +223,8 @@ public final class BatchRunner {
                 + "images, so the run was not started. Load this project's gate tree to run it here.";
     }
 
-    /** {@link #summary(File, List, int, boolean, Predicate)} with every skipped slide taken as still open. */
-    public static String summary(File dir, List<BatchResult> results, int total, boolean cancelled) {
+    /** {@link #summary(File, List, int, boolean, Predicate)} with every skipped slide taken as still open; for tests. */
+    static String summary(File dir, List<BatchResult> results, int total, boolean cancelled) {
         return summary(dir, results, total, cancelled, id -> true);
     }
 
@@ -244,11 +245,18 @@ public final class BatchRunner {
           .append(GatingManifestExporter.FILE).append(" and one phenotype CSV per slide to ").append(dir.getPath());
         section(sb, "Skipped:", results.stream().filter(r -> !r.succeeded())
                 .map(r -> r.imageName() + " — " + r.failure()).toList());
-        section(sb, "Not saved, open in the viewer:", results.stream()
-                .filter(r -> r.writeBack() == BatchResult.WriteBack.SKIPPED_OPEN_SLIDE)
+        List<BatchResult> open = results.stream()
+                .filter(r -> r.writeBack() == BatchResult.WriteBack.SKIPPED_OPEN_SLIDE).toList();
+        section(sb, "Not saved, open in the viewer:", open.stream()
                 .map(r -> r.imageName() + (openNow.test(r.slideId())
                         ? " — already classified; save it from QuPath"
                         : " — closed since; its phenotypes were not written, run again to write them")).toList());
+        if (!open.isEmpty()) {
+            // Final review M7: the run reads every slide from its data file, the open one too, so
+            // its rows describe the file as last saved — not edits made in the viewer since.
+            sb.append("\n\nA slide open in the viewer was gated from its last saved file: its phenotype CSV and ")
+              .append("population rows do not include changes made in QuPath since it was saved.");
+        }
         section(sb, "Could not save:", results.stream()
                 .filter(r -> r.writeBack() == BatchResult.WriteBack.FAILED)
                 .map(r -> r.imageName() + " — " + r.writeBackError()).toList());

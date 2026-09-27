@@ -468,8 +468,8 @@ public final class FlowPathBatch {
         return Double.isFinite(v) ? String.format(Locale.US, "%.4f", v) : "";
     }
 
-    /** {@link BatchRunner#summary} plus what only this run knows: resumed slides and sanity flags. */
-    public static String summary(File outDir, List<SlideRun> runs, int total, boolean cancelled) {
+    /** {@link BatchRunner#summary} plus what only this run knows: resumed slides and sanity flags; for tests. */
+    static String summary(File outDir, List<SlideRun> runs, int total, boolean cancelled) {
         return summary(outDir, runs, total, cancelled, id -> false);
     }
 

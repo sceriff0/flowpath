@@ -74,6 +74,58 @@ class FlowPathSerializerCohortTest {
                 .matches(GateValues.read(poly).map(v -> v + 1, v -> v * 2)));
     }
 
+    /**
+     * Final review M2, one direction: a tree that uses no cohort state — two same-channel roots,
+     * correction left at its default (on) on one and switched off on the other — is written as
+     * version 3, which FlowPath 0.9.4 (maximum 3) opens; and this reader reads each gate's own
+     * correction back rather than taking a tree it wrote for a legacy one.
+     */
+    @Test
+    void aTreeWithoutCohortStateIsWrittenAsVersion3AndKeepsItsCorrection(@TempDir Path dir) throws Exception {
+        GateTree tree = new GateTree();
+        GateNode a = new GateNode("CD8", 400.0);
+        GateNode b = new GateNode("CD8", 600.0);
+        b.setCorrectStaining(false);
+        b.getBranches().get(0).getChildren().add(new GateNode("CD4", 3.0));
+        tree.addRoot(a);
+        tree.addRoot(b);
+        File file = dir.resolve("t.json").toFile();
+        FlowPathSerializer.save(tree, file);
+        com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(Files.readString(file.toPath()))
+                .getAsJsonObject();
+        assertEquals(3, json.get("version").getAsInt(), "0.9.4 refuses anything above 3");
+
+        GateTree loaded = FlowPathSerializer.load(file);
+        assertTrue(loaded.getRoots().get(0).isCorrectStaining(), "a new gate's default survives the round trip");
+        assertFalse(loaded.getRoots().get(1).isCorrectStaining());
+        assertTrue(loaded.getRoots().get(1).getBranches().get(0).getChildren().get(0).isCorrectStaining());
+    }
+
+    /** Final review M2, the other direction: each piece of cohort state alone makes it version 4. */
+    @Test
+    void anyCohortStateMakesItVersion4() {
+        java.util.List<java.util.function.Consumer<GateTree>> cohortState = List.of(
+                t -> t.setReferenceSlideId("ref"),
+                t -> t.setSlideNames(java.util.Map.of("1", "a.tif")),
+                t -> t.getRoots().get(1).setSlideSetting("s1", new SlideSetting.Skip()),
+                t -> t.getRoots().get(0).getBranches().get(0).getChildren().get(0).setLineageMarker(true),
+                t -> t.getRoots().get(0).getBranches().get(0).getChildren().get(0)
+                        .setSlideSetting("s1", new SlideSetting.Reviewed(GateValues.of(new double[]{3.0}))));
+        for (int i = 0; i < cohortState.size(); i++) {
+            GateTree tree = new GateTree();
+            GateNode root = new GateNode("CD8", 400.0);
+            root.getBranches().get(0).getChildren().add(new GateNode("CD4", 3.0));
+            tree.addRoot(root);
+            GateNode disabled = new GateNode("CD8", 600.0);
+            disabled.setEnabled(false);
+            tree.addRoot(disabled);
+            assertEquals(3, FlowPathSerializer.versionFor(tree));
+            cohortState.get(i).accept(tree);
+            assertEquals(4, FlowPathSerializer.versionFor(tree), "case " + i);
+            assertTrue(FlowPathSerializer.toJson(tree).contains("\"version\": 4"), "case " + i);
+        }
+    }
+
     @Test
     void aLegacyTreeLoadsWithCorrectionOffSoNoNumberChanges(@TempDir Path dir) throws Exception {
         File file = dir.resolve("v3.json").toFile();

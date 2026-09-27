@@ -224,6 +224,7 @@ class BatchRunnerTest {
         String s = BatchRunner.summary(dir.toFile(), results, 1, false);
         assertTrue(s.startsWith("1 of 1 slide(s) processed. 1 gated."), s);
         assertFalse(s.contains("Skipped:") || s.contains("Not saved") || s.contains("Could not save"), s);
+        assertFalse(s.contains("last saved file"), "no slide was open: nothing to say about one");
     }
 
     /**
@@ -312,6 +313,9 @@ class BatchRunnerTest {
         assertTrue(s.contains("open.tif — already classified; save it from QuPath"), s);
         assertTrue(s.contains("closed.tif — closed since"), s);
         assertFalse(s.contains("closed.tif — already classified"), s);
+        // Final review M7: its tables came from the file on disk, not from the viewer's edits.
+        assertTrue(s.contains("A slide open in the viewer was gated from its last saved file: its phenotype CSV "
+                + "and population rows do not include changes made in QuPath since it was saved."), s);
     }
 
     // ---- manifest landmarks follow the run's alignments ------------------------------------

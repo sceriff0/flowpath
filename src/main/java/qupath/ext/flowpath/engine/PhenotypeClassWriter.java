@@ -32,6 +32,25 @@ import java.util.Set;
  * that guarantee — {@code LivePreviewService} is the one that does — keeps its own name→colour
  * map of what it last actually applied and compares a fresh {@link #colorPlan} against
  * <em>that</em> instead of trusting this method's return value alone.</p>
+ *
+ * <p><b>The batch run recolours those shared instances from a background thread</b>
+ * ({@code batch/BatchRunner.writeBack}, on {@code flowpath-background}), while the viewer paints
+ * them on the FX thread. This is benign, and deliberately left unsynchronised:</p>
+ * <ul>
+ *   <li>a colour is one packed {@code int}; a write can never be torn, so a painter sees either
+ *       the old colour or the new one;</li>
+ *   <li>both writers derive the colour from the same {@link #colorPlan} under the same colour
+ *       root — a GUI run is handed the viewer's ({@code BatchRunner.Settings.colorRootIndex}) — so
+ *       for a phenotype name they share, they write the same value, and there is no lasting
+ *       disagreement to lose;</li>
+ *   <li>at worst the viewer paints a class in a stale colour until its next repaint, and
+ *       {@code LivePreviewService} compares against its own memory of what it applied (above), so
+ *       a change the batch pre-empted still makes it fire and repaint;</li>
+ *   <li>the batch assigns {@code PathClass}es only to detections of an {@code ImageData} it read
+ *       from disk itself — never the viewer's objects, and not at all for a slide open in the
+ *       viewer ({@code BatchRunner.writeBack} skips it) — so the only state the two threads share
+ *       is the class colour itself.</li>
+ * </ul>
  */
 public final class PhenotypeClassWriter {
 

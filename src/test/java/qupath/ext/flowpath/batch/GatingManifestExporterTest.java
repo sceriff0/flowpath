@@ -75,11 +75,36 @@ class GatingManifestExporterTest {
         assertEquals(GatingManifestExporter.HEADER, lines.get(0));
         assertEquals("image_id,image_name,root_index,gate_path,axis,column,reference_value,applied_value,source,"
                 + "ref_L1,ref_L2,slide_L1,slide_L2,review,flags", lines.get(0));
-        assertEquals("s1,s1.tif,0,CD8,x,CD8,400.0,,skipped,,,,,,", lines.get(1));
+        assertEquals("s1,s1.tif,0,CD8,x,CD8,400.0,,skipped,,,,,ok,", lines.get(1), "a Skip is an answer");
         assertEquals("s1,s1.tif,1,CD8,x,CD8,600.0," + SHIFT.apply(600.0) + ",corrected,,,,,ok,", lines.get(2));
         assertTrue(lines.get(3).startsWith("s1,s1.tif,1,CD8+/CD3 vs CD4,x,CD3,5.0,"));
         assertTrue(lines.get(4).startsWith("s1,s1.tif,1,CD8+/CD3 vs CD4,y,CD4,6.0,"));
         assertEquals(5, lines.size(), "the failed slide writes no rows");
+    }
+
+    /**
+     * Final review M4: the review column is {@code ReviewScorer.answered} — a Skip, a Manual or a
+     * Reviewed still matching the applied value read ok; a Reviewed the value has moved past, or
+     * no setting, reads blank.
+     */
+    @Test
+    void theReviewColumnIsTheOneAnsweredRule(@TempDir Path dir) throws Exception {
+        GateTree tree = tree();
+        GateNode a = tree.getRoots().get(0);
+        GateNode b = tree.getRoots().get(1);
+        a.setSlideSetting("s1", new SlideSetting.Manual(GateValues.of(new double[]{420.0})));
+        b.setSlideSetting("s1", new SlideSetting.Reviewed(GateValues.of(new double[]{600.0})));   // stale: now corrected
+        a.setSlideSetting("s2", new SlideSetting.Reviewed(GateValues.of(new double[]{SHIFT.apply(400.0)})));
+
+        File file = dir.resolve(GatingManifestExporter.FILE).toFile();
+        GatingManifestExporter.write(file, tree, List.of(result(tree, "s1", List.of("CD8", "CD3", "CD4")),
+                result(tree, "s2", List.of("CD8", "CD3", "CD4"))), GatingManifestExporter.Annotations.NONE);
+        List<String> lines = Files.readAllLines(file.toPath());
+        assertTrue(lines.get(1).startsWith("s1,s1.tif,0,CD8,x,CD8,400.0,420.0,manual,") && lines.get(1).endsWith(",ok,"),
+                lines.get(1));
+        assertTrue(lines.get(2).startsWith("s1,s1.tif,1,CD8,") && lines.get(2).endsWith(",,"), lines.get(2));
+        assertTrue(lines.get(5).startsWith("s2,s2.tif,0,CD8,") && lines.get(5).endsWith(",ok,"), lines.get(5));
+        assertTrue(lines.get(6).startsWith("s2,s2.tif,1,CD8,") && lines.get(6).endsWith(",,"), lines.get(6));
     }
 
     /** Review Focus 2. */
