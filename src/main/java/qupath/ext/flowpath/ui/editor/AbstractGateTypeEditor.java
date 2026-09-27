@@ -16,9 +16,11 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.ValueMode;
+import qupath.ext.flowpath.model.cohort.Alignment;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleUnaryOperator;
 
 /**
  * What every gate type's editor does the same way: channel pickers, the per-axis signal
@@ -95,9 +97,70 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
         return GateAxis.of(gate, slot).columnIn(context.cellIndex(), context.markerStats());
     }
 
-    /** {@code col}'s clip window under this gate's clip percentiles, or {@code null}. */
-    final double[] clipSpan(MeasuredColumn col) {
-        return AxisMath.clipSpan(col, gate.getClipPercentileLow(), gate.getClipPercentileHigh());
+    // ---- the display seam (cohort gating) ---------------------------------------------------
+    //
+    // The gate's own numbers are in the REFERENCE slide's units and are edited as they are. The
+    // open slide's values are drawn mapped into those units (alignment.inverse), and so are the
+    // clip windows. The map is monotone, so "raw >= applied" (what the engine compares on the
+    // resolved tree) and "aligned >= reference" (what the canvas compares on the live gate) agree.
+
+    /** The open slide's alignment for this axis; identity unless the axis is corrected here. */
+    final Alignment alignment(int slot) {
+        return context.displayAlignment(gate, slot);
+    }
+
+    /** Slide values mapped into reference units — the units the gate's own numbers are in. NaN stays NaN. */
+    final double[] inReference(int slot, double[] slideValues) {
+        Alignment a = alignment(slot);
+        if (a.kind() == Alignment.Kind.IDENTITY) return slideValues;
+        double[] out = new double[slideValues.length];
+        for (int i = 0; i < out.length; i++) out[i] = a.inverse(slideValues[i]);
+        return out;
+    }
+
+    /** This axis' clip window under the gate's clip percentiles, in reference units, or {@code null}. */
+    final double[] clipSpan(int slot) {
+        double[] raw = AxisMath.clipSpan(axisColumn(slot), gate.getClipPercentileLow(), gate.getClipPercentileHigh());
+        if (raw == null) return null;
+        Alignment a = alignment(slot);
+        return new double[]{a.inverse(raw[0]), a.inverse(raw[1])};
+    }
+
+    /** "CD8 · Cell · Median (aligned to slide_01)" when the axis is corrected here, else the channel. */
+    final String axisLabel(int slot) {
+        GateAxis axis = GateAxis.of(gate, slot);
+        if (alignment(slot).kind() == Alignment.Kind.IDENTITY || context.referenceName() == null
+                || axis.compartment() == null || axis.statistic() == null) return axis.channel();
+        return axis.channel() + " · " + axis.compartment().token() + " · " + axis.statistic().token()
+                + " (aligned to " + context.referenceName() + ")";
+    }
+
+    /**
+     * The percentile remap across a column switch, done where the percentiles live — in this
+     * slide's raw units — and brought back to reference units. Captures the old column and
+     * alignment now; reads the new ones on first use (a region remap applies it once per
+     * coordinate, and every call must see the same new column). An unchanged column returns the
+     * value untouched rather than round-tripping it through the alignment, which would drift it.
+     */
+    final DoubleUnaryOperator remapAcrossColumns(int slot) {
+        MeasuredColumn oldCol = axisColumn(slot);
+        Alignment oldA = alignment(slot);
+        return new DoubleUnaryOperator() {
+            private boolean resolved;
+            private MeasuredColumn newCol;
+            private Alignment newA;
+
+            @Override
+            public double applyAsDouble(double v) {
+                if (!resolved) {
+                    newCol = axisColumn(slot);
+                    newA = alignment(slot);
+                    resolved = true;
+                }
+                if (oldCol == null || newCol == null || newCol.key().equals(oldCol.key())) return v;
+                return newA.inverse(AxisMath.remapRawThreshold(oldCol, newCol, oldA.apply(v)));
+            }
+        };
     }
 
     // ---- the build ----------------------------------------------------------------------------

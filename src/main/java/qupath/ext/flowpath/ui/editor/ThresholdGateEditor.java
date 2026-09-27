@@ -5,6 +5,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
@@ -13,11 +14,13 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.ColorUtils;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MeasuredColumn;
+import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.ui.widgets.HistogramCanvas;
 import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.function.DoubleUnaryOperator;
 
 /** A threshold gate: one channel, a histogram, a threshold slider and a typed threshold. */
 final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
@@ -26,6 +29,8 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
     private final Slider slider;
     private final TextField valueField;
     private final Label populationLabel;
+    /** "CD8 · Cell · Median (aligned to slide_01)" under the histogram, shown only while the axis is corrected. */
+    private final Label alignmentLabel = new Label();
 
     ThresholdGateEditor(GateNode gate, EditorContext context) {
         super(gate, context);
@@ -48,6 +53,16 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
 
         populationLabel.getStyleClass().add("fp-muted");
         populationLabel.setStyle("-fx-font-size: 10;");
+
+        alignmentLabel.getStyleClass().add("fp-muted");
+        alignmentLabel.setStyle("-fx-font-size: 9;");
+        alignmentLabel.setVisible(false);
+        alignmentLabel.setManaged(false);
+        // Worked out when shown, so a threshold dragged since the last refresh is not stale.
+        Tooltip rawThreshold = new Tooltip();
+        rawThreshold.setOnShowing(e -> rawThreshold.setText(String.format(Locale.US,
+                "On this slide the threshold is %.4f (raw)", alignment(0).apply(gate.getThreshold()))));
+        alignmentLabel.setTooltip(rawThreshold);
 
         histogram.setGate(gate);
         branchColorsChanged();
@@ -80,7 +95,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
 
         VBox root = new VBox(4,
                 channelRows.get(0), modeRow,
-                sectionHeader("Histogram"), histogram, hoverLabel,
+                sectionHeader("Histogram"), histogram, alignmentLabel, hoverLabel,
                 sectionHeader("Threshold"), threshRow, populationLabel);
         refresh();
         return root;
@@ -89,7 +104,8 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
     /**
      * Re-read the histogram and re-range the slider from the column the engine gates on.
      * Everything — values, clip percentiles, slider range — comes off one {@link MeasuredColumn}
-     * handle, so the histogram shows exactly what {@code GatingEngine} compares against.
+     * handle, so the histogram shows exactly what {@code GatingEngine} compares against —
+     * mapped into reference units when this slide is corrected, as the gate's threshold is.
      */
     @Override
     public void refresh() {
@@ -101,14 +117,17 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         MeasuredColumn col = axisColumn(0);
         if (col == null) return;
 
-        double[] displayValues = AxisMath.measuredValues(col.values(), context.roiMask(), context.ancestorMask());
+        double[] displayValues = inReference(0,
+                AxisMath.measuredValues(col.values(), context.roiMask(), context.ancestorMask()));
         // Global per-column clip percentiles, so the same channel+compartment+statistic uses
         // one axis everywhere it appears in the gate tree. When the parent-filtered cells sit
         // outside it, the histogram's "X cells outside clip range" message says so.
+        Alignment a = alignment(0);
         double[] window = AxisMath.thresholdWindow(
-                col.percentile(gate.getClipPercentileLow()),
-                col.percentile(gate.getClipPercentileHigh()),
+                a.inverse(col.percentile(gate.getClipPercentileLow())),
+                a.inverse(col.percentile(gate.getClipPercentileHigh())),
                 displayValues);
+        showAlignment(a);
 
         histogram.setData(displayValues, window[0], window[1]);
         histogram.setThreshold(gate.getThreshold());
@@ -126,6 +145,14 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
             valueField.setText(format(gate.getThreshold()));
         });
         updatePopulationCounts();
+    }
+
+    /** The aligned-units caption (its tooltip gives this slide's raw threshold); hidden when uncorrected. */
+    private void showAlignment(Alignment a) {
+        boolean corrected = a.kind() != Alignment.Kind.IDENTITY && context.referenceName() != null;
+        alignmentLabel.setVisible(corrected);
+        alignmentLabel.setManaged(corrected);
+        alignmentLabel.setText(corrected ? axisLabel(0) : "");
     }
 
     @Override
@@ -154,9 +181,9 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
 
     @Override
     Runnable captureForRemap() {
-        MeasuredColumn oldCol = axisColumn(0);
+        DoubleUnaryOperator f = remapAcrossColumns(0);
         double oldThreshold = gate.getThreshold();
-        return () -> gate.setThreshold(AxisMath.remapRawThreshold(oldCol, axisColumn(0), oldThreshold));
+        return () -> gate.setThreshold(f.applyAsDouble(oldThreshold));
     }
 
     /** Threshold gates refresh in place: the histogram and slider re-read the new column. */

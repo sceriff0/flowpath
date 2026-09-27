@@ -5,6 +5,7 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.cohort.Alignment;
 
 /**
  * What a {@link GateTypeEditor} reads from, and reports to, the pane that hosts it.
@@ -25,6 +26,16 @@ public interface EditorContext {
 
     /** Cells in the shown gate's parent population, or {@code null} for a root gate. */
     boolean[] ancestorMask();
+
+    /**
+     * The open slide's alignment for {@code gate}'s {@code axis}; identity when nothing is
+     * corrected (correction off, the open slide is the reference, or no alignment is known).
+     * The gate's own numbers stay in reference units; only the values drawn pass through this.
+     */
+    Alignment displayAlignment(GateNode gate, int axis);
+
+    /** The reference slide's name, or null outside a cohort. */
+    String referenceName();
 
     /** The live channel list; channel pickers share it rather than copy it. */
     ObservableList<String> channelNames();

@@ -14,6 +14,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import qupath.ext.flowpath.model.Branch;
@@ -25,6 +26,9 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
+import qupath.ext.flowpath.model.SlideSetting;
+import qupath.ext.flowpath.model.cohort.Alignment;
+import qupath.ext.flowpath.ui.editor.EditorAlignment;
 import qupath.ext.flowpath.ui.editor.EditorContext;
 import qupath.ext.flowpath.ui.editor.EditorLabels;
 import qupath.ext.flowpath.ui.editor.GateTypeEditor;
@@ -32,6 +36,7 @@ import qupath.ext.flowpath.ui.editor.GateTypeEditors;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -56,6 +61,16 @@ public class GateEditorPane extends VBox {
     private final VBox gateSpecificArea;
     private final VBox branchNamesArea;
     private final VBox actionButtonArea;
+
+    // --- Cohort gating ---
+    /** Per-gate "Correct staining" (U2); shown only while a cohort is available. */
+    private final CheckBox correctStainingBox;
+    /** A slide Manual/Skip, shown as a banner rather than drawn: its number is this slide's own raw value. */
+    private final Label slideSettingLabel;
+    private final Button clearSlideSettingButton;
+    private final HBox slideSettingRow;
+    private EditorAlignment editorAlignment = EditorAlignment.IDENTITY;
+    private Runnable onClearSlideSetting;
 
     private final ObservableList<String> channelNames = FXCollections.observableArrayList();
 
@@ -87,6 +102,36 @@ public class GateEditorPane extends VBox {
         gateTypeLabel = new Label("No gate selected");
         gateTypeLabel.getStyleClass().add("fp-section-header");
         gateTypeLabel.setStyle("-fx-font-size: 11;");
+
+        correctStainingBox = new CheckBox("Correct staining");
+        correctStainingBox.getStyleClass().add("fp-primary-text");
+        correctStainingBox.setTooltip(new Tooltip(
+            "Carry this gate's numbers to every other slide through that slide's staining alignment.\n" +
+            "The numbers you edit are on the reference slide.\n" +
+            "Ellipse gates are carried by their bounding box and polygon edges between vertices\n" +
+            "bend slightly — both are approximate near their outline."));
+        correctStainingBox.setVisible(false);
+        correctStainingBox.managedProperty().bind(correctStainingBox.visibleProperty());
+        correctStainingBox.selectedProperty().addListener((obs, old, val) -> {
+            if (suppressEvents || currentNode == null) return;
+            // Written before it is reported, like every other editor write, so the host
+            // records it through its applied-edit path as one undo step.
+            currentNode.setCorrectStaining(val);
+            // The seam answers from the flag, so the plot moves between raw and aligned units.
+            if (typeEditor != null) typeEditor.refresh();
+            fireNodeChanged();
+        });
+
+        slideSettingLabel = new Label();
+        slideSettingLabel.getStyleClass().add("fp-hint");
+        slideSettingLabel.setWrapText(true);
+        clearSlideSettingButton = new Button("Use the cohort value");
+        clearSlideSettingButton.setTooltip(new Tooltip("Drop this slide's own setting and use the gate's cohort value here"));
+        clearSlideSettingButton.setOnAction(e -> { if (onClearSlideSetting != null) onClearSlideSetting.run(); });
+        slideSettingRow = new HBox(8, slideSettingLabel, clearSlideSettingButton);
+        slideSettingRow.setVisible(false);
+        slideSettingRow.managedProperty().bind(slideSettingRow.visibleProperty());
+        HBox.setHgrow(slideSettingLabel, Priority.ALWAYS);
 
         // --- Outlier clipping ---
         clipLowSpinner = new Spinner<>(0.0, 50.0, 1.0, 0.5);
@@ -142,8 +187,13 @@ public class GateEditorPane extends VBox {
         branchNamesArea = new VBox(4);
         actionButtonArea = new VBox(4);
 
+        HBox spacer = new HBox();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox header = new HBox(8, gateTypeLabel, spacer, correctStainingBox);
+
         getChildren().addAll(
-            gateTypeLabel,
+            header,
+            slideSettingRow,
             gateSpecificArea,
             createSectionHeader("Outlier Clipping"), clipRow, clipInfoLabel,
             new Separator(),
@@ -173,6 +223,7 @@ public class GateEditorPane extends VBox {
         if (node == null) {
             withSuppressedEvents(() -> setDisabled(true));
             gateTypeLabel.setText("No gate selected");
+            setSlideSetting(null);
             gateSpecificArea.getChildren().clear();
             Label hint = new Label("Select a gate from the tree to edit it,\nor click '+ Add Root Gate' to create one.");
             hint.getStyleClass().add("fp-hint");
@@ -191,6 +242,7 @@ public class GateEditorPane extends VBox {
             clipLowSpinner.getValueFactory().setValue(node.getClipPercentileLow());
             clipHighSpinner.getValueFactory().setValue(node.getClipPercentileHigh());
             excludeOutliersBox.setSelected(node.isExcludeOutliers());
+            correctStainingBox.setSelected(node.isCorrectStaining());
 
             String typeDisplay = switch (node.getGateType()) {
                 case "threshold" -> "Threshold Gate";
@@ -381,6 +433,42 @@ public class GateEditorPane extends VBox {
         if (typeEditor != null) typeEditor.refresh();
     }
 
+    /**
+     * How the open slide's values map into reference units, per gate axis. A data change, so the
+     * editor on screen is refreshed, never rebuilt (a rebuild discards a half-drawn polygon).
+     */
+    public void setEditorAlignment(EditorAlignment alignment) {
+        this.editorAlignment = alignment == null ? EditorAlignment.IDENTITY : alignment;
+        refreshForNewData();
+    }
+
+    /** Whether a cohort is available; the "Correct staining" switch is offered only then. */
+    public void setCohortAvailable(boolean available) {
+        correctStainingBox.setVisible(available);
+    }
+
+    /**
+     * The shown gate's setting on the open slide. A {@code Manual} or {@code Skip} is shown as a
+     * banner with a way back to the cohort value; {@code null} or {@code Reviewed} hides it.
+     */
+    public void setSlideSetting(SlideSetting setting) {
+        String text = null;
+        if (setting instanceof SlideSetting.Manual manual) {
+            List<String> values = new ArrayList<>();
+            for (int k = 0; k < manual.values().axisCount(); k++) {
+                for (double v : manual.values().axis(k)) values.add(String.format(Locale.US, "%.4f", v));
+            }
+            text = "Adjusted on this slide: " + String.join(", ", values) + " (raw)";
+        } else if (setting instanceof SlideSetting.Skip) {
+            text = "Skipped on this slide — its cells are unmeasured";
+        }
+        slideSettingLabel.setText(text == null ? "" : text);
+        slideSettingRow.setVisible(text != null);
+    }
+
+    /** Called by "Use the cohort value": drop the open slide's setting for the shown gate. */
+    public void setOnClearSlideSetting(Runnable callback) { this.onClearSlideSetting = callback; }
+
     public void setOnNodeChanged(Consumer<GateNode> callback) { this.onNodeChanged = callback; }
     /**
      * Called when <em>opening</em> a gate wrote to it: the gate's stored signal is not one the
@@ -466,6 +554,8 @@ public class GateEditorPane extends VBox {
         @Override public boolean[] roiMask() { return roiMask; }
         @Override public boolean[] ancestorMask() { return ancestorMask; }
         @Override public ObservableList<String> channelNames() { return channelNames; }
+        @Override public Alignment displayAlignment(GateNode gate, int axis) { return editorAlignment.forAxis(gate, axis); }
+        @Override public String referenceName() { return editorAlignment.referenceName(); }
         @Override public GateNode shownGate() { return currentNode; }
         @Override public boolean eventsSuppressed() { return suppressEvents; }
         @Override public void withSuppressedEvents(Runnable action) { GateEditorPane.this.withSuppressedEvents(action); }

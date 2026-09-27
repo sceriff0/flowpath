@@ -61,27 +61,44 @@ public final class TreeResolver {
         Map<GateNode, Applied> applied = new IdentityHashMap<>();
         boolean isReference = slideId == null || tree.getReferenceSlideId() == null
                 || slideId.equals(tree.getReferenceSlideId());
-        walk(tree.getRoots(), copy.getRoots(), slideId, isReference, lookup, resolved, applied);
+        walk(tree, tree.getRoots(), copy.getRoots(), slideId, isReference, lookup, resolved, applied);
         return new ResolvedTree(copy, Collections.unmodifiableMap(resolved), Collections.unmodifiableMap(applied));
     }
 
-    private static void walk(List<GateNode> live, List<GateNode> copies, String slideId, boolean isReference,
+    /**
+     * The alignment {@code gate}'s {@code axis} is corrected with on {@code slideId}, or identity when
+     * the slide is the reference (or there is none), correction is off, the axis has no channel, or
+     * no non-identity alignment is known. Slide settings are not consulted. The editor's display
+     * seam asks this, so it cannot disagree with {@link #resolve} about which axes are corrected.
+     */
+    public static Alignment correctionFor(GateTree tree, GateNode gate, int axis, String slideId, AlignmentLookup lookup) {
+        if (slideId == null || tree.getReferenceSlideId() == null || slideId.equals(tree.getReferenceSlideId())
+                || !gate.isCorrectStaining()) return Alignment.identity();
+        List<String> channels = gate.getChannels();
+        String channel = axis < channels.size() ? channels.get(axis) : null;
+        if (channel == null || channel.isEmpty()) return Alignment.identity();
+        Alignment a = (lookup == null ? AlignmentLookup.NONE : lookup)
+                .alignment(slideId, CellIndex.keyFor(channel, gate.compartmentAt(axis), gate.statisticAt(axis)));
+        return a == null ? Alignment.identity() : a;
+    }
+
+    private static void walk(GateTree tree, List<GateNode> live, List<GateNode> copies, String slideId, boolean isReference,
                              AlignmentLookup lookup, Map<GateNode, GateNode> resolved,
                              Map<GateNode, Applied> applied) {
         for (int i = 0; i < live.size(); i++) {
             GateNode l = live.get(i);
             GateNode c = copies.get(i);
             resolved.put(l, c);
-            applied.put(l, resolveOne(l, c, slideId, isReference, lookup));
+            applied.put(l, resolveOne(tree, l, c, slideId, isReference, lookup));
             List<Branch> lb = l.getBranches();
             List<Branch> cb = c.getBranches();
             for (int b = 0; b < lb.size(); b++) {
-                walk(lb.get(b).getChildren(), cb.get(b).getChildren(), slideId, isReference, lookup, resolved, applied);
+                walk(tree, lb.get(b).getChildren(), cb.get(b).getChildren(), slideId, isReference, lookup, resolved, applied);
             }
         }
     }
 
-    private static Applied resolveOne(GateNode live, GateNode copy, String slideId, boolean isReference,
+    private static Applied resolveOne(GateTree tree, GateNode live, GateNode copy, String slideId, boolean isReference,
                                       AlignmentLookup lookup) {
         int axes = GateAxis.axisCount(live);
         List<String> columns = new ArrayList<>(axes);
@@ -118,9 +135,8 @@ public final class TreeResolver {
                 sources.add(Source.REFERENCE);
                 continue;
             }
-            Alignment a = !live.isCorrectStaining() || columns.get(k) == null
-                    ? null : lookup.alignment(slideId, columns.get(k));
-            if (a == null || a.kind() == Alignment.Kind.IDENTITY) {
+            Alignment a = correctionFor(tree, live, k, slideId, lookup);
+            if (a.kind() == Alignment.Kind.IDENTITY) {
                 sources.add(Source.UNCORRECTED);
             } else {
                 sources.add(Source.CORRECTED);

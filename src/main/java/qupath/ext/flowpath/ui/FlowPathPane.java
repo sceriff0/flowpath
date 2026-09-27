@@ -44,6 +44,8 @@ import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.RegionMask;
+import qupath.ext.flowpath.model.cohort.Alignment;
+import qupath.ext.flowpath.ui.editor.EditorAlignment;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
 import qupath.ext.flowpath.umap.UmapWindow;
 import qupath.lib.display.ChannelDisplayInfo;
@@ -311,6 +313,7 @@ public class FlowPathPane extends BorderPane {
         editorPane.setOnAddToBranch(this::addChildGate);
         editorPane.setOnRemoveGate(this::removeSelectedGate);
         editorPane.setOnReplaceGate(this::replaceGateNode);
+        editorPane.setOnClearSlideSetting(this::clearSlideSetting);
 
         ScrollPane editorScroll = new ScrollPane(editorPane);
         editorScroll.setFitToWidth(true);
@@ -446,6 +449,7 @@ public class FlowPathPane extends BorderPane {
         // current model on every pass, so nothing has to hand the pass a new one later.
         alignments = cohort.lookup();
         applySlideContext();
+        editorPane.setEditorAlignment(editorAlignment);
 
         // Initialize from current image
         Platform.runLater(this::initializeFromImage);
@@ -643,6 +647,7 @@ public class FlowPathPane extends BorderPane {
         public void scored(boolean alignmentsChanged) {
             if (alignmentsChanged) {
                 refreshAncestorMask();
+                syncEditorCohort();
                 requestPreviewUpdate();
             }
             updateBusyControls();
@@ -693,6 +698,54 @@ public class FlowPathPane extends BorderPane {
         }
         cohortCoordinator.rescore(session.tree());
         updateBusyControls();
+    }
+
+    /**
+     * The open slide's alignment per gate axis, for the editor's display seam. Read live on every
+     * call — the tree, the open slide and the cohort's model are the session's current ones — and
+     * answered by {@link TreeResolver#correctionFor}, the same rule the live pass resolves with,
+     * so the editor cannot draw an axis as corrected that the pass gates uncorrected. Identity
+     * when correction is off, the open slide is the reference, or the tree is foreign
+     * ({@link #currentSlideId()} is null).
+     */
+    private final EditorAlignment editorAlignment = new EditorAlignment() {
+        @Override
+        public Alignment forAxis(GateNode gate, int axis) {
+            return TreeResolver.correctionFor(session.tree(), gate, axis, currentSlideId(), alignments);
+        }
+
+        @Override
+        public String referenceName() {
+            String reference = session.tree().getReferenceSlideId();
+            return reference == null ? null : cohort.slideName(reference);
+        }
+    };
+
+    /**
+     * Bring the editor's cohort view in line: whether "Correct staining" is offered, a redraw
+     * through the seam (a data change, so the editor is refreshed, not rebuilt), and the shown
+     * gate's setting on the open slide.
+     */
+    private void syncEditorCohort() {
+        editorPane.setCohortAvailable(cohort.state().available());
+        editorPane.setEditorAlignment(editorAlignment);
+        showSlideSetting();
+    }
+
+    /** The shown gate's Manual/Skip on the open slide as the editor's banner, or none. */
+    private void showSlideSetting() {
+        GateNode shown = editorPane.getGateNode();
+        editorPane.setSlideSetting(shown == null ? null : shown.slideSetting(currentSlideId()));
+    }
+
+    /** "Use the cohort value": drop the open slide's setting for the shown gate, as one undo step. */
+    private void clearSlideSetting() {
+        GateNode gate = currentNode;
+        String id = currentSlideId();
+        if (gate == null || id == null || gate.slideSetting(id) == null) return;
+        session.recordEdit();
+        gate.setSlideSetting(id, null);
+        resyncToTree();
     }
 
     /**
@@ -1072,6 +1125,7 @@ public class FlowPathPane extends BorderPane {
             currentNode = node;
             editorPane.setAncestorMask(computeAncestorMask(node));
             editorPane.setGateNode(node);
+            showSlideSetting();
             syncViewerChannels(node);
         } else {
             editorPane.setAncestorMask(null);
@@ -2068,9 +2122,11 @@ public class FlowPathPane extends BorderPane {
             suppressTreeSelection = false;
         }
         editorPane.setAncestorMask(currentNode != null ? computeAncestorMask(currentNode) : null);
+        editorPane.setCohortAvailable(cohort.state().available());
         if (EditorRebuild.needed(newIndex, notice.isPresent(), editorPane.getGateNode(), currentNode)) {
             editorPane.setGateNode(currentNode);
         }
+        showSlideSetting();
 
         updateStatusBar();
         notice.ifPresent(this::showMigrationNotice);

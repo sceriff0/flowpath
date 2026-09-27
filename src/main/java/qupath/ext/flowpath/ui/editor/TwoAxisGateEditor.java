@@ -59,7 +59,9 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
         boolean[] roi = context.roiMask();
         boolean[] ancestor = context.ancestorMask();
         double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, roi, ancestor);
-        scatter.setData(filtered[0], filtered[1], x.channel(), y.channel());
+        // Drawn in reference units (identity unless this slide is corrected); the overlay is the
+        // live gate's reference numbers, so positions and outline share one space.
+        scatter.setData(inReference(0, filtered[0]), inReference(1, filtered[1]), axisLabel(0), axisLabel(1));
         if (context.markerStats() != null) applyAxisRange();
     }
 
@@ -69,8 +71,8 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
      * both on X).
      */
     private void applyAxisRange() {
-        double[] x = clipSpan(axisColumn(0));
-        double[] y = clipSpan(axisColumn(1));
+        double[] x = clipSpan(0);
+        double[] y = clipSpan(1);
         if (x == null || y == null) {
             scatter.clearAxisRange();
             return;

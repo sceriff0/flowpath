@@ -21,7 +21,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -413,6 +415,117 @@ class DisplayClassificationAgreementTest {
         int classified = gate.getBranches().get(0).getCount() + gate.getBranches().get(1).getCount();
         assertEquals(FxTestSupport.onFx(canvas::binnedTotal), classified,
                 "the histogram draws exactly the cells the engine classified");
+    }
+
+    // ---- a non-identity staining alignment (cohort gating) ----
+    //
+    // The engine gates the RAW slide values against the APPLIED (resolved) gate; the editor draws
+    // the ALIGNED values (alignment.inverse(raw)) against the REFERENCE gate. The map is monotone,
+    // so they must agree. Probes sit away from the boundary by far more than float rounding.
+    //
+    // Every tree carries a second root on the same channel (MX) with its own threshold, so a
+    // resolution that leaked one gate's applied value into another would show up here.
+
+    private static final qupath.ext.flowpath.model.cohort.Alignment ALIGN =
+            qupath.ext.flowpath.model.cohort.Alignment.between(
+                    new qupath.ext.flowpath.model.cohort.Landmarks(1.0, 0.0, 2.0),
+                    new qupath.ext.flowpath.model.cohort.Landmarks(1.0, 0.3, 2.9));
+
+    /** A second root on the probe gate's own X channel, branches named Z0/Z1. */
+    private static GateNode sameChannelSibling() {
+        GateNode sibling = named(new GateNode(MX, 1.5));
+        sibling.getBranches().get(0).setName("Z0");
+        sibling.getBranches().get(1).setName("Z1");
+        return sibling;
+    }
+
+    /**
+     * The engine's answer on slide {@code s1}: the tree resolved through {@code TreeResolver}
+     * (as the live pass does), then gated. Row 0 is {@code gate}'s branch per cell, row 1 the
+     * same-channel sibling's.
+     */
+    private static int[][] classifyOnSlide(GateNode gate, GateNode sibling, CellIndex index) {
+        GateTree tree = new GateTree();
+        tree.setReferenceSlideId("ref");
+        tree.addRoot(gate);
+        tree.addRoot(sibling);
+        GateTree resolved = qupath.ext.flowpath.engine.TreeResolver.resolve(tree, "s1", (s, c) -> ALIGN).tree();
+        String[] phenotypes = GatingEngine.assignAll(resolved, index, MarkerStats.compute(index)).getPhenotypes();
+        int[][] out = new int[2][index.size()];
+        for (int i = 0; i < index.size(); i++) {
+            String[] parts = phenotypes[i].split(": ");
+            assertEquals(2, parts.length, "one contribution per root: " + phenotypes[i]);
+            out[0][i] = Integer.parseInt(parts[0].substring(1));
+            out[1][i] = Integer.parseInt(parts[1].substring(1));
+        }
+        return out;
+    }
+
+    private static double[] aligned(double[] raw) {
+        double[] out = new double[raw.length];
+        for (int i = 0; i < raw.length; i++) out[i] = ALIGN.inverse(raw[i]);
+        return out;
+    }
+
+    /** The histogram's colour band (0 positive, 1 negative) for each shown value. */
+    private static int[] displayThreshold(GateNode gate, double[] shown) {
+        return FxTestSupport.onFx(() -> {
+            HistogramCanvas h = new HistogramCanvas();
+            h.setGate(gate);
+            int[] out = new int[shown.length];
+            for (int i = 0; i < shown.length; i++) out[i] = h.isPositiveAt(shown[i]) ? 0 : 1;
+            return out;
+        });
+    }
+
+    @Test
+    void thresholdGateAgreesUnderANonIdentityAlignment() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        GateNode gate = named(new GateNode(MX, 0.5));
+        GateNode sibling = sameChannelSibling();
+        double[] px = {-1.0, 0.0, 0.5, 1.0, 1.2, 2.0, 5.0};
+        CellIndex index = indexOf(px, new double[px.length]);
+        int[][] classified = classifyOnSlide(gate, sibling, index);
+        double[] shown = aligned(columnOf(index, MX));
+        assertArrayEquals(classified[0], displayThreshold(gate, shown));
+        assertArrayEquals(classified[1], displayThreshold(sibling, shown), "the same-channel sibling");
+        assertNotEquals(classified[0][3], new GateNode(MX, 0.5).branchFor(1.0, 0),
+                "fixture check: the alignment moves the cut past 1.0");
+    }
+
+    @Test
+    void quadrantAndRectangleAgreeUnderANonIdentityAlignment() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        double[] px = {-1.0, 0.2, 0.8, 1.3, 2.5, 0.2, 2.5, 1.3};
+        double[] py = {-1.0, 2.5, 0.2, 1.3, 2.5, 0.2, -0.5, 3.5};
+        for (GateNode gate : List.of(named(new QuadrantGate(MX, MY, 0.5, 0.5)),
+                named(new RectangleGate(MX, MY, 0.0, 1.0, 0.0, 1.5)))) {
+            GateNode sibling = sameChannelSibling();
+            CellIndex index = indexOf(px, py);
+            int[][] classified = classifyOnSlide(gate, sibling, index);
+            double[] shownX = aligned(columnOf(index, MX));
+            int[] drawn = display2D(gate, shownX, aligned(columnOf(index, MY)));
+            assertArrayEquals(classified[0], drawn, gate.getGateType());
+            assertArrayEquals(classified[1], displayThreshold(sibling, shownX), gate.getGateType() + " sibling");
+        }
+    }
+
+    @Test
+    void polygonAndEllipseAgreeAwayFromTheirOutlineUnderANonIdentityAlignment() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        PolygonGate poly = new PolygonGate(MX, MY);
+        poly.setVertices(List.of(new double[]{0, 0}, new double[]{2, 0}, new double[]{2, 2}, new double[]{0, 2}));
+        double[] px = {1.0, 3.5, -1.5, 1.0, 5.0};
+        double[] py = {1.0, 1.0, 1.0, 4.5, 5.0};
+        for (GateNode gate : List.of(named(poly), named(new EllipseGate(MX, MY, 1.0, 1.0, 1.0, 1.0)))) {
+            GateNode sibling = sameChannelSibling();
+            CellIndex index = indexOf(px, py);
+            int[][] classified = classifyOnSlide(gate, sibling, index);
+            double[] shownX = aligned(columnOf(index, MX));
+            int[] drawn = display2D(gate, shownX, aligned(columnOf(index, MY)));
+            assertArrayEquals(classified[0], drawn, gate.getGateType());
+            assertArrayEquals(classified[1], displayThreshold(sibling, shownX), gate.getGateType() + " sibling");
+        }
     }
 
     /** Guards against a future gate type quietly skipping the geometry contract. */

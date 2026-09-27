@@ -8,12 +8,12 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
-import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.function.DoubleUnaryOperator;
 
 /** A quadrant gate: two channels, a threshold slider and typed threshold per axis, a scatter plot. */
 final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
@@ -93,13 +93,13 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
      */
     private void rerange() {
         context.withSuppressedEvents(() -> {
-            rerange(sliderX, axisColumn(0), gate.getThresholdX());
-            rerange(sliderY, axisColumn(1), gate.getThresholdY());
+            rerange(sliderX, 0, gate.getThresholdX());
+            rerange(sliderY, 1, gate.getThresholdY());
         });
     }
 
-    private void rerange(Slider slider, MeasuredColumn column, double threshold) {
-        double[] span = AxisMath.quadrantSliderSpan(clipSpan(column), threshold);
+    private void rerange(Slider slider, int slot, double threshold) {
+        double[] span = AxisMath.quadrantSliderSpan(clipSpan(slot), threshold);
         slider.setMin(Math.min(slider.getMin(), span[0]));
         slider.setMax(span[1]);
         slider.setMin(span[0]);
@@ -109,11 +109,11 @@ final class QuadrantGateEditor extends TwoAxisGateEditor<QuadrantGate> {
 
     @Override
     Runnable captureForRemap() {
-        MeasuredColumn oldX = axisColumn(0);
-        MeasuredColumn oldY = axisColumn(1);
+        DoubleUnaryOperator fx = remapAcrossColumns(0);
+        DoubleUnaryOperator fy = remapAcrossColumns(1);
         return () -> {
-            gate.setThresholdX(AxisMath.remapRawThreshold(oldX, axisColumn(0), gate.getThresholdX()));
-            gate.setThresholdY(AxisMath.remapRawThreshold(oldY, axisColumn(1), gate.getThresholdY()));
+            gate.setThresholdX(fx.applyAsDouble(gate.getThresholdX()));
+            gate.setThresholdY(fy.applyAsDouble(gate.getThresholdY()));
         };
     }
 
