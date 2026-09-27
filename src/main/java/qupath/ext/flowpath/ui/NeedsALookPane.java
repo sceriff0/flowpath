@@ -12,10 +12,12 @@ import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
 import javafx.scene.input.KeyCode;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
@@ -69,6 +71,9 @@ final class NeedsALookPane extends TitledPane {
         }
     }
 
+    /** One square per slide (spec §6 "Slide strip and status line"); see {@link #renderStrip}. */
+    final FlowPane slideStrip = new FlowPane(2, 2);
+    final Label statusLineLabel = new Label();
     final ListView<ReviewGroup> groupList = new ListView<>();
     final ListView<ReviewItem> itemList = new ListView<>();
     final TextField sampleSizeField = new TextField();
@@ -99,6 +104,7 @@ final class NeedsALookPane extends TitledPane {
     private Runnable onUseReference = () -> {};
     private IntConsumer onSampleSizeChanged = n -> {};
     private Runnable onOpenInViewer = () -> {};
+    private Consumer<String> onSlideFilter = id -> {};
 
     /** True while {@link #render} sets controls, so the selection it restores is not reported as a click. */
     private boolean rendering;
@@ -129,6 +135,8 @@ final class NeedsALookPane extends TitledPane {
         infoLabel.setWrapText(true);
         infoLabel.setVisible(false);
         infoLabel.setManaged(false);
+
+        statusLineLabel.getStyleClass().add("fp-muted");
 
         groupList.setPrefHeight(90);
         groupList.setCellFactory(lv -> new GroupCell());
@@ -163,7 +171,8 @@ final class NeedsALookPane extends TitledPane {
         HBox.setHgrow(cropSide, Priority.ALWAYS);
         updateAnswerButtons();
 
-        setContent(new VBox(4, headerRow, infoLabel, groupList, itemList, cropRow, answerRow, adjustHint));
+        setContent(new VBox(4, headerRow, infoLabel, slideStrip, statusLineLabel, groupList, itemList, cropRow,
+                answerRow, adjustHint));
     }
 
     /**
@@ -233,6 +242,39 @@ final class NeedsALookPane extends TitledPane {
             rendering = false;
         }
     }
+
+    /**
+     * The slide strip and the status line below it (spec §6): one square per {@code squares}
+     * entry, coloured by its status and marked {@code fp-slide-selected} when it is {@code filter};
+     * a click reports the square's slide id. Colour and text are decided by {@link CohortSession}
+     * — this only renders them.
+     */
+    void renderStrip(List<CohortSession.SlideSquare> squares, String statusLine, String filter) {
+        slideStrip.getChildren().clear();
+        for (CohortSession.SlideSquare square : squares) {
+            Region node = new Region();
+            node.setPrefSize(12, 12);
+            node.setMinSize(12, 12);
+            node.setMaxSize(12, 12);
+            node.getStyleClass().add("fp-slide-square");
+            node.getStyleClass().add(switch (square.status()) {
+                case SAMPLING -> "fp-slide-sampling";
+                case READY -> "fp-slide-ready";
+                case NEEDS_LOOK -> "fp-slide-needs-look";
+                case FAILED -> "fp-slide-failed";
+            });
+            if (square.slideId().equals(filter)) node.getStyleClass().add("fp-slide-selected");
+            Tooltip.install(node, square.status() == CohortSession.SlideStatus.FAILED
+                    ? new Tooltip(square.name() + " — " + square.failure())
+                    : new Tooltip(square.name() + " — " + square.cells() + " cells, " + square.items() + " to review"));
+            String slideId = square.slideId();
+            node.setOnMouseClicked(e -> onSlideFilter.accept(slideId));
+            slideStrip.getChildren().add(node);
+        }
+        statusLineLabel.setText(statusLine);
+    }
+
+    void setOnSlideFilter(Consumer<String> callback) { onSlideFilter = Objects.requireNonNull(callback); }
 
     /** A crop is being read for the selected item: no image, and a line saying so. */
     void showCropLoading() {

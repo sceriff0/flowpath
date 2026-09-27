@@ -236,4 +236,25 @@ class NeedsALookPaneTest {
         assertEquals(true, shown[8]);
         assertEquals(1, opened.get());
     }
+
+    @Test
+    void theStripHasOneSquarePerSlideAndAClickReportsItsSlide() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        List<String> filtered = new ArrayList<>();
+        NeedsALookPane pane = FxTestSupport.onFx(NeedsALookPane::new);
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnSlideFilter(filtered::add);
+            pane.renderStrip(List.of(
+                    new qupath.ext.flowpath.cohort.CohortSession.SlideSquare("a", "a.tif",
+                            qupath.ext.flowpath.cohort.CohortSession.SlideStatus.READY, 100, 0, null),
+                    new qupath.ext.flowpath.cohort.CohortSession.SlideSquare("b", "b.tif",
+                            qupath.ext.flowpath.cohort.CohortSession.SlideStatus.NEEDS_LOOK, 100, 2, null)),
+                    "2/2 sampled · 2 to review · Ready to run", null);
+        });
+        assertEquals(2, FxTestSupport.onFx(() -> pane.slideStrip.getChildren().size()));
+        assertTrue(FxTestSupport.onFx(() -> pane.slideStrip.getChildren().get(1).getStyleClass().contains("fp-slide-needs-look")));
+        assertEquals("2/2 sampled · 2 to review · Ready to run", FxTestSupport.onFx(() -> pane.statusLineLabel.getText()));
+        FxTestSupport.onFxRun(() -> pane.slideStrip.getChildren().get(1).getOnMouseClicked().handle(null));
+        assertEquals(List.of("b"), filtered);
+    }
 }

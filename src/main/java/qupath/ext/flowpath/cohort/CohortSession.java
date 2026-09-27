@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.CohortStats;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -32,6 +33,16 @@ public final class CohortSession {
 
     public record Scored(AlignmentModel model, ReviewScorer.Result review, List<String> columnKeys,
                          String suggestedReferenceId) {}
+
+    /** One slide's state on the slide strip (spec §6 "Slide strip and status line"). */
+    public enum SlideStatus { SAMPLING, READY, NEEDS_LOOK, FAILED }
+
+    /**
+     * One square of the slide strip: its status, and what its tooltip says — the failure reason
+     * when {@link SlideStatus#FAILED}, else how many cells were sampled and how many of its
+     * gates need a look.
+     */
+    public record SlideSquare(String slideId, String name, SlideStatus status, int cells, int items, String failure) {}
 
     public static final String REFERENCE_MISSING =
             "Reference slide is not in this project — correction is off; reference numbers are used as raw thresholds";
@@ -65,6 +76,8 @@ public final class CohortSession {
     private ViewMode viewMode = ViewMode.THIS_SLIDE;
     private boolean batchRunning;
     private String batchProgress;
+    /** The slide strip's selected square, by id (a value — CLAUDE.md "keyed on a value"); see {@link #setSlideFilter}. */
+    private String slideFilter;
 
     /**
      * One stable instance: the live pass reads whatever model is current when it runs. Answers
@@ -129,6 +142,8 @@ public final class CohortSession {
         for (SlideRef r : refs) ids.add(r.id());
         samples.keySet().retainAll(ids);
         failures.keySet().retainAll(ids);
+        // The filter is kept by id (a value); it survives a rescore but not the slide vanishing.
+        if (slideFilter != null && !ids.contains(slideFilter)) slideFilter = null;
         updateCorrectionDisabled();
     }
 
@@ -283,8 +298,61 @@ public final class CohortSession {
         return Set.of();
     }
 
+    /**
+     * One square per slide, in project order; empty while the cohort is unavailable (fewer than
+     * two slides). The colour is decided here, once — the pane only renders (spec §6).
+     */
+    public List<SlideSquare> slideStrip() {
+        if (slides.size() < 2) return List.of();
+        List<SlideSquare> out = new ArrayList<>();
+        for (SlideRef r : slides) {
+            SlideSample sample = samples.get(r.id());
+            int items = (int) review.items().stream().filter(i -> i.key().slideId().equals(r.id())).count();
+            SlideStatus status = failures.containsKey(r.id()) ? SlideStatus.FAILED
+                    : sample == null ? SlideStatus.SAMPLING
+                    : items > 0 ? SlideStatus.NEEDS_LOOK : SlideStatus.READY;
+            out.add(new SlideSquare(r.id(), r.name(), status, sample == null ? 0 : sample.detectionCount(), items,
+                    failures.get(r.id())));
+        }
+        return out;
+    }
+
+    /**
+     * {@code "38/40 sampled · 5 to review · Ready to run"} (spec §6); {@code ""} while the cohort
+     * is unavailable. "Ready to run" reports the cohort's own readiness — sampling finished and no
+     * batch of its own going — the same {@code !batchRunning} rule {@link CohortState#canRunBatch}
+     * already states; whether the run button is also blocked by an unrelated background worker or
+     * an empty tree is {@code BusyState.batchBlocked()} / {@code BatchRunCoordinator.hasEnabledGate}'s
+     * decision, not a second one made here.
+     */
+    public String statusLine() {
+        if (slides.size() < 2) return "";
+        return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(), slides.size(),
+                review.items().size(), batchRunning ? "Running…" : sampling ? "Sampling…" : "Ready to run");
+    }
+
+    /**
+     * The slide strip's filter: clicking a square filters the list to it, clicking the same
+     * square again clears it. Kept by id (a value), so it survives a rescore; {@link
+     * #setProjectSlides} drops it once the slide it names is gone.
+     */
+    public void setSlideFilter(String slideId) {
+        slideFilter = slideId == null || slideId.equals(slideFilter) ? null : slideId;
+    }
+
+    public String slideFilter() { return slideFilter; }
+
+    /** The selected group's items, else every item, narrowed to the filtered slide if any. */
+    public List<ReviewItem> visibleItems() {
+        ReviewGroup group = selectedGroup();
+        List<ReviewItem> items = group == null ? review.items() : group.items();
+        return slideFilter == null ? items : items.stream().filter(i -> i.key().slideId().equals(slideFilter)).toList();
+    }
+
     public ReviewItem.Key step(int delta) {
-        List<ReviewItem> items = review.items();
+        // Task 16 carry: with a group or a slide filter shown, N/P must step only through what
+        // the list actually shows, never the whole review.
+        List<ReviewItem> items = visibleItems();
         if (items.isEmpty()) return null;
         int at = -1;
         for (int i = 0; i < items.size(); i++) if (items.get(i).key().equals(selected)) at = i;

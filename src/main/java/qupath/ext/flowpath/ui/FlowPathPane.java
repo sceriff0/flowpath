@@ -566,6 +566,7 @@ public class FlowPathPane extends BorderPane {
         needsALook.setOnLooksRight(this::answerEnter);
         needsALook.setOnSkip(this::answerSkip);
         needsALook.setOnUseReference(this::useSuggestedReference);
+        needsALook.setOnSlideFilter(id -> { cohort.setSlideFilter(id); renderNeedsALook(); });
         // The sample size is part of the sampling key, so the refresh re-samples.
         needsALook.setOnSampleSizeChanged(n -> {
             CohortPrefs.setSampledCellsPerSlide(CohortPrefs.node(), n);
@@ -916,8 +917,9 @@ public class FlowPathPane extends BorderPane {
     private void renderNeedsALook() {
         ReviewGroup group = cohort.selectedGroup();
         needsALook.renderGroups(cohort.groups(), group == null ? null : group.key());
+        needsALook.renderStrip(cohort.slideStrip(), cohort.statusLine(), cohort.slideFilter());
         ReviewItem selected = cohort.selected();
-        List<ReviewItem> items = group == null ? cohort.review().items() : group.items();
+        List<ReviewItem> items = cohort.visibleItems();
         needsALook.render(cohort.state(), items, cohort.review().infos(),
                 selected == null ? null : selected.key(), CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
         syncCrop(selected, items);
