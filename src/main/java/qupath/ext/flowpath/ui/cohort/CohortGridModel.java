@@ -5,6 +5,7 @@ import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.ReferenceRanking;
 import qupath.ext.flowpath.cohort.ReviewItem;
+import qupath.ext.flowpath.cohort.ReviewScorer;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
@@ -69,7 +70,7 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         List<Column> columns = columns(entries);
         String reference = tree.getReferenceSlideId();
         Map<String, ReviewItem> items = new HashMap<>();
-        for (ReviewItem i : session.review().items()) items.put(keyString(i.key()), i);
+        for (ReviewItem i : currentReview(session, tree).items()) items.put(keyString(i.key()), i);
 
         List<Row> rows = new ArrayList<>();
         for (CohortSession.SlideSquare sq : session.slideStrip()) {
@@ -102,6 +103,18 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
                 detail(session, tree, entries, selected, items));
     }
 
+    /**
+     * The review, only while it was scored for the live tree's reference — the condition
+     * {@code CohortSession} itself applies before answering alignments. After a reference change
+     * and before the rescore lands, its flags describe a correction that is no longer applied.
+     */
+    private static ReviewScorer.Result currentReview(CohortSession session, GateTree tree) {
+        String ref = tree.getReferenceSlideId();
+        var model = session.model();
+        boolean current = ref != null && model != null && ref.equals(model.referenceSlideId());
+        return current ? session.review() : new ReviewScorer.Result(List.of(), List.of());
+    }
+
     private static List<Column> columns(List<GateWalk.Entry> entries) {
         Map<String, Integer> perPath = new HashMap<>();
         for (GateWalk.Entry e : entries) perPath.merge(e.gatePath(), 1, Integer::sum);
@@ -118,6 +131,11 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         return k.slideId() + "\u0000" + k.rootIndex() + "\u0000" + k.gatePath();
     }
 
+    /**
+     * The mark of one slide x gate cell. Slide settings win, then a review flag, then "not
+     * measured". The reference row is {@code OK} even with Correct staining off, because the
+     * reference is identity by definition.
+     */
     static CellMark mark(CohortSession session, GateWalk.Entry e, String slideId, String reference,
                          Map<String, ReviewItem> items) {
         GateNode gate = e.gate();
@@ -131,11 +149,7 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         // GateNodes are not the live tree's. The slide's own index says whether it carries the channel.
         var sample = session.sample(slideId);
         if (sample != null) {
-            for (String ch : gate.getChannels()) {
-                if (ch != null && !ch.isEmpty() && sample.index().getMarkerIndex(ch) < 0) {
-                    return CellMark.NOT_MEASURED;
-                }
-            }
+            if (!measured(gate, sample.index())) return CellMark.NOT_MEASURED;
         }
         if (setting instanceof SlideSetting.Reviewed) return CellMark.REVIEWED;
         if (reference == null) return CellMark.NOT_CORRECTED;
@@ -149,6 +163,16 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
             if (a == null || a.kind() == Alignment.Kind.IDENTITY) return CellMark.NOT_CORRECTED;
         }
         return CellMark.OK;
+    }
+
+    /** ReviewScorer's rule: every axis needs a non-null channel the slide's index carries. */
+    private static boolean measured(GateNode gate, qupath.ext.flowpath.model.CellIndex index) {
+        List<String> channels = gate.getChannels();
+        for (int k = 0; k < GateAxis.axisCount(gate); k++) {
+            String ch = k < channels.size() ? channels.get(k) : null;
+            if (ch == null || index.getMarkerIndex(ch) < 0) return false;
+        }
+        return true;
     }
 
     private static Banner banner(CohortSession session, GateTree tree) {
@@ -200,7 +224,18 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         String ref = applied == null ? "" : format(entry.gate(), applied.reference());
         String app = applied == null ? "" : format(entry.gate(), applied.applied());
         String title = session.slideName(slideId) + " · " + entry.gatePath();
-        return new Detail(selected, title, mark, item == null ? List.of() : item.reasons(), ref, app);
+        List<String> reasons = new ArrayList<>();
+        if (item != null) reasons.addAll(item.reasons());
+        if (mark == CellMark.NOT_MEASURED) {
+            // By value (slide + the gate's channels), never by Info.gate() identity.
+            for (ReviewItem.Info info : currentReview(session, tree).infos()) {
+                if (info.slideId().equals(slideId) && info.gate().getChannels().equals(entry.gate().getChannels())) {
+                    // Two roots on one channel yield the same message; say it once.
+                    if (!reasons.contains(info.message())) reasons.add(info.message());
+                }
+            }
+        }
+        return new Detail(selected, title, mark, reasons, ref, app);
     }
 
     /** Each axis's values joined with ", ", the axes joined with " / "; a region gate has no single cut. */

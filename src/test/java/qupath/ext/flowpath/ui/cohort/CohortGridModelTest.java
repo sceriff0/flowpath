@@ -38,6 +38,7 @@ class CohortGridModelTest {
         assertTrue(ref.reference());
         // Root 1 sits on the negative peak, so the fixture flags it on ref too (brief-sanctioned fallback).
         assertEquals(OK, ref.marks().get(0));
+        assertEquals(LOOK, ref.marks().get(1), "the fixture flags root 1 on its negative peak");
         assertFalse(ref.canExclude(), "the reference cannot be excluded (Review Focus 1)");
     }
 
@@ -68,7 +69,7 @@ class CohortGridModelTest {
         tree.setReferenceSlideId(null);
         CohortSession s = CohortFixtures.sampled(tree);
         CohortGridModel m = CohortGridModel.derive(s, tree, null, false);
-        assertTrue(m.rows().stream().allMatch(r -> r.marks().stream().allMatch(k -> k == NOT_CORRECTED || k == LOOK)));
+        assertTrue(m.rows().stream().allMatch(r -> r.marks().stream().allMatch(k -> k == NOT_CORRECTED)));
         assertTrue(m.banner().headline().startsWith("No reference slide"));
         assertEquals(s.suggestedReferenceId(), m.banner().suggestedId());
         assertTrue(m.banner().notes().contains(CohortGridModel.SCOPE_NOTE));
@@ -126,5 +127,35 @@ class CohortGridModelTest {
         CohortSession s = CohortFixtures.sampledWithout(tree, "s2", "CD8");
         CohortGridModel m = CohortGridModel.derive(s, tree, null, false);
         assertEquals(List.of(NOT_MEASURED, NOT_MEASURED), row(m, "s2").marks());
+    }
+
+    @Test
+    void aReviewScoredForAnotherReferenceIsNotTrusted() {
+        for (String liveRef : new String[]{null, "s1"}) {
+            GateTree tree = CohortFixtures.twoCd8Roots();
+            CohortSession s = CohortFixtures.sampled(tree);          // scored with reference "ref"
+            assertFalse(s.review().items().isEmpty(), "fixture check");
+            tree.setReferenceSlideId(liveRef);                       // the rescore has not landed
+            ReviewItem.Key key = s.review().items().get(0).key();
+            CohortGridModel m = CohortGridModel.derive(s, tree, key, false);
+            assertTrue(m.rows().stream().allMatch(r -> !r.marks().contains(LOOK) && r.lookCount() == 0),
+                    "no stale LOOK for reference " + liveRef);
+            if (liveRef == null) {
+                assertTrue(m.rows().stream().allMatch(r -> r.marks().stream().allMatch(k -> k == NOT_CORRECTED)));
+            }
+            assertNotNull(m.detail());
+            assertTrue(m.detail().reasons().isEmpty());
+        }
+    }
+
+    @Test
+    void aNotMeasuredDetailCarriesTheScorersMessage() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortSession s = CohortFixtures.sampledWithout(tree, "s2", "CD8");
+        ReviewItem.Key key = new ReviewItem.Key("s2", 0, GateWalk.enabled(tree).get(0).gatePath());
+        CohortGridModel m = CohortGridModel.derive(s, tree, key, false);
+        assertEquals(NOT_MEASURED, m.detail().mark());
+        assertEquals(1, m.detail().reasons().size());
+        assertTrue(m.detail().reasons().get(0).contains("not measured"));
     }
 }
