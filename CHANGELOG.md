@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.5] - 30/09/2026
+
+Cohort gating: one threshold per gate for the whole project, staining corrected per slide ×
+marker column, a **Needs a look** review list for the slides where a gate is unsure, and
+**Run on all slides** (or headless `FlowPathBatch.run`) with a manifest of every threshold
+applied. Single-image gating is unchanged, and a tree saved before this version opens with
+Correct staining off, so no existing number moves. UMAP and the Analysis window remain held
+back, as in 0.9.4.
 
 ### Added — cohort gating
 
