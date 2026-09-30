@@ -379,7 +379,7 @@ align to. The cache (`io/AlignmentCacheFile`, `<project>/flowpath/alignment-cach
 by each slide's `SlideSample.cacheKey()` — the sample fingerprint plus the digest of the filter
 and ROI inputs its clean mask came from — and the recorded sample size; a cached landmark is
 reused only under that key and the cofactor in force now. The live view
-(`ui/CohortCoordinator`), the review list and the batch run (`batch/FlowPathBatch`,
+(`ui/CohortCoordinator`), the Cohort window and the batch run (`batch/FlowPathBatch`,
 `batch/CohortEvidence`) all read the same model through `engine/AlignmentLookup` — the batch run
 reuses it exactly, recomputing only when the cache is missing or its fingerprint has moved,
 deterministically, from the same seed.
@@ -449,14 +449,78 @@ everywhere — every gate on its reference numbers, no slide setting honoured �
 refuses a foreign tree outright rather than apply one project's per-slide corrections to another
 project's slides.
 
-The reference slide itself is chosen in exactly two places. `GatingSession.applyDefaultReference`
-makes the open slide the reference the first time a project's cohort is seen — one undo step,
-**once per project**: an ingest after undoing it records nothing, because recording a step there
-wipes the redo stack. And `GatingSession.replaceTree(loaded, openSlideId, names)` gives a loaded
-tree that names none the open slide inside the load's own undo step. A tree with no reference
+### No silent reference
+
+A tree has **no reference until the user confirms one**. Nothing chooses it on their behalf: the
+old open-slide default (`GatingSession.applyDefaultReference`, and the three-argument
+`replaceTree(loaded, openSlideId, names)` that gave a loaded tree the open slide) is deleted — do
+not reintroduce it. A default made the reference whichever slide happened to be open first, and
+every corrected number in the cohort was then expressed on that slide without anyone having
+chosen it. The reference is set in exactly two places, both user actions in the Cohort window
+(`FlowPathPane.chooseReference`, spec 2026-09-30 §4.1):
+
+- **Confirming** — ☆ on a row, or the banner's **Use X** — on a tree with no reference goes
+  through `GatingSession.confirmReference(slideId, projectNames)`: one undo step, recorded before
+  the change, with the project's image names recorded beside it (see "Project identity"). It
+  refuses a tree that already has a reference. A tree with no gates takes the chosen slide
+  directly; a tree that already has gates first asks *which slide these gates were drawn on*
+  (pre-filled with the open slide) and makes **that** slide the reference, because the numbers
+  on the tree are its numbers. Choosing the suggested slide afterwards is an ordinary change.
+- **Changing** an existing reference asks once, then runs `CohortSession.rebaseReference` through
+  `GatingSession.recordSlideEdit` — every gate's numbers re-expressed on the new slide, one undo
+  step.
+
+Both end in the one resync path and a background rescore. A tree with no reference
 (`TreeResolver` then gates every slide on the tree's own numbers) is reported by
 `CohortSession.state()` as `NO_REFERENCE`, never as an all-clear, and its status line never says
-"Ready to run".
+"Ready to run". The suggestion (`CohortSession.suggestedReferenceId`) is only ever offered, never
+applied, and is never the current reference or an excluded slide.
+
+### The suggestion is the joint medoid of eligible slides
+
+`cohort/ReferenceRanking` ranks the sampled, non-excluded slides over the gated columns. A slide
+is **eligible** only if, on every gated column, `Landmarks.find` with `Landmarks.cofactor` of its
+own clean values finds an L1 — the same finder and cofactor `AlignmentModel.build` would use were
+it the reference, so the ranking cannot call a slide a good reference that the engine would then
+fail to align to (the old failure: `Alignment.between` silently answering identity for a column
+whose reference lacked L1) — and has at least the cohort's modal landmark count (fdaNorm's rule).
+Among eligible slides the suggestion is the one with the smallest summed L1 distance between
+normalised log(1 + x) histograms, summed over the gated columns; fewer than three eligible
+slides gives no suggestion. The ranking is computed in the same background `score` as the
+alignments and review, and arrives in the same `Scored` record.
+
+### Excluded slides
+
+A slide can be set aside from the cohort (row menu **Exclude / Include**). The flag lives on the
+project's image entry as metadata (`flowpath.cohort.excluded`), read and written only through
+`cohort/CohortExclusions` — **not** in `flowpath.json`: exclusion is a fact about a slide, not about
+a gate tree, and a tree field would force a format version. It is not an undo step; toggling
+again reverses it. An excluded slide is not sampled (`FlowPathPane.refreshCohort` filters it out
+of the sources, and the sorted exclusion set is part of the sampling key, so a toggle
+re-samples), so it has no alignment, plays no part in ranking, modal counts or review, and
+`CohortSession`'s lookup answers null for it — identity through the one resolution point. A batch
+run still gates it, uncorrected, and records `cohort_excluded` in `qc_summary.csv`. Its
+`SlideSetting`s stay on the tree and reappear if it is included again. Excluding the current
+reference is refused ("Pick another reference first").
+
+### Data flow of the Cohort window
+
+```
+exclusions, samples, tree ─► CohortSession.score (flowpath-background)
+                               ├─ AlignmentModel.build   (excluded → not sampled → no alignment)
+                               ├─ ReviewScorer
+                               └─ ReferenceRanking       (same Scored record)
+                             adopt (FX) ─► FlowPathPane.renderCohort
+                               └─ CohortGridModel.derive ─► CohortGridPane.render / CohortCard.render
+```
+
+Exclusion toggles, reference confirmations and sample-size changes all go through the existing
+background `score` request; no new landing path is added (see "`resync`'s synchronous fallback
+is a safety net" in the project's invariants). The window is re-rendered after every adopt and
+every gating pass while it is open, as the Analysis window is pushed. The grid keeps its own
+selected cell by value (`ReviewItem.Key`), because a cell may have no review item (✓, ↷, ✎, ⊘)
+and `CohortSession.selected()` answers only for items; a cell that is an item is selected in the
+session too, so Enter and S answer it.
 
 ### The batch run never writes a slide it did not check live
 
@@ -508,8 +572,11 @@ says so whenever a slide was skipped for being open.
 - `cohort/MarkerRules`, `ReviewGroup` — flag type 5 (above), and grouping review items by gate
   for Shift+Enter
 - `cohort/EvidenceCrop`, `CellShapes`, `ui/EvidenceCropCoordinator` — the 200 µm tissue crop, the
-  boundary-cell shapes drawn on it, and the dedicated `flowpath-crops` executor (image reads must
-  never queue behind gating on `flowpath-background`; prefetch 3, LRU 64)
+  boundary-cell shapes drawn on it, and a coordinator for a dedicated crop executor (prefetch 3,
+  LRU 64). **Not wired into the UI** since the Cohort window replaced the review list: the window
+  shows thresholds, and **Adjust** opens the slide in the viewer, where the evidence is seen. The
+  classes and their tests are kept for a later crop view; `FlowPathPane` no longer owns a
+  `flowpath-crops` executor
 - `batch/BatchRunner`, `BatchSlide`, `BatchResult` — one resolved tree per slide, failures as
   values, the live open-slide check (above)
 - `batch/GatingManifestExporter` — `gating_manifest.csv`; lives in `batch`, not `io`, because
@@ -531,8 +598,16 @@ says so whenever a slide was skipped for being open.
 - `ui/ProjectSlides` — `ProjectImageEntry` → the headless `SlideSource`/`BatchSlide` seams, and
   `refs()`, the `(id, name)` pairs `CohortSession` turns into the `projectNames` map
   `CohortIdentity` checks against
-- `ui/NeedsALookPane` — the review list, slide strip and status line; renders `CohortState` and
-  decides nothing (see "UI state is derived, never set")
+- `cohort/ReferenceRanking` — the suggestion (above): eligibility through the alignment's own
+  landmark finder and cofactor, then the joint medoid; pure
+- `cohort/CohortExclusions` — excluded slides as project-entry metadata, not `flowpath.json`; the
+  QuPath adapter (`of(project)`) is the only code that touches the entry's flag
+- `ui/cohort/CohortGridModel` — the slides × gates grid, its banner and the selected cell's
+  detail, derived from `CohortSession` and the tree; toolkit-free and table-tested
+- `ui/cohort/CohortGridPane`, `CohortWindow`, `ui/CohortCard` — the Cohort window's body (renders
+  a `CohortGridModel`, reports actions, decides nothing), its single floating stage (the pane
+  outlives the stage, as the Analysis pane does), and the side panel's status card with
+  **Open cohort… / Choose reference…** and **Run on all slides…**
 - `ui/BoundaryOverlay` — the paints-never-writes overlay (above)
 - `ui/editor/EditorAlignment` — the editor's display seam onto `TreeResolver.correctionFor`
 
