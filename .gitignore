@@ -32,5 +32,7 @@ notebooks
 
 # Sample / input data. cells.geojson from MIRAGE is ~150MB; never commit one.
 *.geojson
+# Test fixtures are synthetic and must ship with the suite.
+!src/test/resources/**/*.geojson
 # MkDocs build output
 site/
