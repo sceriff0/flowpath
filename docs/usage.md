@@ -111,8 +111,10 @@ Open `Extensions → FlowPath` (++ctrl+g++). Build a hierarchy of marker gates �
 e.g. `CD45+ → CD3+ → CD8+ = "T cytotoxic"` — and cells recolour live as you move
 thresholds.
 
-1. Set **quality filters** to drop segmentation artefacts (min/max for area,
-   eccentricity, solidity, perimeter, total intensity).
+1. Set **quality filters**, in two collapsible sections under the gate tree:
+   **Morphology** (min/max per `MORPH:` shape — area, eccentricity, solidity, …) and **QC**
+   (cell-level `QC: Total intensity`, and the round-level QC metrics — see
+   [Quality filters](#quality-filters) below).
 2. Add a **root gate** and pick a type — threshold (1D), quadrant (2D), polygon,
    rectangle, or ellipse.
 3. For a threshold gate: pick a channel and drag the line on the histogram. For a
@@ -369,6 +371,8 @@ with these metrics:
 - `cells`, `cells_clean` — total and clean cell counts;
 - `pct_quality_filtered`, `pct_outside_roi` — fractions excluded by the quality filter / ROI;
 - `pct_unmeasured` (subject = gate path) — fraction a gate could not judge;
+- `pct_round_qc_failed` (subject = the round's markers, e.g. `[CD3, CD8]`) — fraction of cells
+  that failed that imaging round's QC (Unmeasured for those markers, not removed);
 - `staining_offset`, `staining_stretch` (subject = column) — this slide's alignment vs. the
   cohort's;
 - `rule_violation_pct` (subject = the rule, e.g. `1:CD8+ => 1:CD3+`) — the marker-rule rate;
@@ -696,26 +700,36 @@ ANNOTATION_K,Tumor,1,CD45+/CD8+,CD8+,CD8,1,0,915,915,2011,2011,0,45.4998,8.2100,
   run that means the column as measured, so there is nothing to choose and no selector
   appears; pick *what* to read with the compartment and statistic dropdowns instead.
 
-    FlowPath no longer offers a z-score of its own. It used to, computed over the cells
-  currently loaded *and filtered* — which meant the same slider position was a different
-  cut after you tightened a quality filter or drew a different ROI, and a threshold quoted
-  in a methods section would not reproduce. If a pipeline ever exports a pre-standardised
-  column, that is a real column and appears here as its own labelled option.
+    FlowPath offers no z-score of its own: one computed over the cells currently loaded and
+  filtered would make the same slider position a different cut after any filter change. If
+  a pipeline exports a pre-standardised column, that is a real column and appears here.
 
-    Gate trees saved under the old mode still load: as soon as the tree meets an image's
-  cells, every gate's thresholds and shapes are converted back into the column's own units,
-  so each gate keeps the cells it had — including gates you never open and trees you export
-  straight away. A notification says how many gates were converted and names any that
-  could not be: a gate on a column with no spread keeps its old numbers, and a gate on a
-  channel this image does not carry stays in z-score units until the tree is opened on an
-  image that has it.
+- **Quality filters** { #quality-filters } — pre-gating QC from the keys **your MIRAGE export
+  actually carries**, in two collapsible sections. Each slider spans its column's observed
+  range; at either end it means "no constraint on this side"; a missing value always passes.
+    - **Morphology** — one min/max per `MORPH: …` shape (area, eccentricity, perimeter,
+      solidity, convex area, both axis lengths, and any shape MIRAGE adds). A cell outside is
+      excluded.
+    - **QC → Cell QC** — one min/max per cell-level `QC: …` metric (`QC: Total intensity`).
+      A cell outside is excluded.
+    - **QC → Round QC** — one min/max per round-level metric (`Nuclear retention`,
+      `Registration displacement`, `Registration Dice`), applied to **every** imaging round.
+      A cell outside it in a round is **Unmeasured for gates on that round's markers only**:
+      a CD3/CD8 gate stops counting a cell whose nucleus was lost in the CD3/CD8 round, while
+      its CD68 and reference-round markers still gate normally. The raw values are kept
+      (`_raw` in the CSV); only the judgement changes. The expander underneath lists each
+      round and how many cells fail it. *Nuclear retention assumes each round re-stains the
+      same section (cyclic imaging); on serial sections it is meaningless.*
+- **Unmeasured cells** — a gate that could not judge some cells (no value, a failed imaging
+  round, or a Skip in review) says so on its bar in the tree, `· 1,204 unmeasured`, with the
+  reasons in the tooltip. Those cells are counted in none of the gate's branches.
 
-- **Quality filters** — pre-gating QC with a min + max per morphology measurement
-  **your export actually carries**. A MIRAGE run gives you area, eccentricity, perimeter,
-  solidity and both axis lengths; a whole-cell-only mask gives you fewer, and the rows you
-  do not have are simply not shown rather than being sliders over missing data. Each
-  slider spans its own column's observed range, and a measurement FlowPath has no name for
-  gets a row like any other.
+!!! warning "FlowPath 0.10.0 reads MIRAGE's current output only"
+    Measurement keys are recognised by MIRAGE's prefixes (`QC:`, `MORPH:`), never guessed
+    from their spelling. Exports without them — MIRAGE runs from before the `MORPH:` rename,
+    `[Layer0]`-prefixed imports, or QuPath's own cell detection — show their shape columns as
+    markers; re-export them with a current MIRAGE. Gate trees (`flowpath.json`) saved by
+    FlowPath before 0.10.0 are refused with a message naming their version.
 - **Outlier exclusion** — per-gate percentile clipping, with the scatter axis
   zooming to the clipped range.
 - **Undo / Redo** — snapshot-based (++ctrl+z++ / ++ctrl+shift+z++).

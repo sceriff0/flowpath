@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+MIRAGE's `QC:` / `MORPH:` measurement vocabulary, round-level QC, and every compatibility path
+for older inputs removed. **Breaking:** see *Removed*.
+
+### Added
+
+- **Measurements are classified by MIRAGE's prefixes** (`model/MeasurementName`): `QC: <metric>`
+  (cell-level), `QC: <metric>: [<markers>]` (round-level), `MORPH: <shape>`, the identity keys
+  `label` / `Centroid X µm` / `Centroid Y µm`, and everything else a marker. QC keys no longer
+  appear as phantom markers, and the area filter binds to `MORPH: Area µm²` again.
+- **Round QC.** One min/max per round-level metric (nuclear retention, registration
+  displacement, registration Dice) applies to every imaging round; a cell outside it in a
+  round becomes **Unmeasured for gates on that round's markers only** — the "unmeasured is not
+  negative" rule — while its other markers gate normally. Plots, statistics, percentile clips,
+  the cohort's landmarks, All slides curves, review coverage and boundary band all leave those
+  cells out; raw values are kept.
+- **Quality filter in two collapsible sections**: Morphology, and QC (Cell QC + Round QC with a
+  per-round failure list).
+- **Unmeasured readout**: each gate's bar in the tree says how many cells it could not judge,
+  with the reasons (no value, failed round QC, skipped in review) in its tooltip.
+- `gate_pheno.csv` gains `QC_failed_rounds` (when the export carries round QC); quality
+  columns are written as `area`, …, `qc_total_intensity`. `qc_summary.csv` gains
+  `pct_round_qc_failed` per slide and round.
+- Quality-filter ranges are saved under namespaced slugs: `morph/<shape>`, `qc/<metric>`,
+  `qcround/<metric>`.
+
+### Removed
+
+- **Gate trees saved before 0.10.0 are refused** with a message naming their format version
+  (one format, version 5, every field required). The z-score migration, legacy quality-filter
+  keys, the version-3 downgrade, `hideOutliers` and all v1/v2 defaults are gone.
+- **Only MIRAGE's current output is read.** No `[Layer0]` prefixes, no guessed unprefixed shape
+  names (old MIRAGE, QuPath's own detections), no FlowPath-computed total intensity (use
+  `QC: Total intensity`), no solidity derived from convex area, no centroid unit sniffing
+  (`Centroid X/Y µm` only).
+- Dead backward-compatible constructors, accessors and aliases.
+
 ## [0.9.6] - 30/09/2026
 
 ### Added — New project from MIRAGE
