@@ -3,6 +3,7 @@ package qupath.ext.flowpath.cohort;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -48,8 +49,9 @@ public final class ReferenceRanking {
 
         public Result {
             slides = List.copyOf(slides);
-            columnMedoids = Map.copyOf(columnMedoids);
-            modalLandmarks = Map.copyOf(modalLandmarks);
+            // Insertion-ordered, so the banner's notes come out in column order every time.
+            columnMedoids = Collections.unmodifiableMap(new LinkedHashMap<>(columnMedoids));
+            modalLandmarks = Collections.unmodifiableMap(new LinkedHashMap<>(modalLandmarks));
             uncorrectableColumns = List.copyOf(uncorrectableColumns);
         }
 
@@ -122,6 +124,8 @@ public final class ReferenceRanking {
 
         Map<String, Integer> modal = new LinkedHashMap<>();
         List<String> uncorrectable = new ArrayList<>();
+        // Columns some slide can be corrected on; one no slide has a negative peak on is reported, not ranked.
+        List<AlignmentModel.ColumnRef> usable = new ArrayList<>();
         for (AlignmentModel.ColumnRef col : columns) {
             String label = label(col, columns);
             Map<Integer, Integer> counts = new HashMap<>();
@@ -137,7 +141,11 @@ public final class ReferenceRanking {
                     .max(Map.Entry.<Integer, Integer>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
                     .map(Map.Entry::getKey).orElse(0);
             modal.put(label, mode);
-            if (!anyL1) uncorrectable.add(label);
+            if (!anyL1) {
+                uncorrectable.add(label);
+                continue;
+            }
+            usable.add(col);
             for (SlideSample s : samples) {
                 Landmarks lm = landmarks.get(s.slideId()).get(col.key());
                 List<String> why = reasons.get(s.slideId());
@@ -153,7 +161,7 @@ public final class ReferenceRanking {
         Map<String, String> columnMedoids = new LinkedHashMap<>();
         for (SlideSample s : eligible) score.put(s.slideId(), 0.0);
         if (eligible.size() >= 2) {
-            for (AlignmentModel.ColumnRef col : columns) {
+            for (AlignmentModel.ColumnRef col : usable) {
                 double[][] h = histograms(eligible, values, col.key());
                 String best = null;
                 double bestSum = Double.POSITIVE_INFINITY;
@@ -179,12 +187,13 @@ public final class ReferenceRanking {
                     ok ? score.getOrDefault(s.slideId(), 0.0) : Double.POSITIVE_INFINITY,
                     central.getOrDefault(s.slideId(), 0)));
         }
-        String suggested = eligible.size() < MIN_ELIGIBLE ? null
+        String suggested = usable.isEmpty() || eligible.size() < MIN_ELIGIBLE ? null
                 : ranks.stream().filter(SlideRank::eligible).min(ORDER).map(SlideRank::slideId).orElse(null);
         Set<String> distinctMedoids = new LinkedHashSet<>(columnMedoids.values());
-        boolean heterogeneous = columns.size() > 1 && eligible.size() >= MIN_ELIGIBLE
+        // A FlowPath heuristic: flowLearn shows more prototypes help on diverse cohorts; the "more than half" cut-off is ours.
+        boolean heterogeneous = usable.size() > 1 && eligible.size() >= MIN_ELIGIBLE
                 && distinctMedoids.size() * 2 > eligible.size();
-        return new Result(suggested, ranks, columnMedoids, modal, uncorrectable, heterogeneous, columns.size());
+        return new Result(suggested, ranks, columnMedoids, modal, uncorrectable, heterogeneous, usable.size());
     }
 
     private static boolean tieBefore(SlideSample candidate, String currentBest, List<SlideSample> all) {

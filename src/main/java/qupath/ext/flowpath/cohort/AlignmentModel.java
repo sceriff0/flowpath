@@ -222,8 +222,10 @@ public final class AlignmentModel {
         return out;
     }
 
-    /** The sample's clean values for {@code col}, or null when the slide lacks the channel. */
-    /** Package-private so {@link ReferenceRanking} reads exactly the values alignment reads. */
+    /**
+     * The sample's clean values for {@code col}, or null when the slide lacks the channel.
+     * Package-private so {@link ReferenceRanking} reads exactly the values alignment reads.
+     */
     static double[] cleanValues(SlideSample s, ColumnRef col) {
         if (s.index().getMarkerIndex(col.channel()) < 0) return null;
         double[] raw = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats()).values();
