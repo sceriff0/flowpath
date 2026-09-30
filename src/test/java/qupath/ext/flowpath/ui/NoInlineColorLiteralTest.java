@@ -43,7 +43,8 @@ class NoInlineColorLiteralTest {
     private static final List<Path> DIRECTORIES = List.of(
             Path.of("src/main/java/qupath/ext/flowpath/ui"),
             Path.of("src/main/java/qupath/ext/flowpath/ui/editor"),
-            Path.of("src/main/java/qupath/ext/flowpath/ui/widgets"));
+            Path.of("src/main/java/qupath/ext/flowpath/ui/widgets"),
+            Path.of("src/main/java/qupath/ext/flowpath/ui/cohort"));
 
     /**
      * Files inside {@link #DIRECTORIES} the rule deliberately does not apply to, by name.

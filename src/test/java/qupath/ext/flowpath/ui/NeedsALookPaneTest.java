@@ -140,23 +140,6 @@ class NeedsALookPaneTest {
         assertEquals("Adjust: drag the threshold, then Enter", hints[1]);
     }
 
-    /** The review keys: plain letters and Enter, never while a text field has focus. */
-    @Test
-    void reviewKeysMapWithoutModifiersAndNeverInATextField() {
-        assertEquals(NeedsALookPane.ReviewKey.LOOKS_RIGHT, NeedsALookPane.ReviewKey.of(KeyCode.ENTER, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.SKIP, NeedsALookPane.ReviewKey.of(KeyCode.S, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.NEXT, NeedsALookPane.ReviewKey.of(KeyCode.N, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.PREVIOUS, NeedsALookPane.ReviewKey.of(KeyCode.P, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.BACK, NeedsALookPane.ReviewKey.of(KeyCode.ESCAPE, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.TOGGLE_OVERLAY, NeedsALookPane.ReviewKey.of(KeyCode.B, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.OPEN_IN_VIEWER, NeedsALookPane.ReviewKey.of(KeyCode.V, false, false));
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.V, true, false), "Ctrl+V is Paste, not Open in viewer");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, true, false), "Ctrl+S is Save, not Skip");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, false, true), "Enter in a text field is the field's");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, false, true), "typing an S is not Skip");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.X, false, false));
-    }
-
     /** Groups: one per gate, same-channel roots apart; a click reports the key; the button needs a group. */
     @Test
     void groupsRenderByValueAndAClickReportsTheKey() {
@@ -189,17 +172,6 @@ class NeedsALookPaneTest {
         assertEquals(1, reviewGroup.get());
         FxTestSupport.onFxRun(() -> pane.groupList.getSelectionModel().select(0));
         assertEquals(List.of(new qupath.ext.flowpath.cohort.ReviewGroup.Key(0, "CD8")), chosen);
-    }
-
-    /** Shift+Enter answers the group; Shift with any other key, or another modifier, is nothing. */
-    @Test
-    void shiftEnterIsTheGroupsAnswerAndNothingElseTakesShift() {
-        assertEquals(NeedsALookPane.ReviewKey.REVIEW_GROUP, NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, false, false));
-        assertEquals(NeedsALookPane.ReviewKey.LOOKS_RIGHT, NeedsALookPane.ReviewKey.of(KeyCode.ENTER, false, false, false));
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, true, false), "Ctrl+Shift+Enter is not a review key");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.ENTER, true, false, true), "never in a text field");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.S, true, false, false), "Shift+S is not Skip");
-        assertNull(NeedsALookPane.ReviewKey.of(KeyCode.Z, true, false, false));
     }
 
     @Test

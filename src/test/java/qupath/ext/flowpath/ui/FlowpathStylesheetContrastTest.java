@@ -42,14 +42,14 @@ class FlowpathStylesheetContrastTest {
 
     /** Primary text: must read clearly on its own, so held to the full 4.5:1 floor. */
     private static final List<String> FULL_CONTRAST_CLASSES =
-            List.of("fp-primary-text", "fp-section-header", "fp-mono-field", "fp-flagged");
+            List.of("fp-primary-text", "fp-section-header", "fp-mono-field", "fp-flagged", "fp-cohort-cell", "fp-cohort-headline");
 
     /**
      * Secondary/supplementary text — a count beside a name, a hover read-out beside the
      * histogram, an italic hint under a control that already has its own full-contrast label.
      * WCAG's own floor for this category is 3:1; nothing here is the only text on screen.
      */
-    private static final List<String> MUTED_CONTRAST_CLASSES = List.of("fp-muted", "fp-hint");
+    private static final List<String> MUTED_CONTRAST_CLASSES = List.of("fp-muted", "fp-hint", "fp-cohort-cell-look");
 
     @Test
     void fullContrastClassesMeet4_5to1OnLightBase() {

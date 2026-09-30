@@ -184,3 +184,16 @@
     -fx-border-insets: 1;
     -fx-opacity: 0.55;
 }
+
+/* Cohort window (spec 2026-09-30 §3). Marks are glyphs on the theme's own text colour; only the
+   look/excluded accents are fixed swatches, like the fp-slide-* squares above. */
+.fp-cohort-banner { -fx-padding: 6 8 6 8; -fx-background-color: -fx-control-inner-background-alt; }
+.fp-cohort-headline { -fx-font-weight: bold; -fx-text-fill: -fx-text-base-color; }
+.fp-cohort-cell { -fx-alignment: center; -fx-text-fill: -fx-text-base-color; }
+/* One fixed amber cannot hold 3:1 on both bases (light needs L<=0.25, the dark panel L>=0.32), so the look
+   accent is a ladder over the theme base: deep amber on light, bright amber on dark. */
+.fp-cohort-cell-look { -fx-text-fill: ladder(-fx-base, #ffb347 40%, #9a5c00 41%); -fx-font-weight: bold; }
+.fp-cohort-row-muted { -fx-opacity: 0.55; }
+.fp-cohort-table .table-row-cell:selected .fp-cohort-cell,
+.fp-cohort-table .table-row-cell:selected .text { -fx-text-fill: -fx-selection-bar-text; }
+.fp-cohort-detail { -fx-padding: 6 8 6 8; }

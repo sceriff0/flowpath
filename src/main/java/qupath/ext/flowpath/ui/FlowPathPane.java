@@ -20,6 +20,7 @@ import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
 import qupath.ext.flowpath.batch.CohortEvidence;
 import qupath.ext.flowpath.batch.FlowPathBatch;
+import qupath.ext.flowpath.ui.cohort.ReviewKey;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
@@ -1311,7 +1312,7 @@ public class FlowPathPane extends BorderPane {
         boolean textFocused = e.getTarget() instanceof TextInputControl
                 || (getScene() != null && getScene().getFocusOwner() instanceof TextInputControl);
         boolean otherModifier = e.isShortcutDown() || e.isControlDown() || e.isMetaDown() || e.isAltDown();
-        NeedsALookPane.ReviewKey key = NeedsALookPane.ReviewKey.of(e.getCode(), e.isShiftDown(), otherModifier, textFocused);
+        ReviewKey key = ReviewKey.of(e.getCode(), e.isShiftDown(), otherModifier, textFocused);
         if (key == null) return false;
         switch (key) {
             case LOOKS_RIGHT -> {
@@ -1328,7 +1329,7 @@ public class FlowPathPane extends BorderPane {
             }
             case NEXT, PREVIOUS -> {
                 if (!cohort.state().available()) return false;
-                stepReview(key == NeedsALookPane.ReviewKey.NEXT ? +1 : -1);
+                stepReview(key == ReviewKey.NEXT ? +1 : -1);
             }
             case BACK -> {
                 if (review.active() != null) {
