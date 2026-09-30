@@ -499,4 +499,17 @@ class FlowPathBatchTest {
             assertEquals(f[6], f[7], "2: applied equals reference: " + row);
         }
     }
+
+    /** Final review item 1: an excluded reference switches correction off in a batch, as a missing one does. */
+    @Test
+    void anExcludedReferenceSwitchesCorrectionOff() {
+        java.util.function.Supplier<Cells> shifted = () -> Cells.of(200).atGrid(10, 10)
+                .marker("CD3", i -> 1.5 * i + 5).marker("CD8", i -> 2.0 * i).area(100.0);
+        Log log = new Log();
+        List<BatchSlide> slides = List.of(excluded(slide("a", cells(200), log)), slide("b", shifted.get(), log),
+                slide("c", shifted.get(), log));
+        CohortEvidence evidence = CohortEvidence.sample(slides, tree(), AlignmentModel.Cache.empty(), 0,
+                CohortEvidence.FROM_ARGUMENT, () -> false).evidence();
+        assertSame(qupath.ext.flowpath.engine.AlignmentLookup.NONE, evidence.lookup());
+    }
 }

@@ -1395,7 +1395,8 @@ public class FlowPathPane extends BorderPane {
      * directly; a tree with gates first asks which slide they were drawn on — that slide becomes
      * the reference (the numbers are its numbers), and the suggestion is offered again once the
      * rescore lands. An existing reference is rebased, after one confirmation, as one undo step
-     * ({@link CohortSession#rebaseReference} through {@code recordSlideEdit}).
+     * ({@link CohortSession#rebaseReference} through {@code recordSlideEdit}) — refused while the
+     * current reference has no sample or model ({@link CohortSession#rebaseRefusal}).
      */
     private void chooseReference(String id) {
         if (id == null || !CohortIdentity.matches(session.tree(), cohort.projectNames())) return;
@@ -1420,6 +1421,11 @@ public class FlowPathPane extends BorderPane {
             session.confirmReference(chosen, cohort.projectNames());
         } else {
             if (id.equals(tree.getReferenceSlideId())) return;
+            String refusal = cohort.rebaseRefusal(tree.getReferenceSlideId());
+            if (refusal != null) {
+                Dialogs.showWarningNotification("FlowPath", refusal);
+                return;
+            }
             if (!Dialogs.showConfirmDialog("Reference slide",
                     "Thresholds will be re-expressed on " + cohort.slideName(id) + ". Ctrl+Z undoes it.")) return;
             session.recordSlideEdit(id, cohort.slideName(id),
@@ -1433,19 +1439,21 @@ public class FlowPathPane extends BorderPane {
 
     /**
      * Exclude or include a slide (spec §5): project metadata, not a tree edit, so no undo step.
-     * The current reference is refused. A selection or pending click-through on the slide just
+     * Excluding the current reference is refused; including it is not. A selection or pending click-through on the slide just
      * excluded is dropped; excluding keeps every other slide's sample and rescores, including a
      * slide again re-samples (its sample was never taken while it was excluded).
      */
     private void toggleExcluded(String slideId) {
         Project<BufferedImage> project = qupath.getProject();
         if (project == null || slideId == null) return;
-        if (slideId.equals(session.tree().getReferenceSlideId())) {
+        CohortExclusions exclusions = CohortExclusions.of(project);
+        boolean exclude = !exclusions.isExcluded(slideId);
+        // Only excluding the reference is refused: including it again is the way out of a tree
+        // whose reference is excluded (an undo, a load or another project's exclusions).
+        if (exclude && slideId.equals(session.tree().getReferenceSlideId())) {
             Dialogs.showWarningNotification("FlowPath", "Pick another reference first");
             return;
         }
-        CohortExclusions exclusions = CohortExclusions.of(project);
-        boolean exclude = !exclusions.isExcluded(slideId);
         try {
             exclusions.setExcluded(slideId, exclude);
         } catch (IOException e) {

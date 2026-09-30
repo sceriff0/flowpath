@@ -71,6 +71,50 @@ class CohortSessionTest {
         assertEquals(tree.getRoots().get(0).getThreshold(), applied.applied().axis(0)[0]);
     }
 
+    /**
+     * Final review item 1: an excluded reference has no sample, so the model it would be built on is
+     * empty. Correction is disabled and says why — never an identity lookup that reads as an
+     * all-clear with every cell "=" and the run "Ready".
+     */
+    @Test
+    void anExcludedReferenceDisablesCorrectionWithAMessage() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = sampledSession(tree);
+        s.setExcluded(java.util.Set.of("ref"));
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        CohortState st = s.state();
+        assertTrue(st.correctionDisabled());
+        assertEquals(CohortSession.REFERENCE_EXCLUDED, st.message());
+        assertEquals("Reference slide is excluded — include it or pick another reference", st.message());
+        assertFalse(s.statusLine(true).contains("Ready to run"), s.statusLine(true));
+        String key = AlignmentModel.columnsOf(tree).iterator().next().key();
+        assertNull(s.lookup().alignment("s1", key));
+        assertSame(AlignmentLookup.NONE, s.lookupOn(s.model()));
+        TreeResolver.Applied applied = TreeResolver.resolve(tree, "s1", s.lookup()).applied(tree.getRoots().get(0));
+        assertEquals(List.of(TreeResolver.Source.UNCORRECTED), applied.sources());
+
+        s.setExcluded(java.util.Set.of());
+        assertFalse(s.state().correctionDisabled(), "including it again turns correction back on");
+    }
+
+    /** Final review item 1c: a rebase needs the current reference's own sample and model. */
+    @Test
+    void aRebaseIsRefusedWhileTheCurrentReferenceIsNotAligned() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = sampledSession(tree);
+        assertNull(s.rebaseRefusal("ref"), "sampled and aligned: a rebase may go ahead");
+        s.setExcluded(java.util.Set.of("ref"));
+        assertEquals(CohortSession.REBASE_NOT_ALIGNED, s.rebaseRefusal("ref"));
+        s.setExcluded(java.util.Set.of());
+        assertEquals(CohortSession.REBASE_NOT_ALIGNED, s.rebaseRefusal("ref"), "included again but not yet sampled");
+        CohortSession unscored = new CohortSession();
+        unscored.setProjectSlides(refs("ref", "s1"));
+        unscored.samplingStarted();
+        for (SlideSample sample : ReviewScorerTest.cohort().subList(0, 2)) unscored.landed(new CohortSampler.Sampled(sample));
+        assertEquals(CohortSession.REBASE_NOT_ALIGNED, unscored.rebaseRefusal("ref"), "sampled but the model is not built for it");
+        assertNull(s.rebaseRefusal(null), "no reference: confirming is not a rebase");
+    }
+
     @Test
     void theSelectionIsAValueThatSurvivesARescoreOnFreshNodes() {
         GateTree tree = ReviewScorerTest.tree();

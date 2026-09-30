@@ -57,6 +57,22 @@ public final class CohortSession {
     public static final String REFERENCE_MISSING =
             "Reference slide is not in this project — correction is off; reference numbers are used as raw thresholds";
 
+    /**
+     * The live tree's reference slide is excluded from the cohort: it has no sample, so nothing can
+     * be aligned to it. Correction is off — never an identity model that looks like an all-clear —
+     * until it is included again or another reference is picked.
+     */
+    public static final String REFERENCE_EXCLUDED =
+            "Reference slide is excluded — include it or pick another reference";
+
+    /**
+     * A rebase re-expresses every threshold through the current reference's alignments; with the
+     * current reference unsampled, or the model not built for it, there are none, and its raw
+     * numbers would be copied onto the new reference as that slide's thresholds.
+     */
+    public static final String REBASE_NOT_ALIGNED =
+            "The current reference has not been aligned yet — include it (or wait for sampling) before switching";
+
     public static final String FOREIGN_TREE =
             "This gate tree's per-slide settings belong to another project — correction and slide settings are off";
 
@@ -80,8 +96,10 @@ public final class CohortSession {
     private boolean sampling;
     private AlignmentModel.Cache cache = AlignmentModel.Cache.empty();
     private volatile AlignmentModel model = AlignmentModel.empty();
-    /** The live tree's reference slide is not in the project. */
+    /** The live tree's reference slide is not in the project, or is excluded from the cohort. */
     private volatile boolean correctionDisabled;
+    /** Why {@link #correctionDisabled}: the reference is excluded (else it is missing from the project). */
+    private volatile boolean referenceExcluded;
     /** The live tree's recorded slide names contradict this project's (see {@link CohortIdentity}). */
     private volatile boolean foreign;
     private ReviewScorer.Result review = NO_REVIEW;
@@ -189,6 +207,7 @@ public final class CohortSession {
     /** The project's excluded slides; any sample or failure held for one is dropped now. */
     public void setExcluded(Set<String> slideIds) {
         excluded = Set.copyOf(slideIds);
+        updateCorrectionDisabled();
         samples.keySet().removeAll(excluded);
         failures.keySet().removeAll(excluded);
         // Read-side guarantee: whatever a scoring already landed holds nothing for an excluded slide.
@@ -282,8 +301,11 @@ public final class CohortSession {
     }
 
     private void updateCorrectionDisabled() {
-        correctionDisabled = referenceSlideId != null && slides.size() >= 2
-                && slides.stream().noneMatch(s -> s.id().equals(referenceSlideId));
+        String reference = referenceSlideId;
+        boolean missing = reference != null && slides.size() >= 2
+                && slides.stream().noneMatch(s -> s.id().equals(reference));
+        referenceExcluded = !missing && reference != null && slides.size() >= 2 && excluded.contains(reference);
+        correctionDisabled = missing || referenceExcluded;
     }
 
     public AlignmentLookup lookup() { return lookup; }
@@ -291,6 +313,17 @@ public final class CohortSession {
     public ReviewScorer.Result review() { return review; }
     public List<SlideSample> samples() { return List.copyOf(samples.values()); }
     public SlideSample sample(String slideId) { return samples.get(slideId); }
+
+    /**
+     * Why switching away from {@code currentReference} must wait, or null when it may go ahead (or
+     * there is no current reference: confirming one is not a rebase). See {@link #REBASE_NOT_ALIGNED}.
+     */
+    public String rebaseRefusal(String currentReference) {
+        if (currentReference == null) return null;
+        boolean aligned = samples.containsKey(currentReference) && !excluded.contains(currentReference)
+                && currentReference.equals(model.referenceSlideId());
+        return aligned ? null : REBASE_NOT_ALIGNED;
+    }
 
     /** The ranking's suggestion while it is not already the live reference; never a default. */
     public String suggestedReferenceId() {
@@ -380,6 +413,7 @@ public final class CohortSession {
                 : !runAllowed ? "Not ready to run"
                 : foreign ? "Tree from another project"
                 : referenceSlideId == null ? "No reference slide"
+                : referenceExcluded ? "Reference slide excluded"
                 : "Ready to run";
         return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(),
                 slides.size() - (int) slides.stream().filter(r -> excluded.contains(r.id())).count(),
@@ -453,7 +487,7 @@ public final class CohortSession {
         }
         String message = batchRunning ? batchProgress
                 : foreign ? FOREIGN_TREE
-                : correctionDisabled ? REFERENCE_MISSING
+                : correctionDisabled ? (referenceExcluded ? REFERENCE_EXCLUDED : REFERENCE_MISSING)
                 : referenceSlideId == null ? NO_REFERENCE
                 : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), slides.size())
                 : !failures.isEmpty() ? String.format(Locale.US, "%d slide(s) could not be sampled", failures.size())

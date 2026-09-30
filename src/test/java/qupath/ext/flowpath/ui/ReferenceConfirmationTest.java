@@ -127,6 +127,42 @@ class ReferenceConfirmationTest {
         assertEquals(CohortSession.NO_REFERENCE, cohort.state().message());
     }
 
+    /**
+     * Final review item 1: reference A, rebase to B, exclude A, then undo. The tree names A again,
+     * which has no sample: correction must be off and say so, not answer an empty model as identity.
+     */
+    @Test
+    void undoingBackToAnExcludedReferenceLeavesCorrectionDisabled() {
+        GatingSession session = new GatingSession(() -> 0L, input -> {});
+        session.replaceTree(tree());
+        CohortSession cohort = new CohortSession();
+        cohort.setProjectSlides(List.of(new CohortSession.SlideRef("ref", "ref.tif"),
+                new CohortSession.SlideRef("s1", "s1.tif"), new CohortSession.SlideRef("s2", "s2.tif")));
+        cohort.samplingStarted();
+        cohort.landed(new CohortSampler.Sampled(slide("ref", 1, 0.0)));
+        cohort.landed(new CohortSampler.Sampled(slide("s1", 2, 0.4)));
+        cohort.landed(new CohortSampler.Sampled(slide("s2", 3, -0.2)));
+        cohort.samplingFinished();
+        session.confirmReference("ref", cohort.projectNames());
+        rescore(cohort, session.tree());
+        assertNull(cohort.rebaseRefusal("ref"));
+        session.recordSlideEdit("s1", "s1.tif",
+                () -> CohortSession.rebaseReference(session.tree(), "s1", cohort.lookup()));
+        rescore(cohort, session.tree());
+        cohort.setExcluded(java.util.Set.of("ref"));
+        rescore(cohort, session.tree());
+        assertFalse(cohort.state().correctionDisabled(), "s1 is the reference; excluding the old one is fine");
+
+        assertTrue(session.undo());
+        assertEquals("ref", session.tree().getReferenceSlideId());
+        rescore(cohort, session.tree());
+        assertTrue(cohort.state().correctionDisabled());
+        assertEquals(CohortSession.REFERENCE_EXCLUDED, cohort.state().message());
+        assertEquals(List.of(TreeResolver.Source.UNCORRECTED), sourcesOn(session.tree(), "s1", cohort, 0));
+        assertEquals(CohortSession.REBASE_NOT_ALIGNED, cohort.rebaseRefusal("ref"),
+                "switching from here would copy unaligned numbers onto the new reference");
+    }
+
     /** Final ruling I3: with no reference the cohort says so; the open slide is no longer offered. */
     @Test
     void noReferenceIsReportedAndNoOpenSlideIsOffered() {
