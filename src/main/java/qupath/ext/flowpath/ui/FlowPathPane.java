@@ -897,11 +897,6 @@ public class FlowPathPane extends BorderPane {
             updateBusyControls();
             return;
         }
-        // The open slide becomes the reference the first time this project's cohort is seen
-        // (spec §3), as one undo step (ruling C9), recording the project's slide names with it —
-        // once per project, never again on a later ingest (M6: that re-recorded a step, wiping
-        // redo). The resync this ingest ends in requests the pass.
-        session.applyDefaultReference(indexSlideId, projectDir.toString(), cohort.projectNames());
         int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
         String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
         if (!key.equals(lastSampledKey)) {
@@ -2573,11 +2568,7 @@ public class FlowPathPane extends BorderPane {
         File file = Dialogs.promptForFile("Load FlowPath", null, "JSON", ".json");
         if (file == null) return;
         try {
-            // A tree with no reference gets the open slide as its default inside the load's own
-            // undo step (final ruling I3), whenever there is a cohort to anchor it in.
-            boolean anchor = cohort.state().available() && indexSlideId != null
-                    && cohort.projectNames().containsKey(indexSlideId);
-            session.replaceTree(FlowPathSerializer.load(file), anchor ? indexSlideId : null, cohort.projectNames());
+            session.replaceTree(FlowPathSerializer.load(file));
             endActiveReview();
             resyncToTree();
 
