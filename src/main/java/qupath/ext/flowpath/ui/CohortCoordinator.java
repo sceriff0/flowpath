@@ -9,8 +9,11 @@ import qupath.ext.flowpath.cohort.SlideSource;
 import qupath.ext.flowpath.model.GateTree;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 /**
@@ -46,6 +49,12 @@ final class CohortCoordinator {
     private volatile long sampleGeneration;
     private volatile long scoreGeneration;
     private boolean sampling;
+    /**
+     * The running (or last) run's slides, in order; FX thread only. {@link #sampleMore} appends
+     * to it while a run goes, so an added slide is sampled after the others and the run still
+     * finishes once.
+     */
+    private List<SlideSource> queue = new ArrayList<>();
     /** Where the running (or just finished) run's landmarks belong; null when they are not to be written. */
     private Path cacheFile;
     /** A run finished and its landmarks wait for the next adopted scoring, which includes its last slide. */
@@ -87,7 +96,36 @@ final class CohortCoordinator {
         this.sampledCellsPerSlide = cellsPerSlide;
         cacheDue = false;
         session.samplingStarted();
-        next(generation, List.copyOf(sources), 0, tree.deepCopy(), cellsPerSlide);
+        queue = new ArrayList<>(sources);
+        next(generation, 0, tree.deepCopy(), cellsPerSlide);
+    }
+
+    /**
+     * Sample {@code sources} too, keeping every sample and failure the session holds — for a slide
+     * included again, whose sample was never taken while it was excluded; a full {@link #start}
+     * would clear and re-read every other slide. While a run goes the sources join its queue
+     * (those it already holds are not queued twice); otherwise a new run of just these starts,
+     * generation-stamped like {@link #start} and reported through the same {@link #sampling()}.
+     *
+     * @param cacheFile where this run's landmarks belong, as for {@link #start}; ignored while a
+     *                  run goes (that run's file stands)
+     */
+    void sampleMore(List<SlideSource> sources, GateTree tree, int cellsPerSlide, Path cacheFile) {
+        if (sampling) {
+            Set<String> queued = new HashSet<>();
+            for (SlideSource q : queue) queued.add(q.id());
+            for (SlideSource source : sources) if (queued.add(source.id())) queue.add(source);
+            return;
+        }
+        if (sources.isEmpty()) return;
+        long generation = ++sampleGeneration;
+        sampling = true;
+        this.cacheFile = cacheFile;
+        this.sampledCellsPerSlide = cellsPerSlide;
+        cacheDue = false;
+        session.samplingResumed();
+        queue = new ArrayList<>(sources);
+        next(generation, 0, tree.deepCopy(), cellsPerSlide);
     }
 
     void cancel() {
@@ -100,8 +138,8 @@ final class CohortCoordinator {
         }
     }
 
-    private void next(long generation, List<SlideSource> sources, int i, GateTree tree, int cells) {
-        if (i >= sources.size()) {
+    private void next(long generation, int i, GateTree tree, int cells) {
+        if (i >= queue.size()) {
             sampling = false;
             // Not written from here: the rescore the last slide asked for has not landed yet, so
             // the model still lacks that slide's landmarks. The next adopted scoring has them.
@@ -110,14 +148,15 @@ final class CohortCoordinator {
             host.samplingFinished();
             return;
         }
+        SlideSource source = queue.get(i);
         background.execute(() -> {
             if (generation != sampleGeneration) return;
-            CohortSampler.Outcome outcome = CohortSampler.sampleOne(sources.get(i), tree, cells);
+            CohortSampler.Outcome outcome = CohortSampler.sampleOne(source, tree, cells);
             fxThread.execute(() -> {
                 if (generation != sampleGeneration) return;
                 session.landed(outcome);
                 host.sampled(outcome);
-                next(generation, sources, i + 1, tree, cells);
+                next(generation, i + 1, tree, cells);
             });
         });
     }

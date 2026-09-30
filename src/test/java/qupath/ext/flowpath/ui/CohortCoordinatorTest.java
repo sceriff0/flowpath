@@ -89,6 +89,73 @@ class CohortCoordinatorTest {
         assertEquals(List.of("sampled b", "finished"), host.events, "the superseded slide a never lands");
     }
 
+    /** Final review item 4: sampling one re-included slide keeps every other slide's sample. */
+    @Test
+    void sampleMoreKeepsTheExistingSamplesAndLandsTheNewOne() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        CohortSession session = new CohortSession();
+        session.setProjectSlides(List.of(new CohortSession.SlideRef("a", "a.tif"), new CohortSession.SlideRef("b", "b.tif"),
+                new CohortSession.SlideRef("c", "c.tif")));
+        RecordingHost host = new RecordingHost();
+        CohortCoordinator c = new CohortCoordinator(session, bg, fx, host);
+        c.start(List.of(source("a"), source("b")), GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2), 0);
+        bg.runAll();
+        fx.runAll();
+        bg.runAll();
+        fx.runAll();
+        var sampleA = session.sample("a");
+        assertNotNull(sampleA);
+
+        c.sampleMore(List.of(source("c")), GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2), 0, null);
+        assertTrue(c.sampling(), "joins the same sampling flag BusyState reads");
+        assertSame(sampleA, session.sample("a"), "nothing is cleared when the run starts");
+        assertNotNull(session.sample("b"));
+        bg.runAll();
+        fx.runAll();
+        bg.runAll();
+        fx.runAll();
+        assertFalse(c.sampling());
+        assertSame(sampleA, session.sample("a"));
+        assertNotNull(session.sample("c"));
+        assertEquals(List.of("sampled a", "sampled b", "finished", "sampled c", "finished"), host.events);
+    }
+
+    /** Added while a run is in flight: queued behind it, once, and the run finishes once. */
+    @Test
+    void sampleMoreDuringARunJoinsItsQueue() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        CohortSession session = new CohortSession();
+        session.setProjectSlides(List.of(new CohortSession.SlideRef("a", "a.tif"), new CohortSession.SlideRef("b", "b.tif"),
+                new CohortSession.SlideRef("c", "c.tif")));
+        RecordingHost host = new RecordingHost();
+        CohortCoordinator c = new CohortCoordinator(session, bg, fx, host);
+        c.start(List.of(source("a"), source("b")), GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2), 0);
+        bg.runNext();
+        c.sampleMore(List.of(source("b"), source("c")), GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2), 0, null);
+        for (int i = 0; i < 5; i++) {
+            bg.runAll();
+            fx.runAll();
+        }
+        assertEquals(List.of("sampled a", "sampled b", "sampled c", "finished"), host.events);
+        assertEquals(3, session.samples().size());
+    }
+
+    /** A cancel (another project) drops the additive run too. */
+    @Test
+    void cancelDropsAnAdditiveRun() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        CohortSession session = new CohortSession();
+        session.setProjectSlides(List.of(new CohortSession.SlideRef("a", "a.tif"), new CohortSession.SlideRef("b", "b.tif")));
+        RecordingHost host = new RecordingHost();
+        CohortCoordinator c = new CohortCoordinator(session, bg, fx, host);
+        c.sampleMore(List.of(source("b")), GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2), 0, null);
+        c.cancel();
+        bg.runAll();
+        fx.runAll();
+        assertTrue(host.events.isEmpty(), host.events.toString());
+        assertFalse(c.sampling());
+    }
+
     @Test
     void onlyTheNewestRescoreIsAdopted() {
         ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();

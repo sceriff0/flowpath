@@ -329,7 +329,11 @@ its row is greyed. It is saved with the project (on the image entry, not in `flo
 it stays excluded after reopening, and it is not an undo step — toggle it again to reverse it.
 **Run on all slides** still gates an excluded slide, uncorrected, and records it in
 `qc_summary.csv` (`cohort_excluded`). Any answers you gave on it stay on the tree and come back
-if you include it again. The reference slide cannot be excluded: pick another reference first.
+if you include it again; including a slide samples just that slide, and every other slide keeps
+its sample. The reference slide cannot be excluded: pick another reference first. If the tree's
+reference is excluded anyway (say, after an undo), correction is switched off and the window says
+*Reference slide is excluded — include it or pick another reference*: include it again, and once
+it is sampled you can switch to another reference.
 
 ### Run on all slides
 

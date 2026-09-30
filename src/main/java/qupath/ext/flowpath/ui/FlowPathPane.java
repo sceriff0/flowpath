@@ -37,6 +37,7 @@ import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.cohort.SlideSample;
+import qupath.ext.flowpath.cohort.SlideSource;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
@@ -909,8 +910,8 @@ public class FlowPathPane extends BorderPane {
     /**
      * Bring {@link #cohort} in line with the project: its slides and which of them are excluded
      * ({@link CohortExclusions}, read before any sampling starts), a sampling run of the included
-     * slides when the slides or the sample size changed (or a slide was included again, see
-     * {@link #toggleExcluded}), and a rescore. It never
+     * slides when the slides or the sample size changed, and a rescore. A slide included again is
+     * sampled on its own by {@link #toggleExcluded}. It never
      * chooses a reference: a tree has none until the user confirms one ({@link #chooseReference}).
      * Called when an ingest lands or clears, before its resync requests the pass, and after an
      * exclusion toggle or a sample-size change.
@@ -940,7 +941,7 @@ public class FlowPathPane extends BorderPane {
         int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
         // The exclusions are deliberately NOT part of the key: excluding a slide only drops its
         // sample and review (CohortSession.setExcluded) and rescores, keeping every other slide's
-        // sample. Including one again forces a re-sample instead (toggleExcluded resets the key).
+        // sample. Including one again samples just that slide (toggleExcluded → sampleIncluded).
         String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
         if (!key.equals(lastSampledKey)) {
             lastSampledKey = key;
@@ -1441,7 +1442,7 @@ public class FlowPathPane extends BorderPane {
      * Exclude or include a slide (spec §5): project metadata, not a tree edit, so no undo step.
      * Excluding the current reference is refused; including it is not. A selection or pending click-through on the slide just
      * excluded is dropped; excluding keeps every other slide's sample and rescores, including a
-     * slide again re-samples (its sample was never taken while it was excluded).
+     * slide again samples just that slide, keeping every other sample.
      */
     private void toggleExcluded(String slideId) {
         Project<BufferedImage> project = qupath.getProject();
@@ -1470,14 +1471,28 @@ public class FlowPathPane extends BorderPane {
             }
             if (pendingFocus != null && slideId.equals(pendingFocus.slideId())) pendingFocus = null;
             if (pendingAdjust != null && slideId.equals(pendingAdjust.slideId())) pendingAdjust = null;
-        } else {
-            // An included slide has no sample (it was never sampled while excluded): force one run.
-            lastSampledKey = null;
         }
         // Excluding needs no re-sample: setExcluded drops the slide's sample and review, and the
         // refresh ends in a rescore either way.
         refreshCohort();
+        if (!exclude) sampleIncluded(project, slideId);
         renderCohort();
+    }
+
+    /**
+     * A slide included again has no sample (it was never sampled while excluded): sample just it,
+     * keeping every other slide's sample ({@link CohortCoordinator#sampleMore}). Nothing to do when
+     * the refresh just started a full run (its key changed) — that run already reads the slide —
+     * or when the cohort is unavailable.
+     */
+    private void sampleIncluded(Project<BufferedImage> project, String slideId) {
+        if (lastSampledKey == null || !cohort.state().available() || cohort.sample(slideId) != null) return;
+        Path projectDir = ProjectSlides.projectDir(project);
+        List<SlideSource> sources = ProjectSlides.sources(project).stream()
+                .filter(source -> slideId.equals(source.id())).toList();
+        cohortCoordinator.sampleMore(sources, session.tree(), CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()),
+                AlignmentCacheFile.pathFor(projectDir));
+        updateBusyControls();
     }
 
     /**

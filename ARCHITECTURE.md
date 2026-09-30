@@ -500,10 +500,17 @@ of the sources after handing the set to `CohortSession.setExcluded`), so it has 
 `CohortSession`'s lookup answers null for it — identity through the one resolution point. A batch
 run still gates it, uncorrected, and records `cohort_excluded` in `qc_summary.csv`. Its
 `SlideSetting`s stay on the tree and reappear if it is included again. Excluding the current
-reference is refused ("Pick another reference first"). The exclusion set is deliberately **not**
-part of the sampling key: excluding a slide drops only its sample and review
-(`CohortSession.setExcluded`) and rescores, keeping every other slide's sample, while including
-one again forces a single re-sample (its sample was never taken). A failed metadata save
+reference is refused ("Pick another reference first"); including it never is. A tree whose
+reference is excluded anyway — an undo past a rebase, a loaded tree, a headless run — has
+correction switched off with `CohortSession.REFERENCE_EXCLUDED`, exactly as a missing reference
+is (`state()`, the status line, and `lookupOn`, so a batch gates on the raw reference numbers),
+never an empty model answered as identity. Switching reference away from one with no sample or
+no model built for it is refused (`CohortSession.rebaseRefusal`): the rebase would copy its
+unaligned numbers onto the new reference. The exclusion set is deliberately **not** part of the
+sampling key: excluding a slide drops only its sample and review (`CohortSession.setExcluded`)
+and rescores, keeping every other slide's sample, while including one again samples only that
+slide (`CohortCoordinator.sampleMore`, which keeps every other sample and failure, and joins the
+queue of a run already going). A failed metadata save
 restores the entry's previous value before the error is reported (`CohortExclusions.write`), so a
 refused toggle never takes effect in memory.
 

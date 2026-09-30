@@ -246,6 +246,11 @@ public final class CohortSession {
         failures.clear();
     }
 
+    /** A run that samples more slides, keeping every sample and failure already held. */
+    public void samplingResumed() {
+        sampling = true;
+    }
+
     public void landed(CohortSampler.Outcome outcome) {
         String slideId = switch (outcome) {
             case CohortSampler.Sampled s -> s.slideId();
