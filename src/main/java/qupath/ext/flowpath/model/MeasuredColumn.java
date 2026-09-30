@@ -69,6 +69,30 @@ public final class MeasuredColumn {
         this.std = stats.getStd(key);
         this.min = stats.getMin(key);
         this.max = stats.getMax(key);
+        this.roundFailed = stats.roundMask().failedFor(RoundMask.markerOf(key));
+    }
+
+    /** The cells whose imaging round for this column's marker failed QC; {@code null} when none. */
+    private final java.util.BitSet roundFailed;
+
+    /**
+     * <b>Whether cell {@code i} has a usable measurement here</b>: a finite value from a round that
+     * passed QC. The question every reader of a raw column asks instead of {@code isFinite} —
+     * a failed round's value is present but is no measurement, exactly like NaN.
+     */
+    public boolean isMeasured(int cell) {
+        return Double.isFinite(values[cell]) && (roundFailed == null || !roundFailed.get(cell));
+    }
+
+    /**
+     * {@code mask} (null = every cell) without the cells whose round for this column failed;
+     * {@code mask} itself when none did.
+     */
+    public boolean[] withoutRoundFailures(boolean[] mask) {
+        if (roundFailed == null || roundFailed.isEmpty()) return mask;
+        boolean[] out = new boolean[values.length];
+        for (int i = 0; i < out.length; i++) out[i] = (mask == null || mask[i]) && !roundFailed.get(i);
+        return out;
     }
 
     /**

@@ -58,7 +58,7 @@ abstract class TwoAxisGateEditor<G extends GateNode> extends AbstractGateTypeEdi
         double[] allX = index.getResolvedColumn(x.channel(), x.compartment(), x.statistic());
         double[] allY = index.getResolvedColumn(y.channel(), y.compartment(), y.statistic());
         boolean[] roi = context.roiMask();
-        boolean[] ancestor = context.ancestorMask();
+        boolean[] ancestor = plotMask();
         double[][] filtered = AxisMath.pairedMaskedValues(allX, allY, roi, ancestor);
         // Drawn in reference units (identity unless this slide is corrected); the overlay is the
         // live gate's reference numbers, so positions and outline share one space.

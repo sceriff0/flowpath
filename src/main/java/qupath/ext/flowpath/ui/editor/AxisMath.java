@@ -101,6 +101,28 @@ public final class AxisMath {
         return out;
     }
 
+    /**
+     * {@code ancestorMask} with every cell in {@code failed} removed — the cells a failed imaging
+     * round leaves Unmeasured on this gate's axes, which the predicate counts in no branch and a
+     * plot therefore must not draw. Returns {@code ancestorMask} itself when nothing failed.
+     *
+     * @param n       the number of cells
+     * @param failed  per axis, the cells whose round for that axis' marker failed; {@code null}
+     *                entries (a marker in no failing round) are skipped
+     */
+    public static boolean[] withoutRoundFailures(boolean[] ancestorMask, int n, java.util.BitSet... failed) {
+        boolean any = false;
+        for (java.util.BitSet b : failed) any |= b != null && !b.isEmpty();
+        if (!any) return ancestorMask;
+        boolean[] out = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            boolean keep = ancestorMask == null || ancestorMask[i];
+            for (java.util.BitSet b : failed) keep &= b == null || !b.get(i);
+            out[i] = keep;
+        }
+        return out;
+    }
+
     /** Whether cell {@code i} passes both masks; a {@code null} mask passes everything. */
     public static boolean passes(int i, boolean[] roiMask, boolean[] ancestorMask) {
         if (roiMask != null && !roiMask[i]) return false;

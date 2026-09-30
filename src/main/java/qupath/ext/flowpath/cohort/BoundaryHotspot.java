@@ -99,7 +99,7 @@ public final class BoundaryHotspot {
                 double[] raw = column.values();
                 double c = columns.get(k) == null ? Double.NaN : cofactors.applyAsDouble(columns.get(k));
                 if (!Double.isFinite(c) || c <= 0) c = Landmarks.cofactor(raw);
-                boolean[] near = boundaryCells(raw, parent,
+                boolean[] near = boundaryCells(raw, column.withoutRoundFailures(parent),
                         TreeResolver.correctionFor(live, gate, k, slideId, lookup), reference.axis(k)[0], c);
                 for (int i = 0; i < near.length; i++) cells[i] |= near[i];
             }

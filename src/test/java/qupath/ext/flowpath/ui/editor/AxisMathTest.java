@@ -147,4 +147,17 @@ class AxisMathTest {
         assertEquals(30, AxisMath.remapRawThreshold(mean,
                 column(index, "CD3", Compartment.WHOLE_CELL, Statistic.MEAN), 30), 0, "same column");
     }
+
+    @Test
+    void roundFailuresLeaveThePlotMaskAndNothingElse() {
+        java.util.BitSet failed = new java.util.BitSet();
+        failed.set(1);
+        boolean[] ancestor = {true, true, false, true};
+        assertArrayEquals(new boolean[]{true, false, false, true},
+                AxisMath.withoutRoundFailures(ancestor, 4, failed, null));
+        assertArrayEquals(new boolean[]{true, false, true, true},
+                AxisMath.withoutRoundFailures(null, 4, failed));
+        assertSame(ancestor, AxisMath.withoutRoundFailures(ancestor, 4, null, new java.util.BitSet()),
+                "nothing failed: the ancestor mask itself");
+    }
 }

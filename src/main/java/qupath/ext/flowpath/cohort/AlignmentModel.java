@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
@@ -158,8 +159,8 @@ public final class AlignmentModel {
                 }
                 Landmarks lm = kept.get(key);
                 if (lm == null || Double.compare(lm.cofactor(), c) != 0) {
-                    double[] raw = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats()).values();
-                    lm = Landmarks.find(raw, s.clean(), c);
+                    MeasuredColumn column = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats());
+                    lm = Landmarks.find(column.values(), column.withoutRoundFailures(s.clean()), c);
                     kept.put(key, lm);
                 }
                 perColumn.put(key, lm);
@@ -225,10 +226,12 @@ public final class AlignmentModel {
     /** The sample's clean values for {@code col}, or null when the slide lacks the channel. */
     private static double[] cleanValues(SlideSample s, ColumnRef col) {
         if (s.index().getMarkerIndex(col.channel()) < 0) return null;
-        double[] raw = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats()).values();
+        MeasuredColumn column = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats());
+        double[] raw = column.values();
+        boolean[] keep = column.withoutRoundFailures(s.clean());
         double[] out = new double[raw.length];
         int n = 0;
-        for (int i = 0; i < raw.length; i++) if (s.clean()[i]) out[n++] = raw[i];
+        for (int i = 0; i < raw.length; i++) if (keep[i]) out[n++] = raw[i];
         return Arrays.copyOf(out, n);
     }
 

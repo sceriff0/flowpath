@@ -71,7 +71,7 @@ public final class CohortCurves {
             double[] y = rawY == null ? null : new double[parent.length];
             int n = 0;
             for (int i = 0; i < parent.length; i++) {
-                if (!parent[i] || !Double.isFinite(rawX[i]) || (rawY != null && !Double.isFinite(rawY[i]))) continue;
+                if (!parent[i] || !columns[0].isMeasured(i) || (rawY != null && !columns[1].isMeasured(i))) continue;
                 x[n] = align[0].inverse(rawX[i]);
                 if (y != null) y[n] = align[1].inverse(rawY[i]);
                 n++;

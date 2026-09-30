@@ -14,6 +14,7 @@ import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
+import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.SlideSetting;
@@ -106,6 +107,22 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
      * such axis or there is nothing to resolve against yet. Addressed by slot, through
      * {@link GateAxis}, so an unset X channel cannot shift the Y axis into slot 0.
      */
+    /**
+     * The cells this gate's plot shows beyond the ROI: those reaching the gate (the ancestor
+     * mask) whose imaging round for none of its axes failed QC — exactly the cells the predicate
+     * judges, so the plot and the counts agree.
+     */
+    final boolean[] plotMask() {
+        CellIndex index = context.cellIndex();
+        if (index == null || context.markerStats() == null) return context.ancestorMask();
+        int axes = GateAxis.axisCount(gate);
+        java.util.BitSet[] failed = new java.util.BitSet[axes];
+        for (int slot = 0; slot < axes; slot++) {
+            failed[slot] = context.markerStats().roundMask().failedFor(GateAxis.of(gate, slot).channel());
+        }
+        return AxisMath.withoutRoundFailures(context.ancestorMask(), index.size(), failed);
+    }
+
     final MeasuredColumn axisColumn(int slot) {
         if (slot >= GateAxis.axisCount(gate)) return null;
         return GateAxis.of(gate, slot).columnIn(context.cellIndex(), context.markerStats());

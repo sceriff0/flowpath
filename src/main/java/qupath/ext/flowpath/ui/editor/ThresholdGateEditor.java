@@ -126,7 +126,7 @@ final class ThresholdGateEditor extends AbstractGateTypeEditor<GateNode> {
         if (col == null) return;
 
         double[] displayValues = inReference(0,
-                AxisMath.measuredValues(col.values(), context.roiMask(), context.ancestorMask()));
+                AxisMath.measuredValues(col.values(), context.roiMask(), plotMask()));
         // Global per-column clip percentiles, so the same channel+compartment+statistic uses
         // one axis everywhere it appears in the gate tree. When the parent-filtered cells sit
         // outside it, the histogram's "X cells outside clip range" message says so.

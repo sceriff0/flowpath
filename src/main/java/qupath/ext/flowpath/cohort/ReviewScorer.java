@@ -123,7 +123,7 @@ public final class ReviewScorer {
 
                     int measured = 0;
                     for (int i = 0; i < raw.length; i++) {
-                        if (parent[i] && Double.isFinite(raw[i])) measured++;
+                        if (parent[i] && measuredColumn.isMeasured(i)) measured++;
                     }
                     if (measured < MIN_COVERAGE * parentCount) {
                         flags.add(ReviewItem.Flag.CANT_JUDGE);
