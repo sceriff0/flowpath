@@ -89,7 +89,7 @@ public final class CohortSession {
     private volatile String referenceSlideId;
     private ReferenceRanking.Result ranking = ReferenceRanking.Result.NONE;
     /** Slides the project marks {@code flowpath.cohort.excluded}: never sampled, ranked or reviewed. */
-    private Set<String> excluded = Set.of();
+    private volatile Set<String> excluded = Set.of();
     private ReviewItem.Key selected;
     /** The gate whose group is being reviewed, as a value; see {@link #selectGroup}. */
     private ReviewGroup.Key selectedGroup;
@@ -111,7 +111,7 @@ public final class CohortSession {
 
     private Alignment currentAlignment(String slideId, String column) {
         AlignmentModel m = model;
-        return answers(m) ? m.alignment(slideId, column) : null;
+        return !excluded.contains(slideId) && answers(m) ? m.alignment(slideId, column) : null;
     }
 
     /** Whether the lookup may answer from {@code m} as the session now stands. */
@@ -128,7 +128,7 @@ public final class CohortSession {
      */
     public AlignmentLookup lookupOn(AlignmentModel m) {
         if (m == null || !answers(m)) return AlignmentLookup.NONE;
-        return m::alignment;
+        return (slideId, column) -> excluded.contains(slideId) ? null : m.alignment(slideId, column);
     }
 
     /**
@@ -146,6 +146,7 @@ public final class CohortSession {
             model = AlignmentModel.empty();
             review = NO_REVIEW;
             ranking = ReferenceRanking.Result.NONE;
+            excluded = Set.of();
             selected = null;
             selectedGroup = null;
         }
@@ -190,6 +191,11 @@ public final class CohortSession {
         excluded = Set.copyOf(slideIds);
         samples.keySet().removeAll(excluded);
         failures.keySet().removeAll(excluded);
+        // Read-side guarantee: whatever a scoring already landed holds nothing for an excluded slide.
+        review = new ReviewScorer.Result(
+                review.items().stream().filter(i -> !excluded.contains(i.key().slideId())).toList(),
+                review.infos().stream().filter(i -> !excluded.contains(i.slideId())).toList(),
+                review.rules());
     }
 
     public Set<String> excluded() { return excluded; }
@@ -245,6 +251,9 @@ public final class CohortSession {
 
     /** @return true when any sampled slide's alignment for any scored column changed */
     public boolean adopt(Scored scored) {
+        // A scoring that still holds a slide excluded since it began is stale: the rescore every
+        // exclusion change triggers replaces it.
+        if (scored.samples().stream().anyMatch(x -> excluded.contains(x.slideId()))) return false;
         AlignmentModel previous = model;
         boolean changed = false;
         for (String slideId : samples.keySet()) {
@@ -260,7 +269,6 @@ public final class CohortSession {
             SlideSample current = samples.get(scopedSample.slideId());
             if (current != null && current.index() == scopedSample.index()) samples.put(scopedSample.slideId(), scopedSample);
         }
-        samples.keySet().removeAll(excluded);
         review = scored.review();
         ranking = scored.ranking();
         return changed;
@@ -288,7 +296,7 @@ public final class CohortSession {
     public String suggestedReferenceId() {
         if (foreign) return null;
         String id = ranking.suggestedId();
-        return id != null && !id.equals(referenceSlideId) && projectNames.containsKey(id) ? id : null;
+        return id != null && !id.equals(referenceSlideId) && !excluded.contains(id) && projectNames.containsKey(id) ? id : null;
     }
 
     public ReferenceRanking.Result ranking() { return ranking; }
