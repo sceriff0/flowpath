@@ -112,11 +112,6 @@ public final class Compartment {
         return c != null && KNOWN.contains(c) ? c : null;
     }
 
-    /** Backwards-compatible alias for {@link #known}. */
-    public static Compartment fromToken(String token) {
-        return known(token);
-    }
-
     /** The three FlowPath has an opinion about, in display order. */
     public static List<Compartment> known() {
         return KNOWN;

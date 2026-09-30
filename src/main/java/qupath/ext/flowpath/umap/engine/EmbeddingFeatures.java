@@ -203,10 +203,10 @@ public sealed interface EmbeddingFeatures {
          * <p>
          * {@code f} indexes the <em>ticked</em> markers, not the panel: an excluded
          * marker's column has no {@code f} and so cannot be asked for. Not a defensive
-         * copy, for the reason {@link CellIndex#getMarkerValuesRaw(int)} gives.
+         * copy, for the reason {@link CellIndex#getMarkerValues(int)} gives.
          */
         public double[] column(int f) {
-            return source.getMarkerValuesRaw(sourceColumns[f]);
+            return source.getMarkerValues(sourceColumns[f]);
         }
 
         /**

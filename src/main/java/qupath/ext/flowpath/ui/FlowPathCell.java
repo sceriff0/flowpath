@@ -231,27 +231,10 @@ public class FlowPathCell extends TreeCell<Object> {
         public final GateNode parentGate;
         public final Branch branch;
         public final int branchIndex;
-        /** @deprecated Use the Branch-based constructor instead. */
-        public final boolean isPositive;
-
-        /**
-         * New generic constructor using Branch reference.
-         */
         public BranchItem(GateNode parentGate, Branch branch, int branchIndex) {
             this.parentGate = parentGate;
             this.branch = branch;
             this.branchIndex = branchIndex;
-            this.isPositive = (branchIndex == 0);
-        }
-
-        /**
-         * Backward-compatible constructor for threshold gates.
-         */
-        public BranchItem(GateNode parentGate, boolean isPositive) {
-            this.parentGate = parentGate;
-            this.branchIndex = isPositive ? 0 : 1;
-            this.branch = parentGate.getBranches().get(this.branchIndex);
-            this.isPositive = isPositive;
         }
     }
 

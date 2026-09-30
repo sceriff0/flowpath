@@ -152,7 +152,7 @@ public class UmapResult {
         String[] rawMarkers = markerStats == null ? cellIndex.getMarkerNames() : new String[0];
         double[][] rawValues = new double[rawMarkers.length][];
         for (int m = 0; m < rawMarkers.length; m++) {
-            rawValues[m] = cellIndex.getMarkerValuesRaw(m);
+            rawValues[m] = cellIndex.getMarkerValues(m);
         }
 
         try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {

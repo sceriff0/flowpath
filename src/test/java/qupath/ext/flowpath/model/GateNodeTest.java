@@ -128,13 +128,13 @@ class GateNodeTest {
     @Test
     void transferCountsFromCopiesCounts() {
         var source = new GateNode("CD45");
-        source.setPosCount(42);
-        source.setNegCount(58);
+        source.getBranches().get(0).setCount(42);
+        source.getBranches().get(1).setCount(58);
 
         var target = new GateNode("CD45");
         target.transferCountsFrom(source);
 
-        assertEquals(42, target.getPosCount());
-        assertEquals(58, target.getNegCount());
+        assertEquals(42, target.getBranches().get(0).getCount());
+        assertEquals(58, target.getBranches().get(1).getCount());
     }
 }

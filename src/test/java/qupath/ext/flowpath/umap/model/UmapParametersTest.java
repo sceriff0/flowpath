@@ -32,36 +32,36 @@ class UmapParametersTest {
 
     @Test
     void fourArgConstructorDefaultsNegativeSamples() {
-        var params = new UmapParameters(15, 0.1, 1.0, 200);
+        var params = new UmapParameters(15, 0.1, 1.0, 200, 5);
         assertEquals(5, params.negativeSamples());
     }
 
     @Test
     void kMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(0, 0.1, 1.0, 200));
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(-1, 0.1, 1.0, 200));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(0, 0.1, 1.0, 200, 5));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(-1, 0.1, 1.0, 200, 5));
     }
 
     @Test
     void minDistMustBeNonNegative() {
-        assertDoesNotThrow(() -> new UmapParameters(15, 0.0, 1.0, 200));
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, -0.1, 1.0, 200));
+        assertDoesNotThrow(() -> new UmapParameters(15, 0.0, 1.0, 200, 5));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, -0.1, 1.0, 200, 5));
     }
 
     @Test
     void spreadMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 0.0, 200));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 0.0, 200, 5));
     }
 
     @Test
     void minDistMustNotExceedSpread() {
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 2.0, 1.0, 200));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 2.0, 1.0, 200, 5));
     }
 
     @Test
     void epochsMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 1.0, 0));
-        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 1.0, -10));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 1.0, 0, 5));
+        assertThrows(IllegalArgumentException.class, () -> new UmapParameters(15, 0.1, 1.0, -10, 5));
     }
 
     @Test
@@ -73,7 +73,7 @@ class UmapParametersTest {
     @Test
     void boundaryValuesAccepted() {
         assertDoesNotThrow(() -> new UmapParameters(1, 0.001, 0.001, 1, 1));
-        assertDoesNotThrow(() -> new UmapParameters(15, 1.0, 1.0, 200)); // minDist == spread
+        assertDoesNotThrow(() -> new UmapParameters(15, 1.0, 1.0, 200, 5)); // minDist == spread
     }
 
     @Test

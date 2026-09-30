@@ -302,12 +302,6 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public List<GateNode> getNegativeChildren() { return negativeBranch.getChildren(); }
     public void setNegativeChildren(List<GateNode> children) { negativeBranch.setChildren(children); }
 
-    public int getPosCount() { return positiveBranch.getCount(); }
-    public void setPosCount(int count) { positiveBranch.setCount(count); }
-
-    public int getNegCount() { return negativeBranch.getCount(); }
-    public void setNegCount(int count) { negativeBranch.setCount(count); }
-
     // ========== Generic methods using branches ==========
 
     public boolean isLeaf() {

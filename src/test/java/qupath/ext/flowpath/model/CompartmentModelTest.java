@@ -19,8 +19,8 @@ class CompartmentModelTest {
         assertEquals("Nucleus", Compartment.NUCLEAR.token());
         assertEquals("Cytoplasm", Compartment.CYTOPLASMIC.token());
         assertEquals("Cell", Compartment.WHOLE_CELL.token());
-        assertEquals(Compartment.NUCLEAR, Compartment.fromToken("nucleus"));
-        assertNull(Compartment.fromToken("bogus"));
+        assertEquals(Compartment.NUCLEAR, Compartment.known("nucleus"));
+        assertNull(Compartment.known("bogus"));
         assertEquals(Compartment.WHOLE_CELL, Compartment.defaultCompartment());
     }
 

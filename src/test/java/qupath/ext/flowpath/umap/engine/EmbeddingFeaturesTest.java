@@ -199,7 +199,7 @@ class EmbeddingFeaturesTest {
         CellIndex index = threeMarkers(5);
         var features = selected(index, excluding("CD3"));
 
-        assertSame(index.getMarkerValuesRaw(1), features.column(0),
+        assertSame(index.getMarkerValues(1), features.column(0),
                 "feature 0 is CD8 — the index's column 1, not a copy of it");
         assertSame(index.getObjects(), features.objects());
     }

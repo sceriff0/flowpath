@@ -117,7 +117,7 @@ public final class MarkerSelection {
             String[] parts = lines[i].split("\t", -1);
             if (parts.length != 4) continue;
             String marker = parts[0];
-            Compartment c = Compartment.fromToken(parts[1]);
+            Compartment c = Compartment.known(parts[1]);
             Statistic s = Statistic.fromToken(parts[2]);
             if (marker.isEmpty() || c == null || s == null) continue;
             boolean included = !"0".equals(parts[3]);

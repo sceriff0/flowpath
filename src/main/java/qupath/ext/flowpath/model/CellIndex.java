@@ -560,13 +560,6 @@ public class CellIndex {
         return values[markerIndex];
     }
 
-    /**
-     * Explicit read-only alias for {@link #getMarkerValues(int)}, kept for call sites
-     * that want the no-copy contract stated at the call rather than inferred.
-     */
-    public double[] getMarkerValuesRaw(int markerIndex) {
-        return values[markerIndex];
-    }
 
     // There is deliberately no toMatrix() here any more.
     //

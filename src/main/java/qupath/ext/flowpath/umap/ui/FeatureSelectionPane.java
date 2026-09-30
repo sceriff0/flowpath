@@ -196,7 +196,7 @@ final class FeatureSelectionPane extends VBox {
 
     private static final class CompartmentStringConverter extends javafx.util.StringConverter<Compartment> {
         @Override public String toString(Compartment c) { return c == null ? "" : c.displayName(); }
-        @Override public Compartment fromString(String s) { return Compartment.fromToken(s); }
+        @Override public Compartment fromString(String s) { return Compartment.known(s); }
     }
 
     private static final class StatisticStringConverter extends javafx.util.StringConverter<Statistic> {

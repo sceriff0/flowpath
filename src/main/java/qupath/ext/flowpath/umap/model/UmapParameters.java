@@ -19,11 +19,6 @@ public record UmapParameters(int k, double minDist, double spread, int epochs, i
         if (negativeSamples <= 0) throw new IllegalArgumentException("negativeSamples must be > 0, got: " + negativeSamples);
     }
 
-    /** Backward-compatible constructor defaulting negativeSamples to 5. */
-    public UmapParameters(int k, double minDist, double spread, int epochs) {
-        this(k, minDist, spread, epochs, 5);
-    }
-
     /**
      * Default UMAP parameters with {@link #ADAPTIVE_EPOCHS} as the sentinel for
      * epochs — the compute service substitutes a concrete count based on the

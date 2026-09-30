@@ -48,17 +48,17 @@ class GateTreeTest {
         copyNode.getPositiveChildren().add(copyChild);
 
         // Set counts on copy
-        copyNode.setPosCount(100);
-        copyNode.setNegCount(200);
-        copyChild.setPosCount(30);
-        copyChild.setNegCount(70);
+        copyNode.getBranches().get(0).setCount(100);
+        copyNode.getBranches().get(1).setCount(200);
+        copyChild.getBranches().get(0).setCount(30);
+        copyChild.getBranches().get(1).setCount(70);
 
         GateTree.transferCounts(List.of(orig), List.of(copyNode));
 
-        assertEquals(100, orig.getPosCount());
-        assertEquals(200, orig.getNegCount());
-        assertEquals(30, orig.getPositiveChildren().get(0).getPosCount());
-        assertEquals(70, orig.getPositiveChildren().get(0).getNegCount());
+        assertEquals(100, orig.getBranches().get(0).getCount());
+        assertEquals(200, orig.getBranches().get(1).getCount());
+        assertEquals(30, orig.getPositiveChildren().get(0).getBranches().get(0).getCount());
+        assertEquals(70, orig.getPositiveChildren().get(0).getBranches().get(1).getCount());
     }
 
     @Test
@@ -78,17 +78,17 @@ class GateTreeTest {
         var source = new GateNode("CD45");
         var sourceChild = new GateNode("CD3");
         source.getPositiveChildren().add(sourceChild);
-        source.setPosCount(100);
-        source.setNegCount(200);
-        sourceChild.setPosCount(30);
-        sourceChild.setNegCount(70);
+        source.getBranches().get(0).setCount(100);
+        source.getBranches().get(1).setCount(200);
+        sourceChild.getBranches().get(0).setCount(30);
+        sourceChild.getBranches().get(1).setCount(70);
 
         assertTrue(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)));
 
-        assertEquals(100, destination.getPosCount());
-        assertEquals(200, destination.getNegCount());
-        assertEquals(30, destination.getPositiveChildren().get(0).getPosCount());
-        assertEquals(70, destination.getPositiveChildren().get(0).getNegCount());
+        assertEquals(100, destination.getBranches().get(0).getCount());
+        assertEquals(200, destination.getBranches().get(1).getCount());
+        assertEquals(30, destination.getPositiveChildren().get(0).getBranches().get(0).getCount());
+        assertEquals(70, destination.getPositiveChildren().get(0).getBranches().get(1).getCount());
     }
 
     @Test
@@ -96,11 +96,11 @@ class GateTreeTest {
         var destination = new GateNode("CD45");   // no children
         var source = new GateNode("CD45");
         source.getPositiveChildren().add(new GateNode("CD3"));   // one child: different shape
-        source.setPosCount(999);
+        source.getBranches().get(0).setCount(999);
 
         assertFalse(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)));
 
-        assertEquals(0, destination.getPosCount(), "left at its own default, not partially transferred");
+        assertEquals(0, destination.getBranches().get(0).getCount(), "left at its own default, not partially transferred");
     }
 
     /**
@@ -114,13 +114,13 @@ class GateTreeTest {
     void transferCountsIfStructureMatchesLeavesDestinationAloneOnASameShapeDifferentChannel() {
         var destination = new GateNode("CD45");   // same shape as source: one root, no children
         var source = new GateNode("CD3");         // different channel
-        source.setPosCount(999);
-        source.setNegCount(999);
+        source.getBranches().get(0).setCount(999);
+        source.getBranches().get(1).setCount(999);
 
         assertFalse(GateTree.transferCountsIfStructureMatches(List.of(destination), List.of(source)),
                 "same shape, different channel: no correspondence to borrow");
-        assertEquals(0, destination.getPosCount(), "left at its own default, not the unrelated tree's count");
-        assertEquals(0, destination.getNegCount());
+        assertEquals(0, destination.getBranches().get(0).getCount(), "left at its own default, not the unrelated tree's count");
+        assertEquals(0, destination.getBranches().get(1).getCount());
     }
 
     @Test

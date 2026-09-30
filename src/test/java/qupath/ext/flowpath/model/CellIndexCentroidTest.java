@@ -153,9 +153,9 @@ class CellIndexCentroidTest {
         c.getMeasurements().put("CD45", 5.0);
         var index = CellIndex.build(List.of(c), List.of("CD45"));
 
-        assertSame(index.getMarkerValuesRaw(0), index.getMarkerValuesRaw(0),
+        assertSame(index.getMarkerValues(0), index.getMarkerValues(0),
                 "Raw accessor must return the backing array, not a copy");
-        assertEquals(5.0, index.getMarkerValuesRaw(0)[0]);
+        assertEquals(5.0, index.getMarkerValues(0)[0]);
     }
 
     // The toMatrix tests that lived here moved with the method itself, to
@@ -207,7 +207,7 @@ class CellIndexCentroidTest {
 
         assertSame(index.getMarkerValues(0), index.getMarkerValues(0),
                 "Repeated calls must hand back the same array, not fresh copies");
-        assertSame(index.getMarkerValues(0), index.getMarkerValuesRaw(0),
+        assertSame(index.getMarkerValues(0), index.getMarkerValues(0),
                 "getMarkerValuesRaw is an explicit alias for the same no-copy contract");
         assertEquals(5.0, index.getMarkerValues(0)[0]);
     }
