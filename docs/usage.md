@@ -137,39 +137,55 @@ export `flowpath.json` (the full gate hierarchy, reloadable and shareable) and
 Open a **project** with two or more images (a MIRAGE run becomes one with **New project from
 MIRAGE…**, see [Step 1](#step-1-get-cells-into-qupath)) and the gate editor grows two controls above the
 histogram or scatter plot — **This slide / All slides** — plus a **Correct staining** checkbox
-and, under the gate tree, a collapsible **Needs a look** list. Everything below assumes a
+and, under the gate tree, a **cohort card** that opens the **Cohort window**. Everything below assumes a
 project is open; with none open, or a project of one image, FlowPath behaves exactly as in
 [Step 2](#step-2-gate-and-phenotype).
 
-**The loop:** build the tree on any slide, as before — that slide becomes the **reference
-slide**, and every threshold you set is a raw number on it, exactly as it always was. Switch to
-**All slides** and set each threshold against every slide's distribution at once. Work through
-**Needs a look**. Then **Run on all slides** for a combined population table, one phenotype CSV
-per slide, and a manifest of the exact threshold used on every slide.
+**The loop:** confirm a **reference slide** (FlowPath suggests one; see below), build the tree
+on it — every threshold you set is a raw number on that slide, exactly as it always was. Switch
+to **All slides** and set each threshold against every slide's distribution at once. Work
+through the ⚠ cells of the **Cohort window**. Then **Run on all slides** for a combined
+population table, one phenotype CSV per slide, and a manifest of the exact threshold used on
+every slide.
 
 ### Reference slide
 
-The reference slide is whichever slide was open when FlowPath first saw the project — not
-necessarily the most representative one. That first choice is one undo step, made once per
-project. When a more typical slide exists (its staining landmarks sit closest to the cohort's
-median), the **Needs a look** header offers **Use *\<slide\>* as reference**; clicking it
-rebases every gate's numbers onto that slide, in one undo step.
+FlowPath never picks the reference for you. Until you confirm one, the cohort card reads
+**Pick a reference slide — suggested: *\<slide\>*** with a **Choose reference…** button, the
+status line says **No reference slide**, and correction is off: every slide uses the tree's own
+numbers. Gating still works meanwhile.
 
-A tree you **load** that names no reference slide gets the open slide as its reference, inside
-the load's own undo step — one ++ctrl+z++ takes back the load and the reference together. A tree
-with no reference at all (for instance after undoing past that first choice) is never shown as
-an all-clear: the status bar says **No reference slide** — correction is off and every slide uses
-the tree's own numbers — and the header offers **Use *\<open slide\>* as reference** to turn it
-on. A tree loaded into a project that does not contain its reference slide falls back to using
-the reference numbers as raw thresholds, with correction disabled and a status-bar message —
-nothing is silently recomputed.
+The **suggestion** is the most central slide of the cohort: among the slides where every gated
+marker shows a clear negative peak (and at least the usual number of peaks), the one whose
+staining distributions are, summed over the gated markers, closest to all the others. The
+Cohort window's banner says why ("the most central slide on 11 of 12 gated columns"), and adds
+a note when a marker's most central slide is a different one, when a slide lacks a peak most
+slides have, or when no slide has a clear negative peak for a marker (that marker is then not
+corrected). With fewer than three suitable slides there is no suggestion — pick the one you know
+best.
+
+To confirm, click **Use *\<slide\>*** in the banner, or ☆ on any row of the grid:
+
+- With **no gates** yet, that slide becomes the reference directly.
+- With gates already drawn, FlowPath first asks **which slide these gates were drawn on**
+  (pre-filled with the open slide): that slide becomes the reference, because the numbers on the
+  tree are its numbers. Switching to the suggested slide afterwards is an ordinary change.
+
+**Changing** an existing reference (☆ on another row, or **Use *\<slide\>***) asks once —
+*"Thresholds will be re-expressed on \<slide\>. Ctrl+Z undoes it."* — and rebases every gate's
+numbers onto the new slide. Confirming and changing are each **one undo step**.
+
+A tree you **load** keeps whatever reference it names; a tree that names none stays without one
+until you confirm one. A tree loaded into a project that does not contain its reference slide
+falls back to using the reference numbers as raw thresholds, with correction disabled and a
+status-bar message — nothing is silently recomputed.
 
 ### All slides
 
 **All slides** draws every sampled slide's distribution for the shown gate on the same axes,
 each aligned into the reference slide's units, under one threshold line. If the correction
 worked, the curves line up — a genuinely single threshold applies to all of them. A slide whose
-curve does not line up is visibly wrong before any flag in **Needs a look** says so: usually a
+curve does not line up is visibly wrong before any ⚠ in the Cohort window says so: usually a
 slide with an unusual stain, or one with no clear negative population to align on.
 
 ### Correct staining
@@ -183,7 +199,7 @@ what gating is measuring.
 
 Landmarks are found on each slide's **clean** cells — those passing the tree's quality filter
 and, when it is on, the annotation (ROI) filter — the same cells the gate tree counts as clean.
-Change the quality filter or switch the ROI filter and the landmarks, the review list, the marker
+Change the quality filter or switch the ROI filter and the landmarks, the review, the marker
 rules, the All slides curves and the crops all follow it. The asinh scale for a marker column is
 set by the reference slide alone (the median |value| of its clean cells for that column), so it
 does not depend on which slides were sampled first, or on whether the alignment cache existed.
@@ -194,10 +210,34 @@ mapped individually); an ellipse is carried by its bounding box, so it and a pol
 between vertices bend slightly under a non-linear correction — both are approximate near their
 outline, stated in the editor's own tooltip.
 
-### Needs a look
+### The Cohort window
 
-The list under the gate tree holds only the slide × gate pairs a gate is unsure about, each with
-its reason:
+The **cohort card** under the gate tree shows one status line and two buttons, **Open cohort…**
+(or **Choose reference…** while there is no reference) and **Run on all slides…**. The status
+line summarises the cohort, e.g. `38/40 sampled · 5 to review · Ready to run`. **Ready to run**
+appears only when **Run on all slides** can actually start; otherwise the line says why not —
+`Sampling…`, `Running…`, `Not ready to run` (FlowPath is busy, or the tree has no enabled
+gate), `No reference slide`, or `Tree from another project`.
+
+**Open cohort…** opens a separate window: the reference banner at the top, then a grid with **one
+row per slide and one column per gate** (in tree order), then the selected cell's detail. Each
+row starts with ☆/★ (★ is the reference), the slide's name and its sampled cell count; rows
+still **sampling**, whose sampling **failed**, or that are **excluded** are greyed and labelled.
+Each cell carries one mark:
+
+| Mark | Meaning |
+|---|---|
+| ✓ | corrected, nothing to review |
+| ⚠ | needs a look (the reasons are in the detail) |
+| ↷ | you answered **Looks right**, and the applied value has not changed since |
+| ✎ | adjusted: a manual value for this slide |
+| ⊘ | skipped: this gate does not judge this slide's cells |
+| — | the marker is not measured on this slide |
+| = | not corrected on this slide |
+
+**Only ⚠** hides the rows with nothing to review.
+
+A ⚠ cell is flagged for one of these reasons:
 
 | Reason shown | Why it's flagged |
 |---|---|
@@ -206,30 +246,34 @@ its reason:
 | "Threshold sits on a peak, not in a valley" | The applied threshold falls on a density peak in the parent population, not between two populations. |
 | "Only *N* cells reach this gate" / "Only *N*% of cells reaching this gate are measured on *marker*" | Too few sampled cells reach this gate, or too few of them carry a measurement for it, to judge. |
 
-Each item shows a **200 µm tissue crop** at the gate's boundary (the gate's marker in green on a
-per-slide brightness range, DAPI in blue, boundary cells outlined in their branch colour), so
-most items are decided without opening the slide. Press ++v++ to open the slide itself instead —
-this selects the gate, switches to **This slide**, centres the viewer on the tissue where the
-gate decides, and turns on the boundary overlay (toggle it with ++b++). The overlay only paints;
-it never writes a `PathClass` and can never dirty the slide's data file.
+Click a cell to see its detail: slide · gate, the reasons, the **reference → applied**
+threshold, and — for a ⚠ cell — a **200 µm tissue crop** at the gate's boundary (the gate's
+marker in green on a per-slide brightness range, DAPI in blue, boundary cells outlined in their
+branch colour), so most cells are decided without opening the slide. **Adjust in editor** (or
+++v++) opens the slide itself instead — this selects the gate, switches to **This slide**, and,
+for a ⚠ cell, centres the viewer on the tissue where the gate decides and turns on the boundary
+overlay (toggle it with ++b++). The overlay only paints; it never writes a `PathClass` and can
+never dirty the slide's data file.
 
-Answer with:
+Answer a ⚠ cell with:
 
 | Answer | Key | Records |
 |---|---|---|
-| **Looks right** | ++enter++ | The applied values are approved; the item disappears until they change. |
-| **Adjust** | drag the cut, then ++enter++ | A manual value for **this slide only**, in this slide's own units — the reference number, and every other slide, are untouched. |
-| **Skip slide for this gate** | ++s++ | This gate no longer judges this slide's cells; they stay `UNMEASURED`, never counted as negative. |
+| **Looks right** | ++enter++ | The applied values are approved; the cell shows ↷ until they change. |
+| **Adjust in editor** | drag the cut, then ++enter++ | A manual value for **this slide only**, in this slide's own units — the reference number, and every other slide, are untouched. |
+| **Skip this gate** | ++s++ | This gate no longer judges this slide's cells; they stay `UNMEASURED`, never counted as negative. |
 
-++n++ / ++p++ step to the next / previous item, ++esc++ returns to All slides. Every
-answer — however many drags it took — is **one undo step**. These keys act only while the
-FlowPath window has focus, since they share letters with QuPath's own tool shortcuts.
+**Use cohort value** on a ↷, ✎ or ⊘ cell drops that slide's own setting for the gate, so it goes
+back to the corrected reference value. ++n++ / ++p++ step to the next / previous ⚠ cell, ++esc++
+returns to All slides. Every answer — however many drags it took — is **one undo step**. In the
+main FlowPath window these keys act only while it has focus, since they share letters with
+QuPath's own tool shortcuts.
 
 A review is of a *number*: if the reference threshold (or the alignment) later moves and the
 applied value changes, the item comes back on its own — there is nothing to invalidate by hand.
 
 !!! note "Region gates in this release"
-    Polygon, rectangle and ellipse gates offer **Looks right** and **Skip** in Needs a look, but
+    Polygon, rectangle and ellipse gates offer **Looks right** and **Skip** in the Cohort window, but
     not **Adjust** — per-slide shapes for region gates are not supported yet. Their shapes are
     still corrected slide-by-slide when Correct staining is on; you just cannot hand-adjust one
     slide's shape independently.
@@ -237,7 +281,7 @@ applied value changes, the item comes back on its own — there is nothing to in
 ### Cells per slide
 
 The sample size used for alignment and review — default **20 000** cells per slide, `0` for
-every cell — is a preference, editable in the Needs-a-look header. Changing it invalidates the
+every cell — is a preference, editable in the Cohort window's footer. Changing it invalidates the
 sample and re-samples in the background; alignments are cached in
 `<project>/flowpath/alignment-cache.json` (safe to delete — it is entirely derived data and is
 never part of undo). A slide's cached landmarks are reused only while its sample and the quality
@@ -266,31 +310,30 @@ likely cause; nothing tunes a threshold to reduce the violation rate for you.
 
 ### Reviewing by gate
 
-Items are grouped by gate, top-down. Selecting a gate's group switches the editor to **All
-slides** with the flagged slides' curves highlighted. **Shift+Enter** answers every flagged item
-of that group **Looks right**, in one undo step — the common case, once the aligned curves
-visibly line up. Fixing a parent gate re-scores its descendants immediately, so drilling into one
-slide is only needed when a curve alone cannot settle it.
+Right-click a gate's column header for **All look right for *\<gate\>***, or press
+**Shift+Enter** with one of its cells selected: every ⚠ cell of that gate is answered **Looks
+right**, in one undo step — the common case, once the aligned curves in **All slides** visibly
+line up. Fixing a parent gate re-scores its descendants immediately, so drilling into one slide
+is only needed when a curve alone cannot settle it.
 
 Two gates with the same marker under one branch — what **Duplicate** makes — are told apart by a
 number: the first keeps its plain path (`CD3+/CD8`), the second is `CD3+/CD8#2`, and its own
-branches and children follow (`CD3+/CD8+#2/CD4`). That path is what the list, the groups, the
+branches and children follow (`CD3+/CD8+#2/CD4`). That path is what the grid's columns, the
 manifest's `gate_path` and `qc_summary.csv` show, so an answer always lands on the gate it names.
 
-### Slide strip
+### Excluding a slide
 
-A row of small squares sits above the list, one per slide — grey while it is still being
-sampled, green once it is ready with nothing to review, amber with items to review, red if
-sampling failed — with a tooltip giving the slide's name and counts. Click a square to filter the
-list to that slide; click it again to clear the filter. A status line beneath it summarises the
-whole cohort, e.g. `38/40 sampled · 5 to review · Ready to run`. **Ready to run** appears only
-when **Run on all slides** can actually start; otherwise the line says why not — `Sampling…`,
-`Running…`, `Not ready to run` (FlowPath is busy, or the tree has no enabled gate),
-`No reference slide`, or `Tree from another project`.
+Right-click a row for **Exclude *\<slide\>* from the cohort** (and **Include** to undo it). An
+excluded slide is not sampled and plays no part in the suggestion, the alignment or the review;
+its row is greyed. It is saved with the project (on the image entry, not in `flowpath.json`), so
+it stays excluded after reopening, and it is not an undo step — toggle it again to reverse it.
+**Run on all slides** still gates an excluded slide, uncorrected, and records it in
+`qc_summary.csv` (`cohort_excluded`). Any answers you gave on it stay on the tree and come back
+if you include it again. The reference slide cannot be excluded: pick another reference first.
 
 ### Run on all slides
 
-The toolbar's **Run on all slides…** button gates every image in the project and writes, into a
+The cohort card's **Run on all slides…** button gates every image in the project and writes, into a
 folder you pick. It waits until sampling has finished — a run started mid-sampling would gate the
 slides not yet sampled uncorrected. Its confirmation says how many review items are still open,
 and names any slide whose sampling failed: those run on the tree's own numbers, uncorrected.
@@ -372,7 +415,7 @@ with these metrics:
 - `staining_offset`, `staining_stretch` (subject = column) — this slide's alignment vs. the
   cohort's;
 - `rule_violation_pct` (subject = the rule, e.g. `1:CD8+ => 1:CD3+`) — the marker-rule rate;
-- `open_flags`, `reviewed_flags` — how many Needs-a-look items were open / already reviewed;
+- `open_flags`, `reviewed_flags` — how many review (⚠) items were open / already reviewed;
 - `sanity` (subject = the flag) — the per-slide sanity issues above.
 
 ## Step 3 — Read the numbers in the Analysis window

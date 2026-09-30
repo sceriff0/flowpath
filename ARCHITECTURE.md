@@ -496,12 +496,16 @@ project's image entry as metadata (`flowpath.cohort.excluded`), read and written
 `cohort/CohortExclusions` — **not** in `flowpath.json`: exclusion is a fact about a slide, not about
 a gate tree, and a tree field would force a format version. It is not an undo step; toggling
 again reverses it. An excluded slide is not sampled (`FlowPathPane.refreshCohort` filters it out
-of the sources, and the sorted exclusion set is part of the sampling key, so a toggle
-re-samples), so it has no alignment, plays no part in ranking, modal counts or review, and
+of the sources after handing the set to `CohortSession.setExcluded`), so it has no alignment, plays no part in ranking, modal counts or review, and
 `CohortSession`'s lookup answers null for it — identity through the one resolution point. A batch
 run still gates it, uncorrected, and records `cohort_excluded` in `qc_summary.csv`. Its
 `SlideSetting`s stay on the tree and reappear if it is included again. Excluding the current
-reference is refused ("Pick another reference first").
+reference is refused ("Pick another reference first"). The exclusion set is deliberately **not**
+part of the sampling key: excluding a slide drops only its sample and review
+(`CohortSession.setExcluded`) and rescores, keeping every other slide's sample, while including
+one again forces a single re-sample (its sample was never taken). A failed metadata save
+restores the entry's previous value before the error is reported (`CohortExclusions.write`), so a
+refused toggle never takes effect in memory.
 
 ### Data flow of the Cohort window
 
@@ -572,11 +576,10 @@ says so whenever a slide was skipped for being open.
 - `cohort/MarkerRules`, `ReviewGroup` — flag type 5 (above), and grouping review items by gate
   for Shift+Enter
 - `cohort/EvidenceCrop`, `CellShapes`, `ui/EvidenceCropCoordinator` — the 200 µm tissue crop, the
-  boundary-cell shapes drawn on it, and a coordinator for a dedicated crop executor (prefetch 3,
-  LRU 64). **Not wired into the UI** since the Cohort window replaced the review list: the window
-  shows thresholds, and **Adjust** opens the slide in the viewer, where the evidence is seen. The
-  classes and their tests are kept for a later crop view; `FlowPathPane` no longer owns a
-  `flowpath-crops` executor
+  boundary-cell shapes drawn on it, and the dedicated `flowpath-crops` executor (image reads must
+  never queue behind gating on `flowpath-background`; prefetch 3, LRU 64). The crop is shown in
+  the Cohort window's detail for the selected **review item** only; a grid cell with no item
+  clears it
 - `batch/BatchRunner`, `BatchSlide`, `BatchResult` — one resolved tree per slide, failures as
   values, the live open-slide check (above)
 - `batch/GatingManifestExporter` — `gating_manifest.csv`; lives in `batch`, not `io`, because
