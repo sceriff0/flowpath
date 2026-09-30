@@ -49,8 +49,8 @@ public final class CohortGridPane extends BorderPane {
     final Button useCohortValue = new Button("Use cohort value");
     final TextField sampleSize = new TextField();
 
-    private CohortGridModel model;
-    private boolean rendering;
+    /** The columns the table was last built for; a re-render with the same ones keeps the TableColumns. */
+    private List<CohortGridModel.Column> builtColumns;
     private int shownSampleSize;
 
     private Consumer<ReviewItem.Key> onCellChosen = k -> {};
@@ -132,9 +132,7 @@ public final class CohortGridPane extends BorderPane {
     }
 
     public void render(CohortGridModel m, int sampleSizeValue) {
-        rendering = true;
-        try {
-            model = m;
+        {
             headline.setText(m.banner().headline());
             notes.getChildren().setAll(m.banner().notes().stream().map(t -> {
                 Label l = unmnemonic(new Label(t));
@@ -146,8 +144,11 @@ public final class CohortGridPane extends BorderPane {
             useSuggested.setText(suggest ? "Use " + m.banner().suggestedName() : "");
             useSuggested.setVisible(suggest);
             useSuggested.setManaged(suggest);
-            rebuildColumns(m.columns());
-            table.getItems().setAll(m.rows());
+            if (!m.columns().equals(builtColumns)) {
+                rebuildColumns(m.columns());
+                builtColumns = List.copyOf(m.columns());
+            }
+            setRows(m.rows());
             CohortGridModel.Detail d = m.detail();
             detailTitle.setText(d == null ? "Select a cell to review it" : d.title());
             detailReasons.setText(d == null ? "" : String.join("; ", d.reasons()));
@@ -162,9 +163,24 @@ public final class CohortGridPane extends BorderPane {
                     && d.mark() != CohortGridModel.CellMark.SKIPPED && d.mark() != CohortGridModel.CellMark.REVIEWED));
             shownSampleSize = sampleSizeValue;
             if (!sampleSize.isFocused()) sampleSize.setText(Integer.toString(sampleSizeValue));
-        } finally {
-            rendering = false;
         }
+    }
+
+    /** Replaces the rows in place, keeping the selected slide (by id) and the scroll position. */
+    private void setRows(List<CohortGridModel.Row> rows) {
+        CohortGridModel.Row selected = table.getSelectionModel().getSelectedItem();
+        String selectedId = selected == null ? null : selected.slideId();
+        javafx.scene.control.skin.VirtualFlow<?> flow = table.lookup(".virtual-flow") instanceof
+                javafx.scene.control.skin.VirtualFlow<?> f ? f : null;
+        int first = -1;
+        if (flow != null && flow.getFirstVisibleCell() != null) first = flow.getFirstVisibleCell().getIndex();
+        table.getItems().setAll(rows);
+        if (selectedId != null) {
+            for (int i = 0; i < rows.size(); i++) {
+                if (rows.get(i).slideId().equals(selectedId)) { table.getSelectionModel().select(i); break; }
+            }
+        }
+        if (flow != null && first > 0 && first < rows.size()) flow.scrollTo(first);
     }
 
     private void rebuildColumns(List<CohortGridModel.Column> cols) {
@@ -211,7 +227,7 @@ public final class CohortGridPane extends BorderPane {
                     getStyleClass().add(mark == CohortGridModel.CellMark.LOOK ? "fp-cohort-cell-look" : "fp-cohort-cell");
                     setOnMouseClicked(e -> {
                         CohortGridModel.Row row = getTableRow() == null ? null : getTableRow().getItem();
-                        if (row != null && !rendering) onCellChosen.accept(new ReviewItem.Key(row.slideId(), col.rootIndex(), col.gatePath()));
+                        if (row != null) onCellChosen.accept(new ReviewItem.Key(row.slideId(), col.rootIndex(), col.gatePath()));
                     });
                 }
             });

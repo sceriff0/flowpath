@@ -49,7 +49,7 @@ class FlowpathStylesheetContrastTest {
      * histogram, an italic hint under a control that already has its own full-contrast label.
      * WCAG's own floor for this category is 3:1; nothing here is the only text on screen.
      */
-    private static final List<String> MUTED_CONTRAST_CLASSES = List.of("fp-muted", "fp-hint", "fp-cohort-cell-look");
+    private static final List<String> MUTED_CONTRAST_CLASSES = List.of("fp-muted", "fp-hint", "fp-cohort-cell-look", "fp-cohort-row-muted-text");
 
     @Test
     void fullContrastClassesMeet4_5to1OnLightBase() {

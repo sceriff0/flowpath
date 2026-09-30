@@ -193,7 +193,11 @@
 /* One fixed amber cannot hold 3:1 on both bases (light needs L<=0.25, the dark panel L>=0.32), so the look
    accent is a ladder over the theme base: deep amber on light, bright amber on dark. */
 .fp-cohort-cell-look { -fx-text-fill: ladder(-fx-base, #ffb347 40%, #9a5c00 41%); -fx-font-weight: bold; }
-.fp-cohort-row-muted { -fx-opacity: 0.55; }
+/* A muted row dims its text with the same token as fp-muted (>= 3:1 on both bases), not with opacity. */
+.fp-cohort-table .fp-cohort-row-muted .table-cell,
+.fp-cohort-row-muted-text { -fx-text-fill: derive(-fx-text-background-color, 40%); }
 .fp-cohort-table .table-row-cell:selected .fp-cohort-cell,
+.fp-cohort-table .table-row-cell:selected .fp-cohort-cell-look,
+.fp-cohort-table .table-row-cell:selected .table-cell,
 .fp-cohort-table .table-row-cell:selected .text { -fx-text-fill: -fx-selection-bar-text; }
 .fp-cohort-detail { -fx-padding: 6 8 6 8; }
