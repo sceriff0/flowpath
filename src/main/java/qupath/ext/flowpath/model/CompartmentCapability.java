@@ -123,7 +123,7 @@ public final class CompartmentCapability {
      * derived from this.
      */
     public Set<Pair> pairsFor(String marker) {
-        LinkedHashSet<Pair> set = pairs.get(MeasurementKeys.stripLayerPrefix(marker));
+        LinkedHashSet<Pair> set = pairs.get(marker);
         return set == null ? Set.of() : new LinkedHashSet<>(set);
     }
 

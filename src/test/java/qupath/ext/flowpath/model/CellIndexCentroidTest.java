@@ -46,15 +46,6 @@ class CellIndexCentroidTest {
     }
 
     @Test
-    void markerValueFromLayerPrefix() {
-        var c = Cells.detection();
-        c.getMeasurements().put("[Layer0] CD45", 5.0);
-        var index = CellIndex.build(List.of(c), List.of("CD45"));
-
-        assertEquals(5.0, index.getMarkerValues(0)[0]);
-    }
-
-    @Test
     void missingMarkerValueReturnsNaN() {
         var c = Cells.detection();
         var index = CellIndex.build(List.of(c), List.of("MISSING"));
@@ -70,12 +61,11 @@ class CellIndexCentroidTest {
 
     @Test
     void centroidFromMeasurements() {
-        // ROI sits at (7, 9) but explicit centroid measurements are present, so the
-        // measurements win — this keeps FlowPath CSV round-trips byte-faithful,
-        // including whatever units the exporter used.
+        // ROI sits at (7, 9) but MIRAGE's micrometre centroid measurements are present,
+        // so the measurements win — this keeps FlowPath CSV round-trips byte-faithful.
         var c = Cells.detectionAt(7, 9);
-        c.getMeasurements().put("Centroid X", 100.0);
-        c.getMeasurements().put("Centroid Y", 200.0);
+        c.getMeasurements().put("Centroid X µm", 100.0);
+        c.getMeasurements().put("Centroid Y µm", 200.0);
         var index = CellIndex.build(List.of(c), List.of());
 
         assertEquals(100.0, index.getCentroidX(0));
@@ -105,7 +95,7 @@ class CellIndexCentroidTest {
         // only one centroid measurement offers no usable centroid, and BOTH axes come
         // from the ROI.
         var c = Cells.detectionAt(12.5, 34.5);
-        c.getMeasurements().put("Centroid X", 100.0);
+        c.getMeasurements().put("Centroid X µm", 100.0);
         var index = CellIndex.build(List.of(c), List.of());
 
         assertEquals(12.5, index.getCentroidX(0),
@@ -113,17 +103,6 @@ class CellIndexCentroidTest {
         assertEquals(34.5, index.getCentroidY(0));
         assertEquals(CoordinateSpace.PIXELS, index.geometry().sourceSpace(),
                 "and the space the fallback landed in must be recorded");
-    }
-
-    @Test
-    void centroidFromLayerPrefixedMeasurement() {
-        var c = Cells.detectionAt(7, 9);
-        c.getMeasurements().put("[Layer0] Centroid X", 100.0);
-        c.getMeasurements().put("[Layer0] Centroid Y", 200.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertEquals(100.0, index.getCentroidX(0));
-        assertEquals(200.0, index.getCentroidY(0));
     }
 
     @Test

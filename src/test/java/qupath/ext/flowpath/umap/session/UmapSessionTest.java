@@ -303,7 +303,7 @@ class UmapSessionTest {
         assertEquals(List.of("CD3", "DAPI", "CD8"),
                 UmapSession.collapseToBaseMarkers(List.of(
                         "CD3: Nucleus: Mean", "CD3: Cytoplasm: Median", "DAPI",
-                        "[Layer0] CD8", "   ")));
+                        "CD8", "   ")));
     }
 
     @Test
@@ -317,7 +317,7 @@ class UmapSessionTest {
         var fromMeasurements = UmapSession.discoverMarkerNames(List.of(), detections);
         assertTrue(fromMeasurements.containsAll(List.of("CD3", "CD8")),
                 "With no usable channel list, fall back to the measurement keys");
-        assertFalse(fromMeasurements.contains("Centroid X"), "Morphology keys are not markers");
+        assertFalse(fromMeasurements.contains("Centroid X µm"), "Morphology keys are not markers");
     }
 
     // ------------------------------------------------------------------

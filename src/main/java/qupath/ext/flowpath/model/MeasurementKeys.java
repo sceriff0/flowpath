@@ -2,11 +2,9 @@ package qupath.ext.flowpath.model;
 
 /**
  * Builds and parses the QuPath-native per-compartment measurement keys
- * {@code "<marker>: <Compartment>: <Stat>"} emitted by the MIRAGE pipeline.
- * <p>
- * Parsing tolerates an optional layer prefix (e.g. {@code "[Layer0] CD3: Nucleus: Mean"});
- * the layer prefix is stripped so the returned marker matches the channel names
- * discovered from image metadata.
+ * {@code "<marker>: <Compartment>: <Stat>"} emitted by the MIRAGE pipeline. Only a marker key
+ * ({@link MeasurementName#isMarkerKey}) is ever a candidate: a {@code QC: …} or {@code MORPH: …}
+ * key is not parsed as a marker whatever its shape.
  */
 public final class MeasurementKeys {
 
@@ -66,7 +64,7 @@ public final class MeasurementKeys {
      * @param recognised compartments beyond the known three to accept, or {@code null}
      */
     public static Parsed parse(String key, java.util.Set<Compartment> recognised) {
-        if (key == null) return null;
+        if (key == null || !MeasurementName.isMarkerKey(key)) return null;
         int statSep = key.lastIndexOf(SEP);
         if (statSep < 0) return null;
         int compSep = key.lastIndexOf(SEP, statSep - 1);
@@ -90,16 +88,15 @@ public final class MeasurementKeys {
         Statistic statistic = Statistic.fromToken(key.substring(statSep + SEP.length()));
         if (statistic == null) return null;
 
-        String marker = stripLayerPrefix(key.substring(0, compSep)).trim();
+        String marker = key.substring(0, compSep).trim();
         if (marker.isEmpty()) return null;
         return new Parsed(marker, compartment, statistic);
     }
 
     /**
      * Collapse measurement keys or channel names to their base marker, preserving order
-     * and de-duplicating. {@code "CD3: Nucleus: Mean"} (optionally {@code "[Layer0] "}-
-     * prefixed) collapses to {@code "CD3"}; a bare name keeps its own text with any layer
-     * prefix stripped. This is what makes a marker panel show one row per marker rather
+     * and de-duplicating. {@code "CD3: Nucleus: Mean"} collapses to {@code "CD3"}; a bare name
+     * keeps its own text. A non-marker key (QC, morphology, identity) is dropped. This is what makes a marker panel show one row per marker rather
      * than one row per compartment/statistic combination.
      * <p>
      * The single implementation shared by every discovery path — it lived in
@@ -116,8 +113,7 @@ public final class MeasurementKeys {
      * Anyone who has a {@link CompartmentCapability} in hand <b>must</b> use this form and
      * pass {@code capability.compartments()}. The one-argument form recognises only the
      * known three, so on data carrying a discovered fourth compartment it fails to parse
-     * {@code "CD3: Membrane: Mean"}, falls back to {@link #stripLayerPrefix} and adds the
-     * whole key as a phantom marker of that literal name — while the very same capability
+     * {@code "CD3: Membrane: Mean"} and adds the whole key as a phantom marker of that literal name — while the very same capability
      * is simultaneously offering {@code Membrane} in the gate editor's compartment picker.
      * The two readers of one key set then disagree about what a compartment is, which is
      * exactly what {@link CompartmentCapability#compartments()} tells its caller to
@@ -131,9 +127,9 @@ public final class MeasurementKeys {
         var seen = new java.util.LinkedHashSet<String>();
         if (names == null) return new java.util.ArrayList<>(seen);
         for (String name : names) {
-            if (name == null) continue;
+            if (name == null || !MeasurementName.isMarkerKey(name)) continue;
             Parsed parsed = parse(name, recognised);
-            String base = parsed != null ? parsed.marker() : stripLayerPrefix(name);
+            String base = parsed != null ? parsed.marker() : name;
             if (base != null && !base.isBlank()) seen.add(base);
         }
         return new java.util.ArrayList<>(seen);
@@ -160,14 +156,14 @@ public final class MeasurementKeys {
 
         java.util.Map<String, java.util.Set<String>> markersByToken = new java.util.LinkedHashMap<>();
         for (String key : keys) {
-            if (key == null) continue;
+            if (key == null || !MeasurementName.isMarkerKey(key)) continue;
             int statSep = key.lastIndexOf(SEP);
             if (statSep < 0) continue;
             int compSep = key.lastIndexOf(SEP, statSep - 1);
             if (compSep < 0) continue;
             String token = key.substring(compSep + SEP.length(), statSep).trim();
             if (token.isEmpty() || Compartment.known(token) != null) continue;
-            String marker = stripLayerPrefix(key.substring(0, compSep)).trim();
+            String marker = key.substring(0, compSep).trim();
             if (marker.isEmpty()) continue;
             markersByToken.computeIfAbsent(token, k -> new java.util.LinkedHashSet<>()).add(marker);
         }
@@ -175,14 +171,5 @@ public final class MeasurementKeys {
             if (markers.size() >= 2) out.add(Compartment.of(token));
         });
         return out;
-    }
-
-    /** Remove a leading {@code "[...] "} layer prefix if present. */
-    public static String stripLayerPrefix(String name) {
-        if (name != null && name.startsWith("[")) {
-            int idx = name.indexOf("] ");
-            if (idx >= 0) return name.substring(idx + 2);
-        }
-        return name;
     }
 }

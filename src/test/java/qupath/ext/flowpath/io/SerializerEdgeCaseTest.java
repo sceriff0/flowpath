@@ -239,8 +239,8 @@ class SerializerEdgeCaseTest {
     void unknownSlugsAndOneSidedRangesSurvive() throws IOException {
         GateTree tree = new GateTree();
         QualityFilter qf = new QualityFilter();
-        qf.setRange("major_axis_length", new QualityFilter.Range(2.0, Double.POSITIVE_INFINITY));
-        qf.setRange("minor_axis_length", new QualityFilter.Range(Double.NEGATIVE_INFINITY, 30.0));
+        qf.setRange("morph/major_axis_length", new QualityFilter.Range(2.0, Double.POSITIVE_INFINITY));
+        qf.setRange("morph/minor_axis_length", new QualityFilter.Range(Double.NEGATIVE_INFINITY, 30.0));
         qf.setRange(QualityFilter.AREA, new QualityFilter.Range(Double.NEGATIVE_INFINITY, 500.0));
         qf.setRange(QualityFilter.PERIMETER, new QualityFilter.Range(-5.0, Double.POSITIVE_INFINITY));
         tree.setQualityFilter(qf);
@@ -248,14 +248,14 @@ class SerializerEdgeCaseTest {
         String text = saveText(tree);
         JsonObject ranges = JsonParser.parseString(text).getAsJsonObject()
                 .getAsJsonObject("qualityFilter").getAsJsonObject("ranges");
-        assertEquals(2.0, ranges.getAsJsonObject("major_axis_length").get("min").getAsDouble());
-        assertFalse(ranges.getAsJsonObject("major_axis_length").has("max"));
-        assertFalse(ranges.getAsJsonObject("minor_axis_length").has("min"));
+        assertEquals(2.0, ranges.getAsJsonObject("morph/major_axis_length").get("min").getAsDouble());
+        assertFalse(ranges.getAsJsonObject("morph/major_axis_length").has("max"));
+        assertFalse(ranges.getAsJsonObject("morph/minor_axis_length").has("min"));
         assertFalse(ranges.toString().contains("Infinity"), ranges.toString());
 
         QualityFilter back = loadText(text).getQualityFilter();
-        assertEquals(qf.range("major_axis_length"), back.range("major_axis_length"));
-        assertEquals(qf.range("minor_axis_length"), back.range("minor_axis_length"));
+        assertEquals(qf.range("morph/major_axis_length"), back.range("morph/major_axis_length"));
+        assertEquals(qf.range("morph/minor_axis_length"), back.range("morph/minor_axis_length"));
         assertEquals(qf.range(QualityFilter.AREA), back.range(QualityFilter.AREA),
                 "an open lower bound on a legacy slug must not pick up the legacy 0 floor");
         assertEquals(qf.range(QualityFilter.PERIMETER), back.range(QualityFilter.PERIMETER),
@@ -321,7 +321,7 @@ class SerializerEdgeCaseTest {
                 {"version": 5, "futureRootKey": {"x": [1, 2]},
                  "meta": {"imageName": "img", "someNewProvenance": true},
                  "qualityFilter": {"newQcKnob": 3,
-                                   "ranges": {"area": {"min": 5, "unit": "um2"}}},
+                                   "ranges": {"morph/area": {"min": 5, "unit": "um2"}}},
                  "gates": [
                    {"type": "quadrant", @A, "channelX": "CD3", "channelY": "CD8", "opacity": 0.4,
                     "branches": [{"name": "PP", "pinned": true, "children": []}]}
@@ -513,7 +513,7 @@ class SerializerEdgeCaseTest {
         qf.setMax(QualityFilter.TOTAL_INTENSITY, 9000);
         qf.setMin(QualityFilter.PERIMETER, 10);
         qf.setMax(QualityFilter.PERIMETER, 300);
-        qf.setRange("major_axis_length", new QualityFilter.Range(2, 40));
+        qf.setRange("morph/major_axis_length", new QualityFilter.Range(2, 40));
         tree.setQualityFilter(qf);
         tree.setRoiFilterEnabled(true);
         return tree;

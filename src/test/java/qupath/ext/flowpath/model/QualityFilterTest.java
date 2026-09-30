@@ -6,28 +6,23 @@ import qupath.ext.flowpath.testing.Cells;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Every case here used to go through the deprecated positional
- * {@code passes(area, eccentricity, solidity, totalIntensity, perimeter)}. That method took
- * five bare doubles with no connection to a real export, so it could express states production
- * cannot reach — a {@code NaN} total intensity, for one: {@link CellIndex} sums total intensity
- * across markers and never produces {@code NaN} for it, only a real number (0 for no markers).
- * Ported onto {@link QualityFilter#passes(CellIndex, int)} with {@link Cells} fixtures, which
- * pins the same behaviour against the column resolution production actually uses: area and the
- * lowercase {@code "area"} key, {@code Eccentricity}/{@code Solidity}/{@code Perimeter} resolved
- * case-insensitively, and total intensity as the sum of a single marker's value.
+ * {@link QualityFilter#passes(CellIndex, int)} against {@link Cells} fixtures written in
+ * MIRAGE's key grammar: shapes under {@code MORPH: …} and total intensity as the exported
+ * cell-level QC metric {@code QC: Total intensity} (FlowPath no longer computes one).
  */
 class QualityFilterTest {
 
-    /** One cell per row: area, eccentricity, solidity, perimeter and a single marker's value
-     *  (which is total intensity, since it is the only marker). */
+    /** One cell per row: area, eccentricity, solidity, perimeter and the exported total
+     *  intensity, alongside a single marker. */
     private static CellIndex index(double[] area, double[] eccentricity, double[] solidity,
                                     double[] perimeter, double[] totalIntensity) {
         return Cells.of(area.length)
                 .marker("Marker", totalIntensity)
                 .area(area)
-                .morphology("Eccentricity", eccentricity)
-                .morphology("Solidity", solidity)
-                .morphology("Perimeter", perimeter)
+                .morphology("MORPH: Eccentricity", eccentricity)
+                .morphology("MORPH: Solidity", solidity)
+                .morphology("MORPH: Perimeter µm", perimeter)
+                .qc("Total intensity", totalIntensity)
                 .build();
     }
 
@@ -87,8 +82,7 @@ class QualityFilterTest {
     /**
      * A cell missing area/eccentricity/solidity/perimeter entirely (the export never carried
      * those measurements for it) must not be rejected by a range over any of them — the "NaN
-     * passes" rule from the class doc. Total intensity is deliberately not exercised here: it
-     * is a computed sum, never NaN in production, so there is no real-data case to pin.
+     * passes" rule from the class doc.
      */
     @Test
     void nanValuesAreSkipped() {
@@ -98,8 +92,8 @@ class QualityFilterTest {
         qf.setMin(QualityFilter.SOLIDITY, 0.7);
         CellIndex idx = Cells.of(2)
                 .area(new double[]{100, 100}).absentOn(i -> i == 1)
-                .morphology("Eccentricity", new double[]{0.5, 0.5}).absentOn(i -> i == 1)
-                .morphology("Solidity", new double[]{0.9, 0.9}).absentOn(i -> i == 1)
+                .morphology("MORPH: Eccentricity", new double[]{0.5, 0.5}).absentOn(i -> i == 1)
+                .morphology("MORPH: Solidity", new double[]{0.9, 0.9}).absentOn(i -> i == 1)
                 .build();
         assertTrue(qf.passes(idx, 1), "cell with no morphology measurements at all must pass");
     }

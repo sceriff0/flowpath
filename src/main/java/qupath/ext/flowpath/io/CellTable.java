@@ -2,7 +2,7 @@ package qupath.ext.flowpath.io;
 
 import qupath.ext.flowpath.model.CellGeometry;
 import qupath.ext.flowpath.model.CellIndex;
-import qupath.ext.flowpath.model.MorphologyField;
+import qupath.ext.flowpath.model.QualityField;
 
 import java.io.IOException;
 import java.io.Writer;
@@ -71,24 +71,22 @@ public final class CellTable {
         if (withLabel) w.write(",label");
         w.write(',');
         w.write(HEADER_POSITION);
-        // Every morphology column the export carries, under its unit-free slug. This was
-        // a fixed "area,perimeter,eccentricity,solidity" -- the same four CellIndex had
-        // been told about -- so a MIRAGE export's Major/Minor Axis Length were read from
-        // the file, held in memory and then dropped on the way out.
-        for (MorphologyField field : morphologyOf(index)) {
+        // Every shape and cell-level QC column the export carries, under its unit-free name
+        // (QualityField.csvName: "area", "qc_total_intensity").
+        for (QualityField field : qualityOf(index)) {
             w.write(',');
-            w.write(escape(field.slug()));
+            w.write(escape(field.csvName()));
         }
     }
 
     /**
-     * The morphology columns a CSV carries, in {@link CellIndex#morphology()} order.
+     * The quality columns a CSV carries, in {@link CellIndex#qualityFields()} order.
      * <p>
      * Both writers ask this, so the two files' morphology blocks are the same columns in
      * the same order -- which is what lets a reader line them up beside each other.
      */
-    public static List<MorphologyField> morphologyOf(CellIndex index) {
-        return index == null ? List.of() : index.morphology();
+    public static List<QualityField> qualityOf(CellIndex index) {
+        return index == null ? List.of() : index.qualityFields();
     }
 
     /**
@@ -123,7 +121,7 @@ public final class CellTable {
         w.write(',');
         w.write(fmt(geometry.pixelsY(i)));
 
-        for (MorphologyField field : morphologyOf(index)) {
+        for (QualityField field : qualityOf(index)) {
             w.write(',');
             w.write(fmt(field.valueAt(i)));
         }

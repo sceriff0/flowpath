@@ -99,15 +99,6 @@ class CompartmentModelTest {
     }
 
     @Test
-    void parseStripsLayerPrefix() {
-        var parsed = MeasurementKeys.parse("[Layer0] CD3: Cytoplasm: Sum");
-        assertNotNull(parsed);
-        assertEquals("CD3", parsed.marker());
-        assertEquals(Compartment.CYTOPLASMIC, parsed.compartment());
-        assertEquals(Statistic.SUM, parsed.statistic());
-    }
-
-    @Test
     void parseReturnsNullForBareOrMorphologyKeys() {
         assertNull(MeasurementKeys.parse("CD3"));
         assertNull(MeasurementKeys.parse("Area µm²"));
@@ -152,12 +143,6 @@ class CompartmentModelTest {
         assertEquals(100.0, CellIndex.findMarkerValue(m, "CD3", Compartment.NUCLEAR, Statistic.MEAN));
         assertEquals(10.0, CellIndex.findMarkerValue(m, "CD3", Compartment.CYTOPLASMIC, Statistic.MEAN));
         assertEquals(24.0, CellIndex.findMarkerValue(m, "CD3", Compartment.WHOLE_CELL, Statistic.MEAN));
-    }
-
-    @Test
-    void resolveLayerPrefixedCompartmentKey() {
-        Map<String, Number> m = Map.of("[L0] CD3: Nucleus: Median", 7.0);
-        assertEquals(7.0, CellIndex.findMarkerValue(m, "CD3", Compartment.NUCLEAR, Statistic.MEDIAN));
     }
 
     @Test

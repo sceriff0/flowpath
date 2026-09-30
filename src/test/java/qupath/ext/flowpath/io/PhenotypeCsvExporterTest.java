@@ -117,7 +117,7 @@ class PhenotypeCsvExporterTest {
     /**
      * The other half of the same rule: morphology the export <em>does</em> carry is
      * emitted, including the fields FlowPath has no name for. A MIRAGE run writes
-     * {@code Major Axis Length µm} and {@code Minor Axis Length µm}; they used to be read
+     * {@code MORPH: Major Axis Length µm} and {@code MORPH: Minor Axis Length µm}; they used to be read
      * into the index and then dropped on the way out, because the CSV header was the fixed
      * four FlowPath knew about.
      */
@@ -126,7 +126,7 @@ class PhenotypeCsvExporterTest {
         CellIndex index = Cells.of(6)
                 .mirageMedianMarker("CD45", i -> 10.0 + i)
                 .mirageMorphology(i -> 50.0 + i * 10)
-                .morphology("Major Axis Length µm", i -> 8.0 + i * 0.5)
+                .morphology("MORPH: Major Axis Length µm", i -> 8.0 + i * 0.5)
                 .build();
         MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
         GateTree tree = new GateTree();
@@ -141,8 +141,8 @@ class PhenotypeCsvExporterTest {
         assertTrue(header.contains("eccentricity"), header);
         assertTrue(header.contains("major_axis_length"),
                 "a column in the file must reach the CSV: " + header);
-        assertFalse(header.contains("convex_area"),
-                "convex area backs the solidity derivation, not a column of its own: " + header);
+        assertTrue(header.contains("convex_area"),
+                "solidity is read as exported, so convex area is an ordinary column: " + header);
     }
 
     @Test

@@ -51,11 +51,10 @@ class UmapResultTest {
         // The identity block comes from CellTable and is byte-identical to the one
         // gate_pheno.csv writes -- that shared prefix is what makes the two files
         // joinable. The UMAP-specific columns follow it.
-        // The morphology block is whatever this export carries. These cells hold marker
-        // values only, so the sole morphology column is the total intensity FlowPath sums
-        // itself -- there is no area or perimeter to report.
+        // The quality block is whatever this export carries. These cells hold marker
+        // values only -- no MORPH: or QC: key -- so there is no quality column at all
+        // (FlowPath no longer computes a total intensity of its own).
         assertEquals("cell_id,phenotype,centroid_x,centroid_y,centroid_x_px,centroid_y_px"
-                + ",total_intensity"
                 + ",population,umap_x,umap_y,CD45_raw,CD45_zscore",
                 lines.get(0));
     }

@@ -157,7 +157,7 @@ class GatingSessionResyncTest {
         for (double min : new double[]{25, 35, 45}) {
             clock.addAndGet(100);
             session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
-            session.tree().getQualityFilter().setRange("area",
+            session.tree().getQualityFilter().setRange(QualityFilter.AREA,
                     new QualityFilter.Range(min, Double.POSITIVE_INFINITY));
             session.recomputeQualityMask();
             session.adoptStats(GatingEngine.recomputeStats(
@@ -176,7 +176,7 @@ class GatingSessionResyncTest {
         session.resync(NO_ANNOTATIONS);
 
         // Filter, mask and statistics are all the restored tree's.
-        assertTrue(session.tree().getQualityFilter().range("area").isOpen(), "filter restored");
+        assertTrue(session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen(), "filter restored");
         assertEquals(N, countTrue(session.qualityMask()), "quality mask recomputed from the restored filter");
         assertEquals(5.5, meanCd3(index, session.stats()), 1e-12, "statistics over all ten cells again");
         assertSame(session.stats(), pass.lastInput().stats(), "the pass runs on the resynced statistics");
@@ -733,7 +733,7 @@ class GatingSessionResyncTest {
         GatingSession session = new GatingSession(clock::get, pass);
         CellIndex index = slideA();
         GateTree tree = twoRootsOnCd3();
-        tree.getQualityFilter().setRange("area", new QualityFilter.Range(25, Double.POSITIVE_INFINITY));
+        tree.getQualityFilter().setRange(QualityFilter.AREA, new QualityFilter.Range(25, Double.POSITIVE_INFINITY));
         tree.setRoiFilterEnabled(true);
         session.replaceTree(tree);
         session.adoptIndex(index);
@@ -784,7 +784,7 @@ class GatingSessionResyncTest {
 
         clock.addAndGet(5_000);
         session.recordEdit();
-        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.tree().getQualityFilter().setRange(QualityFilter.AREA, new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         session.resync(NO_ANNOTATIONS);
         MarkerStats filtered = session.stats();
         assertEquals(7.5, meanCd3(index, filtered), 1e-12);
@@ -821,7 +821,7 @@ class GatingSessionResyncTest {
         MarkerStats before = session.stats();
 
         session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
-        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.tree().getQualityFilter().setRange(QualityFilter.AREA, new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         session.settle();
         session.recomputeQualityMask();            // statistics not adopted yet
 
@@ -910,7 +910,7 @@ class GatingSessionResyncTest {
         session.resync(NO_ANNOTATIONS);
 
         GatingSession.Derived stale = GatingSession.derive(session.derivationInputs(index, NO_ANNOTATIONS));
-        session.tree().getQualityFilter().setRange("area", new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
+        session.tree().getQualityFilter().setRange(QualityFilter.AREA, new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         session.resync(stale, NO_ANNOTATIONS);
 
         assertNotSame(stale.stats(), session.stats());

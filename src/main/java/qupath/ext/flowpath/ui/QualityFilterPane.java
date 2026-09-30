@@ -11,7 +11,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.CellIndex;
-import qupath.ext.flowpath.model.MorphologyField;
+import qupath.ext.flowpath.model.QualityField;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.ui.widgets.SliderUtils;
 
@@ -31,7 +31,7 @@ import java.util.function.Consumer;
  * export carries {@code Major Axis Length µm} and {@code Minor Axis Length µm}, and there
  * was no way to filter on either, nor anything to say the columns were there unread.
  * <p>
- * The rows are now one per {@link CellIndex#morphology()} entry, and each slider's travel
+ * The rows are now one per {@link CellIndex#qualityFields()} entry, and each slider's travel
  * is the observed range of that column rather than a guessed constant. A field the file
  * does not carry has no row, because there is nothing to filter; a field FlowPath has
  * never heard of gets a row like any other, because the panel does not need to recognise a
@@ -67,7 +67,7 @@ public class QualityFilterPane extends TitledPane {
     private Consumer<ChangeKind> onBeforeFilterChange;
 
     /** The controls for one morphology field. */
-    private record Row(MorphologyField field, Slider min, Slider max,
+    private record Row(QualityField field, Slider min, Slider max,
                        Label minLabel, Label maxLabel) {}
 
     public QualityFilterPane(QualityFilter filter) {
@@ -102,10 +102,10 @@ public class QualityFilterPane extends TitledPane {
      * rendering of "no cells loaded" — an empty panel rather than sliders over nothing.
      */
     public void setCellIndex(CellIndex index) {
-        showFields(index == null ? List.of() : index.morphology());
+        showFields(index == null ? List.of() : index.qualityFields());
     }
 
-    private void showFields(List<MorphologyField> fields) {
+    private void showFields(List<QualityField> fields) {
         rows.clear();
         grid.getChildren().clear();
 
@@ -117,7 +117,7 @@ public class QualityFilterPane extends TitledPane {
         if (!any) return;
 
         int row = 0;
-        for (MorphologyField field : fields) {
+        for (QualityField field : fields) {
             double[] bounds = observedRange(field);
             if (bounds == null) continue;   // nothing measured; nothing to threshold
 
@@ -174,7 +174,7 @@ public class QualityFilterPane extends TitledPane {
      * non-empty groups — a slider over it would move without ever changing the result,
      * which is the same "control that cannot do anything" the row hiding exists to avoid.
      */
-    private static double[] observedRange(MorphologyField field) {
+    private static double[] observedRange(QualityField field) {
         double lo = Double.POSITIVE_INFINITY;
         double hi = Double.NEGATIVE_INFINITY;
         for (double v : field.values()) {
@@ -232,7 +232,7 @@ public class QualityFilterPane extends TitledPane {
     /** Adopt a different filter and redraw against the fields currently shown. */
     public void setFilter(QualityFilter newFilter) {
         this.filter = newFilter != null ? newFilter : new QualityFilter();
-        List<MorphologyField> shown = new ArrayList<>();
+        List<QualityField> shown = new ArrayList<>();
         for (Row r : rows.values()) shown.add(r.field());
         suppressEvents = true;
         try {
@@ -278,7 +278,7 @@ public class QualityFilterPane extends TitledPane {
         if (rows.keySet().stream().allMatch(slug -> filter.range(slug).isOpen())) return;
         fireBeforeChange(ChangeKind.RESET);
         for (Row r : rows.values()) filter.setRange(r.field().slug(), null);
-        List<MorphologyField> shown = new ArrayList<>();
+        List<QualityField> shown = new ArrayList<>();
         for (Row r : rows.values()) shown.add(r.field());
         suppressEvents = true;
         try {

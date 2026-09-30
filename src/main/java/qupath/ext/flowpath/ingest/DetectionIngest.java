@@ -4,8 +4,8 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.MarkerSelection;
 import qupath.ext.flowpath.model.MeasurementKeySample;
-import qupath.ext.flowpath.model.MorphologyField;
 import qupath.ext.flowpath.model.MeasurementKeys;
+import qupath.ext.flowpath.model.MeasurementName;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
@@ -100,7 +100,7 @@ public final class DetectionIngest {
                 continue;
             }
             var parsed = MeasurementKeys.parse(raw, capability.compartments());
-            String base = parsed != null ? parsed.marker() : MeasurementKeys.stripLayerPrefix(raw);
+            String base = parsed != null ? parsed.marker() : raw;
             if (base == null || base.isBlank()) {
                 nullNames++;
                 continue;
@@ -215,7 +215,8 @@ public final class DetectionIngest {
 
     /**
      * The panel implied by the measurements alone: every key collapsed to its base marker,
-     * minus the morphology and bookkeeping columns, de-duplicated and sorted.
+     * minus every non-marker key (QC, morphology, identity; see {@link MeasurementName}) and
+     * bookkeeping columns, de-duplicated and sorted.
      * <p>
      * Sorted rather than first-seen because there is no meaningful order in a measurement
      * map — the channel path is the one that carries panel order.
@@ -232,21 +233,12 @@ public final class DetectionIngest {
         List<String> out = new ArrayList<>();
         for (String name : collapsed) {
             if (name.startsWith("_")) continue;
-            if (isMorphologyName(name)) continue;
             out.add(name);
         }
         out.sort(String::compareTo);
         return out;
     }
 
-    /**
-     * True if a measurement name is a morphology/identity column rather than a marker
-     * channel. Delegates to {@link MorphologyField#isMorphologyName}, which the quality
-     * filter's discovery also uses, so a column is a marker or a shape and never both.
-     */
-    public static boolean isMorphologyName(String name) {
-        return MorphologyField.isMorphologyName(name);
-    }
 
     // ------------------------------------------------------------------
     // ImageData accessors, defensively

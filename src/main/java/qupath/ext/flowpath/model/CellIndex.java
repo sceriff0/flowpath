@@ -40,11 +40,6 @@ public class CellIndex {
     // string comparisons per preview refresh.
     private final Map<String, Integer> markerIndexByName;
     private final double[][] values; // [markerIndex][cellIndex]
-    private final double[] areas;
-    private final double[] perimeters;
-    private final double[] eccentricities;
-    private final double[] solidities;
-    private final double[] totalIntensities;
     /**
      * Segmentation label — the cell's identity in the mask MIRAGE segmented, as opposed
      * to {@code cell_id}, which is only this collection's index. {@code NaN} where the
@@ -68,8 +63,6 @@ public class CellIndex {
     private final int nullMarkerNames;
 
     private CellIndex(PathObject[] objects, String[] markerNames, double[][] values,
-                      double[] areas, double[] perimeters, double[] eccentricities,
-                      double[] solidities, double[] totalIntensities,
                       double[] labels, CellGeometry geometry, Set<String> sampleKeys,
                       BuildDiagnostics partialDiagnostics) {
         this.objects = objects;
@@ -96,11 +89,6 @@ public class CellIndex {
         this.nullMarkerNames = nulls;
         this.markerIndexByName = Map.copyOf(byName);
         this.values = values;
-        this.areas = areas;
-        this.perimeters = perimeters;
-        this.eccentricities = eccentricities;
-        this.solidities = solidities;
-        this.totalIntensities = totalIntensities;
         this.labels = labels;
         boolean anyLabel = false;
         for (double label : labels) {
@@ -157,11 +145,6 @@ public class CellIndex {
         PathObject[] objects = detections.toArray(new PathObject[0]);
         String[] markers = markerNames.toArray(new String[0]);
         double[][] values = new double[m][n];
-        double[] areas = new double[n];
-        double[] perimeters = new double[n];
-        double[] eccentricities = new double[n];
-        double[] solidities = new double[n];
-        double[] totalIntensities = new double[n];
         double[] labels = new double[n];
 
         // Resolve each marker's (compartment, statistic) once up front.
@@ -201,20 +184,8 @@ public class CellIndex {
         int tileObjects = 0;
         int otherObjects = 0;
 
-        // Morphology columns get the same treatment, and need it more: their lookup
-        // names ("area", "convex_area", "Centroid X") never match the exported names
-        // ("Area µm²", "Centroid X µm") exactly, so findMeasurement's exact-match step
-        // always missed and every cell fell through to two case-folding scans of its
-        // whole measurement map — seven times over. On a per-compartment export
-        // (~170 measurements/cell) that alone was the bulk of index-build time.
-        String areaKey = resolveMeasurementKey(sampleKeys, "area");
-        String convexAreaKey = resolveMeasurementKey(sampleKeys, "convex_area");
-        String eccentricityKey = resolveMeasurementKey(sampleKeys, "eccentricity");
-        String perimeterKey = resolveMeasurementKey(sampleKeys, "perimeter");
-        String solidityKey = resolveMeasurementKey(sampleKeys, "solidity");
-        // Segmentation label, when the export carries one. Resolved the same way and for
-        // the same reason as the morphology keys — once, not per cell.
-        String labelKey = resolveMeasurementKey(sampleKeys, "label");
+        // The segmentation label, when the export carries one: an exact key, never guessed.
+        String labelKey = sampleKeys.contains(MeasurementName.LABEL) ? MeasurementName.LABEL : null;
         // Loop-invariant: n is fixed for the whole build, so the sample's stride is computed
         // once here rather than recomputed (a division) inside the per-cell loop below.
         int keySampleStride = MeasurementKeySample.stride(n);
@@ -230,28 +201,8 @@ public class CellIndex {
             else if (obj.isCell()) cellObjects++;
             else otherObjects++;
 
-            double area = lookupMeasurement(measurements, areaKey, "area");
-            double convexArea = lookupMeasurement(measurements, convexAreaKey, "convex_area");
-            double eccentricity = lookupMeasurement(measurements, eccentricityKey, "eccentricity");
-            double perimeter = lookupMeasurement(measurements, perimeterKey, "perimeter");
-
-            areas[i] = area;
-            perimeters[i] = perimeter;
-            eccentricities[i] = eccentricity;
-            // Solidity = area / convex_area, falling back to a directly exported
-            // "Solidity" measurement. MIRAGE writes both, but only emits Convex Area
-            // when that column survives upstream — without the fallback the quality
-            // filter silently drops solidity from its available metrics.
-            if (!Double.isNaN(area) && !Double.isNaN(convexArea) && convexArea > 0) {
-                solidities[i] = area / convexArea;
-            } else {
-                solidities[i] = lookupMeasurement(measurements, solidityKey, "solidity");
-            }
-
-            // Deliberately NOT routed through lookupMeasurement: its null-key fallback is
-            // a full per-cell scan of the measurement map, and no label key is the common
-            // case (MIRAGE's export_geojson.py does not currently write one). Paying a
-            // scan per cell to rediscover an absence would undo the v2.0.1 build speedup.
+            // A single exact lookup, never a scan: an export without labels must not pay a
+            // per-cell search to rediscover an absence.
             if (labelKey != null) {
                 Number labelValue = measurements.get(labelKey);
                 labels[i] = labelValue != null ? labelValue.doubleValue() : Double.NaN;
@@ -264,7 +215,6 @@ public class CellIndex {
             // upstream join is uniform enough that the sample settles it.
             boolean census = MeasurementKeySample.includes(i, n, keySampleStride);
 
-            double totalIntensity = 0;
             for (int j = 0; j < m; j++) {
                 String key = markerKeys[j];
                 double v;
@@ -294,11 +244,7 @@ public class CellIndex {
                     v = findMarkerValue(measurements, markers[j], comps[j], stats[j]);
                 }
                 values[j][i] = v;
-                if (!Double.isNaN(v)) {
-                    totalIntensity += v;
-                }
             }
-            totalIntensities[i] = totalIntensity;
 
             i++;
         }
@@ -332,8 +278,7 @@ public class CellIndex {
                 Map.copyOf(missing), Map.copyOf(zeros),
                 List.of(), 0);
 
-        return new CellIndex(objects, markers, values, areas, perimeters, eccentricities,
-                solidities, totalIntensities, labels, geometry, sampleKeys, partial);
+        return new CellIndex(objects, markers, values, labels, geometry, sampleKeys, partial);
     }
 
     /**
@@ -347,7 +292,7 @@ public class CellIndex {
      * @param detectionCount          objects handed to the build
      * @param cellObjects             of those, true {@code PathCellObject}s
      * @param tileObjects             of those, tiles/superpixels — never really cells
-     * @param otherObjects            of those, plain detections (the legacy import shape)
+     * @param otherObjects            of those, plain detections
      * @param sampledCells            cells whose key sets formed the resolution sample
      * @param sampleSize              the sample ceiling, {@link MeasurementKeySample#MAX_CELLS}
      * @param resolvedMarkerKeys      marker -&gt; the one concrete measurement key it reads
@@ -381,45 +326,10 @@ public class CellIndex {
     }
 
     /**
-     * Resolve the concrete measurement key a morphology lookup name maps to, mirroring
-     * the priority order of {@link #findMeasurement(Map, String)}: exact match, then the
-     * layer-prefixed form, then a case-insensitive prefix match (so {@code "area"} finds
-     * {@code "Area µm²"}). Returns {@code null} when nothing in {@code keys} matches.
-     */
-    static String resolveMeasurementKey(Set<String> keys, String key) {
-        if (keys.contains(key)) return key;
-
-        String suffixLower = ("] " + key).toLowerCase();
-        for (String k : keys) {
-            if (k.toLowerCase().endsWith(suffixLower)) return k;
-        }
-
-        String keyLower = key.toLowerCase().replace('_', ' ');
-        for (String k : keys) {
-            String candidate = MeasurementKeys.stripLayerPrefix(k).toLowerCase().replace('_', ' ');
-            if (candidate.startsWith(keyLower)) return k;
-        }
-        return null;
-    }
-
-    /**
-     * Read a measurement through a key resolved once for the whole build, falling back
-     * to the per-cell {@link #findMeasurement} scan only when the sample resolved
-     * nothing. Mirrors the marker path's tradeoff: a cell that lacks an otherwise
-     * resolved key reads NaN rather than triggering a rescan.
-     */
-    private static double lookupMeasurement(Map<String, Number> measurements,
-                                            String resolvedKey, String fallbackKey) {
-        if (resolvedKey == null) return findMeasurement(measurements, fallbackKey);
-        Number val = measurements.get(resolvedKey);
-        return val != null ? val.doubleValue() : Double.NaN;
-    }
-
-    /**
      * Resolve the concrete measurement key for a marker, mirroring the priority order of
      * {@link #findMarkerValue(Map, String, Compartment, Statistic)}: the structured
-     * {@code "<marker>: <Compartment>: <Stat>"} key first (exact, then layer-prefixed),
-     * then — for whole-cell mean only — the bare marker key. Returns {@code null} when
+     * {@code "<marker>: <Compartment>: <Stat>"} key first, then — for whole-cell mean only —
+     * the bare marker key. Returns {@code null} when
      * nothing in {@code keys} matches.
      */
     private static String resolveMarkerKey(Set<String> keys, String marker,
@@ -437,14 +347,9 @@ public class CellIndex {
         return null;
     }
 
-    /** Exact match, else the first key ending with {@code "] " + key} (layer-prefixed form). */
+    /** Exact match only. */
     private static String matchKey(Set<String> keys, String key) {
-        if (keys.contains(key)) return key;
-        String suffix = "] " + key;
-        for (String k : keys) {
-            if (k.endsWith(suffix)) return k;
-        }
-        return null;
+        return keys.contains(key) ? key : null;
     }
 
     /**
@@ -469,17 +374,16 @@ public class CellIndex {
      * Resolve a marker value for a specific compartment and statistic, using the
      * QuPath-native key {@code "<channel>: <Compartment>: <Stat>"}.
      * <p>
-     * Resolution order: the structured key (exact, then layer-prefixed), then — only for
-     * the default selection, per {@link #isDefault} — the bare {@code channel} key
-     * (exact, then layer-prefixed) so legacy GeoJSONs carrying a single {@code "CD3"}
-     * measurement keep working unchanged. Returns {@code NaN} if nothing matches.
+     * Resolution order: the structured key, then — only for the default selection, per
+     * {@link #isDefault} — the bare {@code channel} key, which MIRAGE writes on every cell as
+     * the whole-cell mean. Returns {@code NaN} if nothing matches.
      * <p>
      * This is the per-cell fallback scan used when a key could not be resolved once for
      * the whole build against {@link #sampleKeys}; it applies the same two rules
      * {@link #resolveMarkerKey} applies to a key set, so the two cannot drift apart.
      * The <em>bare</em> address matters in both directions: a structured-only GeoJSON
      * (MIRAGE with {@code "CD3: Cell: Mean"} but no {@code "CD3"}) resolves through the
-     * structured step, a legacy bare-only GeoJSON through the fallback.
+     * structured step, a bare-only export through the fallback.
      */
     public static double findMarkerValue(Map<String, Number> measurements, String channel,
                                          Compartment compartment, Statistic statistic) {
@@ -489,63 +393,17 @@ public class CellIndex {
         double v = lookupKey(measurements, MeasurementKeys.build(channel, comp, stat));
         if (!Double.isNaN(v)) return v;
 
-        // Backward compatibility: the default selection also answers to the bare key.
+        // The default selection also answers to the bare key.
         if (isDefault(comp, stat)) {
             return lookupKey(measurements, channel);
         }
         return Double.NaN;
     }
 
-    /**
-     * Read one measurement: exact key, then the layer-prefixed {@code "[layer] key"} form
-     * written by {@code import_phenotype.groovy}. The per-cell twin of {@link #matchKey},
-     * which applies the same rule to a key set.
-     */
+    /** Read one measurement by its exact key, or NaN. */
     private static double lookupKey(Map<String, Number> measurements, String key) {
         Number val = measurements.get(key);
-        if (val != null) return val.doubleValue();
-
-        String suffix = "] " + key;
-        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            if (entry.getKey().endsWith(suffix) && entry.getValue() != null) {
-                return entry.getValue().doubleValue();
-            }
-        }
-        return Double.NaN;
-    }
-
-    /**
-     * Find a morphological measurement by key name.
-     * Tries exact match, then layer-prefixed "[layer] key", then prefix match
-     * (e.g., "area" matches "area µm²"). Returns NaN if not found.
-     * <p>
-     * The layer prefix is stripped before the prefix pass so the two conventions
-     * compose: {@code "[Layer0] Area µm²"} carries both a prefix and a unit suffix,
-     * and matched neither branch on its own.
-     */
-    private static double findMeasurement(Map<String, Number> measurements, String key) {
-        Number val = measurements.get(key);
-        if (val != null) return val.doubleValue();
-
-        // Layer-prefixed match: "[layer] key" (case-insensitive)
-        String suffixLower = ("] " + key).toLowerCase();
-        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            if (entry.getKey().toLowerCase().endsWith(suffixLower) && entry.getValue() != null) {
-                return entry.getValue().doubleValue();
-            }
-        }
-
-        // Prefix match: "area" matches "Area µm²" (case-insensitive, underscores treated as spaces)
-        String keyLower = key.toLowerCase().replace('_', ' ');
-        for (Map.Entry<String, Number> entry : measurements.entrySet()) {
-            String entryLower = MeasurementKeys.stripLayerPrefix(entry.getKey())
-                    .toLowerCase().replace('_', ' ');
-            if (entryLower.startsWith(keyLower) && entry.getValue() != null) {
-                return entry.getValue().doubleValue();
-            }
-        }
-
-        return Double.NaN;
+        return val != null ? val.doubleValue() : Double.NaN;
     }
 
     /**
@@ -581,8 +439,8 @@ public class CellIndex {
 
     /**
      * The resolved measurement key for a channel + compartment + statistic.
-     * Whole-cell mean resolves to the bare channel name (so legacy/default data
-     * uses the existing column and stats unchanged); other selections use the
+     * Whole-cell mean resolves to the bare channel name (MIRAGE's whole-cell-mean key);
+     * other selections use the
      * {@code "<channel>: <Compartment>: <Stat>"} key.
      */
     public String resolvedKey(String channel, Compartment compartment, Statistic statistic) {
@@ -639,7 +497,7 @@ public class CellIndex {
      * {@code null} means "unspecified", which is the default. Every other consumer of the
      * rule — {@link #resolvedKey}, {@link #getResolvedColumn}, {@link #resolveMarkerKey}
      * and {@link #findMarkerValue} — routes through here rather than restating it, so a
-     * legacy GeoJSON carrying only {@code "CD3"} and a structured export carrying only
+     * GeoJSON carrying only {@code "CD3"} and a structured export carrying only
      * {@code "CD3: Cell: Mean"} cannot disagree about which column a default gate reads.
      */
     private static boolean isDefault(Compartment compartment, Statistic statistic) {
@@ -717,26 +575,6 @@ public class CellIndex {
         return markerNames;
     }
 
-    public double[] getAreas() {
-        return areas;
-    }
-
-    public double[] getPerimeters() {
-        return perimeters;
-    }
-
-    public double[] getEccentricities() {
-        return eccentricities;
-    }
-
-    public double[] getSolidities() {
-        return solidities;
-    }
-
-    public double[] getTotalIntensities() {
-        return totalIntensities;
-    }
-
     public int getSize() {
         return size;
     }
@@ -746,132 +584,71 @@ public class CellIndex {
     }
 
     /** Discovered lazily on first ask; the build loop never touches this. */
-    private volatile List<MorphologyField> morphologyFields;
+    private volatile List<QualityField> qualityFields;
 
     /**
-     * <b>Every morphology measurement this export carries</b>, in a stable order: the ones
-     * FlowPath computes or normalises itself first, then whatever else the file turned out
-     * to hold, in the order the key sample saw them.
+     * <b>Every shape ({@code MORPH: …}) and cell-level QC ({@code QC: …}) column this export
+     * carries</b>, in the order the key sample saw them — the answer to "what can a quality
+     * filter filter on?", read from the data rather than declared. A field no cell carries a
+     * value for is left out: it is not something a user can filter on.
      * <p>
-     * This is the answer to "what can a quality filter filter on?", and it is read from the
-     * data rather than declared. FlowPath knew about four fields and drew five sliders; a
-     * MIRAGE export carries seven, so {@code Major Axis Length µm} and
-     * {@code Minor Axis Length µm} sat unread — no way to filter on elongation, and nothing
-     * to say the columns were there. In the other direction a file with no solidity still
-     * got a solidity slider, which filtered on NaN.
-     * <p>
-     * <b>Computed on first call, then cached.</b> The build loop is the {@code cells x
-     * markers} hot path and deliberately gains nothing here: discovery reuses the key
-     * sample already taken, and reading the extra columns costs one pass over the
-     * detections, paid only if something asks. The four known fields cost nothing at all —
-     * their arrays were filled during the build.
+     * <b>Computed on first call, then cached.</b> The build loop is the {@code cells x markers}
+     * hot path and gains nothing here: discovery reuses the key sample, and reading the columns
+     * costs one pass over the detections, paid only if something asks.
      */
-    public List<MorphologyField> morphology() {
-        List<MorphologyField> cached = morphologyFields;
+    public List<QualityField> qualityFields() {
+        List<QualityField> cached = qualityFields;
         if (cached != null) return cached;
         synchronized (this) {
-            if (morphologyFields == null) morphologyFields = discoverMorphology();
-            return morphologyFields;
+            if (qualityFields == null) qualityFields = discoverQualityFields();
+            return qualityFields;
         }
     }
 
-    /** The morphology field for {@code slug}, or {@code null} if this export has none. */
-    public MorphologyField morphology(String slug) {
+    /** The quality field for {@code slug}, or {@code null} if this export has none. */
+    public QualityField qualityField(String slug) {
         if (slug == null) return null;
-        for (MorphologyField f : morphology()) {
+        for (QualityField f : qualityFields()) {
             if (f.slug().equals(slug)) return f;
         }
         return null;
     }
 
-    private List<MorphologyField> discoverMorphology() {
-        Set<Compartment> compartments = MeasurementKeys.discoverCompartments(sampleKeys);
-        List<MorphologyField> out = new ArrayList<>();
+    private List<QualityField> discoverQualityFields() {
+        List<MeasurementName> names = new ArrayList<>();
         Set<String> claimed = new LinkedHashSet<>();
-
-        // The fields the build already resolved, with their own semantics: solidity is
-        // derived from convex area when that is what the file offers, and total intensity
-        // is summed across markers rather than exported at all. Emitted first, and only
-        // when the data actually produced something -- an all-NaN column is not a field a
-        // user can filter on, which is the "offers what is not there" half of the bug.
-        addKnown(out, claimed, "area", "Area", areas);
-        addKnown(out, claimed, "perimeter", "Perimeter", perimeters);
-        addKnown(out, claimed, "eccentricity", "Eccentricity", eccentricities);
-        addKnown(out, claimed, "solidity", "Solidity", solidities);
-        addKnown(out, claimed, "total_intensity", "Total intensity", totalIntensities);
-        // Convex area feeds the solidity derivation above; offering it as its own filter
-        // as well would be two controls over one quantity.
-        claimed.add("convex_area");
-
-        // Everything else the file carries that is not a marker, a position or an identity.
-        List<String> extra = new ArrayList<>();
         for (String key : sampleKeys) {
-            if (key == null || key.isBlank()) continue;
-            // Parsed against this file's own compartment vocabulary, so a per-compartment
-            // column in a compartment FlowPath has never seen is still recognised as a
-            // marker key rather than mistaken for a morphology field.
-            if (MeasurementKeys.parse(key, compartments) != null) continue;
-            String bare = MeasurementKeys.stripLayerPrefix(key);
-            if (markerIndexByName.containsKey(bare)) continue;             // bare marker column
-            // "Not a marker of this index" is not the same as "a shape". When the image's
-            // channel list wins the panel, a marker the export quantified but the image does
-            // not name is absent from the index -- and used to land here as a filterable
-            // "morphology" column. Marker discovery's own rule decides instead.
-            if (!MorphologyField.isMorphologyName(bare)) continue;
-            String slug = MorphologyField.slugOf(key);
-            if (slug.isEmpty() || claimed.contains(slug)) continue;
-            if (slug.startsWith("centroid_")) continue;                    // position, not shape
-            if (slug.equals("label") || slug.equals("cell_id") || slug.equals("fov")) continue;
-            claimed.add(slug);
-            extra.add(key);
+            if (key == null) continue;
+            MeasurementName name = MeasurementName.classify(key);
+            if (name.kind() != MeasurementName.Kind.MORPHOLOGY && name.kind() != MeasurementName.Kind.QC_CELL) continue;
+            if (claimed.add(name.slug())) names.add(name);
         }
-        if (!extra.isEmpty()) {
-            // One pass over the detections for all of them together, not one pass each.
-            double[][] columns = new double[extra.size()][objects.length];
-            for (double[] col : columns) java.util.Arrays.fill(col, Double.NaN);
-            for (int i = 0; i < objects.length; i++) {
-                Map<String, Number> measurements = getMeasurements(objects[i]);
-                for (int c = 0; c < extra.size(); c++) {
-                    Number v = measurements.get(extra.get(c));
-                    if (v != null) columns[c][i] = v.doubleValue();
-                }
-            }
-            for (int c = 0; c < extra.size(); c++) {
-                String key = extra.get(c);
-                MorphologyField field = new MorphologyField(
-                        MorphologyField.slugOf(key), key, MorphologyField.labelOf(key), columns[c]);
-                if (field.hasAnyValue()) out.add(field);
-            }
+        double[][] columns = readColumns(names.stream().map(MeasurementName::key).toList());
+        List<QualityField> out = new ArrayList<>();
+        for (int c = 0; c < names.size(); c++) {
+            MeasurementName name = names.get(c);
+            QualityField field = new QualityField(name.slug(), name.key(), name.label(), name.kind(), columns[c]);
+            if (field.hasAnyValue()) out.add(field);
         }
         return List.copyOf(out);
     }
 
-    private void addKnown(List<MorphologyField> out, Set<String> claimed,
-                          String slug, String label, double[] values) {
-        claimed.add(slug);
-        String key = resolveMeasurementKey(sampleKeys, slug);
-        MorphologyField field = new MorphologyField(slug, key != null ? key : label, label, values);
-        if (field.hasAnyValue()) out.add(field);
-    }
-
-    public double getArea(int i) {
-        return areas[i];
-    }
-
-    public double getPerimeter(int i) {
-        return perimeters[i];
-    }
-
-    public double getEccentricity(int i) {
-        return eccentricities[i];
-    }
-
-    public double getSolidity(int i) {
-        return solidities[i];
-    }
-
-    public double getTotalIntensity(int i) {
-        return totalIntensities[i];
+    /**
+     * {@code keys} read off every detection in one pass, NaN where a cell lacks a key. One
+     * pass for all of them together, not one pass each.
+     */
+    double[][] readColumns(List<String> keys) {
+        double[][] columns = new double[keys.size()][objects.length];
+        for (double[] col : columns) java.util.Arrays.fill(col, Double.NaN);
+        if (keys.isEmpty()) return columns;
+        for (int i = 0; i < objects.length; i++) {
+            Map<String, Number> measurements = getMeasurements(objects[i]);
+            for (int c = 0; c < keys.size(); c++) {
+                Number v = measurements.get(keys.get(c));
+                if (v != null) columns[c][i] = v.doubleValue();
+            }
+        }
+        return columns;
     }
 
     /**

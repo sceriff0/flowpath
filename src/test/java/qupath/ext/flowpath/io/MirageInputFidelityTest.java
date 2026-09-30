@@ -88,44 +88,44 @@ class MirageInputFidelityTest {
         return new Csv(hdr, rows);
     }
 
-    // ---- morphology: QuPath-native names must resolve ---------------------------
+    // ---- morphology: MIRAGE MORPH: keys must resolve -----------------------------
 
     @Test
-    void qupathNativeMorphologyKeysResolve() {
+    void mirageMorphKeysResolve() {
         CellIndex idx = mirageCells(1).at(new double[]{12.5}, new double[]{25.0})
                 .mirageMarker("DAPI", 100.0)
                 .mirageMorphology(42.0)
                 .build();
 
-        assertEquals(42.0, idx.getArea(0), 1e-4, "\"Area µm²\" must resolve via prefix match");
-        assertEquals(30.0, idx.getPerimeter(0), 1e-4, "\"Perimeter µm\"");
-        assertEquals(0.6, idx.getEccentricity(0), 1e-4, "\"Eccentricity\" (capitalised)");
-        assertEquals(0.84, idx.getSolidity(0), 1e-4, "Area µm² / Convex Area µm²");
+        assertEquals(42.0, idx.qualityField(QualityFilter.AREA).valueAt(0), 1e-4, "\"MORPH: Area µm²\"");
+        assertEquals(30.0, idx.qualityField(QualityFilter.PERIMETER).valueAt(0), 1e-4, "\"MORPH: Perimeter µm\"");
+        assertEquals(0.6, idx.qualityField(QualityFilter.ECCENTRICITY).valueAt(0), 1e-4, "\"MORPH: Eccentricity\"");
+        assertEquals(0.84, idx.qualityField(QualityFilter.SOLIDITY).valueAt(0), 1e-4, "\"MORPH: Solidity\", as exported");
         assertEquals(12.5, idx.getCentroidX(0), 1e-4, "\"Centroid X µm\" — micrometres");
         assertEquals(25.0, idx.getCentroidY(0), 1e-4);
         assertEquals(100.0, idx.getMarkerValues(0)[0], 1e-4, "bare marker == whole-cell mean");
     }
 
     @Test
-    void solidityFallsBackToTheExportedMeasurementWhenConvexAreaIsAbsent() {
+    void solidityIsReadAsExportedWithoutConvexArea() {
         // MIRAGE only emits Convex Area when the upstream column survives; Solidity
         // is emitted independently. Losing solidity strips it from the quality filter.
         CellIndex idx = Cells.of(1)
                 .marker("CD3", 10.0)
-                .morphology("Area µm²", 42.0)
-                .morphology("Solidity", 0.9)
+                .morphology("MORPH: Area µm²", 42.0)
+                .morphology("MORPH: Solidity", 0.9)
                 .build();
-        assertEquals(0.9, idx.getSolidity(0), 1e-4,
+        assertEquals(0.9, idx.qualityField(QualityFilter.SOLIDITY).valueAt(0), 1e-4,
                 "with no Convex Area, the directly exported Solidity must be used");
     }
 
     @Test
-    void solidityIsNaNWhenNeitherConvexAreaNorSolidityIsPresent() {
+    void solidityIsAbsentWhenNotExported() {
         CellIndex idx = Cells.of(1)
                 .marker("CD3", 10.0)
-                .morphology("Area µm²", 42.0)
+                .morphology("MORPH: Area µm²", 42.0)
                 .build();
-        assertTrue(Double.isNaN(idx.getSolidity(0)),
+        assertNull(idx.qualityField(QualityFilter.SOLIDITY),
                 "absent solidity must stay NaN, never a fabricated 0 or 1");
     }
 
@@ -207,22 +207,6 @@ class MirageInputFidelityTest {
                 idx.getResolvedColumn("CD3", gate.getCompartment(), gate.getStatistic())[0], 1e-4,
                 "default gate reads Cell Median, not the bare whole-cell mean");
     }
-
-    @Test
-    void layerPrefixedCompartmentKeysResolve() {
-        // import_phenotype.groovy prefixes measurements with "[Layer0] ".
-        CellIndex idx = Cells.of(1)
-                .marker("CD3", 50.0)
-                .marker("CD3", Compartment.NUCLEAR, Statistic.MEAN, 80.0)
-                .morphology("Area µm²", 100.0)
-                .layerPrefixed()
-                .build();
-        assertEquals(50.0, idx.getMarkerValues(0)[0], 1e-4);
-        assertEquals(80.0, idx.getResolvedColumn("CD3", Compartment.NUCLEAR, Statistic.MEAN)[0], 1e-4);
-        assertEquals(100.0, idx.getArea(0), 1e-4);
-    }
-
-    // ---- end-to-end: MIRAGE cells -> nuclear gate -> CSV -------------------------
 
     @Test
     void mirageShapedCellsGateAndExportEndToEnd() throws IOException {

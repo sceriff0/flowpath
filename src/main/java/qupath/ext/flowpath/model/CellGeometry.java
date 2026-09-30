@@ -4,7 +4,6 @@ import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
 import qupath.lib.roi.interfaces.ROI;
 
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -138,11 +137,12 @@ public final class CellGeometry {
 
         // Joint, not per-axis: one coordinate of a pair is not a position. An export
         // offering only "Centroid X" offers no usable centroid at all.
-        String xKey = CellIndex.resolveMeasurementKey(sampleKeys, "Centroid X");
-        String yKey = CellIndex.resolveMeasurementKey(sampleKeys, "Centroid Y");
+        String xKey = sampleKeys.contains(MeasurementName.CENTROID_X) ? MeasurementName.CENTROID_X : null;
+        String yKey = sampleKeys.contains(MeasurementName.CENTROID_Y) ? MeasurementName.CENTROID_Y : null;
         boolean measured = xKey != null && yKey != null;
 
-        CoordinateSpace space = measured ? spaceOf(xKey, yKey) : CoordinateSpace.PIXELS;
+        // MIRAGE writes centroids in micrometres; without them the ROI centroid, in pixels.
+        CoordinateSpace space = measured ? CoordinateSpace.MICRONS : CoordinateSpace.PIXELS;
 
         double pw = Double.NaN;
         double ph = Double.NaN;
@@ -203,23 +203,6 @@ public final class CellGeometry {
         return new CellGeometry(objects, sx, sy, space, pw, ph, fallbacks, measured, verdict);
     }
 
-    /**
-     * Decide the measured space from the resolved key names. Only an explicit pixel unit
-     * demotes a centroid to {@link CoordinateSpace#PIXELS}; see the class javadoc for why
-     * defaulting the unit-less case to micrometres is safe.
-     */
-    private static CoordinateSpace spaceOf(String xKey, String yKey) {
-        return (isPixelUnit(xKey) && isPixelUnit(yKey))
-                ? CoordinateSpace.PIXELS
-                : CoordinateSpace.MICRONS;
-    }
-
-    private static boolean isPixelUnit(String key) {
-        String k = key.toLowerCase(Locale.ROOT).trim();
-        // A leading space is required: matching a bare "px" suffix would also claim any
-        // marker or morphology column that happens to end in those letters.
-        return k.endsWith(" px") || k.endsWith(" pixels") || k.endsWith(" pixel");
-    }
 
     private static double roiX(PathObject obj) {
         ROI roi = obj != null ? obj.getROI() : null;

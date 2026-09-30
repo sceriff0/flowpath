@@ -389,7 +389,7 @@ class DetectionIngestTest {
                 ROIs.createRectangleROI(0, 0, 4, 4, ImagePlane.getDefaultPlane()),
                 ROIs.createRectangleROI(1, 1, 2, 2, ImagePlane.getDefaultPlane()));
         cell.getMeasurements().put("CD3", 5.0);
-        cell.getMeasurements().put("Area µm²", 42.0);
+        cell.getMeasurements().put(Cells.MORPH_AREA, 42.0);
 
         var cells = new ArrayList<>(mirageExport(3, "CD3"));
         cells.add(cell);
@@ -464,9 +464,6 @@ class DetectionIngestTest {
         IngestResult r = DetectionIngest.read(cells, IngestOptions.none());
         assertEquals(List.of("CD3"), r.markerNames());
         assertFalse(r.markerNames().contains("label"));
-        assertTrue(DetectionIngest.isMorphologyName("Centroid X µm"));
-        assertFalse(DetectionIngest.isMorphologyName("YAP1"),
-                "prefix-matching x/y must not swallow real markers");
     }
     // ---- ROI-centroid fallback ----------------------------------------------------
 
@@ -536,53 +533,6 @@ class DetectionIngestTest {
                 .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
         assertTrue(line.contains("10 of 10"), line);
         assertTrue(line.contains("pixels"), line);
-        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
-    }
-
-    @Test
-    void aMajorityOfCentroidFallbacksInAPixelCentroidExportIsAFindingInPixels() {
-        // The pixel-space sibling of aMajorityOfCentroidFallbacksWithTheColumnsPresentIsAFinding
-        // (which is µm-based, via MIRAGE morphology): centroid columns present, in pixels, and
-        // a majority of cells still fell back to their ROI centroid -- a finding, worded for
-        // the space the export's own columns are actually in, not "converted to µm".
-        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
-                .mirageMedianMarker("CD3", i -> 10.0 + i)
-                .mirageMorphology(i -> 42.0, i -> 50.0)
-                .measurement("Centroid X px", i -> i)
-                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 6)
-                .detections();
-        IngestReport report = read(cells, "CD3").report();
-
-        assertTrue(report.centroidColumnsPresent());
-        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
-        assertEquals(6, report.roiFallbackCells());
-        assertFalse(report.isClean(), report.findings().toString());
-        String line = report.findings().stream().filter(s -> s.contains("ROI centroid"))
-                .findFirst().orElseThrow(() -> new AssertionError(report.findings().toString()));
-        assertTrue(line.contains("6 of 10"), line);
-        assertTrue(line.contains("in pixels"), line);
-        assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
-        assertTrue(report.notes().stream().noneMatch(s -> s.contains("ROI centroid")),
-                "said once, as a finding, not also as a note");
-    }
-
-    @Test
-    void aFallbackInAPixelCentroidExportStaysInPixels() {
-        var cells = Cells.of(10).at(i -> i, i -> i * 2.0)
-                .mirageMedianMarker("CD3", i -> 10.0 + i)
-                .mirageMorphology(i -> 42.0, i -> 50.0)
-                .measurement("Centroid X px", i -> i)
-                .measurement("Centroid Y px", i -> i * 2.0).absentOn(i -> i < 3)
-                .detections();
-        IngestReport report = read(cells, "CD3").report();
-
-        assertTrue(report.centroidColumnsPresent());
-        assertEquals(CoordinateSpace.PIXELS, report.positionSpace());
-        assertEquals(3, report.roiFallbackCells());
-        assertTrue(report.isClean(), report.findings().toString());
-        String line = report.notes().stream().filter(s -> s.contains("ROI centroid"))
-                .findFirst().orElseThrow(() -> new AssertionError(report.notes().toString()));
-        assertTrue(line.contains("in pixels"), line);
         assertFalse(line.contains("converted"), "a pixel index converts nothing: " + line);
     }
 }

@@ -747,7 +747,7 @@ class IngestCoordinatorTest {
 
         // The user drags a quality slider while that re-derivation runs: areas are 10..100,
         // so this cuts cells 0..4 and the mask it lands with describes nothing.
-        rig.session.tree().getQualityFilter().setRange("area",
+        rig.session.tree().getQualityFilter().setRange(QualityFilter.AREA,
                 new QualityFilter.Range(55, Double.POSITIVE_INFINITY));
 
         int resyncsBeforeLanding = rig.host.resyncedWithNewIndex.size();

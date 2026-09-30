@@ -4,18 +4,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * <b>Per-field acceptance ranges for pre-gating quality control</b>, keyed by
- * {@link MorphologyField#slug()}.
+ * <b>Per-field acceptance ranges for pre-gating quality control</b>, keyed by namespaced slug
+ * ({@link MeasurementName#slug()}): {@code morph/<name>} for a shape, {@code qc/<metric>} for a
+ * cell-level QC metric — both remove a failing cell — and {@code qcround/<metric>} for a
+ * round-level QC metric, which applies to every round and makes a failing round's markers
+ * Unmeasured for that cell rather than removing it.
  * <p>
- * This used to be ten fixed fields — a min and a max each for area, eccentricity,
- * solidity, total intensity and perimeter — which meant the filter could only ever
- * express what FlowPath had been told about in advance. A MIRAGE export carries seven
- * morphology measurements; five could be filtered, and {@code Major Axis Length µm} and
- * {@code Minor Axis Length µm} could not, though they are among the more useful signals
- * for rejecting a segmentation artefact. In the other direction a file with no solidity
- * still got a solidity range, applied to a column of NaN.
- * <p>
- * Ranges are now a map, and {@link CellIndex#morphology()} decides what there is to
+ * {@link CellIndex#qualityFields()} (and the index's round QC) decide what there is to
  * filter. A slug with no entry here is unconstrained; an entry whose field the file does
  * not carry is simply never consulted, so a filter saved against a richer export loads
  * against a leaner one without either erroring or silently dropping cells.
@@ -48,16 +43,7 @@ public class QualityFilter {
          * underlying data actually carries, which loses at most the last bit of a bound typed
          * with more precision than a {@code float} measurement could ever match anyway.
          * <p>
-         * "Lossless for {@code v}" holds for every field sourced directly from a QuPath
-         * measurement — which is every field this class filters except one. {@code
-         * total_intensity} ({@link CellIndex}) is not a stored measurement but a {@code
-         * double} accumulated by summing several float-widened marker values; that sum
-         * carries real fractional bits at {@code double} precision no single {@code float}
-         * ever held, so casting <em>it</em> to {@code float} can genuinely discard precision,
-         * not merely bits {@code double} widening manufactured. It is compared the same way
-         * as every other field regardless, for one uniform rule rather than a per-field
-         * special case, and the loss is bounded to the last few bits of a running sum over
-         * a marker panel — not a concern at the range widths quality control is set at.
+         * Lossless for {@code v}: every field this class filters is a stored measurement.
          */
         public boolean accepts(double v) {
             return Double.isNaN(v) || ((float) v >= (float) min && (float) v <= (float) max);
@@ -69,13 +55,12 @@ public class QualityFilter {
         }
     }
 
-    // Slugs FlowPath has always filtered on. Named constants because the legacy accessors
-    // and the v1..v3 JSON both address them by these exact spellings.
-    public static final String AREA = "area";
-    public static final String ECCENTRICITY = "eccentricity";
-    public static final String SOLIDITY = "solidity";
-    public static final String PERIMETER = "perimeter";
-    public static final String TOTAL_INTENSITY = "total_intensity";
+    // The slugs of MIRAGE's own fields, for code and tests that name one.
+    public static final String AREA = "morph/area";
+    public static final String ECCENTRICITY = "morph/eccentricity";
+    public static final String SOLIDITY = "morph/solidity";
+    public static final String PERIMETER = "morph/perimeter";
+    public static final String TOTAL_INTENSITY = "qc/total_intensity";
 
     private final Map<String, Range> ranges = new LinkedHashMap<>();
 
@@ -110,13 +95,13 @@ public class QualityFilter {
     /**
      * Whether cell {@code i} passes every constrained field this export actually carries.
      * <p>
-     * Driven by {@link CellIndex#morphology()}, so a range over a field the file does not
+     * Driven by {@link CellIndex#qualityFields()}, so a range over a field the file does not
      * have is not consulted — it cannot exclude a cell on the strength of a column that
      * is not there.
      */
     public boolean passes(CellIndex index, int i) {
         if (index == null || ranges.isEmpty()) return true;
-        for (MorphologyField field : index.morphology()) {
+        for (QualityField field : index.qualityFields()) {
             Range r = ranges.get(field.slug());
             if (r != null && !r.accepts(field.valueAt(i))) return false;
         }

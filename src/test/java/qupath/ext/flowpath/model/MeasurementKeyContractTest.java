@@ -82,16 +82,6 @@ class MeasurementKeyContractTest {
                 "unparsed non-measurements keep their own text, as before");
     }
 
-    /** A layer prefix is still stripped, and still only from the marker. */
-    @Test
-    void aLayerPrefixIsStripped() {
-        MeasurementKeys.Parsed parsed = MeasurementKeys.parse("[Layer0] CD3: Nucleus: REDSEA");
-
-        assertNotNull(parsed);
-        assertEquals("CD3", parsed.marker());
-        assertEquals("REDSEA", parsed.statistic().token());
-    }
-
     /** Build and parse are inverses, for a known statistic and an unknown one alike. */
     @Test
     void buildAndParseRoundTrip() {
@@ -196,7 +186,7 @@ class MeasurementKeyContractTest {
     /** Discovery still ignores keys that are not per-compartment measurements. */
     @Test
     void discoveryIgnoresNonMeasurementKeys() {
-        var cap = CompartmentCapability.fromKeys(List.of("Area µm²", "Centroid X µm", "CD3"));
+        var cap = CompartmentCapability.fromKeys(List.of("MORPH: Area µm²", "QC: Total intensity", "Centroid X µm", "CD3"));
 
         assertFalse(cap.isRich(), "no per-compartment key means a legacy export");
         assertTrue(cap.pairsFor("CD3").isEmpty());

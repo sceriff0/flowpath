@@ -182,12 +182,12 @@ class CellGeometryTest {
 
     @Test
     void disagreesWhenMicrometreColumnsActuallyHoldPixels() {
-        // The unit-inference safety net: a unit-less "Centroid X" is assumed to be
-        // micrometres, so an export that actually wrote pixels there is mis-declared.
-        // The cross-check catches it — observed 1.0 µm/px against an expected 0.325.
+        // The safety net: "Centroid X µm" is always read as micrometres, so an export
+        // that actually wrote pixels there is mis-declared. The cross-check catches it —
+        // observed 1.0 µm/px against an expected 0.325.
         List<PathObject> cells = Cells.of(20).at(i -> (i + 1) * 40.0, i -> (i + 1) * 25.0)
-                .measurement("Centroid X", i -> (i + 1) * 40.0)   // pixels, mislabelled
-                .measurement("Centroid Y", i -> (i + 1) * 25.0)
+                .measurement("Centroid X µm", i -> (i + 1) * 40.0)   // pixels, mislabelled
+                .measurement("Centroid Y µm", i -> (i + 1) * 25.0)
                 .marker("DAPI", 1.0)
                 .detections();
 
@@ -259,23 +259,6 @@ class CellGeometryTest {
         assertEquals(ScaleVerdict.Status.DISAGREE, verdict.status(), verdict.describe());
         assertEquals(0.25, verdict.observedMicronsPerPixel(), 1e-6, "the worse axis is reported");
         assertEquals(0.5, verdict.expectedMicronsPerPixel(), 1e-6);
-    }
-
-    @Test
-    void explicitPixelUnitIsNotMistakenForMicrons() {
-        // QuPath writes "Centroid X px" for an uncalibrated image. Believing that to be
-        // micrometres would make every downstream µm wrong by the pixel size.
-        PathObject o = Cells.of(1).at(40.0, 25.0)
-                .measurement("Centroid X px", 40.0)
-                .measurement("Centroid Y px", 25.0)
-                .marker("DAPI", 1.0)
-                .only();
-
-        CellGeometry geom = geometryOf(List.of(o), calibrated(PIXEL_SIZE));
-
-        assertEquals(CoordinateSpace.PIXELS, geom.sourceSpace());
-        assertEquals(40.0, geom.pixelsX(0), 1e-9);
-        assertEquals(40.0 * PIXEL_SIZE, geom.micronsX(0), 1e-9);
     }
 
     @Test

@@ -1450,15 +1450,6 @@ public class FlowPathPane extends BorderPane {
                 || batchRun.running());
     }
 
-    /**
-     * True if a measurement name is a morphology/identity column rather than a marker
-     * channel. Delegates to {@link DetectionIngest}, which owns the single copy of the
-     * rule; this pane and {@code UmapSession} each used to carry their own, and they did
-     * not agree. Package-private so the rule stays testable without a QuPath GUI.
-     */
-    static boolean isMorphologyName(String name) {
-        return DetectionIngest.isMorphologyName(name);
-    }
 
     // --- Tree building ---
 

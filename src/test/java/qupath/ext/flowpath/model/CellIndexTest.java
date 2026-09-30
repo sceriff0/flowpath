@@ -19,9 +19,9 @@ class CellIndexTest {
         c1.getMeasurements().put("CD45", 1.0);
         c2.getMeasurements().put("CD45", 2.0);
         c3.getMeasurements().put("CD45", 3.0);
-        c1.getMeasurements().put("area", 10.0);
-        c2.getMeasurements().put("area", 20.0);
-        c3.getMeasurements().put("area", 30.0);
+        c1.getMeasurements().put("MORPH: Area µm²", 10.0);
+        c2.getMeasurements().put("MORPH: Area µm²", 20.0);
+        c3.getMeasurements().put("MORPH: Area µm²", 30.0);
 
         var index = CellIndex.build(List.of(c1, c2, c3), List.of("CD45"));
 
@@ -53,30 +53,12 @@ class CellIndexTest {
     }
 
     @Test
-    void areaFromExactMeasurementKey() {
+    void areaFromMorphKey() {
         var c = Cells.detection();
-        c.getMeasurements().put("area", 42.0);
+        c.getMeasurements().put("MORPH: Area µm²", 42.0);
         var index = CellIndex.build(List.of(c), List.of());
 
-        assertEquals(42.0, index.getArea(0));
-    }
-
-    @Test
-    void areaFromPrefixMatch() {
-        var c = Cells.detection();
-        c.getMeasurements().put("area \u00b5m\u00b2", 55.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertEquals(55.0, index.getArea(0));
-    }
-
-    @Test
-    void areaFromLayerPrefixMatch() {
-        var c = Cells.detection();
-        c.getMeasurements().put("[Layer0] area", 77.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertEquals(77.0, index.getArea(0));
+        assertEquals(42.0, index.qualityField(QualityFilter.AREA).valueAt(0));
     }
 
     @Test
@@ -84,55 +66,8 @@ class CellIndexTest {
         var c = Cells.detection();
         var index = CellIndex.build(List.of(c), List.of());
 
-        assertTrue(Double.isNaN(index.getArea(0)));
-    }
-
-    @Test
-    void solidityComputedFromAreaAndConvexArea() {
-        var c = Cells.detection();
-        c.getMeasurements().put("area", 10.0);
-        c.getMeasurements().put("convex_area", 20.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertEquals(0.5, index.getSolidity(0), 1e-9);
-    }
-
-    @Test
-    void solidityNaNWhenConvexAreaMissing() {
-        var c = Cells.detection();
-        c.getMeasurements().put("area", 10.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertTrue(Double.isNaN(index.getSolidity(0)));
-    }
-
-    @Test
-    void solidityNaNWhenConvexAreaZero() {
-        var c = Cells.detection();
-        c.getMeasurements().put("area", 10.0);
-        c.getMeasurements().put("convex_area", 0.0);
-        var index = CellIndex.build(List.of(c), List.of());
-
-        assertTrue(Double.isNaN(index.getSolidity(0)));
-    }
-
-    @Test
-    void totalIntensitySumsAllMarkers() {
-        var c = Cells.detection();
-        c.getMeasurements().put("CD45", 3.0);
-        c.getMeasurements().put("CD3", 7.0);
-        var index = CellIndex.build(List.of(c), List.of("CD45", "CD3"));
-
-        assertEquals(10.0, index.getTotalIntensity(0), 1e-9);
-    }
-
-    @Test
-    void markerValueFromLayerPrefix() {
-        var c = Cells.detection();
-        c.getMeasurements().put("[Layer0] CD45", 5.0);
-        var index = CellIndex.build(List.of(c), List.of("CD45"));
-
-        assertEquals(5.0, index.getMarkerValues(0)[0]);
+        assertNull(index.qualityField(QualityFilter.AREA),
+                "an export without an area key has no area field to filter on");
     }
 
     @Test
@@ -154,8 +89,8 @@ class CellIndexTest {
     @Test
     void centroidFromMeasurements() {
         var c = Cells.detection();
-        c.getMeasurements().put("Centroid X", 100.0);
-        c.getMeasurements().put("Centroid Y", 200.0);
+        c.getMeasurements().put("Centroid X µm", 100.0);
+        c.getMeasurements().put("Centroid Y µm", 200.0);
         var index = CellIndex.build(List.of(c), List.of());
 
         assertEquals(100.0, index.getCentroidX(0));

@@ -246,7 +246,7 @@ class DerivationCoordinatorTest {
 
         rig.clock.addAndGet(5_000);
         rig.session.recordEdit();
-        rig.session.tree().getQualityFilter().setRange("area",
+        rig.session.tree().getQualityFilter().setRange(QualityFilter.AREA,
                 new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         rig.requestAndRun();
         MarkerStats filtered = rig.session.stats();
@@ -260,7 +260,7 @@ class DerivationCoordinatorTest {
         assertEquals(6, countTrue(rig.session.qualityMask()), "nor re-masked there");
 
         rig.background.runAll();
-        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(), "filter restored");
+        assertTrue(rig.session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen(), "filter restored");
         assertNotSame(filtered, rig.session.stats(), "the restored filter selects other cells");
         assertEquals(N, countTrue(rig.session.qualityMask()));
         assertEquals(5.5, meanCd3(rig.session.index(), rig.session.stats()), 1e-12,
@@ -325,7 +325,7 @@ class DerivationCoordinatorTest {
         // A quality-filter change: one undo step, and one that changes a mask.
         rig.clock.addAndGet(5_000);
         rig.session.recordEdit();
-        rig.session.tree().getQualityFilter().setRange("area",
+        rig.session.tree().getQualityFilter().setRange(QualityFilter.AREA,
                 new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         rig.requestAndRun();
         assertEquals(6, countTrue(rig.session.qualityMask()));
@@ -338,14 +338,14 @@ class DerivationCoordinatorTest {
         rig.session.recordAppliedEdit(GatingSession.EditSource.GATE);
         rig.background.runAll();
 
-        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(), "the undo stands");
+        assertTrue(rig.session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen(), "the undo stands");
         assertEquals(N, countTrue(rig.session.qualityMask()), "recomputed for the restored filter");
 
         // One Ctrl+Z: back to the undone tree, not forward to the filtered one.
         assertTrue(rig.session.undo());
         rig.requestAndRun();
         assertEquals(5.5, rig.session.tree().getRoots().get(0).getThreshold(), "the gate edit is undone");
-        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(),
+        assertTrue(rig.session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen(),
                 "and the filter change does not come back with it");
         assertEquals(N, countTrue(rig.session.qualityMask()));
         assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
@@ -364,7 +364,7 @@ class DerivationCoordinatorTest {
 
         rig.clock.addAndGet(5_000);
         rig.session.recordEdit();
-        rig.session.tree().getQualityFilter().setRange("area",
+        rig.session.tree().getQualityFilter().setRange(QualityFilter.AREA,
                 new QualityFilter.Range(45, Double.POSITIVE_INFINITY));
         rig.requestAndRun();
 
@@ -383,7 +383,7 @@ class DerivationCoordinatorTest {
         assertTrue(rig.session.undo());
         rig.requestAndRun();
         assertEquals(5.5, rig.session.tree().getRoots().get(0).getThreshold());
-        assertTrue(rig.session.tree().getQualityFilter().range("area").isOpen(),
+        assertTrue(rig.session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen(),
                 "the failed derivation did not leave the abandoned tree as the baseline");
         assertArrayEquals(new int[]{5, 5}, counts(rig, rig.root(0)));
     }

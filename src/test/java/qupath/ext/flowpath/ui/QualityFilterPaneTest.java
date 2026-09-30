@@ -32,8 +32,8 @@ class QualityFilterPaneTest {
         return Cells.of(20)
                 .mirageMedianMarker("CD3", i -> 100.0 + i)
                 .mirageMorphology(i -> 50.0 + i * 10)          // Area µm², varies
-                .morphology("Major Axis Length µm", i -> 8.0 + i * 0.5)
-                .morphology("Minor Axis Length µm", i -> 4.0 + i * 0.25)
+                .morphology("MORPH: Major Axis Length µm", i -> 8.0 + i * 0.5)
+                .morphology("MORPH: Minor Axis Length µm", i -> 4.0 + i * 0.25)
                 .build();
     }
 
@@ -45,15 +45,15 @@ class QualityFilterPaneTest {
         FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
 
         List<String> shown = pane.shownFields();
-        assertTrue(shown.contains("area"), "area: " + shown);
+        assertTrue(shown.contains(QualityFilter.AREA), "area: " + shown);
         // The point of the change: these are in every MIRAGE export and were unreachable.
-        assertTrue(shown.contains("major_axis_length"),
+        assertTrue(shown.contains("morph/major_axis_length"),
                 "Major Axis Length is in the file and must be filterable: " + shown);
-        assertTrue(shown.contains("minor_axis_length"),
+        assertTrue(shown.contains("morph/minor_axis_length"),
                 "Minor Axis Length is in the file and must be filterable: " + shown);
-        // Convex area backs the solidity derivation; offering it too would be two controls
-        // over one quantity.
-        assertFalse(shown.contains("convex_area"), "convex area is not its own filter: " + shown);
+        // Solidity is read as exported, not derived from convex area, so convex area is an
+        // ordinary MORPH: column and filterable like any other.
+        assertTrue(shown.contains("morph/convex_area"), "convex area is in the file: " + shown);
     }
 
     /** A column the file does not carry gets no row, rather than a slider over NaN. */
@@ -66,10 +66,10 @@ class QualityFilterPaneTest {
         FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
 
         List<String> shown = pane.shownFields();
-        assertTrue(shown.contains("area"));
-        assertFalse(shown.contains("solidity"),
+        assertTrue(shown.contains(QualityFilter.AREA));
+        assertFalse(shown.contains(QualityFilter.SOLIDITY),
                 "no solidity in this export, so no solidity slider over a column of NaN: " + shown);
-        assertFalse(shown.contains("major_axis_length"), shown.toString());
+        assertFalse(shown.contains("morph/major_axis_length"), shown.toString());
     }
 
     /** With no cells loaded the panel is empty, not a set of sliders over nothing. */
@@ -107,13 +107,13 @@ class QualityFilterPaneTest {
     void aUserSetBoundSurvivesTheDataArriving() {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         QualityFilter filter = new QualityFilter();
-        filter.setRange("area", new QualityFilter.Range(Double.NEGATIVE_INFINITY, 100.0));
+        filter.setRange(QualityFilter.AREA, new QualityFilter.Range(Double.NEGATIVE_INFINITY, 100.0));
         QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(filter));
 
         CellIndex index = mirageIndex();          // area runs 50..240
         FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
 
-        assertEquals(100.0, pane.getFilter().range("area").max(), 1e-6,
+        assertEquals(100.0, pane.getFilter().range(QualityFilter.AREA).max(), 1e-6,
                 "an explicit upper bound must not be widened by the data arriving");
         assertFalse(pane.getFilter().passes(index, index.size() - 1),
                 "and it must still exclude the cells it names");
@@ -123,7 +123,7 @@ class QualityFilterPaneTest {
     @Test
     void aRangeOverAnAbsentFieldExcludesNoCell() {
         QualityFilter filter = new QualityFilter();
-        filter.setRange("solidity", new QualityFilter.Range(0.99, 1.0));
+        filter.setRange(QualityFilter.SOLIDITY, new QualityFilter.Range(0.99, 1.0));
         CellIndex index = Cells.of(5).marker("CD3", i -> 1.0 + i).area(i -> 60.0 + i).build();
 
         for (int i = 0; i < index.size(); i++) {
@@ -156,8 +156,8 @@ class QualityFilterPaneTest {
         List<QualityFilter.Range> seenBefore = new ArrayList<>();
         List<QualityFilter.Range> seenAfter = new ArrayList<>();
         FxTestSupport.onFxRun(() -> {
-            pane.setOnBeforeFilterChange(kind -> seenBefore.add(filter.range("area")));
-            pane.setOnFilterChanged(f -> seenAfter.add(f.range("area")));
+            pane.setOnBeforeFilterChange(kind -> seenBefore.add(filter.range(QualityFilter.AREA)));
+            pane.setOnFilterChanged(f -> seenAfter.add(f.range(QualityFilter.AREA)));
             sliders(pane).get(0).setValue(45);
         });
 
@@ -201,7 +201,7 @@ class QualityFilterPaneTest {
         FxTestSupport.onFxRun(() -> pane.setFilter(session.tree().getQualityFilter()));
 
         assertSame(session.tree().getQualityFilter(), pane.getFilter(), "the panel edits the restored tree's filter");
-        assertTrue(pane.getFilter().range("area").isOpen());
+        assertTrue(pane.getFilter().range(QualityFilter.AREA).isOpen());
         assertEquals(10.0, sliders(pane).get(0).getValue(), 1e-9, "min slider back at the column minimum");
         assertEquals(10, count(session.qualityMask()), "mask recomputed from the restored filter");
     }
@@ -243,13 +243,13 @@ class QualityFilterPaneTest {
 
         assertTrue(session.undo(), "undo the reset");
         session.resync(List::of);
-        assertEquals(45.0, session.tree().getQualityFilter().range("area").min(), 1e-9,
+        assertEquals(45.0, session.tree().getQualityFilter().range(QualityFilter.AREA).min(), 1e-9,
                 "one undo brings back the dragged filter");
         assertEquals(6, count(session.qualityMask()));
 
         assertTrue(session.undo(), "undo the drag");
         session.resync(List::of);
-        assertTrue(session.tree().getQualityFilter().range("area").isOpen());
+        assertTrue(session.tree().getQualityFilter().range(QualityFilter.AREA).isOpen());
         assertEquals(10, count(session.qualityMask()));
         assertFalse(session.undo(), "the drag and the reset were two steps, no more");
     }

@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class MorphologyDiscoveryTest {
 
     private static List<String> slugs(CellIndex index) {
-        return index.morphology().stream().map(MorphologyField::slug).toList();
+        return index.qualityFields().stream().map(QualityField::slug).toList();
     }
 
     @Test
@@ -30,42 +30,28 @@ class MorphologyDiscoveryTest {
                 .marker("DAPI", i -> 100.0 + i)
                 .marker("PANCK", i -> 20.0 + i)
                 .marker("wrongPANCK", i -> 5.0 + i)       // in the file, not on the image
-                .morphology("Area µm²", i -> 50.0 + i)
-                .morphology("Major Axis Length µm", i -> 8.0 + i)
+                .morphology("MORPH: Area µm²", i -> 50.0 + i)
+                .morphology("MORPH: Major Axis Length µm", i -> 8.0 + i)
                 .panel("DAPI", "PANCK")
                 .build();
 
         List<String> shown = slugs(index);
-        assertFalse(shown.contains("wrongpanck"),
+        assertFalse(shown.stream().anyMatch(sl -> sl.endsWith("wrongpanck")),
                 "an intensity column must not become a quality-filter row: " + shown);
-        assertTrue(shown.contains("area"), shown.toString());
-        assertTrue(shown.contains("major_axis_length"), shown.toString());
+        assertTrue(shown.contains(QualityFilter.AREA), shown.toString());
+        assertTrue(shown.contains("morph/major_axis_length"), shown.toString());
     }
 
     @Test
-    void shapeMeasurementsFlowPathNeverNamedAreStillOffered() {
-        // QuPath's own cell detection spells these; none is in the MIRAGE vocabulary.
+    void anyMorphPrefixedShapeIsOfferedEvenOneFlowPathNeverNamed() {
         CellIndex index = Cells.of(10)
                 .marker("CD3", i -> 10.0 + i)
-                .morphology("Nucleus: Circularity", i -> 0.5 + i * 0.01)
-                .morphology("Cell: Max caliper µm", i -> 10.0 + i)
-                .morphology("Feret Diameter px", i -> 12.0 + i)
+                .morphology("MORPH: Circularity", i -> 0.5 + i * 0.01)
+                .morphology("MORPH: Max caliper µm", i -> 10.0 + i)
                 .build();
 
         List<String> shown = slugs(index);
-        assertTrue(shown.contains("nucleus_circularity"), shown.toString());
-        assertTrue(shown.contains("cell_max_caliper"), shown.toString());
-        assertTrue(shown.contains("feret_diameter"), shown.toString());
-    }
-
-    @Test
-    void theRuleAgreesWithMarkerDiscovery() {
-        for (String marker : new String[]{"CD3", "wrongPANCK", "YAP1", "Sum", "Perilipin"}) {
-            assertFalse(MorphologyField.isMorphologyName(marker), marker);
-        }
-        for (String shape : new String[]{"Area µm²", "Nucleus: Area µm^2", "Nucleus: Circularity",
-                "Cell: Max caliper µm", "Minor Axis Length µm", "Centroid X µm", "label"}) {
-            assertTrue(MorphologyField.isMorphologyName(shape), shape);
-        }
+        assertTrue(shown.contains("morph/circularity"), shown.toString());
+        assertTrue(shown.contains("morph/max_caliper"), shown.toString());
     }
 }

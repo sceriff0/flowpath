@@ -31,10 +31,9 @@ import java.util.function.IntToDoubleFunction;
  * real input shape quietly pushes tests toward the shapes it <em>can</em> express.
  * <p>
  * So this builder speaks the MIRAGE key grammar natively — the bare marker key
- * <em>and</em> {@code "<marker>: <Compartment>: <Statistic>"}, the {@code µm}-suffixed
- * morphology names, and the {@code "[Layer0] "} prefix {@code import_phenotype.groovy}
- * adds — and it can express the deliberately malformed inputs tests need: an absent
- * key on some cells but not others, a marker in the panel with no measurement behind
+ * <em>and</em> {@code "<marker>: <Compartment>: <Statistic>"}, the {@code MORPH: …} shape
+ * names and the {@code QC: …} cell- and round-level keys — and it can express the
+ * deliberately malformed inputs tests need: an absent key on some cells but not others, a marker in the panel with no measurement behind
  * it, a duplicate or null panel entry, {@code NaN}.
  *
  * <h2>Shape</h2>
@@ -56,8 +55,6 @@ import java.util.function.IntToDoubleFunction;
  */
 public final class Cells {
 
-    /** The layer prefix {@code import_phenotype.groovy} puts in front of every measurement. */
-    public static final String LAYER_PREFIX = "[Layer0] ";
 
     /** One measurement column: its key, its per-cell value, and where it is present at all. */
     private static final class Col {
@@ -78,7 +75,6 @@ public final class Cells {
     private List<String> panel;                 // null -> the markers declared below
     private IntToDoubleFunction roiX = i -> 0.0;
     private IntToDoubleFunction roiY = i -> 0.0;
-    private boolean layerPrefixed = false;
     private MarkerSelection selection;
     private PixelCalibration calibration;
     private IntToDoubleFunction areaMicrons2;   // remembered so a MIRAGE Sum can use it
@@ -98,12 +94,11 @@ public final class Cells {
     /**
      * The plain synthetic population several test classes each open-coded identically: one
      * cell per column of {@code valuesByMarker} ({@code [marker][cell]}), each carrying
-     * the bare marker keys and a uniform lowercase {@code "area"} of 100, with cell
+     * the bare marker keys and a uniform {@code "MORPH: Area µm²"} of 100, with cell
      * {@code i}'s ROI at {@code (i*10, i*10)}.
      * <p>
-     * No structured keys and no {@code µm} suffixes: this is the <em>legacy</em> GeoJSON
-     * shape, and the gating and CSV tests that use it are about arithmetic rather than
-     * about key resolution. Override the area with {@link #area}, the positions with
+     * No structured marker keys: the gating and CSV tests that use it are about arithmetic
+     * rather than about key resolution. Override the area with {@link #area}, the positions with
      * {@link #at} or {@link #atGrid}.
      */
     public static Cells columns(List<String> markers, double[][] valuesByMarker) {
@@ -269,25 +264,54 @@ public final class Cells {
         return measurement(key, values);
     }
 
-    /** The lowercase {@code "area"} key the legacy synthetic fixtures write. */
+    /** MIRAGE's {@code "MORPH: Area µm²"} key. */
     public Cells area(double... values) {
-        return measurement("area", values);
+        return measurement(MORPH_AREA, values);
     }
 
-    /** The lowercase {@code "area"} key, valued by function of the cell index. */
+    /** MIRAGE's {@code "MORPH: Area µm²"} key, valued by function of the cell index. */
     public Cells area(IntToDoubleFunction values) {
-        return measurement("area", values);
+        return measurement(MORPH_AREA, values);
+    }
+
+    /** A cell-level QC key, {@code "QC: <metric>"}. */
+    public Cells qc(String metric, double... values) {
+        return measurement("QC: " + metric, values);
+    }
+
+    /** A cell-level QC key, {@code "QC: <metric>"}, valued by function of the cell index. */
+    public Cells qc(String metric, IntToDoubleFunction values) {
+        return measurement("QC: " + metric, values);
     }
 
     /**
-     * The morphology block {@code bin/export_geojson.py} writes, in its own order:
-     * {@code Area µm²}, {@code Eccentricity} 0.6, {@code Perimeter µm} 30,
+     * A round-level QC key, {@code "QC: <metric>: [<m1>, <m2>, ...]"} — the round's markers in
+     * the order given (MIRAGE writes them sorted).
+     */
+    public Cells round(String metric, List<String> markers, double... values) {
+        return measurement(roundKey(metric, markers), values);
+    }
+
+    /** As {@link #round(String, List, double...)}, valued by function of the cell index. */
+    public Cells round(String metric, List<String> markers, IntToDoubleFunction values) {
+        return measurement(roundKey(metric, markers), values);
+    }
+
+    public static String roundKey(String metric, List<String> markers) {
+        return "QC: " + metric + ": [" + String.join(", ", markers) + "]";
+    }
+
+    public static final String MORPH_AREA = "MORPH: Area µm²";
+
+    /**
+     * The morphology block {@code bin/export_geojson.py} writes, in its own order, each under
+     * {@code "MORPH: "}: {@code Area µm²}, {@code Eccentricity} 0.6, {@code Perimeter µm} 30,
      * {@code Solidity} 0.84, {@code Convex Area µm²} = area/0.84, and
      * {@code Major}/{@code Minor Axis Length µm} 10/5. Also remembers the area so
      * {@link #mirageMarker}'s integrated-density Sum can use it.
      */
     public Cells mirageMorphology(double... areaUm2) {
-        return mirageMorphology(broadcast("Area µm²", areaUm2));
+        return mirageMorphology(broadcast(MORPH_AREA, areaUm2));
     }
 
     /** As {@link #mirageMorphology(double...)}, with the area a function of the cell index. */
@@ -302,13 +326,13 @@ public final class Cells {
      */
     public Cells mirageMorphology(IntToDoubleFunction areaUm2, IntToDoubleFunction convexAreaUm2) {
         this.areaMicrons2 = areaUm2;
-        measurement("Area µm²", areaUm2);
-        measurement("Eccentricity", 0.6);
-        measurement("Perimeter µm", 30.0);
-        measurement("Solidity", 0.84);
-        measurement("Convex Area µm²", convexAreaUm2);
-        measurement("Major Axis Length µm", 10.0);
-        measurement("Minor Axis Length µm", 5.0);
+        measurement(MORPH_AREA, areaUm2);
+        measurement("MORPH: Eccentricity", 0.6);
+        measurement("MORPH: Perimeter µm", 30.0);
+        measurement("MORPH: Solidity", 0.84);
+        measurement("MORPH: Convex Area µm²", convexAreaUm2);
+        measurement("MORPH: Major Axis Length µm", 10.0);
+        measurement("MORPH: Minor Axis Length µm", 5.0);
         return this;
     }
 
@@ -358,12 +382,6 @@ public final class Cells {
         return this;
     }
 
-    /** Prefix every measurement key with {@value #LAYER_PREFIX}. */
-    public Cells layerPrefixed() {
-        layerPrefixed = true;
-        return this;
-    }
-
     // ---- what gets built ----------------------------------------------------------
 
     /**
@@ -404,7 +422,7 @@ public final class Cells {
             var m = o.getMeasurements();
             for (Col c : cols) {
                 if (!c.present.test(i)) continue;
-                m.put(layerPrefixed ? LAYER_PREFIX + c.key : c.key, c.value.applyAsDouble(i));
+                m.put(c.key, c.value.applyAsDouble(i));
             }
             out.add(o);
         }
