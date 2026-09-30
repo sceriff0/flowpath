@@ -165,7 +165,7 @@ class BatchRunnerTest {
 
     static final CohortEvidence NO_COHORT = new CohortEvidence(qupath.ext.flowpath.cohort.AlignmentModel.empty(),
             new qupath.ext.flowpath.cohort.ReviewScorer.Result(List.of(), List.of()), AlignmentLookup.NONE,
-            new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null));
+            new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null), java.util.Set.of());
 
     /** Review Focus 4. */
     @Test

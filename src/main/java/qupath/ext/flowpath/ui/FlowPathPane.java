@@ -2714,7 +2714,8 @@ public class FlowPathPane extends BorderPane {
         CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup, new CohortEvidence.Provenance(
                 sampled >= 0 ? sampled : CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()),
                 sampled >= 0 ? CohortEvidence.FROM_REVIEWED_MODEL : CohortEvidence.FROM_PREFERENCE,
-                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId())));
+                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId())),
+                cohort.excluded());
         cohort.batchStarted();
         batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence));
         updateBusyControls();

@@ -19,4 +19,7 @@ public interface BatchSlide {
     default PathObjectHierarchy readHierarchy() throws Exception {
         return read().getHierarchy();
     }
+
+    /** Set aside from the cohort ({@code cohort/CohortExclusions}): gated, never sampled. */
+    default boolean cohortExcluded() { return false; }
 }

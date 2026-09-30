@@ -2,6 +2,7 @@ package qupath.ext.flowpath.batch;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.flowpath.cohort.CohortExclusions;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
@@ -429,6 +430,7 @@ public final class FlowPathBatch {
     private static void writeCohortQc(Writer w, GateTree tree, BatchResult r, CohortEvidence evidence)
             throws IOException {
         String id = r.slideId(), name = r.imageName();
+        if (evidence.excluded().contains(id)) qc(w, id, name, "cohort_excluded", "", count(1));
         for (AlignmentModel.ColumnRef col : AlignmentModel.columnsOf(tree)) {
             Alignment a = evidence.lookup().alignment(id, col.key());
             if (a == null) continue;
@@ -503,6 +505,7 @@ public final class FlowPathBatch {
             @Override public ImageData<BufferedImage> read() throws Exception { return e.readImageData(); }
             @Override public PathObjectHierarchy readHierarchy() throws Exception { return e.readHierarchy(); }
             @Override public void save(ImageData<BufferedImage> data) throws Exception { e.saveImageData(data); }
+            @Override public boolean cohortExcluded() { return "true".equals(e.getMetadataValue(CohortExclusions.KEY)); }
         }).toList();
     }
 

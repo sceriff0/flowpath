@@ -441,7 +441,7 @@ class FlowPathBatchTest {
         Files.delete(dir.resolve("c.tif" + FlowPathBatch.QC_SUFFIX));
         CohortEvidence none = new CohortEvidence(AlignmentModel.empty(),
                 new qupath.ext.flowpath.cohort.ReviewScorer.Result(List.of(), List.of()), null,
-                new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null));
+                new CohortEvidence.Provenance(0, CohortEvidence.FROM_ARGUMENT, -1, 0, null), java.util.Set.of());
         BatchRunner.Settings settings = new BatchRunner.Settings(tree(), null, dir.toFile(), (String) null, true);
         FlowPathBatch.finish(dir.toFile(), settings.tree(), first.slides(), none);
         List<String> combined = Files.readAllLines(dir.resolve("batch_populations.csv"));
@@ -462,5 +462,41 @@ class FlowPathBatchTest {
         assertFalse(one.cache().slides().isEmpty());
         assertEquals(Files.readAllLines(dir.resolve("1").resolve(GatingManifestExporter.FILE)),
                 Files.readAllLines(dir.resolve("2").resolve(GatingManifestExporter.FILE)));
+    }
+
+    /** {@code slide} with its cohort exclusion flag set, everything else delegated. */
+    static BatchSlide excluded(BatchSlide slide) {
+        return new BatchSlide() {
+            @Override public String id() { return slide.id(); }
+            @Override public String name() { return slide.name(); }
+            @Override public ImageData<BufferedImage> read() throws Exception { return slide.read(); }
+            @Override public PathObjectHierarchy readHierarchy() throws Exception { return slide.readHierarchy(); }
+            @Override public void save(ImageData<BufferedImage> d) throws Exception { slide.save(d); }
+            @Override public boolean cohortExcluded() { return true; }
+        };
+    }
+
+    @Test
+    void anExcludedSlideIsGatedUncorrectedAndFlaggedInQc(@TempDir Path dir) throws Exception {
+        java.util.function.Supplier<Cells> shifted = () -> Cells.of(200).atGrid(10, 10)
+                .marker("CD3", i -> 1.5 * i + 5).marker("CD8", i -> 2.0 * i).area(100.0);
+        Log log = new Log();
+        List<BatchSlide> slides = List.of(slide("a", cells(200), log), slide("b", shifted.get(), log),
+                excluded(slide("c", shifted.get(), log)));
+        run(slides, tree(), dir.toFile(), new AtomicBoolean());
+
+        List<String> qc = Files.readAllLines(dir.resolve("qc_summary.csv"));
+        assertTrue(qc.contains("c,c.tif,cohort_excluded,,1"), "1: " + qc);
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,staining_offset,")),
+                "the same data on an included slide IS corrected: " + qc);
+        assertTrue(qc.stream().noneMatch(l -> l.startsWith("c,c.tif,staining_offset,")), "3: " + qc);
+
+        List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
+        List<String> rows = manifest.stream().filter(l -> l.startsWith("c,c.tif,")).toList();
+        assertFalse(rows.isEmpty(), "the excluded slide is still gated");
+        for (String row : rows) {
+            String[] f = row.split(",", -1);
+            assertEquals(f[6], f[7], "2: applied equals reference: " + row);
+        }
     }
 }

@@ -15,7 +15,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 /**
  * Everything a run reports about the cohort — the alignments it gates with, the model, review
@@ -32,7 +34,7 @@ import java.util.function.BooleanSupplier;
  * built from, never evaluated a second time.
  */
 public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, AlignmentLookup lookup,
-                             Provenance provenance) {
+                             Provenance provenance, Set<String> excluded) {
 
     /** The sample size came from the project's alignment cache, which records the one the GUI used. */
     public static final String FROM_CACHE = "alignment-cache";
@@ -63,6 +65,7 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         Objects.requireNonNull(review, "review");
         Objects.requireNonNull(provenance, "provenance");
         lookup = lookup == null ? AlignmentLookup.NONE : lookup;
+        excluded = excluded == null ? Set.of() : Set.copyOf(excluded);
     }
 
     /** The manifest's landmark and flag columns, blank landmarks when {@link #lookup} corrects nothing. */
@@ -89,10 +92,15 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         CohortSession session = new CohortSession();
         session.setProject("batch", slides.stream().map(s -> new CohortSession.SlideRef(s.id(), s.name())).toList());
         session.setCache(cache);
+        Set<String> excluded = slides.stream().filter(BatchSlide::cohortExcluded).map(BatchSlide::id)
+                .collect(Collectors.toSet());
+        session.setExcluded(excluded);
         Map<String, String> fingerprints = new HashMap<>();
         if (tree.getReferenceSlideId() != null && slides.size() >= 2) {
             List<SlideSource> sources = new ArrayList<>();
-            for (BatchSlide slide : slides) sources.add(fingerprinting(slide, fingerprints));
+            for (BatchSlide slide : slides) {
+                if (!slide.cohortExcluded()) sources.add(fingerprinting(slide, fingerprints));
+            }
             session.samplingStarted();
             CohortSampler.sampleAll(sources, tree, cellsPerSlide, session::landed, cancelled);
             session.samplingFinished();
@@ -107,7 +115,7 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         String referenceName = slides.stream().filter(s -> s.id().equals(tree.getReferenceSlideId()))
                 .map(BatchSlide::name).findFirst().orElse(null);
         CohortEvidence evidence = new CohortEvidence(session.model(), session.review(), session.lookupOn(session.model()),
-                new Provenance(cellsPerSlide, sampleSizeSource, hits, samples.size(), referenceName));
+                new Provenance(cellsPerSlide, sampleSizeSource, hits, samples.size(), referenceName), excluded);
         return new Sampled(evidence, fingerprints);
     }
 
