@@ -91,6 +91,17 @@ rest are your markers. Then pick **one** of two equivalent on-ramps:
     so the measurements are identical. Use this when all you have on disk is a
     labelled mask (MIRAGE, Cellpose, StarDist, or custom).
 
+=== "On-ramp C — a whole MIRAGE run at once"
+
+    In the FlowPath window, click **New project from MIRAGE…** and pick MIRAGE's `--outdir`.
+    FlowPath finds every patient (`<outdir>/<patient>/pyramid/pyramid.ome.tiff`), lists them
+    before writing anything, and builds a QuPath project with one image per patient, its cells
+    imported from `geojson/export/` and saved. Choose **Cell + nucleus outlines**
+    (`cells.geojson`) or **Whole-cell outline only** (`cells_wholecell.geojson`, lighter) — the
+    measurements are the same. The project goes in `<outdir>/qupath_project` unless you pick
+    another folder; picking a folder that already holds a project adds only the patients it
+    lacks. Use this to start [gating many slides](#gating-many-slides).
+
 Either way you now have **detections carrying per-marker measurements**, ready to
 gate.
 
@@ -123,7 +134,8 @@ export `flowpath.json` (the full gate hierarchy, reloadable and shareable) and
 
 ## Gating many slides { #gating-many-slides }
 
-Open a **project** with two or more images and the gate editor grows two controls above the
+Open a **project** with two or more images (a MIRAGE run becomes one with **New project from
+MIRAGE…**, see [Step 1](#step-1-get-cells-into-qupath)) and the gate editor grows two controls above the
 histogram or scatter plot — **This slide / All slides** — plus a **Correct staining** checkbox
 and, under the gate tree, a collapsible **Needs a look** list. Everything below assumes a
 project is open; with none open, or a project of one image, FlowPath behaves exactly as in

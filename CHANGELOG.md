@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] - 30/09/2026
+
+### Added — New project from MIRAGE
+
+- **New project from MIRAGE…** (FlowPath toolbar) turns a MIRAGE output folder into a QuPath
+  project ready for gating many slides: one image per patient, named after its folder, its cells
+  imported and **saved** — the saved data files are what cohort sampling and Run on all slides
+  read. Pick the run's `--outdir` (or a single patient folder); patients are found as
+  `<outdir>/<patient>/pyramid/pyramid.ome.tiff`, in natural order (P2 before P10).
+- **Cells**: *Cell + nucleus outlines* (`geojson/export/cells.geojson`) or *Whole-cell outline
+  only* (`cells_wholecell.geojson`, lighter on large slides); the measurements are the same.
+  Remembered between uses. A patient without the whole-cell file uses `cells.geojson`, and the
+  preview says so.
+- A **preview** lists every patient before anything is written — Ready, Already in project, or
+  No cells file. The project folder is suggested as `<outdir>/qupath_project`; an empty folder
+  gets a new project, a folder holding a project gets only the patients it lacks, so a re-run
+  adds new patients. Any other non-empty folder is refused.
+- One patient at a time in the background; the button becomes **Cancel import (i/n)**. A
+  patient that fails (an unreadable pyramid, a GeoJSON with no cells) is left out entirely —
+  never an image without its cells — and the import goes on; the summary names each failure.
+  The project opens in QuPath when the import ends.
+- Refused while the open image has unsaved changes. Run on all slides and an import exclude each
+  other. `csv/postprocessed.csv` is deliberately not read: its absolute paths break when a cluster
+  run is copied, and MIRAGE omits it at `cleanup_level=final`.
+
 ## [0.9.5] - 30/09/2026
 
 Cohort gating: one threshold per gate for the whole project, staining corrected per slide ×

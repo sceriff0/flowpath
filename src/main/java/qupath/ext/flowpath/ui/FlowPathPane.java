@@ -79,6 +79,7 @@ import qupath.lib.roi.interfaces.ROI;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -279,6 +280,13 @@ public class FlowPathPane extends BorderPane {
     private final Button exportBtn;
     /** "Run on all slides…", or "Cancel run" while {@link #batchRun} is running; see {@link #updateBusyControls()}. */
     private final Button runAllButton;
+
+    /** "New project from MIRAGE…": one patient per task on {@link #backgroundExecutor}, cancellable. */
+    private final MirageImportCoordinator mirageImport;
+    /** "New project from MIRAGE…", or "Cancel import (i/n)" while {@link #mirageImport} runs. */
+    private final Button importButton;
+    /** The patients the running import's preview listed but will not add, for its summary. */
+    private int importSkipped;
     private final ProgressIndicator spinner;
     /**
      * A gating pass is running; the spinner also shows while {@link #ingest} is busy or
@@ -444,6 +452,10 @@ public class FlowPathPane extends BorderPane {
         // Shown only in a project with a cohort; updateBusyControls decides, as for every control.
         runAllButton.setVisible(false);
         runAllButton.setManaged(false);
+        importButton = new Button("New project from MIRAGE…");
+        importButton.setOnAction(e -> newProjectFromMirage());
+        importButton.setTooltip(new Tooltip("Create a QuPath project from a MIRAGE output folder: one image per "
+                + "patient, its cells imported and saved — or add new patients to an existing project"));
 
         // The bridge to the other half of the extension. See createUmapControl.
         UmapControl umap = createUmapControl(this::openUmapWindow);
@@ -474,7 +486,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, runAllButton, toolbarSpacer, analysisSlot, umapSlot);
+            exportBtn, runAllButton, importButton, toolbarSpacer, analysisSlot, umapSlot);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -525,6 +537,9 @@ public class FlowPathPane extends BorderPane {
         // The same executor, one slide per task: a derivation, a re-ingest or a sampling step queued
         // meanwhile runs between two slides rather than after the whole project.
         batchRun = new BatchRunCoordinator(backgroundExecutor, Platform::runLater, new BatchHost());
+
+        // The same executor, one patient per task, for the same reason as the batch run.
+        mirageImport = new MirageImportCoordinator(backgroundExecutor, Platform::runLater, new MirageImportHost());
 
         // The same executor again, one slide per task: a pass, a derivation or an export queued
         // meanwhile runs between two slides rather than after the whole project.
@@ -764,6 +779,34 @@ public class FlowPathPane extends BorderPane {
             cohort.batchFinished();
             updateBusyControls();
             Dialogs.showErrorMessage("Run on all slides", ErrorMessages.describe(error));
+        }
+    }
+
+    /** What {@link #mirageImport} asks of this pane. Every call arrives on the FX thread. */
+    private final class MirageImportHost implements MirageImportCoordinator.Host {
+        @Override
+        public void progress(int done, int total, String id) {
+            updateImportButton(busyState(), done + "/" + total);
+        }
+
+        /**
+         * Open what was built. The project instance the import wrote is handed to QuPath as it is,
+         * so only one in-memory {@code Project} ever writes its {@code project.qpproj}.
+         */
+        @Override
+        public void finished(MirageImportCoordinator.Outcome outcome) {
+            updateBusyControls();
+            if (!outcome.added().isEmpty() || qupath.getProject() == null) {
+                qupath.setProject(outcome.project());
+            }
+            Dialogs.showPlainMessage("New project from MIRAGE", MirageImportCoordinator.summary(outcome, importSkipped));
+        }
+
+        @Override
+        public void failed(Throwable error) {
+            logger.error("New project from MIRAGE failed", error);
+            updateBusyControls();
+            Dialogs.showErrorMessage("New project from MIRAGE", ErrorMessages.describe(error));
         }
     }
 
@@ -1340,6 +1383,7 @@ public class FlowPathPane extends BorderPane {
         analysisButton.setDisable(!ANALYSIS_ENABLED || session.index() == null);
         updateExportControlsDisabled();
         updateRunAllButton(busy);
+        updateImportButton(busy, null);
         updateStatusBar();
         renderNeedsALook();
     }
@@ -1359,6 +1403,20 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
+     * "New project from MIRAGE…" applies {@link BusyState#importBlocked()} and decides nothing else:
+     * while an import runs it is that import's Cancel, never disabled, with its progress.
+     *
+     * @param progress "done/total" while running, or {@code null} to keep what it says
+     */
+    private void updateImportButton(BusyState busy, String progress) {
+        boolean running = mirageImport.running();
+        if (!running) importButton.setText("New project from MIRAGE…");
+        else if (progress != null) importButton.setText("Cancel import (" + progress + ")");
+        else if (!importButton.getText().startsWith("Cancel import")) importButton.setText("Cancel import");
+        importButton.setDisable(!running && busy.importBlocked());
+    }
+
+    /**
      * Whether "Run on all slides" may start: {@link BusyState#batchAllowed}, over whether the tree
      * has an enabled gate. The one answer the button and the status line's "Ready to run" both
      * read, so the line can never call a run ready that the button refuses.
@@ -1371,7 +1429,7 @@ public class FlowPathPane extends BorderPane {
     private BusyState busyState() {
         return new BusyState(ingest.busy() == IngestCoordinator.Busy.LOADING,
                 derivations.deriving(), csvExport.exporting(), cohortCoordinator.sampling(),
-                batchRun.running());
+                batchRun.running(), mirageImport.running());
     }
 
     /**
@@ -2576,6 +2634,53 @@ public class FlowPathPane extends BorderPane {
      * {@link BatchRunner.Settings}), the alignments bound to the model the user reviewed — never
      * recomputed — and that model's landmarks and review flags for the manifest.
      */
+    /**
+     * "New project from MIRAGE…", or its Cancel while one runs. Refused up front while the open
+     * image has unsaved changes: the import ends by switching QuPath's project. When the target
+     * is the project QuPath has open, that project is closed before the import starts, so the
+     * import's own {@code Project} is the only one writing {@code project.qpproj}; it is reopened
+     * at the end ({@link MirageImportHost#finished}).
+     */
+    private void newProjectFromMirage() {
+        if (mirageImport.running()) {
+            mirageImport.cancel();
+            return;
+        }
+        if (busyState().importBlocked()) return;
+        String refused = MirageImportCoordinator.refusal(openImageUnsaved(), 1);
+        if (refused != null) {
+            Dialogs.showPlainMessage("New project from MIRAGE", refused);
+            return;
+        }
+        Optional<MirageImportDialog.Request> request =
+                MirageImportDialog.show(getScene() != null ? getScene().getWindow() : null);
+        if (request.isEmpty()) return;
+
+        // The dialog ran a nested event loop: re-ask, against QuPath as it is now.
+        refused = MirageImportCoordinator.refusal(openImageUnsaved(), request.get().ready().size());
+        if (refused != null) {
+            Dialogs.showPlainMessage("New project from MIRAGE", refused);
+            return;
+        }
+        if (busyState().importBlocked()) {
+            Dialogs.showWarningNotification("FlowPath", "FlowPath became busy; start the import again when it is idle.");
+            return;
+        }
+        Path target = request.get().projectDir().toAbsolutePath().normalize();
+        Project<BufferedImage> open = qupath.getProject();
+        if (open != null && ProjectSlides.projectDir(open).toAbsolutePath().normalize().equals(target)) {
+            qupath.setProject(null);
+        }
+        importSkipped = request.get().skipped();
+        mirageImport.run(target, request.get().ready(), MirageImportCoordinator.Importer.standard());
+        updateBusyControls();
+    }
+
+    private boolean openImageUnsaved() {
+        ImageData<BufferedImage> data = qupath.getImageData();
+        return data != null && data.isChanged();
+    }
+
     private void runOnAllSlides() {
         if (batchRun.running()) {
             batchRun.cancel();
@@ -2858,6 +2963,7 @@ public class FlowPathPane extends BorderPane {
         }
         cohortCoordinator.cancel();
         batchRun.close();
+        mirageImport.close();
         crops.cancel();
         // shutdownNow: a crop still reading is for a pane that is gone.
         cropExecutor.shutdownNow();

@@ -36,10 +36,12 @@ import java.util.Optional;
  * @param exporting    the CSV writer is running, from a snapshot taken when it started
  * @param sampling     the project's slides are being sampled for staining alignment
  * @param batchRunning the gate tree is being run on every slide of the project
+ * @param importing    MIRAGE patients are being added to a project ({@link MirageImportCoordinator})
  */
-record BusyState(boolean loading, boolean deriving, boolean exporting, boolean sampling, boolean batchRunning) {
+record BusyState(boolean loading, boolean deriving, boolean exporting, boolean sampling, boolean batchRunning,
+                 boolean importing) {
 
-    static final BusyState IDLE = new BusyState(false, false, false, false, false);
+    static final BusyState IDLE = new BusyState(false, false, false, false, false, false);
 
     /**
      * Whether the gate the editor shows may be edited.
@@ -75,7 +77,17 @@ record BusyState(boolean loading, boolean deriving, boolean exporting, boolean s
      * uncorrected without anyone having been told.
      */
     boolean batchBlocked() {
-        return loading || deriving || exporting || sampling || batchRunning;
+        return loading || deriving || exporting || sampling || batchRunning || importing;
+    }
+
+    /**
+     * Whether "New project from MIRAGE…" may start. An import adds entries to a project and may
+     * close and reopen the one QuPath has open; a batch run writes those entries' data files. The
+     * two exclude each other, and one import runs at a time. Nothing else writes the project file,
+     * so reading, deriving, exporting and sampling do not block it.
+     */
+    boolean importBlocked() {
+        return batchRunning || importing;
     }
 
     /**
