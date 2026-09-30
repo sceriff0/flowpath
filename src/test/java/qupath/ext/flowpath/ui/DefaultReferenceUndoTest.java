@@ -184,18 +184,17 @@ class DefaultReferenceUndoTest {
         assertEquals(Map.of("s1", "another-project.tif"), session.tree().getSlideNames());
     }
 
-    /** Final ruling I3: with no reference the cohort says so, and offers the open slide as one. */
+    /** Final ruling I3: with no reference the cohort says so; the open slide is no longer offered. */
     @Test
-    void noReferenceIsReportedWithTheOpenSlideOffered() {
+    void noReferenceIsReportedAndNoOpenSlideIsOffered() {
         CohortSession cohort = new CohortSession();
         cohort.setProjectSlides(List.of(new CohortSession.SlideRef("ref", "ref.tif"),
                 new CohortSession.SlideRef("s1", "s1.tif")));
-        cohort.setOpenSlide("s1");
         cohort.setLiveTree(tree());
         assertEquals(CohortSession.NO_REFERENCE, cohort.state().message());
         assertFalse(cohort.state().correctionDisabled(), "no reference is not a missing reference");
-        assertEquals("s1", cohort.suggestedReferenceId());
-        assertEquals("s1.tif", cohort.state().suggestedReferenceName());
+        assertNull(cohort.suggestedReferenceId());
+        assertNull(cohort.state().suggestedReferenceName());
         assertFalse(cohort.statusLine(true).contains("Ready to run"));
     }
 

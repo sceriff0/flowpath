@@ -897,7 +897,6 @@ public class FlowPathPane extends BorderPane {
             updateBusyControls();
             return;
         }
-        cohort.setOpenSlide(indexSlideId);
         // The open slide becomes the reference the first time this project's cohort is seen
         // (spec §3), as one undo step (ruling C9), recording the project's slide names with it —
         // once per project, never again on a later ingest (M6: that re-recorded a step, wiping

@@ -258,7 +258,7 @@ final class NeedsALookPane extends TitledPane {
             node.setMaxSize(12, 12);
             node.getStyleClass().add("fp-slide-square");
             node.getStyleClass().add(switch (square.status()) {
-                case SAMPLING -> "fp-slide-sampling";
+                case SAMPLING, EXCLUDED -> "fp-slide-sampling";
                 case READY -> "fp-slide-ready";
                 case NEEDS_LOOK -> "fp-slide-needs-look";
                 case FAILED -> "fp-slide-failed";

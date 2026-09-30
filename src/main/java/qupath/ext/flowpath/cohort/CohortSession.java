@@ -32,19 +32,20 @@ public final class CohortSession {
     public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache) {}
 
     /**
-     * One scoring: the model, the review, the columns scored, the most typical slide, and the
+     * One scoring: the model, the review, the columns scored, the reference ranking, and the
      * samples as scored — each {@linkplain SlideSample#scopedTo scoped} to the scored tree's quality
      * filter and ROI, which {@link #adopt} keeps so the curves and crops read the same clean cells.
      */
     public record Scored(AlignmentModel model, ReviewScorer.Result review, List<String> columnKeys,
-                         String suggestedReferenceId, List<SlideSample> samples) {
+                         ReferenceRanking.Result ranking, List<SlideSample> samples) {
         public Scored {
             samples = List.copyOf(samples);
+            ranking = ranking == null ? ReferenceRanking.Result.NONE : ranking;
         }
     }
 
     /** One slide's state on the slide strip (spec §6 "Slide strip and status line"). */
-    public enum SlideStatus { SAMPLING, READY, NEEDS_LOOK, FAILED }
+    public enum SlideStatus { SAMPLING, READY, NEEDS_LOOK, FAILED, EXCLUDED }
 
     /**
      * One square of the slide strip: its status, and what its tooltip says — the failure reason
@@ -60,13 +61,12 @@ public final class CohortSession {
             "This gate tree's per-slide settings belong to another project — correction and slide settings are off";
 
     /**
-     * The live tree names no reference slide — after an undo past the default one, say (final
-     * ruling I3). Every slide then gates on the tree's own numbers, uncorrected, and there is no
-     * review: said in words, never left to look like an all-clear.
+     * The live tree names no reference slide: every slide gates on the tree's own numbers,
+     * uncorrected, until a reference is confirmed (spec 2026-09-30 §4.1). Said in words, never
+     * left to look like an all-clear.
      */
     public static final String NO_REFERENCE =
-            "No reference slide — correction is off and every slide uses the tree's own numbers; "
-                    + "use the open slide as the reference to turn it on";
+            "No reference slide — thresholds are not corrected between slides; pick one in the Cohort window";
 
     private static final ReviewScorer.Result NO_REVIEW = new ReviewScorer.Result(List.of(), List.of());
 
@@ -87,9 +87,9 @@ public final class CohortSession {
     private ReviewScorer.Result review = NO_REVIEW;
     /** The live tree's reference slide, as last handed in by {@link #setLiveTree} or {@link #snapshot}. */
     private volatile String referenceSlideId;
-    private String suggestedReferenceId;
-    /** The slide whose cells the panel holds: what a tree with no reference is offered as one. */
-    private String openSlideId;
+    private ReferenceRanking.Result ranking = ReferenceRanking.Result.NONE;
+    /** Slides the project marks {@code flowpath.cohort.excluded}: never sampled, ranked or reviewed. */
+    private Set<String> excluded = Set.of();
     private ReviewItem.Key selected;
     /** The gate whose group is being reviewed, as a value; see {@link #selectGroup}. */
     private ReviewGroup.Key selectedGroup;
@@ -145,7 +145,7 @@ public final class CohortSession {
             cache = AlignmentModel.Cache.empty();
             model = AlignmentModel.empty();
             review = NO_REVIEW;
-            suggestedReferenceId = null;
+            ranking = ReferenceRanking.Result.NONE;
             selected = null;
             selectedGroup = null;
         }
@@ -183,12 +183,16 @@ public final class CohortSession {
         updateCorrectionDisabled();
     }
 
-    /** The slide open in the viewer, by project id; null when none (or outside a project). */
-    public void setOpenSlide(String slideId) {
-        openSlideId = slideId;
+    public void setCache(AlignmentModel.Cache cache) { this.cache = cache == null ? AlignmentModel.Cache.empty() : cache; }
+
+    /** The project's excluded slides; any sample or failure held for one is dropped now. */
+    public void setExcluded(Set<String> slideIds) {
+        excluded = Set.copyOf(slideIds);
+        samples.keySet().removeAll(excluded);
+        failures.keySet().removeAll(excluded);
     }
 
-    public void setCache(AlignmentModel.Cache cache) { this.cache = cache == null ? AlignmentModel.Cache.empty() : cache; }
+    public Set<String> excluded() { return excluded; }
 
     public void samplingStarted() {
         sampling = true;
@@ -197,6 +201,11 @@ public final class CohortSession {
     }
 
     public void landed(CohortSampler.Outcome outcome) {
+        String slideId = switch (outcome) {
+            case CohortSampler.Sampled s -> s.slideId();
+            case CohortSampler.Failed f -> f.slideId();
+        };
+        if (excluded.contains(slideId)) return;
         switch (outcome) {
             case CohortSampler.Sampled s -> { samples.put(s.slideId(), s.sample()); failures.remove(s.slideId()); }
             case CohortSampler.Failed f -> { failures.put(f.slideId(), f.reason()); samples.remove(f.slideId()); }
@@ -219,36 +228,19 @@ public final class CohortSession {
      */
     public static Scored score(Snapshot snapshot, GateTree treeCopy) {
         List<SlideSample> samples = snapshot.samples().stream().map(s -> s.scopedTo(treeCopy)).toList();
+        Set<AlignmentModel.ColumnRef> columns = AlignmentModel.columnsOf(treeCopy);
+        // Ranked whether or not a reference exists: the suggestion is what lets one be chosen.
+        ReferenceRanking.Result ranking = samples.size() >= 2 ? ReferenceRanking.rank(samples, columns)
+                : ReferenceRanking.Result.NONE;
         if (snapshot.referenceSlideId() == null || samples.size() < 2) {
             // Nothing to align, but the persisted landmarks carry through: adopting an empty cache
             // here would throw them away and the next write would lose them.
-            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), null, samples);
+            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), ranking, samples);
         }
-        Set<AlignmentModel.ColumnRef> columns = AlignmentModel.columnsOf(treeCopy);
         AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache());
         ReviewScorer.Result review = ReviewScorer.score(treeCopy, samples, model);
         List<String> keys = columns.stream().map(AlignmentModel.ColumnRef::key).toList();
-        return new Scored(model, review, keys, mostTypical(model, samples, keys), samples);
-    }
-
-    /** The slide whose L1 shifts sit closest to the cohort median across every column; null under 3 slides. */
-    private static String mostTypical(AlignmentModel model, List<SlideSample> samples, List<String> keys) {
-        if (samples.size() < 3 || keys.isEmpty()) return null;
-        Map<String, Double> distance = new LinkedHashMap<>();
-        for (SlideSample s : samples) distance.put(s.slideId(), 0.0);
-        for (String key : keys) {
-            double[] shifts = samples.stream().map(s -> model.alignment(s.slideId(), key))
-                    .filter(a -> a != null).mapToDouble(Alignment::shift).toArray();
-            if (shifts.length == 0) continue;
-            // The one cohort median (pre-flight ruling C6), not a local upper median.
-            double median = CohortStats.median(shifts);
-            for (SlideSample s : samples) {
-                Alignment a = model.alignment(s.slideId(), key);
-                distance.merge(s.slideId(), a == null ? Double.POSITIVE_INFINITY : Math.abs(a.shift() - median), Double::sum);
-            }
-        }
-        return distance.entrySet().stream().filter(e -> Double.isFinite(e.getValue()))
-                .min(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(null);
+        return new Scored(model, review, keys, ranking, samples);
     }
 
     /** @return true when any sampled slide's alignment for any scored column changed */
@@ -268,8 +260,9 @@ public final class CohortSession {
             SlideSample current = samples.get(scopedSample.slideId());
             if (current != null && current.index() == scopedSample.index()) samples.put(scopedSample.slideId(), scopedSample);
         }
+        samples.keySet().removeAll(excluded);
         review = scored.review();
-        suggestedReferenceId = scored.suggestedReferenceId();
+        ranking = scored.ranking();
         return changed;
     }
 
@@ -291,19 +284,14 @@ public final class CohortSession {
     public List<SlideSample> samples() { return List.copyOf(samples.values()); }
     public SlideSample sample(String slideId) { return samples.get(slideId); }
 
-    /**
-     * The most typical slide's id, while it is not already the reference — the slide
-     * {@link CohortState#suggestedReferenceName()} names, by id, since two images may share a name.
-     */
+    /** The ranking's suggestion while it is not already the live reference; never a default. */
     public String suggestedReferenceId() {
-        if (noReference()) return openSlideId != null && projectNames.containsKey(openSlideId) ? openSlideId : null;
-        return suggestedReferenceId != null && !suggestedReferenceId.equals(referenceSlideId) ? suggestedReferenceId : null;
+        if (foreign) return null;
+        String id = ranking.suggestedId();
+        return id != null && !id.equals(referenceSlideId) && projectNames.containsKey(id) ? id : null;
     }
 
-    /** A tree of this project that names no reference slide, while the cohort is available. */
-    private boolean noReference() {
-        return slides.size() >= 2 && !foreign && referenceSlideId == null;
-    }
+    public ReferenceRanking.Result ranking() { return ranking; }
 
     /** The names of the slides whose sampling failed, in project order: they run uncorrected. */
     public List<String> failedSlideNames() {
@@ -359,7 +347,8 @@ public final class CohortSession {
         for (SlideRef r : slides) {
             SlideSample sample = samples.get(r.id());
             int items = (int) review.items().stream().filter(i -> i.key().slideId().equals(r.id())).count();
-            SlideStatus status = failures.containsKey(r.id()) ? SlideStatus.FAILED
+            SlideStatus status = excluded.contains(r.id()) ? SlideStatus.EXCLUDED
+                    : failures.containsKey(r.id()) ? SlideStatus.FAILED
                     : sample == null ? SlideStatus.SAMPLING
                     : items > 0 ? SlideStatus.NEEDS_LOOK : SlideStatus.READY;
             out.add(new SlideSquare(r.id(), r.name(), status, sample == null ? 0 : sample.detectionCount(), items,
@@ -384,7 +373,8 @@ public final class CohortSession {
                 : foreign ? "Tree from another project"
                 : referenceSlideId == null ? "No reference slide"
                 : "Ready to run";
-        return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(), slides.size(),
+        return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(),
+                slides.size() - (int) slides.stream().filter(r -> excluded.contains(r.id())).count(),
                 review.items().size(), run);
     }
 
