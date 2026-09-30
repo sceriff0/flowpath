@@ -97,4 +97,46 @@ class RoundQcGatingTest {
         assertEquals(ResolvedGate.UNMEASURED, readout.branchIgnoringClip(cd3, 1));
         assertTrue(readout.branchIgnoringClip(tree.getRoots().get(1), 1) >= 0);
     }
+
+    /** Round QC removes cells from a gate silently unless the readout says how many, and why. */
+    @Test
+    void eachGateCountsItsUnmeasuredCellsByReason() throws Exception {
+        CellIndex index = index();
+        GateTree tree = tree(true);
+        GatingEngine.assignAll(tree, index, stats(index, tree));
+        GateNode cd3 = tree.getRoots().get(0);
+        GateNode panck = tree.getRoots().get(1);
+        assertEquals(1, cd3.getUnmeasuredCount());
+        assertEquals(1, cd3.getUnmeasuredByRoundQc());
+        assertEquals(0, cd3.getUnmeasuredSkipped());
+        assertEquals(0, panck.getUnmeasuredCount());
+    }
+
+    @Test
+    void aSkippedSlideAndAMissingValueAreCountedApartFromRoundQc() throws Exception {
+        CellIndex index = qupath.ext.flowpath.testing.Cells.of(3)
+                .marker("CD3", 1, 200, 300).absentOn(i -> i == 0)
+                .marker("PANCK", 5, 6, 7)
+                .build();
+        GateTree tree = tree(false);
+        tree.getRoots().get(1).setSkippedOnSlide(true);
+        GatingEngine.assignAll(tree, index, MarkerStats.compute(index));
+        GateNode cd3 = tree.getRoots().get(0);
+        GateNode panck = tree.getRoots().get(1);
+        assertEquals(1, cd3.getUnmeasuredCount(), "no CD3 value on cell 0");
+        assertEquals(0, cd3.getUnmeasuredByRoundQc());
+        assertEquals(3, panck.getUnmeasuredCount());
+        assertEquals(3, panck.getUnmeasuredSkipped(), "a Skip is not blamed on QC");
+    }
+
+    /** A new pass starts from zero, like the branch counts. */
+    @Test
+    void unmeasuredCountsResetEveryPass() throws Exception {
+        CellIndex index = index();
+        GateTree tree = tree(true);
+        GatingEngine.assignAll(tree, index, stats(index, tree));
+        tree.getQualityFilter().setRange("qcround/nuclear_retention", QualityFilter.Range.OPEN);
+        GatingEngine.assignAll(tree, index, stats(index, tree));
+        assertEquals(0, tree.getRoots().get(0).getUnmeasuredCount());
+    }
 }

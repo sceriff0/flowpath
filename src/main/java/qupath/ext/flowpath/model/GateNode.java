@@ -250,6 +250,19 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public boolean isLineageMarker() { return lineageMarker; }
     public void setLineageMarker(boolean v) { this.lineageMarker = v; }
     public boolean isSkippedOnSlide() { return skippedOnSlide; }
+
+    /**
+     * Cells this gate could not judge in the last gating pass (never counted in any of its
+     * branches), and of those, how many because their imaging round failed QC and how many because
+     * this slide's review skipped the gate. Transient, like a branch count: filled by the walk,
+     * zero on a copy or a loaded tree until a pass lands.
+     */
+    public int getUnmeasuredCount() { return getBranches().get(0).getUnmeasured(); }
+    public int getUnmeasuredByRoundQc() { return getBranches().get(0).getUnmeasuredRoundQc(); }
+    public int getUnmeasuredSkipped() { return getBranches().get(0).getUnmeasuredSkipped(); }
+
+    /** Record one cell this gate could not judge; the gating walk is the only caller. */
+    public void recordUnmeasured(UnmeasuredReason reason) { getBranches().get(0).recordUnmeasured(reason); }
     public void setSkippedOnSlide(boolean v) { this.skippedOnSlide = v; }
 
     // ========== ThresholdGate-specific getters/setters ==========

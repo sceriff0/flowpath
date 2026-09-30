@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Region2DGate;
+import qupath.ext.flowpath.model.UnmeasuredReason;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -257,6 +258,18 @@ final class ResolvedGate {
 
         // Step 3: geometry, on the values as measured. There is no second coordinate space.
         return node.branchFor(rawX, rawY);
+    }
+
+    /**
+     * Why {@link #branchOf} answered {@link #UNMEASURED} for {@code cellIdx}, in the order it
+     * checks. Asked only on that path.
+     */
+    UnmeasuredReason unmeasuredReason(int cellIdx) {
+        if (!usable) return node.isSkippedOnSlide() ? UnmeasuredReason.SKIPPED : UnmeasuredReason.NO_VALUE;
+        if (Double.isNaN(x.valueAt(cellIdx)) || (twoAxis && Double.isNaN(y.valueAt(cellIdx)))) {
+            return UnmeasuredReason.NO_VALUE;
+        }
+        return UnmeasuredReason.ROUND_QC;
     }
 
     /** True when {@code raw} falls outside this gate's X clip bounds. */

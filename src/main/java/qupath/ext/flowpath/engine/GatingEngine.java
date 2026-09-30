@@ -678,6 +678,9 @@ public final class GatingEngine {
             // gate's branches, and the walk stops here rather than descending into a
             // subtree that would be judging it on the same absent data.
             unmeasured[cellIdx] = true;
+            // Counted under the same guard as a branch count, so "Unmeasured" is about the cells
+            // this gate would otherwise have counted.
+            if (!excluded[cellIdx]) rg.node.recordUnmeasured(rg.unmeasuredReason(cellIdx));
             return;
         }
 
@@ -741,7 +744,7 @@ public final class GatingEngine {
         }
         for (GateNode node : nodes) {
             for (Branch branch : node.getBranches()) {
-                branch.setCount(0);
+                branch.resetCounts();
                 resetCounts(branch.getChildren());
             }
         }

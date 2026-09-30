@@ -307,6 +307,33 @@ public class FlowPathCell extends TreeCell<Object> {
         return label;
     }
 
+    /**
+     * "· 1,204 unmeasured" when the last pass left cells this gate could not judge — counted in
+     * none of its branches, so without this the branch percentages silently cover fewer cells —
+     * with the reasons in the tooltip. {@code null} when there are none.
+     */
+    static Label unmeasuredLabel(GateNode node) {
+        int total = node.getUnmeasuredCount();
+        if (total <= 0) return null;
+        Label label = detailLabel(String.format(java.util.Locale.US, "· %,d unmeasured", total), 10);
+        label.setTooltip(new Tooltip(unmeasuredTooltip(node)));
+        return label;
+    }
+
+    /** The reasons behind a gate's unmeasured count, one per line. */
+    static String unmeasuredTooltip(GateNode node) {
+        int total = node.getUnmeasuredCount();
+        int qc = node.getUnmeasuredByRoundQc();
+        int skipped = node.getUnmeasuredSkipped();
+        StringBuilder sb = new StringBuilder(String.format(java.util.Locale.US,
+                "%,d cells this gate could not judge (counted in none of its branches)", total));
+        if (qc > 0) sb.append(String.format(java.util.Locale.US, "\n%,d failed round QC for this marker", qc));
+        if (skipped > 0) sb.append(String.format(java.util.Locale.US, "\n%,d skipped on this slide in review", skipped));
+        int noValue = total - qc - skipped;
+        if (noValue > 0) sb.append(String.format(java.util.Locale.US, "\n%,d have no value for this marker", noValue));
+        return sb.toString();
+    }
+
     /** Muted secondary text (threshold readout, gate-type word). */
     private static Label detailLabel(String text, int size) {
         Label label = new Label(text);
@@ -392,6 +419,8 @@ public class FlowPathCell extends TreeCell<Object> {
             if (badge != null) bar.getChildren().add(badge);
             bar.getChildren().add(detailLabel(thresholdText, 11));
         }
+        Label unmeasured = unmeasuredLabel(node);
+        if (unmeasured != null) bar.getChildren().add(unmeasured);
 
         return bar;
     }
