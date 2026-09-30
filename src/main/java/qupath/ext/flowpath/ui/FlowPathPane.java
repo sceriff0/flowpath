@@ -685,8 +685,8 @@ public class FlowPathPane extends BorderPane {
         }
 
         @Override
-        public void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
-            render(notice, newIndex);
+        public void resynced(boolean newIndex) {
+            render(newIndex);
             // After the resync, so the index, masks and statistics describe the slide just opened.
             if (pendingFocus != null && pendingFocus.slideId().equals(currentSlideId())) {
                 ReviewItem.Key key = pendingFocus;
@@ -717,8 +717,8 @@ public class FlowPathPane extends BorderPane {
         }
 
         @Override
-        public void resynced(Optional<GatingSession.MigrationNotice> notice) {
-            render(notice, false);
+        public void resynced() {
+            render(false);
         }
 
         @Override
@@ -735,7 +735,7 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void failed(Throwable error) {
             logger.error("Recomputing the masks and statistics failed", error);
-            render(Optional.empty(), false);
+            render(false);
             Dialogs.showErrorNotification("FlowPath",
                     "Could not recompute the statistics: " + ErrorMessages.describe(error));
         }
@@ -851,7 +851,7 @@ public class FlowPathPane extends BorderPane {
             // editor draws even when no alignment number changed: render, the one path that
             // brings the editor, the Correct staining switch and the banner in line.
             if (alignmentsChanged || !cohortContext().equals(renderedCohortContext)) {
-                render(Optional.empty(), false);
+                render(false);
                 requestPreviewUpdate();
             }
             updateBusyControls();
@@ -1121,7 +1121,7 @@ public class FlowPathPane extends BorderPane {
         currentNode = gate;
         cohort.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
         editorPane.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
-        render(Optional.empty(), false);
+        render(false);
         syncViewerChannels(gate);
 
         BoundaryHotspot.Boundary boundary = BoundaryHotspot.of(session.tree(), gate, currentSlideId(), alignments,
@@ -1234,7 +1234,7 @@ public class FlowPathPane extends BorderPane {
         GateNode gate = CohortSession.liveGate(session.tree(), new ReviewItem.Key(null, key.rootIndex(), key.gatePath()));
         if (gate != null) {
             currentNode = gate;
-            render(Optional.empty(), false);   // selects the gate and shows it, as focusReviewItem does
+            render(false);   // selects the gate and shows it, as focusReviewItem does
             syncViewerChannels(gate);
         } else {
             renderNeedsALook();
@@ -1549,7 +1549,7 @@ public class FlowPathPane extends BorderPane {
      */
     private void onGateMoved(GateNode moved) {
         currentNode = moved;
-        render(Optional.empty(), false);
+        render(false);
         requestPreviewUpdate();
     }
 
@@ -1889,10 +1889,6 @@ public class FlowPathPane extends BorderPane {
                 editorPane.viewMode() == CohortSession.ViewMode.THIS_SLIDE)) {
             showSlideSetting();
         }
-        // A legacy z-score gate whose channel this image lacked keeps its flag. Re-pointed
-        // in the editor onto a channel the image does carry, it is convertible now, and must
-        // be converted before the pass below reads its z-value as a raw threshold.
-        session.migrateLegacyZScores().ifPresent(this::showMigrationNotice);
         treeView.refresh();
         requestPreviewUpdate();
         syncViewerChannels(currentNode);
@@ -2860,7 +2856,7 @@ public class FlowPathPane extends BorderPane {
     private void resyncToTree() {
         // Show the edit, then ask for its derivation: requesting first would render twice on
         // the no-cells path, where the request resyncs and renders on this very thread.
-        render(Optional.empty(), false);
+        render(false);
         derivations.request();
     }
 
@@ -2869,13 +2865,13 @@ public class FlowPathPane extends BorderPane {
      * {@link #derivations}, or the tree as an edit has just left it, before its derivation has
      * been asked for (see {@link #resyncToTree()}).
      * <p>
-     * The editor is rebuilt only when it has to be: the cells changed ({@code newIndex}), a
-     * migration rewrote gates in place, or the selected gate is not the one it shows (an undo
+     * The editor is rebuilt only when it has to be: the cells changed ({@code newIndex}), or
+     * the selected gate is not the one it shows (an undo
      * or a load swaps in fresh {@code GateNode}s). An annotation edit or a filter toggle keeps
      * it, and its plots redraw through the masks and statistics set below. Rebuilding on every
      * resync threw away a polygon half-drawn on the scatter plot whenever an annotation moved.
      */
-    private void render(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+    private void render(boolean newIndex) {
         GateTree tree = session.tree();
         // First: the cohort lookup answers for the tree's reference and identity, and the editor
         // asks it (All slides curves, the display seam) from setGateNode and every refresh below.
@@ -2907,7 +2903,7 @@ public class FlowPathPane extends BorderPane {
         }
         editorPane.setAncestorMask(currentNode != null ? computeAncestorMask(currentNode) : null);
         editorPane.setCohortAvailable(cohort.state().available());
-        if (EditorRebuild.needed(newIndex, notice.isPresent(), editorPane.getGateNode(), currentNode)) {
+        if (EditorRebuild.needed(newIndex, editorPane.getGateNode(), currentNode)) {
             editorPane.setGateNode(currentNode);
         }
         showSlideSetting();
@@ -2915,7 +2911,6 @@ public class FlowPathPane extends BorderPane {
 
         updateStatusBar();
         renderNeedsALook();
-        notice.ifPresent(this::showMigrationNotice);
     }
 
     /** Hand a resync's result to the live preview and request the pass. */
@@ -2929,14 +2924,6 @@ public class FlowPathPane extends BorderPane {
                 regions != null ? regions.regionNames().size() : 0);
         previewService.setGateTree(input.tree());
         previewService.requestUpdate();
-    }
-
-    private void showMigrationNotice(GatingSession.MigrationNotice notice) {
-        if (notice.warning()) {
-            Dialogs.showWarningNotification("FlowPath", notice.message());
-        } else {
-            Dialogs.showInfoNotification("FlowPath", notice.message());
-        }
     }
 
     /**

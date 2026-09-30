@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.engine;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
@@ -31,7 +32,7 @@ class PhenotypeClassWriterTest {
         b.setStatistic(Statistic.MEAN);
         tree.addRoot(a);
         tree.addRoot(b);
-        tree.getQualityFilter().setMinArea(50);
+        tree.getQualityFilter().setMin(QualityFilter.AREA, 50);
         MarkerStats stats = GatingEngine.recomputeStats(index, tree.getQualityFilter(), null);
         GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
@@ -89,7 +90,7 @@ class PhenotypeClassWriterTest {
         GateNode root = new GateNode(channel, 1.0);
         root.setStatistic(Statistic.MEAN);
         tree.addRoot(root);
-        tree.getQualityFilter().setMinArea(50);
+        tree.getQualityFilter().setMin(QualityFilter.AREA, 50);
         MarkerStats stats = GatingEngine.recomputeStats(index, tree.getQualityFilter(), null);
         GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 

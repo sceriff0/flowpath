@@ -68,13 +68,14 @@ class DerivationCoordinatorTest {
     }
 
     private static final class RecordingHost implements DerivationCoordinator.Host {
-        final List<Optional<GatingSession.MigrationNotice>> resynced = new ArrayList<>();
+        /** One entry per render the coordinator asked for. */
+        final List<Boolean> resynced = new ArrayList<>();
         final List<Boolean> busy = new ArrayList<>();
         final List<Throwable> failures = new ArrayList<>();
         List<PathObject> annotations = List.of();
 
         @Override public List<PathObject> annotations() { return annotations; }
-        @Override public void resynced(Optional<GatingSession.MigrationNotice> notice) { resynced.add(notice); }
+        @Override public void resynced() { resynced.add(true); }
         @Override public void busyChanged(boolean deriving) { busy.add(deriving); }
         @Override public void failed(Throwable error) { failures.add(error); }
 

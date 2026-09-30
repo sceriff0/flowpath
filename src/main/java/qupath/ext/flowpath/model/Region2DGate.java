@@ -99,8 +99,7 @@ public abstract sealed class Region2DGate extends GateNode
      * <p>
      * Used to carry a drawn region across a raw-mode compartment/statistic switch that
      * changes what a coordinate on an axis means (the editor supplies a percentile-preserving
-     * map), and by {@code LegacyZScoreMigration} to move a legacy shape out of the retired
-     * computed z-score (a linear map). A shape with no genuine extent is left alone --
+     * map). A shape with no genuine extent is left alone --
      * remapping a placeholder zero would plant a real region at the new axis' minimum where
      * there was none. Rectangle re-sorts its bounds afterward so a non-monotone map cannot
      * leave {@code minX > maxX}; ellipse remaps its bounding box and recomputes centre/radii,

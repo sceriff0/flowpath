@@ -163,7 +163,7 @@ class GateReorderFxTest {
         public void accept(GateNode gate) {
             moved.add(gate);
             selected = EditorRebuild.surviving(gate, session.tree());
-            if (EditorRebuild.needed(false, false, shown, selected)) {
+            if (EditorRebuild.needed(false, shown, selected)) {
                 shown = selected;
                 rebuilds++;
             }

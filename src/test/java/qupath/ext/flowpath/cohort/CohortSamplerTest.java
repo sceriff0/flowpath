@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.testing.Cells;
@@ -90,7 +91,7 @@ class CohortSamplerTest {
     @Test
     void theCleanMaskIsTheQualityFilterAndTheRoi() {
         GateTree t = tree();
-        t.getQualityFilter().setMinArea(60);
+        t.getQualityFilter().setMin(QualityFilter.AREA, 60);
         SlideSample q = sampled(CohortSampler.sampleOne(slide("s1", cells(40)), t, 0));
         assertEquals(20, count(q.clean()), "the area filter drops the 50-area half");
 

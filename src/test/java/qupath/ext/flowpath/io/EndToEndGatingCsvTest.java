@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.io;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -386,7 +387,7 @@ class EndToEndGatingCsvTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(40);
+        qf.setMin(QualityFilter.AREA, 40);
 
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);

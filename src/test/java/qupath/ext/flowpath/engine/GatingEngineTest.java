@@ -59,41 +59,6 @@ class GatingEngineTest {
         assertEquals(5, negCount, "Expected 5 cells negative (< 5.5)");
     }
 
-    @Test
-    void aLegacyZScoreThresholdGatesTheSameCellsOnceMigrated() {
-        // 10 cells with values 1..10, mean=5.5: a legacy z-threshold of 0 split at the mean.
-        // The engine no longer standardises, so the gate is migrated first -- as the pane
-        // does when a tree meets an index -- and must still split at the mean.
-        List<String> markers = List.of("CD45");
-        double[][] values = { {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} };
-        CellIndex index = Cells.columns(markers, values).build();
-        boolean[] mask = Cells.allTrue(10);
-        MarkerStats stats = MarkerStats.compute(index, mask);
-
-        GateNode gate = new GateNode("CD45", 0.0);
-        gate.setStatistic(Statistic.MEAN);
-        gate.setThresholdIsZScore(true);
-
-        GateTree tree = new GateTree();
-        tree.setQualityFilter(null);
-        tree.addRoot(gate);
-
-        qupath.ext.flowpath.model.LegacyZScoreMigration.migrate(tree, index, stats);
-        assertEquals(5.5, gate.getThreshold(), 1e-9, "z = 0 is the column mean");
-        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
-
-        // mean = 5.5, so values >= 5.5 have z >= 0 -> positive
-        // Values 6,7,8,9,10 -> positive (5); values 1,2,3,4,5 -> negative (5)
-        int posCount = 0;
-        int negCount = 0;
-        for (String p : result.getPhenotypes()) {
-            assertNotNull(p);
-            if (p.equals("CD45+")) posCount++;
-            else if (p.equals("CD45-")) negCount++;
-        }
-        assertEquals(5, posCount, "Expected 5 positive cells with z-score >= 0");
-        assertEquals(5, negCount, "Expected 5 negative cells with z-score < 0");
-    }
 
     @Test
     void qualityFilterExcludesByArea() {
@@ -104,7 +69,7 @@ class GatingEngineTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
 
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
 
@@ -367,7 +332,7 @@ class GatingEngineTest {
         CellIndex index = Cells.columns(markers, values).build(); // default area=100
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(Double.MAX_VALUE);
+        qf.setMin(QualityFilter.AREA, Double.MAX_VALUE);
 
         GateNode gate = new GateNode("CD45", 3.0);
         gate.setStatistic(Statistic.MEAN);
@@ -711,7 +676,7 @@ class GatingEngineTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(100);
+        qf.setMin(QualityFilter.AREA, 100);
 
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
 

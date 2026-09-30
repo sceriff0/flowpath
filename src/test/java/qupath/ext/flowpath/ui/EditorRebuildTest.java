@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * When a resync rebuilds the gate editor. A rebuild discards a polygon the user is halfway
  * through drawing, so an annotation edit or an ROI toggle must not trigger one; an undo that
- * swaps the tree's nodes, a new index or a migration must.
+ * swaps the tree's nodes or a new index must.
  * <p>
  * Driven through a real {@link GatingSession} and replayed the way {@code FlowPathPane.render}
  * uses the rule — resolve the surviving selection, decide, and if rebuilt the editor then shows
@@ -37,10 +37,16 @@ class EditorRebuildTest {
 
         Pane(GatingSession session) { this.session = session; }
 
+        /** One resync followed by its render: returns whether it rebuilt the editor. */
+        boolean render(Supplier<List<PathObject>> annotations, boolean newIndex) {
+            session.resync(annotations);
+            return render(newIndex);
+        }
+
         /** One render: returns whether it rebuilt the editor. */
-        boolean render(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+        boolean render(boolean newIndex) {
             selected = EditorRebuild.surviving(selected, session.tree());
-            boolean rebuild = EditorRebuild.needed(newIndex, notice.isPresent(), shown, selected);
+            boolean rebuild = EditorRebuild.needed(newIndex, shown, selected);
             if (rebuild) {
                 shown = selected;
                 rebuilds++;
@@ -69,7 +75,7 @@ class EditorRebuildTest {
         Pane pane = new Pane(session);
 
         // The image lands and the user selects root 1 (a tree click shows it).
-        assertTrue(pane.render(session.resync(List::of), true), "new cells: rebuild");
+        assertTrue(pane.render(List::of, true), "new cells: rebuild");
         pane.selected = session.tree().getRoots().get(1);
         pane.shown = pane.selected;
 
@@ -78,8 +84,8 @@ class EditorRebuildTest {
                 ROIs.createRectangleROI(-5, 0, 50, 10, ImagePlane.getDefaultPlane()));
         Supplier<List<PathObject>> annotations = () -> List.of(annotation);
         session.setRoiFilterEnabled(true);
-        assertFalse(pane.render(session.resync(annotations), false), "ROI toggle keeps the editor");
-        assertFalse(pane.render(session.resync(annotations), false), "annotation edit keeps the editor");
+        assertFalse(pane.render(annotations, false), "ROI toggle keeps the editor");
+        assertFalse(pane.render(annotations, false), "annotation edit keeps the editor");
         session.settle();
         assertSame(session.tree().getRoots().get(1), pane.shown);
 
@@ -89,32 +95,31 @@ class EditorRebuildTest {
         session.settle();
         GateNode before = pane.shown;
         assertTrue(session.undo());
-        assertTrue(pane.render(session.resync(annotations), false), "undo swapped the nodes: rebuild");
+        assertTrue(pane.render(annotations, false), "undo swapped the nodes: rebuild");
         assertNull(pane.selected, "the old node is not in the restored tree");
         assertNull(pane.shown, "the editor no longer writes to the discarded node");
         assertNotSame(before, session.tree().getRoots().get(1));
 
         // Second pass after the undo: nothing changed again, so no second rebuild.
         int rebuilds = pane.rebuilds;
-        assertFalse(pane.render(session.resync(annotations), false));
+        assertFalse(pane.render(annotations, false));
         assertEquals(rebuilds, pane.rebuilds);
 
         // Selecting a gate of the restored tree shows it; the next annotation pass keeps it.
         pane.selected = session.tree().getRoots().get(0);
         pane.shown = pane.selected;
-        assertFalse(pane.render(session.resync(annotations), false));
+        assertFalse(pane.render(annotations, false));
         assertSame(session.tree().getRoots().get(0), pane.shown);
     }
 
     @Test
-    void aNewIndexOrARewrittenTreeRebuildsEvenWithTheSameGateShown() {
+    void aNewIndexRebuildsEvenWithTheSameGateShown() {
         GateNode gate = new GateNode("CD3", 1.0);
-        assertTrue(EditorRebuild.needed(true, false, gate, gate), "new cells");
-        assertTrue(EditorRebuild.needed(false, true, gate, gate), "migration rewrote the gate");
-        assertFalse(EditorRebuild.needed(false, false, gate, gate), "same gate, same cells");
-        assertFalse(EditorRebuild.needed(false, false, null, null), "nothing shown, nothing selected");
-        assertTrue(EditorRebuild.needed(false, false, gate, null), "selection dropped");
-        assertTrue(EditorRebuild.needed(false, false, null, gate), "new selection");
+        assertTrue(EditorRebuild.needed(true, gate, gate), "new cells");
+        assertFalse(EditorRebuild.needed(false, gate, gate), "same gate, same cells");
+        assertFalse(EditorRebuild.needed(false, null, null), "nothing shown, nothing selected");
+        assertTrue(EditorRebuild.needed(false, gate, null), "selection dropped");
+        assertTrue(EditorRebuild.needed(false, null, gate), "new selection");
     }
 
     /**
@@ -150,19 +155,19 @@ class EditorRebuildTest {
 
         // onGateMoved: the moved gate becomes the selection, then render decides.
         pane.selected = child;
-        assertFalse(pane.render(Optional.empty(), false), "a re-parented gate needs no rebuild");
+        assertFalse(pane.render(false), "a re-parented gate needs no rebuild");
         assertSame(child, pane.selected, "the moved gate is still in the tree");
         assertSame(child, pane.shown, "so the editor keeps it instead of blanking");
         assertEquals(rebuilds, pane.rebuilds);
 
         // The pass after the move: still the same gate, still no rebuild.
-        assertFalse(pane.render(Optional.empty(), false));
+        assertFalse(pane.render(false));
         assertSame(child, pane.shown);
 
         // And the contrast: one undo swaps in a fresh tree, so the moved node is gone and
         // the editor MUST let go of it — the case `surviving` exists for.
         assertTrue(session.undo());
-        assertTrue(pane.render(Optional.empty(), false), "undo swapped the nodes: rebuild");
+        assertTrue(pane.render(false), "undo swapped the nodes: rebuild");
         assertNull(pane.selected);
         assertNull(pane.shown);
     }

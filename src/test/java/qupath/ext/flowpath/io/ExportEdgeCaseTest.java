@@ -694,7 +694,7 @@ class ExportEdgeCaseTest {
                 .build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
         MarkerStats stats = MarkerStats.compute(index, GatingEngine.computeQualityMask(index, qf));
 
         GateNode root = rawGate("CD45", 50);

@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.io;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.engine.GatingEngine;
@@ -357,78 +358,6 @@ class CsvCorrectnessTest {
         assertTrue(result.getExcluded()[99], "Cell 99 (CD3 outlier) should be excluded");
     }
 
-    // ========== Gap 7: a legacy z-score QuadrantGate, migrated ==========
-
-    @Test
-    void quadrantGateSavedInZScoreModeSplitsAtTheMeanOnceMigrated() throws IOException {
-        // 4 cells. A legacy z-threshold of 0 split at the mean; migration must keep that.
-        // CD45 values [1,9,1,9], mean=5, so z>0 for 9, z<0 for 1
-        // CD3 values  [1,1,9,9], mean=5, so z>0 for 9, z<0 for 1
-        List<String> markers = List.of("CD45", "CD3");
-        double[][] values = { {1, 9, 1, 9}, {1, 1, 9, 9} };
-        CellIndex index = Cells.columns(markers, values).build();
-        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(4));
-
-        QuadrantGate gate = new QuadrantGate("CD45", "CD3");
-        gate.setStatisticX(Statistic.MEAN);
-        gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdX(0.0);
-        gate.setThresholdY(0.0);
-        gate.setThresholdIsZScore(true);
-
-        GateTree tree = new GateTree();
-        tree.setQualityFilter(null);
-        tree.addRoot(gate);
-
-        LegacyZScoreMigration.migrate(tree, index, stats);
-        assertEquals(5.0, gate.getThresholdX(), 1e-9);
-        assertEquals(5.0, gate.getThresholdY(), 1e-9);
-        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
-
-        // Cell 0: CD45=1 (z<0), CD3=1 (z<0) -> NN
-        assertEquals("CD45-/CD3-", result.getPhenotypes()[0]);
-        // Cell 1: CD45=9 (z>0), CD3=1 (z<0) -> PN
-        assertEquals("CD45+/CD3-", result.getPhenotypes()[1]);
-        // Cell 2: CD45=1 (z<0), CD3=9 (z>0) -> NP
-        assertEquals("CD45-/CD3+", result.getPhenotypes()[2]);
-        // Cell 3: CD45=9 (z>0), CD3=9 (z>0) -> PP
-        assertEquals("CD45+/CD3+", result.getPhenotypes()[3]);
-    }
-
-    // ========== Gap 8: a legacy z-score 2D gate, migrated ==========
-
-    @Test
-    void rectangleGateSavedInZScoreModeKeepsItsCellsOnceMigrated() throws IOException {
-        // Region gate saved in z-score mode: boundaries were in z-score space.
-        // CD45 values [1,5,9], mean=5, std≈3.27 → z-scores: -1.22, 0.0, 1.22
-        // Gate bounds [-0.5, 0.5] in z-score space → only cell 1 (z=0) is inside.
-        List<String> markers = List.of("CD45", "CD3");
-        double[][] values = { {1, 5, 9}, {1, 5, 9} };
-        CellIndex index = Cells.columns(markers, values).build();
-        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(3));
-
-        RectangleGate gate = new RectangleGate("CD45", "CD3", -0.5, 0.5, -0.5, 0.5);
-        gate.setStatisticX(Statistic.MEAN);
-        gate.setStatisticY(Statistic.MEAN);
-        gate.setThresholdIsZScore(true);
-
-        GateTree tree = new GateTree();
-        tree.setQualityFilter(null);
-        tree.addRoot(gate);
-
-        // The engine compares raw values only; the legacy bounds are converted first.
-        LegacyZScoreMigration.migrate(tree, index, stats);
-        assertFalse(gate.isThresholdIsZScore());
-        AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
-
-        String insideName = gate.getBranches().get(0).getName();
-        String outsideName = gate.getBranches().get(1).getName();
-
-        assertEquals(outsideName, result.getPhenotypes()[0], "Cell 0 z=-1.22 should be outside");
-        assertEquals(insideName, result.getPhenotypes()[1], "Cell 1 z=0 should be inside");
-        assertEquals(outsideName, result.getPhenotypes()[2], "Cell 2 z=1.22 should be outside");
-    }
-
     @Test
     void rectangleGateRawMode() throws IOException {
         // Region gate in raw mode: boundaries are in raw data space.
@@ -719,7 +648,7 @@ class CsvCorrectnessTest {
         CellIndex index = Cells.columns(markers, new double[][]{cd45}).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
 
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);
@@ -771,7 +700,7 @@ class CsvCorrectnessTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
@@ -804,7 +733,7 @@ class CsvCorrectnessTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
@@ -836,7 +765,7 @@ class CsvCorrectnessTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);
 
@@ -1012,7 +941,7 @@ class CsvCorrectnessTest {
 
         // QF: minArea=60 → excludes cells 0,1 (areas 50, 55)
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(60);
+        qf.setMin(QualityFilter.AREA, 60);
         boolean[] mask = GatingEngine.computeQualityMask(index, qf);
         MarkerStats stats = MarkerStats.compute(index, mask);
 

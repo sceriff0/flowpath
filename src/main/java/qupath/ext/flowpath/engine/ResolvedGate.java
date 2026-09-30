@@ -240,9 +240,7 @@ final class ResolvedGate {
         // Step 2: the cell has a real value on every axis, so now it can be merely extreme.
         if (honourClip && (clipsX(rawX) || (twoAxis && clipsY(rawY)))) return CLIPPED;
 
-        // Step 3: geometry, on the values as measured. There is no second coordinate space:
-        // FlowPath's computed z-score is retired, and a legacy gate still carrying the flag
-        // is converted by LegacyZScoreMigration before it gets here, not honoured here.
+        // Step 3: geometry, on the values as measured. There is no second coordinate space.
         return node.branchFor(rawX, rawY);
     }
 

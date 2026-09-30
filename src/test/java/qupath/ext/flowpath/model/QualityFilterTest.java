@@ -42,7 +42,7 @@ class QualityFilterTest {
     @Test
     void rejectsAreaBelowMin() {
         var qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
         CellIndex idx = index(new double[]{10}, new double[]{0.5}, new double[]{0.9},
                 new double[]{0.0}, new double[]{5000});
         assertFalse(qf.passes(idx, 0));
@@ -51,7 +51,7 @@ class QualityFilterTest {
     @Test
     void rejectsAreaAboveMax() {
         var qf = new QualityFilter();
-        qf.setMaxArea(200);
+        qf.setMax(QualityFilter.AREA, 200);
         CellIndex idx = index(new double[]{300}, new double[]{0.5}, new double[]{0.9},
                 new double[]{0.0}, new double[]{5000});
         assertFalse(qf.passes(idx, 0));
@@ -60,7 +60,7 @@ class QualityFilterTest {
     @Test
     void rejectsEccentricityAboveMax() {
         var qf = new QualityFilter();
-        qf.setMaxEccentricity(0.8);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.8);
         CellIndex idx = index(new double[]{100}, new double[]{0.95}, new double[]{0.9},
                 new double[]{0.0}, new double[]{5000});
         assertFalse(qf.passes(idx, 0));
@@ -69,7 +69,7 @@ class QualityFilterTest {
     @Test
     void rejectsSolidityBelowMin() {
         var qf = new QualityFilter();
-        qf.setMinSolidity(0.7);
+        qf.setMin(QualityFilter.SOLIDITY, 0.7);
         CellIndex idx = index(new double[]{100}, new double[]{0.5}, new double[]{0.3},
                 new double[]{0.0}, new double[]{5000});
         assertFalse(qf.passes(idx, 0));
@@ -78,7 +78,7 @@ class QualityFilterTest {
     @Test
     void rejectsTotalIntensityBelowMin() {
         var qf = new QualityFilter();
-        qf.setMinTotalIntensity(1000);
+        qf.setMin(QualityFilter.TOTAL_INTENSITY, 1000);
         CellIndex idx = index(new double[]{100}, new double[]{0.5}, new double[]{0.9},
                 new double[]{0.0}, new double[]{500});
         assertFalse(qf.passes(idx, 0));
@@ -93,9 +93,9 @@ class QualityFilterTest {
     @Test
     void nanValuesAreSkipped() {
         var qf = new QualityFilter();
-        qf.setMinArea(50);
-        qf.setMaxEccentricity(0.8);
-        qf.setMinSolidity(0.7);
+        qf.setMin(QualityFilter.AREA, 50);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.8);
+        qf.setMin(QualityFilter.SOLIDITY, 0.7);
         CellIndex idx = Cells.of(2)
                 .area(new double[]{100, 100}).absentOn(i -> i == 1)
                 .morphology("Eccentricity", new double[]{0.5, 0.5}).absentOn(i -> i == 1)
@@ -107,8 +107,8 @@ class QualityFilterTest {
     @Test
     void boundaryValuesPass() {
         var qf = new QualityFilter();
-        qf.setMinArea(50);
-        qf.setMaxArea(200);
+        qf.setMin(QualityFilter.AREA, 50);
+        qf.setMax(QualityFilter.AREA, 200);
         // 0.8/0.7: PathObject's measurement list stores floats, and neither is exactly
         // representable in float32, so the double literal here and the float32 value
         // CellIndex reads back round to different bit patterns. This used to miss the
@@ -116,9 +116,9 @@ class QualityFilterTest {
         // compares at float precision (see its javadoc) for exactly this reason, so the
         // values that used to have to be dodged (0.75/0.5, exact in both precisions) are
         // usable here directly.
-        qf.setMaxEccentricity(0.8);
-        qf.setMinSolidity(0.7);
-        qf.setMinTotalIntensity(1000);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.8);
+        qf.setMin(QualityFilter.SOLIDITY, 0.7);
+        qf.setMin(QualityFilter.TOTAL_INTENSITY, 1000);
         CellIndex idx = index(
                 new double[]{50, 200},
                 new double[]{0.8, 0.0},
@@ -132,7 +132,7 @@ class QualityFilterTest {
     @Test
     void rejectsEccentricityBelowMin() {
         var qf = new QualityFilter();
-        qf.setMinEccentricity(0.3);
+        qf.setMin(QualityFilter.ECCENTRICITY, 0.3);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.1, 0.5}, new double[]{0.9, 0.9},
                 new double[]{0.0, 0.0}, new double[]{5000, 5000});
@@ -143,7 +143,7 @@ class QualityFilterTest {
     @Test
     void rejectsSolidityAboveMax() {
         var qf = new QualityFilter();
-        qf.setMaxSolidity(0.8);
+        qf.setMax(QualityFilter.SOLIDITY, 0.8);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.5, 0.5}, new double[]{0.95, 0.7},
                 new double[]{0.0, 0.0}, new double[]{5000, 5000});
@@ -154,7 +154,7 @@ class QualityFilterTest {
     @Test
     void rejectsTotalIntensityAboveMax() {
         var qf = new QualityFilter();
-        qf.setMaxTotalIntensity(3000);
+        qf.setMax(QualityFilter.TOTAL_INTENSITY, 3000);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.5, 0.5}, new double[]{0.9, 0.9},
                 new double[]{0.0, 0.0}, new double[]{5000, 2000});
@@ -165,7 +165,7 @@ class QualityFilterTest {
     @Test
     void rejectsPerimeterBelowMin() {
         var qf = new QualityFilter();
-        qf.setMinPerimeter(10);
+        qf.setMin(QualityFilter.PERIMETER, 10);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.5, 0.5}, new double[]{0.9, 0.9},
                 new double[]{5, 15}, new double[]{5000, 5000});
@@ -176,7 +176,7 @@ class QualityFilterTest {
     @Test
     void rejectsPerimeterAboveMax() {
         var qf = new QualityFilter();
-        qf.setMaxPerimeter(100);
+        qf.setMax(QualityFilter.PERIMETER, 100);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.5, 0.5}, new double[]{0.9, 0.9},
                 new double[]{150, 50}, new double[]{5000, 5000});
@@ -189,11 +189,11 @@ class QualityFilterTest {
         var qf = new QualityFilter();
         // 0.2/0.9: exercises the same float-precision comparison as boundaryValuesPass above,
         // with values that are not exact in float32.
-        qf.setMinEccentricity(0.2);
-        qf.setMaxSolidity(0.9);
-        qf.setMaxTotalIntensity(5000);
-        qf.setMinPerimeter(10);
-        qf.setMaxPerimeter(200);
+        qf.setMin(QualityFilter.ECCENTRICITY, 0.2);
+        qf.setMax(QualityFilter.SOLIDITY, 0.9);
+        qf.setMax(QualityFilter.TOTAL_INTENSITY, 5000);
+        qf.setMin(QualityFilter.PERIMETER, 10);
+        qf.setMax(QualityFilter.PERIMETER, 200);
         CellIndex idx = index(
                 new double[]{100, 100}, new double[]{0.2, 1.0}, new double[]{0.9, 0.0},
                 new double[]{10, 200}, new double[]{5000, 0});
@@ -224,11 +224,11 @@ class QualityFilterTest {
     @Test
     void deepCopyIncludesNewFields() {
         var qf = new QualityFilter();
-        qf.setMinEccentricity(0.3);
-        qf.setMaxSolidity(0.8);
-        qf.setMaxTotalIntensity(3000);
-        qf.setMinPerimeter(10);
-        qf.setMaxPerimeter(200);
+        qf.setMin(QualityFilter.ECCENTRICITY, 0.3);
+        qf.setMax(QualityFilter.SOLIDITY, 0.8);
+        qf.setMax(QualityFilter.TOTAL_INTENSITY, 3000);
+        qf.setMin(QualityFilter.PERIMETER, 10);
+        qf.setMax(QualityFilter.PERIMETER, 200);
         var copy = qf.deepCopy();
         assertEquals(0.3, copy.range(QualityFilter.ECCENTRICITY).min());
         assertEquals(0.8, copy.range(QualityFilter.SOLIDITY).max());

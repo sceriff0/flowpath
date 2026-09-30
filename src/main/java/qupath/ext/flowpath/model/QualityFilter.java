@@ -123,37 +123,15 @@ public class QualityFilter {
         return true;
     }
 
-    // ---- legacy named setters ---------------------------------------------------
-    //
-    // FlowPathSerializer.deserializeQualityFilter addresses these five by name to load
-    // v1..v3 JSON, which is the only remaining production reason they exist. The getters
-    // that used to sit beside them were removed: nothing in src/main called them, and their
-    // per-field fallback (0 for an unset min, 1.0 for an unset max solidity, and so on) was
-    // a translation only the getter performed -- range(slug) is the one representation now,
-    // and an unset bound reads as the open range it is, not a field-specific guessed number.
-
-    private void withMin(String slug, double v) {
+    /** Close the lower bound of {@code slug}, keeping its upper bound. */
+    public void setMin(String slug, double v) {
         setRange(slug, new Range(v, range(slug).max()));
     }
 
-    private void withMax(String slug, double v) {
+    /** Close the upper bound of {@code slug}, keeping its lower bound. */
+    public void setMax(String slug, double v) {
         setRange(slug, new Range(range(slug).min(), v));
     }
-
-    public void setMinArea(double v) { withMin(AREA, v); }
-    public void setMaxArea(double v) { withMax(AREA, v); }
-
-    public void setMinEccentricity(double v) { withMin(ECCENTRICITY, v); }
-    public void setMaxEccentricity(double v) { withMax(ECCENTRICITY, v); }
-
-    public void setMinSolidity(double v) { withMin(SOLIDITY, v); }
-    public void setMaxSolidity(double v) { withMax(SOLIDITY, v); }
-
-    public void setMinPerimeter(double v) { withMin(PERIMETER, v); }
-    public void setMaxPerimeter(double v) { withMax(PERIMETER, v); }
-
-    public void setMinTotalIntensity(double v) { withMin(TOTAL_INTENSITY, v); }
-    public void setMaxTotalIntensity(double v) { withMax(TOTAL_INTENSITY, v); }
 
     /** A deep copy, carrying every range including those for fields FlowPath does not name. */
     public QualityFilter deepCopy() {

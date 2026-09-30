@@ -13,7 +13,6 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
-import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RectangleGate;
@@ -511,8 +510,6 @@ class GateEditorSignalTest {
 
         assertEquals(Statistic.of("Median Z"), gate.getStatistic(),
                 "the gate must now read MIRAGE's own standardised column");
-        assertFalse(gate.isThresholdIsZScore(),
-                "and FlowPath must not standardise an already-standardised column");
     }
 
     // ---- the Values row is what the file offers, and nothing else ----------------
@@ -538,8 +535,6 @@ class GateEditorSignalTest {
         assertTrue(buttons.isEmpty(),
                 "nothing to choose between, so no buttons: " + buttons.stream()
                         .map(RadioButton::getText).toList());
-        assertFalse(gate.isThresholdIsZScore(),
-                "and the gate reads its column as measured");
     }
 
     /** FlowPath's own z-score is not offered anywhere, on any fixture. */
@@ -559,47 +554,5 @@ class GateEditorSignalTest {
                         .map(RadioButton::getText).toList());
     }
 
-    /**
-     * <b>Migrating a gate saved under the retired mode.</b> Its threshold is in standard
-     * deviations. Clearing the flag without converting would leave that number — often
-     * around 1 — compared against a column whose values run to hundreds, so every cell
-     * reads negative: no error, and a gate tree that still looks right. The threshold must
-     * come back to the column's own units, landing on the same cells it did before.
-     * <p>
-     * The conversion is {@link LegacyZScoreMigration}'s, run when the tree meets the index —
-     * not the editor's, which only reached the gates a user happened to open. Opening the
-     * migrated gate must then leave its threshold exactly where the migration put it.
-     */
-    @Test
-    void aGateSavedInTheRetiredZScoreModeIsConvertedBeforeTheEditorSeesIt() {
-        assumeTrue(FxTestSupport.toolkitAvailable());
-        GateNode gate = new GateNode("CD3");
-        gate.setStatistic(Statistic.MEDIAN);
-        gate.setThresholdIsZScore(true);
-
-        // Build the index first so we can express the saved threshold as a real z-score.
-        Fixture probe = editorForZScore(new GateNode("CD3"));
-        MeasuredColumn col = probe.index()
-                .column("CD3", Compartment.WHOLE_CELL, Statistic.MEDIAN, probe.stats());
-        double rawAtP60 = col.percentile(60.0);
-        double savedZ = col.toZScore(rawAtP60);
-        gate.setThreshold(savedZ);
-        GateTree tree = new GateTree();
-        tree.addRoot(gate);
-
-        LegacyZScoreMigration.Result result =
-                LegacyZScoreMigration.migrate(tree, probe.index(), probe.stats());
-        assertEquals(1, result.converted());
-
-        editorForZScore(gate);
-        flushFx();
-
-        assertFalse(gate.isThresholdIsZScore(), "the retired flag must be cleared");
-        assertEquals(rawAtP60, gate.getThreshold(), 1e-6,
-                "and the threshold converted back to the column's own units, so the gate "
-                        + "keeps the cells it had");
-        assertNotEquals(savedZ, gate.getThreshold(), 1e-6,
-                "the fixture must make the two spaces distinguishable");
-    }
 
 }

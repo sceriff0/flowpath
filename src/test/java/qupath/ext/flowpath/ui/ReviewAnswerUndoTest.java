@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.engine.AlignmentLookup;
@@ -200,7 +201,7 @@ class ReviewAnswerUndoTest {
         drag(650, true);
 
         session.recordEditCoalesced(GatingSession.EditSource.QUALITY_FILTER);
-        session.tree().getQualityFilter().setMinArea(25);
+        session.tree().getQualityFilter().setMin(QualityFilter.AREA, 25);
         session.settle();
         assertNull(flow.active(), "the filter edit closed the item");
         assertEquals(1, ended.get());

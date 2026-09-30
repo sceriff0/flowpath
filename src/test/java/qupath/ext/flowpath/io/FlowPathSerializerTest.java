@@ -41,7 +41,6 @@ class FlowPathSerializerTest {
         GateNode loadedRoot = loaded.getRoots().get(0);
         assertEquals("CD45", loadedRoot.getChannel());
         assertEquals(1.5, loadedRoot.getThreshold());
-        assertFalse(loadedRoot.isThresholdIsZScore());
         assertEquals("Immune+", loadedRoot.getPositiveName());
         assertEquals("Immune-", loadedRoot.getNegativeName());
         assertEquals((0 << 16) | (255 << 8) | 0, loadedRoot.getPositiveColor());
@@ -81,11 +80,11 @@ class FlowPathSerializerTest {
     void qualityFilterRoundTrip() throws IOException {
         var tree = new GateTree();
         var qf = new QualityFilter();
-        qf.setMinArea(25);
-        qf.setMaxArea(500);
-        qf.setMinTotalIntensity(100);
-        qf.setMaxEccentricity(0.9);
-        qf.setMinSolidity(0.5);
+        qf.setMin(QualityFilter.AREA, 25);
+        qf.setMax(QualityFilter.AREA, 500);
+        qf.setMin(QualityFilter.TOTAL_INTENSITY, 100);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.9);
+        qf.setMin(QualityFilter.SOLIDITY, 0.5);
         tree.setQualityFilter(qf);
         tree.addRoot(new GateNode("CD45"));
 
@@ -107,37 +106,6 @@ class FlowPathSerializerTest {
         assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).max());
     }
 
-    @Test
-    void legacyHideOutliersKeyLoadsAsExcludeOutliers() throws IOException {
-        // Simulate a v1 JSON with the old "hideOutliers" key
-        String json = """
-                {
-                  "version": 1,
-                  "qualityFilter": {},
-                  "gates": [
-                    {
-                      "channel": "CD45",
-                      "threshold": 0.0,
-                      "thresholdIsZScore": true,
-                      "positiveName": "CD45+",
-                      "negativeName": "CD45-",
-                      "positiveColor": [0, 200, 0],
-                      "negativeColor": [128, 128, 128],
-                      "hideOutliers": true,
-                      "positiveChildren": [],
-                      "negativeChildren": []
-                    }
-                  ]
-                }
-                """;
-        File file = tempDir.resolve("legacy.json").toFile();
-        try (var writer = new BufferedWriter(new FileWriter(file))) {
-            writer.write(json);
-        }
-
-        GateTree loaded = FlowPathSerializer.load(file);
-        assertTrue(loaded.getRoots().get(0).isExcludeOutliers());
-    }
 
     /**
      * A statistic FlowPath does not ship a constant for must survive a save/load cycle.
@@ -164,18 +132,22 @@ class FlowPathSerializerTest {
                 "an unrecognised statistic must not be silently downgraded to Mean");
     }
 
-    /** Workspaces written by the closed-enum version spelled the statistic {@code "MEDIAN"}. */
+    /** A statistic token is read case-insensitively: {@code "MEDIAN"} is {@code Median}. */
     @Test
     void aStatisticWrittenAsAnEnumNameStillLoads() throws IOException {
         String json = """
                 {
-                  "version": 1,
-                  "qualityFilter": {},
+                  "version": 5,
+                  "qualityFilter": {"ranges": {}},
                   "gates": [
                     {
+                      "type": "threshold",
+                      "clipPercentileLow": 1.0,
+                      "clipPercentileHigh": 99.0,
+                      "excludeOutliers": false,
+                      "correctStaining": false,
                       "channel": "CD45",
                       "threshold": 0.0,
-                      "thresholdIsZScore": true,
                       "compartment": "NUCLEAR",
                       "statistic": "MEDIAN",
                       "positiveName": "CD45+",
@@ -197,38 +169,6 @@ class FlowPathSerializerTest {
                 "parsing is case-insensitive, so MEDIAN and Median are the same statistic");
     }
 
-    /**
-     * A v1 workspace has no statistic property at all. Mean is the right answer there and
-     * only there: the bare column genuinely is the whole-cell mean.
-     */
-    @Test
-    void anAbsentStatisticPropertyStillMeansMean() throws IOException {
-        String json = """
-                {
-                  "version": 1,
-                  "qualityFilter": {},
-                  "gates": [
-                    {
-                      "channel": "CD45",
-                      "threshold": 0.0,
-                      "thresholdIsZScore": true,
-                      "positiveName": "CD45+",
-                      "negativeName": "CD45-",
-                      "positiveColor": [0, 200, 0],
-                      "negativeColor": [128, 128, 128],
-                      "positiveChildren": [],
-                      "negativeChildren": []
-                    }
-                  ]
-                }
-                """;
-        File file = tempDir.resolve("v1.json").toFile();
-        try (var writer = new BufferedWriter(new FileWriter(file))) {
-            writer.write(json);
-        }
-
-        assertEquals(Statistic.MEAN, FlowPathSerializer.load(file).getRoots().get(0).getStatistic());
-    }
 
     @Test
     void futureVersionThrowsIOException() throws IOException {
@@ -263,16 +203,16 @@ class FlowPathSerializerTest {
     void qualityFilterNewFieldsRoundTrip() throws IOException {
         var tree = new GateTree();
         var qf = new QualityFilter();
-        qf.setMinArea(25);
-        qf.setMaxArea(500);
-        qf.setMinEccentricity(0.2);
-        qf.setMaxEccentricity(0.9);
-        qf.setMinSolidity(0.3);
-        qf.setMaxSolidity(0.85);
-        qf.setMinTotalIntensity(100);
-        qf.setMaxTotalIntensity(8000);
-        qf.setMinPerimeter(10);
-        qf.setMaxPerimeter(300);
+        qf.setMin(QualityFilter.AREA, 25);
+        qf.setMax(QualityFilter.AREA, 500);
+        qf.setMin(QualityFilter.ECCENTRICITY, 0.2);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.9);
+        qf.setMin(QualityFilter.SOLIDITY, 0.3);
+        qf.setMax(QualityFilter.SOLIDITY, 0.85);
+        qf.setMin(QualityFilter.TOTAL_INTENSITY, 100);
+        qf.setMax(QualityFilter.TOTAL_INTENSITY, 8000);
+        qf.setMin(QualityFilter.PERIMETER, 10);
+        qf.setMax(QualityFilter.PERIMETER, 300);
         tree.setQualityFilter(qf);
         tree.addRoot(new GateNode("CD45"));
 
@@ -293,68 +233,7 @@ class FlowPathSerializerTest {
         assertEquals(300, lqf.range(QualityFilter.PERIMETER).max());
     }
 
-    @Test
-    void qualityFilterBackwardCompatMissingNewFields() throws IOException {
-        String json = """
-                {
-                  "version": 1,
-                  "qualityFilter": {
-                    "minArea": 50,
-                    "maxArea": 1000,
-                    "minTotalIntensity": 200,
-                    "maxEccentricity": 0.8,
-                    "minSolidity": 0.5
-                  },
-                  "gates": []
-                }
-                """;
-        File file = tempDir.resolve("old_qf.json").toFile();
-        try (var w = new java.io.BufferedWriter(new java.io.FileWriter(file))) { w.write(json); }
-        GateTree loaded = FlowPathSerializer.load(file);
-        QualityFilter lqf = loaded.getQualityFilter();
-        assertEquals(50, lqf.range(QualityFilter.AREA).min());
-        assertEquals(1000, lqf.range(QualityFilter.AREA).max());
-        assertEquals(200, lqf.range(QualityFilter.TOTAL_INTENSITY).min());
-        assertEquals(0.8, lqf.range(QualityFilter.ECCENTRICITY).max());
-        assertEquals(0.5, lqf.range(QualityFilter.SOLIDITY).min());
-        // New fields left unconstrained -- this legacy JSON never mentions them
-        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.ECCENTRICITY).min());
-        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.SOLIDITY).max());
-        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.TOTAL_INTENSITY).max());
-        assertEquals(Double.NEGATIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).min());
-        assertEquals(Double.POSITIVE_INFINITY, lqf.range(QualityFilter.PERIMETER).max());
-    }
 
-    @Test
-    void legacyRoiFilterNameIsIgnored() throws IOException {
-        String json = """
-                {
-                  "version": 1,
-                  "qualityFilter": {},
-                  "roiFilterName": "Annotation 1",
-                  "gates": [
-                    {
-                      "channel": "CD45",
-                      "threshold": 0.0,
-                      "thresholdIsZScore": true,
-                      "positiveName": "CD45+",
-                      "negativeName": "CD45-",
-                      "positiveColor": [0, 200, 0],
-                      "negativeColor": [128, 128, 128],
-                      "positiveChildren": [],
-                      "negativeChildren": []
-                    }
-                  ]
-                }
-                """;
-        File file = tempDir.resolve("legacy_roi.json").toFile();
-        try (var writer = new BufferedWriter(new FileWriter(file))) {
-            writer.write(json);
-        }
-
-        GateTree loaded = FlowPathSerializer.load(file);
-        assertFalse(loaded.isRoiFilterEnabled());
-    }
 
     @Test
     void gateWithNoChannelRoundTripsInsteadOfThrowing() throws IOException {
@@ -378,8 +257,11 @@ class FlowPathSerializerTest {
         File file = tempDir.resolve("explicit-null.json").toFile();
         try (BufferedWriter w = new BufferedWriter(new FileWriter(file))) {
             w.write("""
-                    {"version": 3, "gates": [
-                      {"type": "threshold", "channel": null, "threshold": 0.0}
+                    {"version": 5, "gates": [
+                      {"type": "threshold", "channel": null, "threshold": 0.0,
+                       "clipPercentileLow": 1.0, "clipPercentileHigh": 99.0,
+                       "excludeOutliers": false, "correctStaining": false,
+                       "compartment": "WHOLE_CELL", "statistic": "Mean"}
                     ]}""");
         }
 

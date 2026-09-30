@@ -12,7 +12,6 @@ class GateNodeTest {
         var node = new GateNode("CD45", 1.5);
         assertEquals("CD45", node.getChannel());
         assertEquals(1.5, node.getThreshold());
-        assertFalse(node.isThresholdIsZScore(), "new gates compare the column as measured");
         assertEquals("CD45+", node.getPositiveName());
         assertEquals("CD45-", node.getNegativeName());
     }
@@ -21,7 +20,6 @@ class GateNodeTest {
     void singleArgConstructorDefaultsThresholdToZero() {
         var node = new GateNode("CD3");
         assertEquals(0.0, node.getThreshold());
-        assertFalse(node.isThresholdIsZScore());
     }
 
     @Test
@@ -69,12 +67,10 @@ class GateNodeTest {
         node.setClipPercentileLow(2.0);
         node.setClipPercentileHigh(98.0);
         node.setExcludeOutliers(true);
-        node.setThresholdIsZScore(true);   // a legacy gate not yet migrated
 
         var copy = node.deepCopy();
         assertEquals("CD45", copy.getChannel());
         assertEquals(1.5, copy.getThreshold());
-        assertTrue(copy.isThresholdIsZScore());
         assertEquals("Immune+", copy.getPositiveName());
         assertEquals("Immune-", copy.getNegativeName());
         assertEquals(0xFF0000, copy.getPositiveColor());

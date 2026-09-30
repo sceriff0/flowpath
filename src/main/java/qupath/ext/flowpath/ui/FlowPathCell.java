@@ -368,9 +368,7 @@ public class FlowPathCell extends TreeCell<Object> {
         });
 
         if (node instanceof QuadrantGate qg) {
-            String threshText = qg.isThresholdIsZScore()
-                    ? String.format("X:%.2f Y:%.2f", qg.getThresholdX(), qg.getThresholdY())
-                    : String.format("X=%.2f Y=%.2f", qg.getThresholdX(), qg.getThresholdY());
+            String threshText = String.format("X=%.2f Y=%.2f", qg.getThresholdX(), qg.getThresholdY());
 
             bar.getChildren().add(enabledBox);
             addAxisLabels(bar, qg.getChannelX(), qg.getCompartmentX(), qg.getStatisticX(),
@@ -386,9 +384,7 @@ public class FlowPathCell extends TreeCell<Object> {
                     rg.getChannelY(), rg.getCompartmentY(), rg.getStatisticY());
             bar.getChildren().add(detailLabel(regionTypeName(rg), 10));
         } else {
-            String thresholdText = node.isThresholdIsZScore()
-                    ? String.format("z = %.3f", node.getThreshold())
-                    : String.format("t = %.3f", node.getThreshold());
+            String thresholdText = String.format("t = %.3f", node.getThreshold());
 
             Label badge = compartmentBadge(node.getCompartment(), node.getStatistic());
             bar.getChildren().add(enabledBox);

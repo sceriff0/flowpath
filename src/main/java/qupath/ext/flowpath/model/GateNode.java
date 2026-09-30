@@ -41,19 +41,11 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     private double clipPercentileLow = 1.0;
     private double clipPercentileHigh = 99.0;
     private boolean excludeOutliers = false;
-    // The retired computed z-score. Nothing classifies or draws in a z-space any more --
-    // every gate compares against the column as measured (see ValueMode) -- so this is
-    // true only on a gate read from a file saved before that change, and only until
-    // LegacyZScoreMigration converts its numbers the first time the tree meets an index.
-    // New gates never carry it. Declared once, for every gate type, so the migration has
-    // one variable to read.
-    private boolean thresholdIsZScore = false;
 
     // Per-slide decisions, keyed by ProjectImageEntry.getID(). On the node so every structural
     // edit carries them; see SlideSetting.
     private Map<String, SlideSetting> slideSettings = new LinkedHashMap<>();
-    // New gates correct for staining; the serializer loads a legacy (v1-v3) gate with false so
-    // opening an old tree never changes a number.
+    // New gates correct for staining.
     private boolean correctStaining = true;
     // Marks a threshold gate's marker as a lineage marker: every pair of ticked threshold gates
     // is an exclusive marker rule (cohort/MarkerRules). Off by default; serialised only when set.
@@ -268,14 +260,6 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
     public double getThreshold() { return threshold; }
     public void setThreshold(double threshold) { this.threshold = threshold; }
 
-    /**
-     * Whether this gate still holds numbers in the retired computed z-space. Read only by
-     * {@link LegacyZScoreMigration}; set only by the serializer reading a legacy file (and by
-     * the migration, clearing it). The engine ignores it.
-     */
-    public boolean isThresholdIsZScore() { return thresholdIsZScore; }
-    public void setThresholdIsZScore(boolean v) { this.thresholdIsZScore = v; }
-
     public Compartment getCompartment() { return compartment; }
     public void setCompartment(Compartment c) { this.compartment = c != null ? c : Compartment.WHOLE_CELL; }
 
@@ -332,7 +316,6 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
         target.clipPercentileLow = this.clipPercentileLow;
         target.clipPercentileHigh = this.clipPercentileHigh;
         target.excludeOutliers = this.excludeOutliers;
-        target.thresholdIsZScore = this.thresholdIsZScore;
         target.compartment = this.compartment;
         target.statistic = this.statistic;
         target.slideSettings = new LinkedHashMap<>(this.slideSettings);
@@ -367,7 +350,6 @@ public sealed class GateNode permits QuadrantGate, Region2DGate {
         GateNode copy = new GateNode();
         copy.channel = this.channel;
         copy.threshold = this.threshold;
-        copy.thresholdIsZScore = this.thresholdIsZScore;
         copySharedFieldsTo(copy);
         copyBranchesTo(copy);
         return copy;

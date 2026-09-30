@@ -27,14 +27,12 @@ final class EditorRebuild {
      *
      * @param newIndex      the cells changed (an image read, a re-read or a clear): channel
      *                      lists and the columns every control was built from are different
-     * @param treeRewritten a legacy migration rewrote gates in place, so the controls show
-     *                      values the gate no longer has
      * @param shown         the gate the editor shows now, or {@code null}
      * @param selected      the gate that should be shown after the resync, as returned by
      *                      {@link #surviving}
      */
-    static boolean needed(boolean newIndex, boolean treeRewritten, GateNode shown, GateNode selected) {
-        return newIndex || treeRewritten || shown != selected;
+    static boolean needed(boolean newIndex, GateNode shown, GateNode selected) {
+        return newIndex || shown != selected;
     }
 
     /**

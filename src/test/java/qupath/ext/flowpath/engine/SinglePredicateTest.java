@@ -56,12 +56,11 @@ class SinglePredicateTest {
     }
 
     /** Unique branch names, and axes pinned to the bare marker column the index carries. */
-    private static <T extends GateNode> T prepare(T gate, boolean zScore) {
+    private static <T extends GateNode> T prepare(T gate) {
         List<Branch> branches = gate.getBranches();
         for (int i = 0; i < branches.size(); i++) {
             branches.get(i).setName("B" + i);
         }
-        gate.setThresholdIsZScore(zScore);
         if (gate instanceof Region2DGate region) {
             region.setCompartmentX(Compartment.WHOLE_CELL); region.setStatisticX(Statistic.MEAN);
             region.setCompartmentY(Compartment.WHOLE_CELL); region.setStatisticY(Statistic.MEAN);
@@ -91,35 +90,33 @@ class SinglePredicateTest {
     // ---- the walk ----
 
     @Test
-    void theTreeWalkAgreesWithBranchOfForEveryGateTypeAndBothCoordinateSpaces() {
+    void theTreeWalkAgreesWithBranchOfForEveryGateType() {
         CellIndex index = randomIndex(500, 4242L);
 
-        for (boolean zScore : new boolean[]{false, true}) {
-            for (GateNode gate : everyGateType()) {
-                prepare(gate, zScore);
-                GateTree tree = new GateTree();
-                tree.setQualityFilter(null);   // outliers here must come only from gate clipping
-                tree.addRoot(gate);
-                MarkerStats stats = MarkerStats.compute(index);
+        for (GateNode gate : everyGateType()) {
+            prepare(gate);
+            GateTree tree = new GateTree();
+            tree.setQualityFilter(null);   // outliers here must come only from gate clipping
+            tree.addRoot(gate);
+            MarkerStats stats = MarkerStats.compute(index);
 
-                // The predicate, compiled exactly the way assignAll compiles it.
-                ResolvedGate rg = ResolvedGate.compile(tree.getRoots(), index, stats, null).get(0);
-                GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
+            // The predicate, compiled exactly the way assignAll compiles it.
+            ResolvedGate rg = ResolvedGate.compile(tree.getRoots(), index, stats, null).get(0);
+            GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats);
 
-                int[] expectedCounts = new int[gate.getBranches().size()];
-                for (int i = 0; i < index.size(); i++) {
-                    int branch = rg.branchOf(i);
-                    String where = gate.getGateType() + (zScore ? " (z)" : " (raw)") + " cell " + i;
-                    assertEquals(branch < 0, result.getOutlier()[i], where + ": outlier flag");
-                    int landed = branch < 0 ? rg.branchIgnoringClip(i) : branch;
-                    assertEquals(gate.getBranches().get(landed).getName(), result.getPhenotypes()[i],
-                            where + ": phenotype");
-                    if (branch >= 0) expectedCounts[landed]++;
-                }
-                for (int b = 0; b < expectedCounts.length; b++) {
-                    assertEquals(expectedCounts[b], gate.getBranches().get(b).getCount(),
-                            gate.getGateType() + " branch " + b + " count");
-                }
+            int[] expectedCounts = new int[gate.getBranches().size()];
+            for (int i = 0; i < index.size(); i++) {
+                int branch = rg.branchOf(i);
+                String where = gate.getGateType() + " cell " + i;
+                assertEquals(branch < 0, result.getOutlier()[i], where + ": outlier flag");
+                int landed = branch < 0 ? rg.branchIgnoringClip(i) : branch;
+                assertEquals(gate.getBranches().get(landed).getName(), result.getPhenotypes()[i],
+                        where + ": phenotype");
+                if (branch >= 0) expectedCounts[landed]++;
+            }
+            for (int b = 0; b < expectedCounts.length; b++) {
+                assertEquals(expectedCounts[b], gate.getBranches().get(b).getCount(),
+                        gate.getGateType() + " branch " + b + " count");
             }
         }
     }
@@ -127,7 +124,7 @@ class SinglePredicateTest {
     @Test
     void outlierClippingStillLandsTheCellInTheBranchThePredicateNames() {
         CellIndex index = randomIndex(400, 99L);
-        GateNode gate = prepare(new GateNode("A", 0.0), false);
+        GateNode gate = prepare(new GateNode("A", 0.0));
         gate.setExcludeOutliers(true);
         gate.setClipPercentileLow(20);
         gate.setClipPercentileHigh(80);
@@ -171,8 +168,8 @@ class SinglePredicateTest {
         absent.add(new EllipseGate("ABSENT", "ABSENT", 0, 0, 1.5, 0.75));
 
         for (GateNode gate : absent) {
-            prepare(gate, false);
-            GateNode child = prepare(new GateNode("A", 0.0), false);
+            prepare(gate);
+            GateNode child = prepare(new GateNode("A", 0.0));
             gate.getBranches().get(0).getChildren().add(child);
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
@@ -217,8 +214,8 @@ class SinglePredicateTest {
         GateNode noChannel = new GateNode();   // no-arg: channel is null
 
         for (GateNode gate : List.of(missingY, missingX, noChannel)) {
-            prepare(gate, false);
-            GateNode child = prepare(new GateNode("A", 0.0), false);
+            prepare(gate);
+            GateNode child = prepare(new GateNode("A", 0.0));
             gate.getBranches().get(0).getChildren().add(child);
             GateTree tree = new GateTree();
             tree.setQualityFilter(null);
@@ -246,20 +243,19 @@ class SinglePredicateTest {
 
     @Test
     void csvSignAgreesWithBranchOfForAOneDimensionalCut() throws IOException {
-        assertSignMatchesBranch(prepare(new GateNode("A", 0.4), false), "A");
-        assertSignMatchesBranch(prepare(new GateNode("A", 0.4), true), "A");
+        assertSignMatchesBranch(prepare(new GateNode("A", 0.4)), "A");
     }
 
     @Test
     void csvSignAgreesWithBranchOfForARegionGate() throws IOException {
-        assertSignMatchesBranch(prepare(new RectangleGate("A", "B", -1, 1, -1, 1), false), "A");
-        assertSignMatchesBranch(prepare(new EllipseGate("A", "B", 0, 0, 1.5, 0.75), true), "B");
+        assertSignMatchesBranch(prepare(new RectangleGate("A", "B", -1, 1, -1, 1)), "A");
+        assertSignMatchesBranch(prepare(new EllipseGate("A", "B", 0, 0, 1.5, 0.75)), "B");
     }
 
     @Test
     void csvSignAgreesWithBranchOfForAQuadrantAxis() throws IOException {
-        assertSignMatchesBranch(prepare(new QuadrantGate("A", "B", 0.5, -0.5), false), "A");
-        assertSignMatchesBranch(prepare(new QuadrantGate("A", "B", 0.5, -0.5), false), "B");
+        assertSignMatchesBranch(prepare(new QuadrantGate("A", "B", 0.5, -0.5)), "A");
+        assertSignMatchesBranch(prepare(new QuadrantGate("A", "B", 0.5, -0.5)), "B");
     }
 
     /**

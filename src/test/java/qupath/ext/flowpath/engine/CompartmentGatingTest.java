@@ -6,7 +6,6 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
-import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.Statistic;
@@ -73,39 +72,6 @@ class CompartmentGatingTest {
         assertEquals("CD3+", ph[1]);
     }
 
-    @Test
-    void legacyZScoreMigrationUsesResolvedColumnStatsNotBare() {
-        // A legacy gate saved at z = 0 on the NUCLEAR column [100, 1] (mean 50.5) must
-        // convert through that column's statistics: A (100) positive, B (1) negative.
-        // Converting through the bare whole-cell column [50, 50] would have no spread to
-        // convert with at all.
-        CellIndex index = twoCellIndex();
-        MarkerStats stats = MarkerStats.compute(index, Cells.allTrue(index.size()));
-        GateNode gate = new GateNode("CD3", 0.0);
-        gate.setThresholdIsZScore(true);
-        gate.setCompartment(Compartment.NUCLEAR);
-        gate.setStatistic(Statistic.MEAN);   // data carries Nucleus Mean, not Median
-        GateTree tree = new GateTree();
-        tree.setQualityFilter(null);
-        tree.addRoot(gate);
-
-        LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(tree, index, stats);
-
-        assertEquals(1, result.converted());
-        assertEquals(50.5, gate.getThreshold(), 1e-9, "z = 0 is the nuclear column's mean");
-        String[] ph = GatingEngine.assignAll(tree, index, stats).getPhenotypes();
-        assertEquals("CD3+", ph[0]);
-        assertEquals("CD3-", ph[1]);
-
-        // Sanity: the whole-cell column has no spread, so a whole-cell legacy gate cannot be
-        // converted, and is reported rather than silently moved.
-        GateNode wc = new GateNode("CD3", 0.0);
-        wc.setThresholdIsZScore(true);
-        wc.setStatistic(Statistic.MEAN);   // whole-cell mean resolves to bare "CD3"
-        GateTree wcTree = new GateTree();
-        wcTree.addRoot(wc);
-        assertEquals(List.of(wc), LegacyZScoreMigration.migrate(wcTree, index, stats).unconvertible());
-    }
 
     @Test
     void quadrantPerAxisCompartments() {

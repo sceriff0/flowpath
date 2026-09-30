@@ -41,36 +41,12 @@ import java.util.Map;
  */
 public class FlowPathSerializer {
 
-    // v2 adds per-channel compartment + statistic on threshold and quadrant gates.
-    // v3 extends the same to the 2D region gates (polygon / rectangle / ellipse).
-    // Older files load unchanged: a missing compartment defaults to whole-cell and a
-    // missing statistic to mean, which is exactly how those gates used to behave.
-    //
-    // The "meta" block added alongside v3 deliberately did NOT bump this. It is pure
-    // provenance -- nothing in it changes how a gate resolves -- so a file carrying it is
-    // structurally a v3 file and an older FlowPath can still load it. Bumping would have
-    // made those readers throw "Unsupported gate tree version" over a block they were
-    // free to ignore.
-    //
-    // v4 adds per-slide cohort settings (SlideSetting, keyed by slide id) and the flag
-    // controlling whether a gate corrects for staining, on every node, plus an optional
-    // tree-level reference slide id. A file written before v4 carries none of this: correction
-    // loads off (see deserializeNode) so opening an old tree never changes a number, and a gate
-    // with no "slideSettings" key simply has none.
-    //
-    // A tree that uses none of v4's cohort state is still written as version 3 (final review
-    // M2), so FlowPath 0.9.4 — which refuses anything above 3 — opens every tree a user who
-    // never touched a cohort saves. "Uses cohort state" means a field an older reader would drop
-    // with a consequence: a reference slide, recorded slide names, any per-slide setting (a Manual
-    // or Skip silently lost would move that slide's number), a lineage tick. See versionFor.
-    // correctStaining is deliberately not among them: it is written on every gate at every
-    // version, and a reader reads the key whenever it is present, whatever the version. Without a
-    // reference slide it changes no number anywhere, so an old reader ignoring it loses nothing,
-    // while this reader keeps the gate's own setting (new gates default on) instead of reading a
-    // tree it wrote itself as a legacy one. Only a gate with no key at all — a file written
-    // before v4 — loads with correction off, so opening an old tree still never changes a number.
-    private static final int CURRENT_VERSION = 4;
-    private static final int PRE_COHORT_VERSION = 3;
+    // One format, one version. FlowPath 0.10.0 dropped every older reader: a file written by an
+    // earlier FlowPath is refused with a message naming its version rather than half-read, because
+    // each older format needed a conversion (z-score thresholds, unnamespaced filter keys, missing
+    // compartments) whose absence would load plausible, wrong numbers without an error.
+    // Every field is written on every save and required on every load.
+    static final int CURRENT_VERSION = 5;
 
     private FlowPathSerializer() {
         // static utility class
@@ -145,7 +121,7 @@ public class FlowPathSerializer {
     /** The saved document; {@code meta} is omitted when null. */
     private static JsonObject serializeTree(GateTree tree, JsonObject meta) {
         JsonObject root = new JsonObject();
-        root.addProperty("version", versionFor(tree));
+        root.addProperty("version", CURRENT_VERSION);
         if (meta != null) root.add("meta", meta);
         root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
         root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
@@ -157,28 +133,6 @@ public class FlowPathSerializer {
         }
         root.add("gates", serializeNodeList(tree.getRoots()));
         return root;
-    }
-
-    /**
-     * The version a tree is written as: {@value #CURRENT_VERSION} when it carries any cohort state
-     * an older reader would drop with a consequence — a reference slide, recorded slide names, a
-     * per-slide setting or a lineage tick on any gate, enabled or not — else
-     * {@value #PRE_COHORT_VERSION}, which FlowPath 0.9.4 still opens. See the note on
-     * {@code CURRENT_VERSION} for why {@code correctStaining} is not in the list.
-     */
-    static int versionFor(GateTree tree) {
-        if (tree.getReferenceSlideId() != null || !tree.getSlideNames().isEmpty()) return CURRENT_VERSION;
-        return usesCohortState(tree.getRoots()) ? CURRENT_VERSION : PRE_COHORT_VERSION;
-    }
-
-    private static boolean usesCohortState(List<GateNode> nodes) {
-        for (GateNode node : nodes) {
-            if (!node.getSlideSettings().isEmpty() || node.isLineageMarker()) return true;
-            for (Branch b : node.getBranches()) {
-                if (usesCohortState(b.getChildren())) return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -255,10 +209,20 @@ public class FlowPathSerializer {
     }
 
     private static GateTree parseGateTree(JsonObject root) throws IOException {
-        int version = root.has("version") ? root.get("version").getAsInt() : 1;
+        if (!root.has("version")) {
+            throw new IOException("Not a FlowPath " + CURRENT_VERSION + " gate tree: the file has no version. "
+                    + "It was saved by a FlowPath older than 0.10.0, which this version no longer reads.");
+        }
+        int version = root.get("version").getAsInt();
         if (version > CURRENT_VERSION) {
             throw new IOException("Unsupported gate tree version: " + version
-                    + " (maximum supported: " + CURRENT_VERSION + ")");
+                    + " (maximum supported: " + CURRENT_VERSION + "). "
+                    + "This file may have been created by a newer version of FlowPath.");
+        }
+        if (version < CURRENT_VERSION) {
+            throw new IOException("This gate tree was saved by a FlowPath older than 0.10.0 (format version "
+                    + version + "), which this version no longer reads. Re-create the gates, or open the "
+                    + "file in the FlowPath that saved it to read its thresholds.");
         }
 
         GateTree tree = new GateTree();
@@ -272,8 +236,8 @@ public class FlowPathSerializer {
         }
 
         tree.setReferenceSlideId(optString(root, "referenceSlideId"));
-        // Optional within version 4: a file saved before it existed loads with no names, which
-        // CohortIdentity treats as matching any project (nothing recorded to contradict).
+        // Absent when the tree never met a project: no names, which CohortIdentity treats as
+        // matching any project (nothing recorded to contradict).
         if (root.has("slideNames") && root.get("slideNames").isJsonObject()) {
             Map<String, String> names = new LinkedHashMap<>();
             for (var e : root.getAsJsonObject("slideNames").entrySet()) {
@@ -293,28 +257,9 @@ public class FlowPathSerializer {
     //  Quality filter
     // -----------------------------------------------------------------------
 
-    /**
-     * The quality filter, as one entry per constrained field.
-     * <p>
-     * The five legacy {@code minArea}/{@code maxArea}/... properties are still written, so
-     * a file stays readable by an older FlowPath, and a {@code "ranges"} object carries
-     * the full set including fields FlowPath has no name for. A reader that understands
-     * only the legacy keys loses the extra constraints but reads the rest correctly, which
-     * is the right failure: it under-filters visibly rather than mis-filtering silently.
-     */
+    /** The quality filter, as one entry per constrained field. */
     private static JsonObject serializeQualityFilter(QualityFilter qf) {
         JsonObject obj = new JsonObject();
-        // Legacy keys carry only bounds that are actually set. They used to be written from
-        // the legacy getters, which report an open bound as 0 / 1.0 / Double.MAX_VALUE, and
-        // an unconstrained filter reloaded as five closed ranges -- excluding, among others,
-        // every cell with a negative total intensity. An older reader treats an absent key
-        // as its own default, which is the same "no constraint".
-        writeLegacyBounds(obj, qf, QualityFilter.AREA, "minArea", "maxArea");
-        writeLegacyBounds(obj, qf, QualityFilter.ECCENTRICITY, "minEccentricity", "maxEccentricity");
-        writeLegacyBounds(obj, qf, QualityFilter.SOLIDITY, "minSolidity", "maxSolidity");
-        writeLegacyBounds(obj, qf, QualityFilter.TOTAL_INTENSITY, "minTotalIntensity", "maxTotalIntensity");
-        writeLegacyBounds(obj, qf, QualityFilter.PERIMETER, "minPerimeter", "maxPerimeter");
-
         JsonObject ranges = new JsonObject();
         qf.ranges().forEach((slug, range) -> {
             JsonObject r = new JsonObject();
@@ -324,13 +269,6 @@ public class FlowPathSerializer {
         });
         obj.add("ranges", ranges);
         return obj;
-    }
-
-    private static void writeLegacyBounds(JsonObject obj, QualityFilter qf, String slug,
-                                          String minKey, String maxKey) {
-        QualityFilter.Range r = qf.range(slug);
-        if (r.min() > Double.NEGATIVE_INFINITY) obj.addProperty(minKey, r.min());
-        if (r.max() < Double.POSITIVE_INFINITY) obj.addProperty(maxKey, r.max());
     }
 
     private static void readRanges(JsonObject ranges, QualityFilter qf) {
@@ -343,28 +281,12 @@ public class FlowPathSerializer {
         }
     }
 
-    private static QualityFilter deserializeQualityFilter(JsonObject obj) {
-        QualityFilter qf = new QualityFilter();
-        // A file that carries "ranges" was written by a FlowPath that writes the full set
-        // there, so it is authoritative and the legacy keys beside it are only for older
-        // readers. Reading both let a legacy key close a bound "ranges" had left open.
-        if (obj.has("ranges") && obj.get("ranges").isJsonObject()) {
-            readRanges(obj.getAsJsonObject("ranges"), qf);
-            return qf;
+    private static QualityFilter deserializeQualityFilter(JsonObject obj) throws IOException {
+        if (!obj.has("ranges") || !obj.get("ranges").isJsonObject()) {
+            throw new IOException("Invalid FlowPath file structure: the quality filter has no \"ranges\" object");
         }
-        // Legacy properties only, so a v1..v3 file loads exactly as it did.
-        if (obj.has("minArea")) qf.setMinArea(obj.get("minArea").getAsDouble());
-        if (obj.has("maxArea")) qf.setMaxArea(obj.get("maxArea").getAsDouble());
-        if (obj.has("minEccentricity")) qf.setMinEccentricity(obj.get("minEccentricity").getAsDouble());
-        if (obj.has("maxEccentricity")) qf.setMaxEccentricity(obj.get("maxEccentricity").getAsDouble());
-        if (obj.has("minSolidity")) qf.setMinSolidity(obj.get("minSolidity").getAsDouble());
-        if (obj.has("maxSolidity")) qf.setMaxSolidity(obj.get("maxSolidity").getAsDouble());
-        if (obj.has("minTotalIntensity")) qf.setMinTotalIntensity(obj.get("minTotalIntensity").getAsDouble());
-        if (obj.has("maxTotalIntensity")) qf.setMaxTotalIntensity(obj.get("maxTotalIntensity").getAsDouble());
-        if (obj.has("minPerimeter")) qf.setMinPerimeter(obj.get("minPerimeter").getAsDouble());
-        if (obj.has("maxPerimeter")) qf.setMaxPerimeter(obj.get("maxPerimeter").getAsDouble());
-
-        // "hideFiltered" silently ignored for backward compat with v1 files
+        QualityFilter qf = new QualityFilter();
+        readRanges(obj.getAsJsonObject("ranges"), qf);
         return qf;
     }
 
@@ -438,7 +360,6 @@ public class FlowPathSerializer {
             obj.addProperty("channelY", qg.getChannelY());
             obj.addProperty("thresholdX", qg.getThresholdX());
             obj.addProperty("thresholdY", qg.getThresholdY());
-            writeLegacyZScoreFlag(obj, qg);
             obj.addProperty("compartmentX", qg.getCompartmentX().name());
             obj.addProperty("compartmentY", qg.getCompartmentY().name());
             obj.addProperty("statisticX", qg.getStatisticX().token());
@@ -462,7 +383,6 @@ public class FlowPathSerializer {
             // user's work was already on disk. See the refusal below.
             obj.addProperty("channel", node.getChannel());
             obj.addProperty("threshold", node.getThreshold());
-            writeLegacyZScoreFlag(obj, node);
             obj.addProperty("compartment", node.getCompartment().name());
             obj.addProperty("statistic", node.getStatistic().token());
             obj.addProperty("positiveName", node.getPositiveName());
@@ -489,25 +409,10 @@ public class FlowPathSerializer {
         return obj;
     }
 
-    /**
-     * Write {@code "thresholdIsZScore": true} for a gate still holding numbers in the retired
-     * computed z-space, and nothing otherwise.
-     * <p>
-     * New gates never carry the flag, so a raw gate's file omits it. But a legacy tree can be
-     * saved before it has met an index -- saving needs no image open -- and a gate whose
-     * channel the current image lacks keeps the flag through migration. Dropping the flag on
-     * either would write thresholds like 1.5 into a file that reloads as raw, where no
-     * migration ever fires again.
-     */
-    private static void writeLegacyZScoreFlag(JsonObject obj, GateNode gate) {
-        if (gate.isThresholdIsZScore()) obj.addProperty("thresholdIsZScore", true);
-    }
-
     /** Write the axis block shared by every 2D region gate (polygon / rectangle / ellipse). */
     private static void serializeRegionAxes(JsonObject obj, Region2DGate gate) {
         obj.addProperty("channelX", gate.getChannelX());
         obj.addProperty("channelY", gate.getChannelY());
-        writeLegacyZScoreFlag(obj, gate);
         obj.addProperty("compartmentX", gate.getCompartmentX().name());
         obj.addProperty("compartmentY", gate.getCompartmentY().name());
         obj.addProperty("statisticX", gate.getStatisticX().token());
@@ -559,17 +464,13 @@ public class FlowPathSerializer {
     }
 
     private static GateNode deserializeNode(JsonObject obj) throws IOException {
-        String type = obj.has("type") ? obj.get("type").getAsString() : "threshold";
+        String type = required(obj, "type").getAsString();
 
-        // Shared fields
+        // Shared fields. "enabled" is written only when false.
         boolean enabled = !obj.has("enabled") || obj.get("enabled").getAsBoolean();
-        double clipLow = obj.has("clipPercentileLow") ? obj.get("clipPercentileLow").getAsDouble() : 1.0;
-        double clipHigh = obj.has("clipPercentileHigh") ? obj.get("clipPercentileHigh").getAsDouble() : 99.0;
-        boolean excludeOutliers = false;
-        if (obj.has("excludeOutliers"))
-            excludeOutliers = obj.get("excludeOutliers").getAsBoolean();
-        else if (obj.has("hideOutliers"))
-            excludeOutliers = obj.get("hideOutliers").getAsBoolean();
+        double clipLow = required(obj, "clipPercentileLow").getAsDouble();
+        double clipHigh = required(obj, "clipPercentileHigh").getAsDouble();
+        boolean excludeOutliers = required(obj, "excludeOutliers").getAsBoolean();
 
         GateNode result;
         if ("quadrant".equals(type)) {
@@ -587,11 +488,8 @@ public class FlowPathSerializer {
                     + "This file may have been created by a newer version of FlowPath.");
         }
         result.setEnabled(enabled);
-        // Absent means a file written before v4 (every such gate lacks the key; this version writes
-        // it on every gate, a version-3 file included): correction off, so opening an old tree
-        // never changes a number.
-        result.setCorrectStaining(obj.has("correctStaining") && obj.get("correctStaining").getAsBoolean());
-        // Optional v4 field: absent (every older file, and every unticked gate) reads off.
+        result.setCorrectStaining(required(obj, "correctStaining").getAsBoolean());
+        // Written only when ticked.
         result.setLineageMarker(obj.has("lineageMarker") && obj.get("lineageMarker").getAsBoolean());
         if (obj.has("slideSettings")) {
             for (var entry : obj.getAsJsonObject("slideSettings").entrySet()) {
@@ -601,79 +499,36 @@ public class FlowPathSerializer {
         return result;
     }
 
-    /** Parse a Compartment enum from a property, defaulting to whole-cell (v1 / unknown). */
+    /** A property every current file carries; its absence means the file is not a valid one. */
+    private static JsonElement required(JsonObject obj, String key) throws IOException {
+        if (!obj.has(key) || obj.get(key).isJsonNull()) {
+            throw new IOException("Invalid FlowPath file structure: missing \"" + key + "\"");
+        }
+        return obj.get(key);
+    }
+
     /**
-     * Parse a compartment from a property, accepting <b>either</b> spelling.
-     * <p>
-     * Compartments are written as the enum {@code name()} ({@code "NUCLEAR"}) while
-     * statistics are written as their display {@code token()} ({@code "Median"}), so the
-     * two sit adjacent in the same object in different dialects. The asymmetry is forced
-     * rather than chosen: {@link Statistic} stopped being an enum when MIRAGE's vocabulary
-     * opened up, so it has no {@code name()} left to write. Rather than break every
-     * existing file to make the JSON symmetric, this reads both -- the enum name and the
-     * measurement-key token ({@code "Nucleus"}) -- case-insensitively.
-     * <p>
-     * The bare {@code valueOf} inside {@code catch (Exception ignored)} that stood here
-     * was the same defect {@link #parseStatistic} was just cured of: an unrecognised
-     * compartment became {@code WHOLE_CELL}, so a gate pinned to a nuclear column silently
-     * reloaded pointing at the whole cell -- a different population, no error, and a
-     * number that still looks plausible. An unknown token now falls back only because
-     * there is genuinely nothing else to do, and a <em>missing</em> property still means
-     * a v1 file, whose gates really were whole-cell.
+     * A compartment, written as the enum {@code name()} ({@code "NUCLEAR"}). An unrecognised
+     * token is honoured as a compartment FlowPath has not met rather than replaced: turning it
+     * into whole-cell would point the gate at a different population with no error.
      */
-    private static Compartment parseCompartment(JsonObject obj, String key) {
-        if (!obj.has(key) || obj.get(key).isJsonNull()) return Compartment.WHOLE_CELL;
-        String raw;
-        try {
-            raw = obj.get(key).getAsString();
-        } catch (Exception ignored) {
-            // Not a string primitive -- malformed; fall back.
-            return Compartment.WHOLE_CELL;
-        }
-        if (raw == null || raw.isBlank()) return Compartment.WHOLE_CELL;
-        String trimmed = raw.trim();
+    private static Compartment parseCompartment(JsonObject obj, String key) throws IOException {
+        String trimmed = required(obj, key).getAsString().trim();
         for (Compartment c : Compartment.known()) {
-            if (c.name().equalsIgnoreCase(trimmed) || c.token().equalsIgnoreCase(trimmed)) {
-                return c;
-            }
+            if (c.name().equals(trimmed)) return c;
         }
-        // Not one of the three, but the file named something. Honour it rather than
-        // silently substituting whole-cell: since the vocabulary opened, an unrecognised
-        // compartment is a gate pinned to a real column FlowPath has not met, and turning
-        // it into WHOLE_CELL would point that gate at a different population with no error.
         return Compartment.of(trimmed);
     }
 
     /**
-     * Parse a statistic from a property.
-     * <p>
-     * <b>Absent means v1; present means honour it verbatim.</b> This used to be
-     * {@code Statistic.valueOf(...)} inside a bare {@code catch (Exception ignored)}
-     * falling through to {@link Statistic#MEAN}, which turned "I do not recognise this
-     * statistic" into "it is a mean". Since {@link Statistic} became an open vocabulary
-     * that is no longer a harmless default: a workspace saved against a MIRAGE export
-     * carrying {@code CD3: Cell: REDSEA} would reload pinned to {@code Mean}, resolve to a
-     * measurement key that is not in the file, and read NaN for every cell — plausible,
-     * silent and wrong, exactly the class of defect {@code MeasuredColumn} exists to
-     * prevent. An unrecognised token is now kept as itself.
-     * <p>
-     * Mean remains the answer only when the property is <em>missing</em>, which means a v1
-     * workspace, whose bare column genuinely is the whole-cell mean.
-     * <p>
-     * Written as {@link Statistic#token} (e.g. {@code "Median"}) rather than the old enum
-     * {@code name()} (e.g. {@code "MEDIAN"}); parsing is case-insensitive, so workspaces
-     * written by either version load identically.
+     * A statistic, written as its {@link Statistic#token} ({@code "Median"}). An unrecognised
+     * token is kept as itself: substituting Mean would resolve a key not in the file and read
+     * NaN for every cell.
      */
-    private static Statistic parseStatistic(JsonObject obj, String key) {
-        if (obj.has(key) && !obj.get(key).isJsonNull()) {
-            try {
-                Statistic parsed = Statistic.fromToken(obj.get(key).getAsString());
-                if (parsed != null) return parsed;
-            } catch (Exception ignored) {
-                // Not a string primitive — fall through to the v1 default.
-            }
-        }
-        return Statistic.MEAN;
+    private static Statistic parseStatistic(JsonObject obj, String key) throws IOException {
+        Statistic parsed = Statistic.fromToken(required(obj, key).getAsString());
+        if (parsed == null) throw new IOException("Invalid FlowPath file structure: blank \"" + key + "\"");
+        return parsed;
     }
 
     private static GateNode deserializeThresholdNode(JsonObject obj,
@@ -686,11 +541,6 @@ public class FlowPathSerializer {
         node.setChannel(optString(obj, "channel"));
         if (obj.has("threshold"))
             node.setThreshold(obj.get("threshold").getAsDouble());
-        // A file saved before the computed z-score was retired holds this threshold in
-        // standard deviations, and LegacyZScoreMigration needs the flag to know to convert
-        // it. Written back only while still set (see writeLegacyZScoreFlag); absent means raw.
-        if (obj.has("thresholdIsZScore"))
-            node.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
         node.setCompartment(parseCompartment(obj, "compartment"));
         node.setStatistic(parseStatistic(obj, "statistic"));
         if (obj.has("positiveName"))
@@ -722,8 +572,6 @@ public class FlowPathSerializer {
             gate.setThresholdX(obj.get("thresholdX").getAsDouble());
         if (obj.has("thresholdY"))
             gate.setThresholdY(obj.get("thresholdY").getAsDouble());
-        if (obj.has("thresholdIsZScore"))
-            gate.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
         gate.setCompartmentX(parseCompartment(obj, "compartmentX"));
         gate.setCompartmentY(parseCompartment(obj, "compartmentY"));
         gate.setStatisticX(parseStatistic(obj, "statisticX"));
@@ -750,17 +598,13 @@ public class FlowPathSerializer {
         gate.setClipPercentileHigh(clipHigh);
         gate.setExcludeOutliers(excludeOutliers);
 
-        // Shared axis block for all 2D region gate types: channels, the legacy z-score flag,
-        // and the per-axis compartment/statistic (absent in v1/v2 files, which then
-        // default to whole-cell mean and behave exactly as before).
+        // Shared axis block for all 2D region gate types: channels and per-axis compartment/statistic.
         gate.setChannelX(optString(obj, "channelX"));
         gate.setChannelY(optString(obj, "channelY"));
         gate.setCompartmentX(parseCompartment(obj, "compartmentX"));
         gate.setCompartmentY(parseCompartment(obj, "compartmentY"));
         gate.setStatisticX(parseStatistic(obj, "statisticX"));
         gate.setStatisticY(parseStatistic(obj, "statisticY"));
-        if (obj.has("thresholdIsZScore"))
-            gate.setThresholdIsZScore(obj.get("thresholdIsZScore").getAsBoolean());
 
         // A genuine per-type dispatch over Region2DGate's sealed permits: exhaustive with no
         // default, so a new region shape fails to compile here instead of silently loading

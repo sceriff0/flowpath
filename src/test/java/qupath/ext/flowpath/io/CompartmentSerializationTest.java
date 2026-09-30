@@ -54,18 +54,4 @@ class CompartmentSerializationTest {
         assertEquals(Statistic.MEAN, loaded.getStatisticY());
     }
 
-    @Test
-    void v1FileLoadsWithWholeCellDefaults(@TempDir Path dir) throws IOException {
-        // A v1 gate tree has no compartment/statistic fields.
-        String v1 = "{\"version\":1,\"roiFilterEnabled\":false,\"gates\":["
-                + "{\"type\":\"threshold\",\"channel\":\"CD3\",\"threshold\":1.0,"
-                + "\"thresholdIsZScore\":true,\"positiveName\":\"CD3+\",\"negativeName\":\"CD3-\"}]}";
-        File f = dir.resolve("v1.json").toFile();
-        Files.writeString(f.toPath(), v1);
-
-        GateNode loaded = FlowPathSerializer.load(f).getRoots().get(0);
-        assertEquals(Compartment.WHOLE_CELL, loaded.getCompartment());
-        assertEquals(Statistic.MEAN, loaded.getStatistic());
-        assertEquals("CD3", loaded.getChannel());
-    }
 }

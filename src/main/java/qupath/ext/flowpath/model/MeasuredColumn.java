@@ -112,14 +112,6 @@ public final class MeasuredColumn {
         return (raw - mean) / std;
     }
 
-    /**
-     * Inverse of {@link #toZScore}. Used by {@link LegacyZScoreMigration} to move a gate
-     * saved in the retired z-space back onto the column it was standardised from.
-     */
-    public double fromZScore(double zScore) {
-        return zScore * std + mean;
-    }
-
     /** Value at the given percentile (0-100) of this column, or NaN if it is empty. */
     public double percentile(double percentile) {
         return stats.getPercentileValue(key, percentile);

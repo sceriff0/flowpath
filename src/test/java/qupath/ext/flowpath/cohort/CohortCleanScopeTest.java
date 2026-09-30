@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import qupath.ext.flowpath.model.QualityFilter;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
@@ -118,7 +119,7 @@ class CohortCleanScopeTest {
 
         // The filter the user loads or drags afterwards: area >= 60 keeps only the CD8+ cells.
         GateTree filtered = unfiltered.deepCopy();
-        filtered.getQualityFilter().setMinArea(60);
+        filtered.getQualityFilter().setMin(QualityFilter.AREA, 60);
         rescore(s, filtered);
 
         assertEquals(POSITIVES, count(s.sample("s1").clean()), "the sample is re-scoped to the scored tree's filter");
@@ -173,7 +174,7 @@ class CohortCleanScopeTest {
 
         // A filter change moves the key: a miss, and the entry is re-keyed.
         GateTree filtered = moved.deepCopy();
-        filtered.getQualityFilter().setMinArea(60);
+        filtered.getQualityFilter().setMin(QualityFilter.AREA, 60);
         rescore(s, filtered);
         String filteredKey = s.sample("s1").cacheKey();
         assertNotEquals(key, filteredKey);

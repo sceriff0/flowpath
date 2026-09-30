@@ -372,8 +372,6 @@ abstract class AbstractGateTypeEditor<G extends GateNode> implements GateTypeEdi
 
         currentMode = selected;
 
-        // A gate saved under the retired computed z-score is not migrated here:
-        // LegacyZScoreMigration converts the whole tree when it first meets an index.
         if (selected != null && !alreadyIn(gate, selected)) {
             selected.applyTo(gate);
         }

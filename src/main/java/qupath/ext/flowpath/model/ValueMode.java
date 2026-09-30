@@ -152,10 +152,6 @@ public record ValueMode(Kind kind, String normalisation, String label, String to
      * Put {@code gate} into this mode: point every axis at its own sibling column for this
      * normalisation.
      * <p>
-     * The retired standardise-here flag is not touched. Clearing it without converting the
-     * numbers it describes would leave a threshold in standard deviations compared against
-     * raw intensities; {@link LegacyZScoreMigration} is the one writer that does both.
-     * <p>
      * Note this does <em>not</em> convert the threshold. Moving between columns is a
      * change of scale, and only a caller holding the index can re-map it; see
      * {@code AbstractGateTypeEditor.onModeSelected}.

@@ -39,20 +39,6 @@ class GateTypeConversionTest {
         return source;
     }
 
-    @Test
-    void conversionNeverCarriesTheRetiredZScoreFlag() {
-        // The scatter draws every axis as measured, so a shape drawn on it is in raw units.
-        // Carrying a legacy flag across would have LegacyZScoreMigration "convert" raw
-        // coordinates as if they were standard deviations.
-        PolygonGate source = nuclearMedianPolygon();
-        source.setThresholdIsZScore(true);
-        RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
-
-        GateEditorPane.copySharedSettings(source, replacement);
-
-        assertFalse(replacement.isThresholdIsZScore(),
-                "a rectangle drawn on the raw scatter is evaluated on raw values");
-    }
 
     @Test
     void conversionCarriesPerAxisCompartmentAndStatistic() {
@@ -86,21 +72,10 @@ class GateTypeConversionTest {
                 "child gates must survive the conversion");
     }
 
-    @Test
-    void rawSourceGateStaysRawAfterConversion() {
-        PolygonGate source = new PolygonGate("CD3", "CD8");
-
-        RectangleGate replacement = new RectangleGate("CD3", "CD8", 0, 1, 0, 1);
-        GateEditorPane.copySharedSettings(source, replacement);
-
-        assertFalse(replacement.isThresholdIsZScore(),
-                "conversion must preserve raw mode too, not blanket-set z-score");
-    }
 
     /**
-     * A legacy gate loads with {@code correctStaining == false} so opening an old tree
-     * never changes a number (see {@code FlowPathSerializer}). Drawing a new shape over it
-     * must not silently flip that back to {@code true} for the replacement.
+     * A gate with staining correction switched off must keep it off when a new shape is
+     * drawn over it: the replacement must not silently flip it back to {@code true}.
      */
     @Test
     void conversionCarriesCorrectStaining() {
@@ -133,7 +108,6 @@ class GateTypeConversionTest {
         PolygonGate replacement = new PolygonGate("CD3", "CD8");
         GateEditorPane.copySharedSettings(source, replacement);
 
-        assertFalse(replacement.isThresholdIsZScore());
         assertEquals(Compartment.NUCLEAR, replacement.getCompartmentX(),
                 "a threshold gate's single axis maps onto the region gate's X axis");
         assertEquals(Statistic.MEDIAN, replacement.getStatisticX());

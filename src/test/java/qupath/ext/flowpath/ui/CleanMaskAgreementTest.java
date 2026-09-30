@@ -29,7 +29,7 @@ class CleanMaskAgreementTest {
         PathObject box = PathObjects.createAnnotationObject(
                 ROIs.createRectangleROI(-0.5, -1, 120, 2, ImagePlane.getDefaultPlane()));
         QualityFilter filter = new QualityFilter();
-        filter.setMinArea(60);
+        filter.setMin(QualityFilter.AREA, 60);
 
         for (QualityFilter f : new QualityFilter[]{null, filter}) {
             for (boolean roi : new boolean[]{false, true}) {

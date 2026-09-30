@@ -266,22 +266,4 @@ class CompartmentCsvTest {
         assertEquals(Statistic.MEDIAN, out.getStatisticY());
     }
 
-    @Test
-    void legacyRegionGateJsonDefaultsToWholeCellMean() throws IOException {
-        // A v1/v2 file has no compartment keys on a region gate.
-        String json = """
-            {"version": 2, "roiFilterEnabled": false, "gates": [
-              {"type": "rectangle", "channelX": "CD3", "channelY": "CD8",
-               "minX": 0, "maxX": 1, "minY": 0, "maxY": 1,
-               "branches": [{"name": "In"}, {"name": "Out"}]}
-            ]}""";
-        File f = tempDir.resolve("legacy.json").toFile();
-        Files.writeString(f.toPath(), json);
-
-        RectangleGate rg = (RectangleGate) FlowPathSerializer.load(f).getRoots().get(0);
-        assertEquals(Compartment.WHOLE_CELL, rg.getCompartmentX());
-        assertEquals(Compartment.WHOLE_CELL, rg.getCompartmentY());
-        assertEquals(Statistic.MEAN, rg.getStatisticX());
-        assertEquals(Statistic.MEAN, rg.getStatisticY());
-    }
 }

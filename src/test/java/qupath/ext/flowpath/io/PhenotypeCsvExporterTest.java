@@ -155,7 +155,7 @@ class PhenotypeCsvExporterTest {
         CellIndex index = Cells.columns(markers, values).area(areas).build();
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(50);
+        qf.setMin(QualityFilter.AREA, 50);
 
         GateNode gate = new GateNode("CD45", 3.5);
         gate.setStatistic(Statistic.MEAN);
@@ -379,7 +379,7 @@ class PhenotypeCsvExporterTest {
 
         // QF with impossible minArea excludes everything
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(Double.MAX_VALUE);
+        qf.setMin(QualityFilter.AREA, Double.MAX_VALUE);
 
         GateNode gate = new GateNode("CD45", 2.0);
         gate.setStatistic(Statistic.MEAN);

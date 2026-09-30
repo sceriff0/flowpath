@@ -70,7 +70,6 @@ class MeasuredColumnTest {
         assertEquals(manual.getMax(key), col.max(), 1e-12);
         assertEquals(manual.getPercentileValue(key, 90), col.percentile(90), 1e-12);
         assertEquals(manual.percentileRankOf(key, raw[3]), col.percentileRankOf(raw[3]), 1e-12);
-        assertEquals(raw[7], col.fromZScore(col.zScoreAt(7)), 1e-9);
     }
 
     @Test

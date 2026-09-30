@@ -472,7 +472,6 @@ class GateEditorAxisChangeTest {
         var nuclear = GateAxis.of(gate, 0).columnIn(f.index(), f.stats());
         double lo = nuclear.percentile(gate.getClipPercentileLow());
         double hi = nuclear.percentile(gate.getClipPercentileHigh());
-        assertFalse(gate.isThresholdIsZScore(), "a new gate reads its columns as measured");
         double[] expected = AxisMath.quadrantSliderSpan(new double[]{lo, hi}, gate.getThresholdX());
         List<Slider> sliders = new ArrayList<>();
         collect(f.pane(), Slider.class, sl -> true, sliders);

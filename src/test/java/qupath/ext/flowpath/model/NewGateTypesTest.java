@@ -103,7 +103,6 @@ class NewGateTypesTest {
         assertEquals("CD3", copy.getChannelY());
         assertEquals(5.0, copy.getThresholdX());
         assertEquals(3.0, copy.getThresholdY());
-        assertFalse(copy.isThresholdIsZScore());
         assertEquals(2.0, copy.getClipPercentileLow());
         assertEquals(98.0, copy.getClipPercentileHigh());
         assertTrue(copy.isExcludeOutliers());
@@ -113,14 +112,12 @@ class NewGateTypesTest {
         original.setChannelY("CD8");
         original.setThresholdX(99.0);
         original.setThresholdY(88.0);
-        original.setThresholdIsZScore(true);
 
         // Copy should be unchanged
         assertEquals("CD45", copy.getChannelX(), "Copy channelX should not change when original is modified");
         assertEquals("CD3", copy.getChannelY(), "Copy channelY should not change when original is modified");
         assertEquals(5.0, copy.getThresholdX(), "Copy thresholdX should not change when original is modified");
         assertEquals(3.0, copy.getThresholdY(), "Copy thresholdY should not change when original is modified");
-        assertFalse(copy.isThresholdIsZScore(), "Copy thresholdIsZScore should not change when original is modified");
     }
 
     @Test
@@ -350,7 +347,6 @@ class NewGateTypesTest {
         assertEquals("CD3", loadedGate.getChannelY());
         assertEquals(2.5, loadedGate.getThresholdX());
         assertEquals(3.5, loadedGate.getThresholdY());
-        assertFalse(loadedGate.isThresholdIsZScore());
         assertEquals(2.0, loadedGate.getClipPercentileLow());
         assertEquals(98.0, loadedGate.getClipPercentileHigh());
         assertTrue(loadedGate.isExcludeOutliers());

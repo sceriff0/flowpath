@@ -105,7 +105,7 @@ class IngestCoordinatorTest {
         }
         @Override public void cleared(IngestCoordinator.Cleared why) { cleared.add(why); }
         @Override public void ingested(ImageData<?> imageData, IngestResult result) { ingested.add(result); }
-        @Override public void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex) {
+        @Override public void resynced(boolean newIndex) {
             resyncedWithNewIndex.add(newIndex);
         }
         @Override public void busyChanged(IngestCoordinator.Busy state) { busy.add(state); }

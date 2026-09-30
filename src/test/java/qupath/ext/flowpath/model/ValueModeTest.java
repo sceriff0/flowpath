@@ -201,26 +201,6 @@ class ValueModeTest {
         assertEquals(Statistic.MEAN, gate.getStatisticY());
     }
 
-    /**
-     * <b>The retired flag is not a mode, and choosing a mode does not touch it.</b> Clearing
-     * it is {@link LegacyZScoreMigration}'s job, because only a caller holding the index can
-     * convert the numbers it describes; a mode write that dropped it on the way past would
-     * leave a threshold in standard deviations compared against raw intensities.
-     */
-    @Test
-    void theRetiredFlagNeitherSelectsNorIsClearedByAMode() {
-        var capability = CompartmentCapability.fromKeys(Set.of(
-                "CD3: Cell: Median", "CD3: Cell: Median Z"));
-        var gate = thresholdOn("CD3", Compartment.WHOLE_CELL, Statistic.of("Median Z"));
-        gate.setThresholdIsZScore(true);
-
-        var modes = ValueMode.availableFor(gate, capability);
-        ValueMode selected = ValueMode.selectedIn(modes, gate);
-        assertEquals(ValueMode.Kind.MIRAGE, selected.kind(),
-                "the mode is read off the column the gate points at");
-        modes.get(0).applyTo(gate);
-        assertTrue(gate.isThresholdIsZScore(), "only the migration clears the flag");
-    }
 
     /** Axes that disagree about normalisation have no gate-wide mode; raw is the answer. */
     @Test

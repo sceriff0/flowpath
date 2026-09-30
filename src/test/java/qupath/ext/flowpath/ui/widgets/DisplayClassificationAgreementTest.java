@@ -325,40 +325,6 @@ class DisplayClassificationAgreementTest {
         }
     }
 
-    @Test
-    void aStillFlaggedLegacyGateIsDrawnAndClassifiedInTheSameRawSpace() {
-        assumeTrue(FxTestSupport.toolkitAvailable());
-        // The engine used to standardise a flagged gate and the plot was fed standardised
-        // values to match. Both now read the column as measured, flag or no flag, so a legacy
-        // gate that has not been migrated yet can still never be drawn one way and
-        // classified another.
-        RectangleGate gate = new RectangleGate(MX, MY, 3.5, 6.5, 3.5, 6.5);
-        gate.setThresholdIsZScore(true);
-        named(gate);
-
-        double[] raw = {1, 2, 3, 4, 5, 6, 7, 8};
-        double[] rawY = {8, 7, 6, 5, 4, 3, 2, 1};
-
-        CellIndex index = indexOf(raw, rawY);
-        MarkerStats stats = MarkerStats.compute(index);
-        double[] colX = columnOf(index, MX);
-        double[] colY = columnOf(index, MY);
-
-        GateTree tree = new GateTree();
-        tree.addRoot(gate);
-        String[] phenotypes = GatingEngine.assignAll(tree, index, stats).getPhenotypes();
-        int[] drawn = display2D(gate, colX, colY);
-        int inside = 0;
-        for (int i = 0; i < raw.length; i++) {
-            final int idx = i;
-            int classified = Integer.parseInt(phenotypes[i].substring(1));
-            assertEquals(classified, drawn[i], () -> String.format(
-                    "flagged rectangle: cell %d (%s, %s) classified into branch %d but drawn as branch %d",
-                    idx, colX[idx], colY[idx], Integer.parseInt(phenotypes[idx].substring(1)), drawn[idx]));
-            if (classified == 0) inside++;
-        }
-        assertEquals(2, inside, "cells (4,5) and (5,4) are inside in raw units");
-    }
 
     /**
      * The agreement has to hold for cells the gate cannot measure, not only for the finite

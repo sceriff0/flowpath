@@ -6,7 +6,6 @@ import qupath.ext.flowpath.engine.CleanMask;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
-import qupath.ext.flowpath.model.LegacyZScoreMigration;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.RegionMask;
@@ -75,9 +74,6 @@ final class GatingSession {
         void request(PassInput input);
     }
 
-    /** One notification about a legacy z-score migration. */
-    record MigrationNotice(String message, boolean warning) {}
-
     /**
      * What a coalesced undo step belongs to. A burst coalesces only with itself, so a
      * quality-filter drag straight after a gate edit is a step of its own.
@@ -102,13 +98,6 @@ final class GatingSession {
      */
     private CellIndex statsIndex;
     private boolean[] statsMask;
-
-    /**
-     * The last migration notice shown while the tree changed nothing, so the same "these gates
-     * read a channel this image does not carry" warning is not repeated on every undo, redo
-     * and load. Cleared when a new index is adopted.
-     */
-    private String lastUnchangedMigrationNotice;
 
     /** The project whose first sighting {@link #applyDefaultReference} has already answered. */
     private String defaultReferenceProject;
@@ -169,11 +158,13 @@ final class GatingSession {
      *
      * @param annotations the annotations the ROI filter should use; only asked for when the
      *                    tree's filter is on and there are cells to filter
-     * @return the migration notice to show, if any
      */
-    Optional<MigrationNotice> resync(Supplier<List<PathObject>> annotations) {
-        if (index == null) return adopt(Derived.NONE);
-        return adopt(derive(derivationInputs(index, annotations), reusableStats()));
+    void resync(Supplier<List<PathObject>> annotations) {
+        if (index == null) {
+            adopt(Derived.NONE);
+        } else {
+            adopt(derive(derivationInputs(index, annotations), reusableStats()));
+        }
     }
 
     /**
@@ -186,11 +177,15 @@ final class GatingSession {
      * The annotations are the one input not re-checked: a derivation carries the annotations
      * captured when it was requested, and any later annotation change requests its own.
      */
-    Optional<MigrationNotice> resync(Derived derived, Supplier<List<PathObject>> annotations) {
+    void resync(Derived derived, Supplier<List<PathObject>> annotations) {
         Objects.requireNonNull(derived, "derived");
-        if (index == null) return adopt(Derived.NONE);
-        if (!stillDescribes(derived)) return resync(annotations);
-        return adopt(derived);
+        if (index == null) {
+            adopt(Derived.NONE);
+        } else if (!stillDescribes(derived)) {
+            resync(annotations);
+        } else {
+            adopt(derived);
+        }
     }
 
     /**
@@ -211,18 +206,15 @@ final class GatingSession {
                 && Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()));
     }
 
-    private Optional<MigrationNotice> adopt(Derived derived) {
-        Optional<MigrationNotice> notice = Optional.empty();
+    private void adopt(Derived derived) {
         regions = derived.regions();
         roiMask = regions != null ? regions.included() : null;
         qualityMask = derived.qualityMask();
         stats = derived.stats();
         statsIndex = derived.index();
         statsMask = combinedMask();
-        if (index != null) notice = migrateLegacyZScores();
         settle();
         gatingPass.request(new PassInput(tree, index, stats, roiMask, regions));
-        return notice;
     }
 
     // ---- the heavy part, on any thread -------------------------------------------------
@@ -320,11 +312,9 @@ final class GatingSession {
 
     /**
      * A new image's cells, or {@code null} when there are none. Follow with {@link #resync}.
-     * A new image may show the same missing-channel notice again.
      */
     void adoptIndex(CellIndex newIndex) {
         this.index = newIndex;
-        this.lastUnchangedMigrationNotice = null;
     }
 
     /**
@@ -574,31 +564,5 @@ final class GatingSession {
         // known here, so the next resync recomputes rather than reuse them.
         this.statsIndex = null;
         this.statsMask = null;
-    }
-
-    // ---- migration ---------------------------------------------------------------------
-
-    /**
-     * Convert a tree saved under the retired computed z-score onto raw values, through the
-     * current statistics. Called by {@link #resync} after the statistics are recomputed, and
-     * directly when an edit re-points a flagged gate onto a channel this image carries.
-     * <p>
-     * A no-op without an index (the conversion waits for one) or when no gate carries the
-     * flag. Gates whose channel this image lacks keep the flag and are found again on every
-     * call; their notice is returned once per image unless the set of such gates changes.
-     */
-    Optional<MigrationNotice> migrateLegacyZScores() {
-        if (index == null || stats == null || !LegacyZScoreMigration.needsMigration(tree)) {
-            return Optional.empty();
-        }
-        LegacyZScoreMigration.Result result = LegacyZScoreMigration.migrate(tree, index, stats);
-        if (result.isEmpty()) return Optional.empty();
-        String message = result.message();
-        if (!result.changedTree()) {
-            if (message.equals(lastUnchangedMigrationNotice)) return Optional.empty();
-            lastUnchangedMigrationNotice = message;
-        }
-        boolean warning = !result.unconvertible().isEmpty() || !result.missingChannel().isEmpty();
-        return Optional.of(new MigrationNotice(message, warning));
     }
 }

@@ -64,7 +64,7 @@ public final class EllipseGate extends Region2DGate {
      * alone would let an ellipse that is degenerate on Y (a real X radius but none on Y)
      * still get remapped, the same hazard {@link RectangleGate#remapCoordinates} guards
      * against. The bounding box on each axis is remapped and the centre/radius recomputed
-     * from it: for a linear {@code fx}/{@code fy} (as {@code LegacyZScoreMigration} uses)
+     * from it: for a linear {@code fx}/{@code fy}
      * this reduces exactly to mapping the centre directly and scaling each radius by the
      * map's slope magnitude, which is the correct behaviour for a radius -- it has no
      * position to shift.

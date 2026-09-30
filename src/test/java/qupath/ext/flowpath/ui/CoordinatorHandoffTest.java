@@ -138,7 +138,7 @@ class CoordinatorHandoffTest {
                         }
                         @Override public void cleared(IngestCoordinator.Cleared why) { }
                         @Override public void ingested(ImageData<?> imageData, IngestResult result) { }
-                        @Override public void resynced(Optional<GatingSession.MigrationNotice> n, boolean newIndex) {
+                        @Override public void resynced(boolean newIndex) {
                             ingestResyncedWithNewIndex.add(newIndex);
                         }
                         @Override public void busyChanged(IngestCoordinator.Busy state) { }
@@ -150,7 +150,7 @@ class CoordinatorHandoffTest {
             derivation = new DerivationCoordinator(session, background, Runnable::run,
                     new DerivationCoordinator.Host() {
                         @Override public List<PathObject> annotations() { return annotationsOf(image); }
-                        @Override public void resynced(Optional<GatingSession.MigrationNotice> notice) { }
+                        @Override public void resynced() { }
                         @Override public void busyChanged(boolean deriving) { }
                         @Override public void failed(Throwable error) { failures.add(error); }
                     });

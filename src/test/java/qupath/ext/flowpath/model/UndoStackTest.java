@@ -239,10 +239,10 @@ class UndoStackTest {
     @Test
     void deepCopyPreservesQualityFilter() {
         GateTree tree = new GateTree();
-        tree.getQualityFilter().setMinArea(100.0);
+        tree.getQualityFilter().setMin(QualityFilter.AREA, 100.0);
 
         GateTree copy = tree.deepCopy();
-        copy.getQualityFilter().setMinArea(200.0);
+        copy.getQualityFilter().setMin(QualityFilter.AREA, 200.0);
 
         assertEquals(100.0, tree.getQualityFilter().range(QualityFilter.AREA).min(),
             "Original QualityFilter should not change after modifying copy");

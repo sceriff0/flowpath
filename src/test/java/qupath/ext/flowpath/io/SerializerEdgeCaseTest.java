@@ -295,7 +295,7 @@ class SerializerEdgeCaseTest {
     @Test
     void aOneSidedLegacyConstraintDoesNotCloseTheOtherBounds() throws IOException {
         GateTree tree = new GateTree();
-        tree.getQualityFilter().setMinArea(25);
+        tree.getQualityFilter().setMin(QualityFilter.AREA, 25);
 
         QualityFilter back = roundTrip(tree).getQualityFilter();
 
@@ -305,95 +305,25 @@ class SerializerEdgeCaseTest {
                 "only the area constraint was set; nothing else may appear after a reload");
     }
 
-    /** When a file carries both a legacy property and a "ranges" entry, "ranges" wins. */
-    @Test
-    void rangesEntryOverridesTheLegacyPropertyForTheSameSlug() throws IOException {
-        GateTree loaded = loadText("""
-                {"version": 3,
-                 "qualityFilter": {"minArea": 50, "maxArea": 1000,
-                                   "ranges": {"area": {"min": 10}}},
-                 "gates": []}""");
-        assertEquals(new QualityFilter.Range(10, Double.POSITIVE_INFINITY),
-                loaded.getQualityFilter().range(QualityFilter.AREA));
-    }
 
     // =====================================================================
-    //  Legacy / defaults / tolerance
+    //  Tolerance
     // =====================================================================
 
-    /** No "version" key and no "type" key: a pre-versioned file loads as v1 threshold gates. */
-    @Test
-    void aFileWithNoVersionAndNoTypeLoadsAsThresholdGates() throws IOException {
-        GateTree loaded = loadText("""
-                {"gates": [{"channel": "CD45", "threshold": 0.75,
-                            "positiveChildren": [{"channel": "CD3", "threshold": 1.0}]}]}""");
-        GateNode root = loaded.getRoots().get(0);
-        assertEquals(GateNode.class, root.getClass());
-        assertEquals(0.75, root.getThreshold());
-        assertEquals(GateNode.class, root.getPositiveChildren().get(0).getClass());
-        assertEquals("CD3", root.getPositiveChildren().get(0).getChannel());
-    }
 
-    /** A minimal threshold body picks up every documented default. */
-    @Test
-    void aMinimalThresholdGateTakesTheDocumentedDefaults() throws IOException {
-        GateNode g = loadText("""
-                {"version": 3, "gates": [{"type": "threshold"}]}""").getRoots().get(0);
-        assertTrue(g.isEnabled());
-        assertEquals(1.0, g.getClipPercentileLow());
-        assertEquals(99.0, g.getClipPercentileHigh());
-        assertFalse(g.isExcludeOutliers());
-        assertFalse(g.isThresholdIsZScore(), "an absent flag is raw: every file written since "
-                + "the computed z-score was retired omits it");
-        assertNull(g.getChannel());
-        assertEquals(0.0, g.getThreshold());
-        assertEquals(Compartment.WHOLE_CELL, g.getCompartment());
-        assertEquals(Statistic.MEAN, g.getStatistic(), "absent statistic means v1 -> Mean");
-        assertEquals(2, g.getBranches().size());
-        assertTrue(g.isLeaf());
-    }
 
-    /** Minimal quadrant and region bodies (no branches, no axes) still produce whole gates. */
-    @Test
-    void minimalTwoAxisGatesTakeTheirDefaults() throws IOException {
-        GateTree loaded = loadText("""
-                {"version": 3, "gates": [
-                  {"type": "quadrant"}, {"type": "polygon"},
-                  {"type": "rectangle"}, {"type": "ellipse"}]}""");
-        QuadrantGate q = (QuadrantGate) loaded.getRoots().get(0);
-        assertEquals(4, q.getBranches().size());
-        assertEquals(Statistic.MEAN, q.getStatisticX());
-        assertEquals(Statistic.MEAN, q.getStatisticY());
-        assertEquals(Compartment.WHOLE_CELL, q.getCompartmentY());
-        for (int i = 1; i < 4; i++) {
-            Region2DGate r = (Region2DGate) loaded.getRoots().get(i);
-            assertEquals("Inside", r.getInsideBranch().getName());
-            assertEquals("Outside", r.getOutsideBranch().getName());
-            assertEquals(Statistic.MEAN, r.getStatisticY());
-            assertTrue(r.isLeaf());
-        }
-        assertTrue(((PolygonGate) loaded.getRoots().get(1)).getVertices().isEmpty());
-    }
 
-    /** When both "excludeOutliers" and legacy "hideOutliers" are present, the new key wins. */
-    @Test
-    void excludeOutliersTakesPrecedenceOverLegacyHideOutliers() throws IOException {
-        GateNode g = loadText("""
-                {"version": 1, "gates": [{"channel": "CD3",
-                  "excludeOutliers": false, "hideOutliers": true}]}""").getRoots().get(0);
-        assertFalse(g.isExcludeOutliers());
-    }
 
     /** Unknown keys at root, meta, quality filter, range entry, gate and branch level are ignored. */
     @Test
     void unknownExtraFieldsAreIgnoredAtEveryLevel() throws IOException {
         GateTree loaded = loadText("""
-                {"version": 3, "futureRootKey": {"x": [1, 2]},
+                {"version": 5, "futureRootKey": {"x": [1, 2]},
                  "meta": {"imageName": "img", "someNewProvenance": true},
                  "qualityFilter": {"newQcKnob": 3,
                                    "ranges": {"area": {"min": 5, "unit": "um2"}}},
                  "gates": [
-                   {"type": "quadrant", "channelX": "CD3", "channelY": "CD8", "opacity": 0.4,
+                   {"type": "quadrant", @A, "channelX": "CD3", "channelY": "CD8", "opacity": 0.4,
                     "branches": [{"name": "PP", "pinned": true, "children": []}]}
                  ]}""");
         assertEquals(5.0, loaded.getQualityFilter().range(QualityFilter.AREA).min());
@@ -406,8 +336,8 @@ class SerializerEdgeCaseTest {
     @Test
     void aQuadrantWithFewerBranchEntriesKeepsTheRest() throws IOException {
         QuadrantGate q = (QuadrantGate) loadText("""
-                {"version": 3, "gates": [{"type": "quadrant", "channelX": "A", "channelY": "B",
-                  "branches": [{"name": "only", "children": [{"channel": "C"}]}]}]}""")
+                {"version": 5, "gates": [{"type": "quadrant", @A, "channelX": "A", "channelY": "B",
+                  "branches": [{"name": "only", "children": [{"type": "threshold", @T, "channel": "C"}]}]}]}""")
                 .getRoots().get(0);
         assertEquals(4, q.getBranches().size());
         assertEquals("only", q.getBranchPP().getName());
@@ -423,7 +353,7 @@ class SerializerEdgeCaseTest {
     @Test
     void anUnknownRootGateTypeFailsNamingTheType() throws IOException {
         IOException e = assertThrows(IOException.class, () -> loadText("""
-                {"version": 3, "gates": [{"type": "hexagon"}]}"""));
+                {"version": 5, "gates": [{"type": "hexagon", @S}]}"""));
         assertTrue(e.getMessage().contains("hexagon"), e.getMessage());
     }
 
@@ -434,12 +364,12 @@ class SerializerEdgeCaseTest {
     @Test
     void anUnknownGateTypeDeepInASubtreeFailsTheWholeLoad() {
         IOException e = assertThrows(IOException.class, () -> loadText("""
-                {"version": 3, "gates": [
-                  {"type": "threshold", "channel": "CD45"},
-                  {"type": "quadrant", "channelX": "A", "channelY": "B", "branches": [
+                {"version": 5, "gates": [
+                  {"type": "threshold", @T, "channel": "CD45"},
+                  {"type": "quadrant", @A, "channelX": "A", "channelY": "B", "branches": [
                     {"name": "pp"}, {"name": "np"}, {"name": "pn", "children": [
-                      {"type": "polygon", "branches": [{"name": "in"}, {"name": "out", "children": [
-                        {"type": "spline"}]}]}]}]}]}"""));
+                      {"type": "polygon", @A, "branches": [{"name": "in"}, {"name": "out", "children": [
+                        {"type": "spline", @S}]}]}]}]}]}"""));
         assertTrue(e.getMessage().contains("spline"), e.getMessage());
     }
 
@@ -449,17 +379,17 @@ class SerializerEdgeCaseTest {
         List<String> bad = List.of(
                 "",                                                        // empty file
                 "   \n  ",                                                 // whitespace only
-                "{\"version\": 3, \"gates\": [ {\"type\": \"threshold\"",   // truncated
+                "{\"version\": 5, \"gates\": [ {\"type\": \"threshold\"",   // truncated
                 "[]",                                                      // top-level array
                 "\"just a string\"",                                       // top-level primitive
-                "{\"version\": 3, \"gates\": {}}",                         // gates not an array
-                "{\"version\": 3, \"gates\": [42]}",                       // gate not an object
-                "{\"version\": 3, \"gates\": null}",                       // null gates
-                "{\"version\": 3, \"qualityFilter\": [], \"gates\": []}",  // qf not an object
-                "{\"version\": 3, \"qualityFilter\": {\"minArea\": null}, \"gates\": []}",
-                "{\"version\": 3, \"gates\": [{\"type\": \"polygon\", \"vertices\": [[1]]}]}",
-                "{\"version\": 3, \"gates\": [{\"type\": null}]}",
-                "{\"version\": 3, \"gates\": [{\"type\": \"quadrant\", \"branches\": [null]}]}");
+                "{\"version\": 5, \"gates\": {}}",                         // gates not an array
+                "{\"version\": 5, \"gates\": [42]}",                       // gate not an object
+                "{\"version\": 5, \"gates\": null}",                       // null gates
+                "{\"version\": 5, \"qualityFilter\": [], \"gates\": []}",  // qf not an object
+                "{\"version\": 5, \"qualityFilter\": {\"ranges\": []}, \"gates\": []}",
+                "{\"version\": 5, \"gates\": [{\"type\": \"polygon\", @A, \"vertices\": [[1]]}]}",
+                "{\"version\": 5, \"gates\": [{\"type\": null}]}",
+                "{\"version\": 5, \"gates\": [{\"type\": \"quadrant\", @A, \"branches\": [null]}]}");
         for (String text : bad) {
             assertThrows(IOException.class, () -> loadText(text),
                     "expected IOException for: " + text);
@@ -477,10 +407,10 @@ class SerializerEdgeCaseTest {
     void aNonNumericStringWhereANumberBelongsThrowsIOException() {
         List<String> bad = List.of(
                 "{\"version\": \"three\", \"gates\": []}",
-                "{\"version\": 3, \"gates\": [{\"type\": \"threshold\", \"threshold\": \"high\"}]}",
-                "{\"version\": 3, \"gates\": [{\"type\": \"rectangle\", \"minX\": \"left\"}]}",
-                "{\"version\": 3, \"gates\": [{\"type\": \"threshold\", \"positiveColor\": [\"red\", 0, 0]}]}",
-                "{\"version\": 3, \"qualityFilter\": {\"ranges\": {\"area\": {\"min\": \"big\"}}}, \"gates\": []}");
+                "{\"version\": 5, \"gates\": [{\"type\": \"threshold\", @T, \"threshold\": \"high\"}]}",
+                "{\"version\": 5, \"gates\": [{\"type\": \"rectangle\", @A, \"minX\": \"left\"}]}",
+                "{\"version\": 5, \"gates\": [{\"type\": \"threshold\", @T, \"positiveColor\": [\"red\", 0, 0]}]}",
+                "{\"version\": 5, \"qualityFilter\": {\"ranges\": {\"area\": {\"min\": \"big\"}}}, \"gates\": []}");
         List<String> escaped = new ArrayList<>();
         for (String text : bad) {
             Throwable t = assertThrows(Throwable.class, () -> loadText(text));
@@ -573,16 +503,16 @@ class SerializerEdgeCaseTest {
         tree.addRoot(rectRoot);
 
         QualityFilter qf = new QualityFilter();
-        qf.setMinArea(25);
-        qf.setMaxArea(500);
-        qf.setMinEccentricity(0.1);
-        qf.setMaxEccentricity(0.9);
-        qf.setMinSolidity(0.3);
-        qf.setMaxSolidity(0.95);
-        qf.setMinTotalIntensity(100);
-        qf.setMaxTotalIntensity(9000);
-        qf.setMinPerimeter(10);
-        qf.setMaxPerimeter(300);
+        qf.setMin(QualityFilter.AREA, 25);
+        qf.setMax(QualityFilter.AREA, 500);
+        qf.setMin(QualityFilter.ECCENTRICITY, 0.1);
+        qf.setMax(QualityFilter.ECCENTRICITY, 0.9);
+        qf.setMin(QualityFilter.SOLIDITY, 0.3);
+        qf.setMax(QualityFilter.SOLIDITY, 0.95);
+        qf.setMin(QualityFilter.TOTAL_INTENSITY, 100);
+        qf.setMax(QualityFilter.TOTAL_INTENSITY, 9000);
+        qf.setMin(QualityFilter.PERIMETER, 10);
+        qf.setMax(QualityFilter.PERIMETER, 300);
         qf.setRange("major_axis_length", new QualityFilter.Range(2, 40));
         tree.setQualityFilter(qf);
         tree.setRoiFilterEnabled(true);
@@ -601,9 +531,26 @@ class SerializerEdgeCaseTest {
         return text.replaceAll("(?m)^\\s*\"savedAt\": \"[^\"]*\",?\\R", "");
     }
 
+    /** The keys every current gate must carry, shared by every type. */
+    private static final String SHARED_KEYS = "\"clipPercentileLow\": 1.0, \"clipPercentileHigh\": 99.0, "
+            + "\"excludeOutliers\": false, \"correctStaining\": false";
+    /** A threshold gate's required keys. */
+    private static final String THRESHOLD_KEYS = SHARED_KEYS
+            + ", \"compartment\": \"WHOLE_CELL\", \"statistic\": \"Mean\"";
+    /** A two-axis gate's required keys. */
+    private static final String AXIS_KEYS = SHARED_KEYS
+            + ", \"compartmentX\": \"WHOLE_CELL\", \"compartmentY\": \"WHOLE_CELL\""
+            + ", \"statisticX\": \"Mean\", \"statisticY\": \"Mean\"";
+
+    /**
+     * Writes a hand-built fixture and loads it. {@code @S}, {@code @T} and {@code @A} expand to
+     * the required keys of any gate, a threshold gate and a two-axis gate, so a fixture fails
+     * (or loads) for the reason it names rather than for a missing required key.
+     */
     private GateTree loadText(String json) throws IOException {
         File f = tempDir.resolve("load-" + (fileCounter++) + ".json").toFile();
-        Files.writeString(f.toPath(), json, StandardCharsets.UTF_8);
+        String expanded = json.replace("@T", THRESHOLD_KEYS).replace("@A", AXIS_KEYS).replace("@S", SHARED_KEYS);
+        Files.writeString(f.toPath(), expanded, StandardCharsets.UTF_8);
         return FlowPathSerializer.load(f);
     }
 
@@ -628,7 +575,6 @@ class SerializerEdgeCaseTest {
         assertEquals(e.getClipPercentileLow(), a.getClipPercentileLow(), path + ": clipLow");
         assertEquals(e.getClipPercentileHigh(), a.getClipPercentileHigh(), path + ": clipHigh");
         assertEquals(e.isExcludeOutliers(), a.isExcludeOutliers(), path + ": excludeOutliers");
-        assertEquals(e.isThresholdIsZScore(), a.isThresholdIsZScore(), path + ": thresholdIsZScore");
 
         if (e instanceof QuadrantGate eq) {
             QuadrantGate aq = (QuadrantGate) a;

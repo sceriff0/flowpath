@@ -130,7 +130,7 @@ final class IngestCoordinator {
          * @param newIndex whether the cells changed (an image read or a clear) rather than only
          *                 the masks and statistics — the editor needs rebuilding only for this
          */
-        void resynced(Optional<GatingSession.MigrationNotice> notice, boolean newIndex);
+        void resynced(boolean newIndex);
 
         void busyChanged(Busy state);
 
@@ -441,7 +441,8 @@ final class IngestCoordinator {
      */
     private void adoptOrRederive(ImageData<?> imageData, GatingSession.Derived derived, boolean newIndex) {
         if (session.stillDescribes(derived)) {
-            host.resynced(session.resync(derived, () -> host.annotations(imageData)), newIndex);
+            session.resync(derived, () -> host.annotations(imageData));
+            host.resynced(newIndex);
         } else {
             rederive(imageData, newIndex);
         }
@@ -517,7 +518,8 @@ final class IngestCoordinator {
     private void clear(Cleared why) {
         session.adoptIndex(null);
         host.cleared(why);
-        host.resynced(session.resync(List::of), true);
+        session.resync(List::of);
+        host.resynced(true);
     }
 
     /** Drop anything in flight or armed: its result, if it comes, is no longer wanted. */

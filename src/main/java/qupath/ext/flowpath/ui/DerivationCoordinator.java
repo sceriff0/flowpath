@@ -54,7 +54,7 @@ final class DerivationCoordinator {
         List<PathObject> annotations();
 
         /** A resync finished; the cells are unchanged, so only the derived state is new. */
-        void resynced(Optional<GatingSession.MigrationNotice> notice);
+        void resynced();
 
         /**
          * Whether a derivation is running, for the spinner and anything disabled meanwhile.
@@ -132,7 +132,8 @@ final class DerivationCoordinator {
         CellIndex index = session.index();
         if (index == null) {
             setDeriving(false);
-            host.resynced(session.resync(host::annotations));
+            session.resync(host::annotations);
+            host.resynced();
             return;
         }
         long stamp = generation.get();
@@ -177,7 +178,8 @@ final class DerivationCoordinator {
                     return;
                 }
                 setDeriving(false);
-                host.resynced(session.resync(c.derived(), host::annotations));
+                session.resync(c.derived(), host::annotations);
+                host.resynced();
             }
             case Failed f -> {
                 // Nothing is adopted, so the session keeps the masks, statistics and counts it
