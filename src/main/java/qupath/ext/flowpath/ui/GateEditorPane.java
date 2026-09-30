@@ -75,7 +75,7 @@ public class GateEditorPane extends VBox {
     private final CheckBox lineageMarkerBox;
     /** A slide Manual/Skip, shown as a banner rather than drawn: its number is this slide's own raw value. */
     static final String CUT_LOCKED_HINT =
-            "This slide has its own threshold — open it from Needs a look, or use the cohort value";
+            "This slide has its own threshold — open it from the Cohort window, or use the cohort value";
 
     private final Label slideSettingLabel;
     /** Shown while the cut is locked; see {@link #setCutEditable}. */

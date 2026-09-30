@@ -20,16 +20,19 @@ import qupath.ext.flowpath.batch.BatchRunner;
 import qupath.ext.flowpath.batch.BatchSlide;
 import qupath.ext.flowpath.batch.CohortEvidence;
 import qupath.ext.flowpath.batch.FlowPathBatch;
+import qupath.ext.flowpath.ui.cohort.CohortGridModel;
+import qupath.ext.flowpath.ui.cohort.CohortGridPane;
+import qupath.ext.flowpath.ui.cohort.CohortWindow;
 import qupath.ext.flowpath.ui.cohort.ReviewKey;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
+import qupath.ext.flowpath.cohort.CohortExclusions;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
-import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.cohort.SlideSample;
@@ -68,7 +71,6 @@ import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.dialogs.Dialogs;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
-import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
@@ -79,11 +81,10 @@ import qupath.lib.roi.interfaces.ROI;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -202,14 +203,23 @@ public class FlowPathPane extends BorderPane {
     /** The slide ids and sample size the running or last sampling run was started for. */
     private String lastSampledKey;
 
-    /** The review list ("Needs a look"): renders the cohort's items, reports the answers. */
-    private final NeedsALookPane needsALook = new NeedsALookPane();
+    /** The side panel's cohort status (spec 2026-09-30 §3.1). */
+    private final CohortCard cohortCard = new CohortCard();
+    /** The Cohort window's body; kept across close and reopen, like the Analysis pane. */
+    private final CohortGridPane cohortGrid = new CohortGridPane();
+    private final CohortWindow cohortWindow = new CohortWindow();
+    /** The grid's "Only ⚠" filter. */
+    private boolean onlyLooks;
+    /** The grid's selected cell, by value; may name a cell with no review item (✓, ↷, ✎, ⊘). */
+    private ReviewItem.Key gridSelection;
     /** The review visual on the viewer; paints only (see {@link BoundaryOverlay}). */
     private final BoundaryOverlay boundaryOverlay = new BoundaryOverlay();
     /** The viewer {@link #boundaryOverlay} was added to, so {@link #shutdown()} removes it from that one. */
     private QuPathViewer overlayViewer;
     /** An item opened on another slide, focused once that slide's cells have landed. */
     private ReviewItem.Key pendingFocus;
+    /** A non-item grid cell's [Adjust] on another slide, shown once that slide's cells have landed. */
+    private ReviewItem.Key pendingAdjust;
     /**
      * The item being answered (by value; its gate is found in the live tree on every use), its
      * baseline and its undo mark; what a drag or an answer on it does lives there, toolkit-free.
@@ -242,24 +252,6 @@ public class FlowPathPane extends BorderPane {
                 t.setDaemon(true);
                 return t;
             });
-
-    /**
-     * The evidence crops' own single thread (spec §6): an image read must not queue behind gating
-     * on {@link #backgroundExecutor}, nor a gating pass behind a slow read. Shut down in
-     * {@link #shutdown()}.
-     */
-    private final ExecutorService cropExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "flowpath-crops");
-        t.setDaemon(true);
-        return t;
-    });
-
-    /** The selected review item's crop, the next few prefetched, an LRU of recent ones. */
-    private final EvidenceCropCoordinator crops = new EvidenceCropCoordinator(cropExecutor, Platform::runLater,
-            cohort::model, this::cropJob);
-
-    /** The (item, applied values) whose crop the pane shows or awaits; null when none. */
-    private EvidenceCropCoordinator.CacheKey shownCrop;
 
     /** Reads the open image's detections in the background, and again whenever they change. */
     private final IngestCoordinator ingest;
@@ -381,7 +373,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(addRootBtn, Priority.ALWAYS);
 
         HBox togglesRow = new HBox(8, roiFilterCheckBox, syncViewerChannelsToggle);
-        VBox leftPane = new VBox(4, treeView, treeToolbar, togglesRow, needsALook, qualityFilterPane);
+        VBox leftPane = new VBox(4, treeView, treeToolbar, togglesRow, cohortCard, qualityFilterPane);
         VBox.setVgrow(treeView, Priority.ALWAYS);
         leftPane.setPadding(new Insets(4));
         leftPane.setPrefWidth(280);
@@ -446,7 +438,8 @@ public class FlowPathPane extends BorderPane {
         exportBtn = new Button("Export CSV");
         exportBtn.setOnAction(e -> exportCsv());
         exportBtn.setTooltip(new Tooltip("Export phenotype assignments to CSV (Ctrl+E)"));
-        runAllButton = new Button("Run on all slides…");
+        // The card's button: it sits in the cohort card, not the toolbar.
+        runAllButton = cohortCard.runAllButton();
         runAllButton.setOnAction(e -> runOnAllSlides());
         runAllButton.setTooltip(new Tooltip("Gate every slide in the project with its own applied thresholds; "
                 + "write the population table, one phenotype CSV per slide and gating_manifest.csv"));
@@ -487,7 +480,7 @@ public class FlowPathPane extends BorderPane {
         HBox.setHgrow(toolbarSpacer, Priority.ALWAYS);
 
         HBox toolbar = new HBox(8, saveBtn, loadBtn, new Separator(Orientation.VERTICAL),
-            exportBtn, runAllButton, importButton, toolbarSpacer, analysisSlot, umapSlot);
+            exportBtn, importButton, toolbarSpacer, analysisSlot, umapSlot);
         toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         toolbar.setPadding(new Insets(6));
 
@@ -575,17 +568,29 @@ public class FlowPathPane extends BorderPane {
             showSlideSetting();
         });
 
-        needsALook.setOnItemChosen(this::showItem);
-        needsALook.setOnOpenInViewer(this::openSelectedInViewer);
-        needsALook.setOnGroupChosen(this::showGroup);
-        needsALook.setOnReviewGroup(this::answerGroup);
-        needsALook.setOnStep(this::stepReview);
-        needsALook.setOnLooksRight(this::answerEnter);
-        needsALook.setOnSkip(this::answerSkip);
-        needsALook.setOnUseReference(this::useSuggestedReference);
-        needsALook.setOnSlideFilter(id -> { cohort.setSlideFilter(id); renderNeedsALook(); });
+        cohortCard.setOnOpen(this::openCohortWindow);
+        cohortGrid.setOnCellChosen(this::chooseCell);
+        cohortGrid.setOnLooksRight(this::answerEnter);
+        cohortGrid.setOnSkip(this::answerSkip);
+        cohortGrid.setOnAdjust(this::adjustSelectedCell);
+        cohortGrid.setOnUseCohortValue(this::clearSelectedSlideSetting);
+        cohortGrid.setOnColumnLooksRight(key -> {
+            cohort.selectGroup(key);
+            answerGroup();
+        });
+        cohortGrid.setOnMakeReference(this::chooseReference);
+        cohortGrid.setOnUseSuggested(() -> {
+            String id = cohort.suggestedReferenceId();
+            if (id != null) chooseReference(id);
+        });
+        cohortGrid.setOnToggleExcluded(this::toggleExcluded);
+        cohortGrid.setOnOnlyLooksChanged(b -> {
+            onlyLooks = b;
+            renderCohort();
+        });
+        cohortGrid.setOnKey(this::onCohortKey);
         // The sample size is part of the sampling key, so the refresh re-samples.
-        needsALook.setOnSampleSizeChanged(n -> {
+        cohortGrid.setOnSampleSizeChanged(n -> {
             CohortPrefs.setSampledCellsPerSlide(CohortPrefs.node(), n);
             refreshCohort();
         });
@@ -693,6 +698,12 @@ public class FlowPathPane extends BorderPane {
                 ReviewItem.Key key = pendingFocus;
                 pendingFocus = null;
                 focusReviewItem(key);
+            }
+            if (pendingAdjust != null && pendingAdjust.slideId().equals(currentSlideId())) {
+                ReviewItem.Key key = pendingAdjust;
+                pendingAdjust = null;
+                // Only while it is still the grid's selection: the user may have moved on.
+                if (key.equals(gridSelection)) showGateOnSlide(key);
             }
         }
 
@@ -864,7 +875,7 @@ public class FlowPathPane extends BorderPane {
     private void onCohortScored() {
         // New samples or alignments: the All slides view re-reads them (a refresh, not a rebuild).
         if (cohort.viewMode() == CohortSession.ViewMode.ALL_SLIDES) editorPane.refreshEditor();
-        renderNeedsALook();
+        renderCohort();
     }
 
     /** What {@link #renderedCohortContext} holds; see there. */
@@ -874,9 +885,12 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * Bring {@link #cohort} in line with the project: its slides, the default reference slide,
-     * a sampling run when the slides or the sample size changed, and a rescore. Called when an
-     * ingest lands or clears, before its resync requests the pass.
+     * Bring {@link #cohort} in line with the project: its slides and which of them are excluded
+     * ({@link CohortExclusions}, read before any sampling starts), a sampling run of the included
+     * slides when the slides, the exclusions or the sample size changed, and a rescore. It never
+     * chooses a reference: a tree has none until the user confirms one ({@link #chooseReference}).
+     * Called when an ingest lands or clears, before its resync requests the pass, and after an
+     * exclusion toggle or a sample-size change.
      */
     private void refreshCohort() {
         Project<BufferedImage> project = qupath.getProject();
@@ -892,6 +906,8 @@ public class FlowPathPane extends BorderPane {
         Path projectDir = ProjectSlides.projectDir(project);
         List<CohortSession.SlideRef> refs = ProjectSlides.refs(project);
         cohort.setProject(projectDir.toString(), refs);
+        Set<String> excluded = CohortExclusions.of(project).excluded();
+        cohort.setExcluded(excluded);
         if (refs.size() < 2) {
             cohortCoordinator.cancel();
             lastSampledKey = null;
@@ -899,12 +915,15 @@ public class FlowPathPane extends BorderPane {
             return;
         }
         int cells = CohortPrefs.sampledCellsPerSlide(CohortPrefs.node());
-        String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells;
+        // The exclusions are part of the key, so a toggle re-samples without (or with) the slide.
+        String key = projectDir + "|" + refs.stream().map(CohortSession.SlideRef::id).toList() + "|" + cells
+                + "|" + new TreeSet<>(excluded);
         if (!key.equals(lastSampledKey)) {
             lastSampledKey = key;
             Path cacheFile = AlignmentCacheFile.pathFor(projectDir);
             cohort.setCache(AlignmentCacheFile.read(cacheFile));
-            cohortCoordinator.start(ProjectSlides.sources(project), session.tree(), cells, cacheFile);
+            cohortCoordinator.start(ProjectSlides.sources(project).stream()
+                    .filter(source -> !excluded.contains(source.id())).toList(), session.tree(), cells, cacheFile);
         }
         cohortCoordinator.rescore(session.tree());
         updateBusyControls();
@@ -952,43 +971,91 @@ public class FlowPathPane extends BorderPane {
         resyncToTree();
     }
 
-    // --- Needs a look (spec §6): the list, the click-through and the answers ---
+    // --- The cohort (spec 2026-09-30 §3): the card, the window, the click-through and the answers ---
 
-    /** The review list as the cohort now stands; it renders and decides nothing. */
-    private void renderNeedsALook() {
-        ReviewGroup group = cohort.selectedGroup();
-        needsALook.renderGroups(cohort.groups(), group == null ? null : group.key());
-        needsALook.renderStrip(cohort.slideStrip(), cohort.statusLine(runAllowed(busyState())), cohort.slideFilter());
-        ReviewItem selected = cohort.selected();
-        List<ReviewItem> items = cohort.visibleItems();
-        needsALook.render(cohort.state(), items, cohort.review().infos(),
-                selected == null ? null : selected.key(), CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
-        syncCrop(selected, items);
+    /** The cohort as it now stands, in the card and (when open) the window; decides nothing. */
+    private void renderCohort() {
+        CohortState state = cohort.state();
+        boolean noReference = session.tree().getReferenceSlideId() == null;
+        String suggested = cohort.suggestedReferenceId();
+        String open = noReference && state.available() ? "Choose reference…" : "Open cohort…";
+        String line = noReference && suggested != null
+                ? "Pick a reference slide — suggested: " + cohort.slideName(suggested)
+                : cohort.statusLine(runAllowed(busyState()));
+        // Shown while a run goes too, so its Cancel stays reachable (see updateRunAllButton).
+        boolean running = batchRun != null && batchRun.running();
+        cohortCard.render(line, open, state.available() || running);
+        if (cohortWindow.isOpen()) {
+            cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks),
+                    CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
+        }
+    }
+
+    private void openCohortWindow() {
+        java.net.URL css = FlowPathPane.class.getResource("/qupath/ext/flowpath/ui/flowpath.css");
+        cohortWindow.open(getScene() == null ? null : getScene().getWindow(), cohortGrid,
+                css == null ? null : css.toExternalForm());
+        renderCohort();
     }
 
     /**
-     * The crop follows the selection: the selected item's crop is requested when it, or its
-     * applied values (a rescore after a moved cut), or the alignment model differ from the one
-     * shown — so a moved threshold or a rescore re-renders — and nothing is shown when nothing is selected. The items after it
-     * in the list are prefetched. A crop landing for anything else is never shown (see
-     * {@link EvidenceCropCoordinator}).
+     * A grid cell chosen. The grid keeps its own selection by value, because a cell may have no
+     * review item (✓, ↷, ✎, ⊘) and {@link CohortSession#selected()} answers only for items; a
+     * cell that is an item is selected in the session too, so Enter and S answer it.
      */
-    private void syncCrop(ReviewItem selected, List<ReviewItem> items) {
-        if (selected == null) {
-            if (shownCrop == null) return;
-            shownCrop = null;
-            crops.cancel();
-            needsALook.clearCrop();
+    private void chooseCell(ReviewItem.Key key) {
+        gridSelection = key;
+        boolean isItem = cohort.review().items().stream().anyMatch(i -> i.key().equals(key));
+        if (isItem) {
+            showItem(key);
+        } else {
+            if (review.active() != null) endActiveReview();
+            pendingFocus = null;
+            cohort.select(null);
+            renderCohort();
+        }
+    }
+
+    /**
+     * [Adjust] (spec §3.4): the slide opened in the viewer with the gate selected in the editor.
+     * A review item goes through its own click-through ({@link #openSelectedInViewer}); any other
+     * cell opens its slide and shows the gate in This slide view, without opening a review.
+     */
+    private void adjustSelectedCell() {
+        if (cohort.selected() != null) {
+            openSelectedInViewer();
             return;
         }
-        EvidenceCropCoordinator.CacheKey key = crops.keyOf(selected);
-        if (key.equals(shownCrop)) return;
-        shownCrop = key;
-        int at = -1;
-        for (int i = 0; i < items.size(); i++) if (items.get(i).key().equals(selected.key())) at = i;
-        List<ReviewItem> following = at < 0 ? List.of() : items.subList(at + 1, items.size());
-        needsALook.showCropLoading();
-        crops.show(selected, List.copyOf(following), needsALook::showCrop);
+        ReviewItem.Key key = gridSelection;
+        if (key == null) return;
+        if (key.slideId().equals(currentSlideId())) {
+            showGateOnSlide(key);
+            return;
+        }
+        endActiveReview();
+        Project<BufferedImage> project = qupath.getProject();
+        ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getImageList().stream()
+                .filter(e -> key.slideId().equals(e.getID())).findFirst().orElse(null);
+        if (entry == null) {
+            Dialogs.showWarningNotification("FlowPath", "That slide is no longer in the project");
+            return;
+        }
+        pendingAdjust = key;
+        if (!qupath.openImageEntry(entry)) pendingAdjust = null;
+    }
+
+    /** The gate of {@code key} shown in This slide view on its (open) slide; nothing is reviewed. */
+    private void showGateOnSlide(ReviewItem.Key key) {
+        GateNode gate = CohortSession.liveGate(session.tree(), key);
+        if (gate == null) {
+            renderCohort();
+            return;
+        }
+        currentNode = gate;
+        cohort.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
+        editorPane.setViewMode(CohortSession.ViewMode.THIS_SLIDE);
+        render(Optional.empty(), false);
+        syncViewerChannels(gate);
     }
 
     /**
@@ -1000,8 +1067,10 @@ public class FlowPathPane extends BorderPane {
         if (review.active() != null && !review.active().equals(key)) endActiveReview();
         // A click-through still waiting for its slide is for the item the user has just left.
         pendingFocus = ReviewTarget.pendingAfterSelecting(pendingFocus, key);
+        pendingAdjust = null;
         cohort.select(key);
-        renderNeedsALook();
+        gridSelection = key;   // N / P and the next item after an answer move the grid's selection too
+        renderCohort();
     }
 
     /** V / "Open in viewer": the selected item's full click-through (Task 14's). */
@@ -1011,52 +1080,13 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * Snapshot, on the FX thread, what the selected item's crop needs, and return the work for
-     * {@code flowpath-crops}: the open slide's own server when the item is on it, else a server
-     * built from the project entry and closed after the read.
-     */
-    private Callable<EvidenceCrop.Crop> cropJob(ReviewItem item) {
-        GateTree tree = session.tree().deepCopy();
-        String slideId = item.key().slideId();
-        SlideSample sample = cohort.sample(slideId);
-        SlideSample reference = tree.getReferenceSlideId() == null ? null : cohort.sample(tree.getReferenceSlideId());
-        AlignmentModel model = cohort.model();
-        // Bound to the captured model — the one the crop's cache key names — never the live
-        // lookup, which a rescore landing mid-read would move to another model.
-        AlignmentLookup lookup = cohort.lookupOn(model);
-        boolean open = slideId.equals(currentSlideId());
-        ImageData<BufferedImage> imageData = qupath.getImageData();
-        ImageServer<BufferedImage> openServer = open && imageData != null ? imageData.getServer() : null;
-        Project<BufferedImage> project = qupath.getProject();
-        ProjectImageEntry<BufferedImage> entry = openServer != null || project == null ? null
-                : project.getImageList().stream().filter(e -> slideId.equals(e.getID())).findFirst().orElse(null);
-        return () -> {
-            if (sample == null) return EvidenceCrop.Crop.failed("This slide has not been sampled yet");
-            if (model == null) return EvidenceCrop.Crop.failed("The cohort has not been aligned yet");
-            if (openServer != null) return renderCrop(openServer, item, tree, sample, reference, model, lookup);
-            if (entry == null) return EvidenceCrop.Crop.failed("This slide is no longer in the project");
-            try (ImageServer<BufferedImage> server = entry.getServerBuilder().build()) {
-                return renderCrop(server, item, tree, sample, reference, model, lookup);
-            }
-        };
-    }
-
-    private static EvidenceCrop.Crop renderCrop(ImageServer<BufferedImage> server, ReviewItem item, GateTree tree,
-                                                SlideSample sample, SlideSample reference, AlignmentModel model,
-                                                AlignmentLookup lookup) {
-        EvidenceCrop.Spec spec = EvidenceCrop.spec(item, tree, sample, reference, model, lookup,
-                BoundaryHotspot.fieldPixels(server.getPixelCalibration()));
-        return spec == null ? EvidenceCrop.Crop.failed("No cells near the threshold in this slide's sample")
-                : EvidenceCrop.render(server, spec);
-    }
-
-    /**
      * Open an item: its slide first, when another one is open — QuPath owns the save prompt for
      * the slide being left, and the item is focused once the new slide's cells have landed (see
      * {@link IngestHost#resynced}).
      */
     private void openReviewItem(ReviewItem.Key key) {
         cohort.select(key);
+        gridSelection = key;
         if (key.slideId().equals(currentSlideId())) {
             focusReviewItem(key);
             return;
@@ -1067,12 +1097,12 @@ public class FlowPathPane extends BorderPane {
                 .filter(e -> key.slideId().equals(e.getID())).findFirst().orElse(null);
         if (entry == null) {
             Dialogs.showWarningNotification("FlowPath", "That slide is no longer in the project");
-            renderNeedsALook();
+            renderCohort();
             return;
         }
         pendingFocus = key;
         if (!qupath.openImageEntry(entry)) pendingFocus = null;
-        renderNeedsALook();
+        renderCohort();
     }
 
     /**
@@ -1101,11 +1131,11 @@ public class FlowPathPane extends BorderPane {
         ReviewItem selected = cohort.selected();
         if (!ReviewTarget.mayFocus(key, selected == null ? null : selected.key())) {
             // The user moved on while the slide opened: open nothing the list is not showing.
-            renderNeedsALook();
+            renderCohort();
             return;
         }
         if (gate == null) {
-            renderNeedsALook();
+            renderCohort();
             return;
         }
         if (session.index() == null || session.stats() == null) {
@@ -1211,28 +1241,7 @@ public class FlowPathPane extends BorderPane {
             else showItem(next);
         } else {
             cohort.select(null);
-            renderNeedsALook();
-        }
-    }
-
-    /**
-     * A gate's group chosen: that gate shown in All slides, its flagged slides' ridges marked, and
-     * the list narrowed to its items. An open item is left as Esc leaves it (its drags stay, as the
-     * edits they were) — the group is looked at across slides, not on this one.
-     */
-    private void showGroup(ReviewGroup.Key key) {
-        endActiveReview();
-        cohort.select(null);
-        cohort.selectGroup(key);
-        cohort.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
-        editorPane.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
-        GateNode gate = CohortSession.liveGate(session.tree(), new ReviewItem.Key(null, key.rootIndex(), key.gatePath()));
-        if (gate != null) {
-            currentNode = gate;
-            render(Optional.empty(), false);   // selects the gate and shows it, as focusReviewItem does
-            syncViewerChannels(gate);
-        } else {
-            renderNeedsALook();
+            renderCohort();
         }
     }
 
@@ -1255,17 +1264,19 @@ public class FlowPathPane extends BorderPane {
         endActiveReview();
         resyncToTree();
         cohortCoordinator.rescore(session.tree());
-        renderNeedsALook();
+        renderCohort();
     }
 
     /** Esc: back to All slides, the overlay off. A drag made meanwhile stays, as the edit it is. */
     private void leaveReview() {
         endActiveReview();
         cohort.select(null);
+        gridSelection = null;
+        pendingAdjust = null;
         cohort.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
         editorPane.setViewMode(CohortSession.ViewMode.ALL_SLIDES);
         showSlideSetting();
-        renderNeedsALook();
+        renderCohort();
     }
 
     /**
@@ -1287,17 +1298,117 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * "Use … as reference": rebase every gate's numbers onto the suggested slide, as one undo
-     * step that records its name too, then the one resync path and a rescore for the new basis.
+     * ☆ / "Use X" (spec 2026-09-30 §4.1). No reference yet: a tree with no gates takes {@code id}
+     * directly; a tree with gates first asks which slide they were drawn on — that slide becomes
+     * the reference (the numbers are its numbers), and the suggestion is offered again once the
+     * rescore lands. An existing reference is rebased, after one confirmation, as one undo step
+     * ({@link CohortSession#rebaseReference} through {@code recordSlideEdit}).
      */
-    private void useSuggestedReference() {
-        String id = cohort.suggestedReferenceId();
+    private void chooseReference(String id) {
         if (id == null || !CohortIdentity.matches(session.tree(), cohort.projectNames())) return;
-        session.recordSlideEdit(id, cohort.slideName(id),
-                () -> CohortSession.rebaseReference(session.tree(), id, alignments));
+        GateTree tree = session.tree();
+        if (tree.getReferenceSlideId() == null) {
+            String chosen = id;
+            if (!tree.getRoots().isEmpty()) {
+                List<String> names = cohort.projectSlides().stream()
+                        .filter(r -> !cohort.excluded().contains(r.id()))
+                        .map(CohortSession.SlideRef::name).toList();
+                String openName = indexSlideId == null ? null : cohort.slideName(indexSlideId);
+                if (openName == null || !names.contains(openName)) openName = cohort.slideName(id);
+                String picked = Dialogs.showChoiceDialog("Reference slide",
+                        "Which slide were these gates drawn on? Its thresholds are kept as they are; "
+                                + "you can switch to " + cohort.slideName(id) + " afterwards.", names, openName);
+                if (picked == null) return;
+                chosen = cohort.projectSlides().stream().filter(r -> r.name().equals(picked))
+                        .map(CohortSession.SlideRef::id).findFirst().orElse(null);
+                if (chosen == null) return;
+            }
+            session.confirmReference(chosen, cohort.projectNames());
+        } else {
+            if (id.equals(tree.getReferenceSlideId())) return;
+            if (!Dialogs.showConfirmDialog("Reference slide",
+                    "Thresholds will be re-expressed on " + cohort.slideName(id) + ". Ctrl+Z undoes it.")) return;
+            session.recordSlideEdit(id, cohort.slideName(id),
+                    () -> CohortSession.rebaseReference(session.tree(), id, alignments));
+        }
         endActiveReview();
         resyncToTree();
         cohortCoordinator.rescore(session.tree());
+        renderCohort();
+    }
+
+    /**
+     * Exclude or include a slide (spec §5): project metadata, not a tree edit, so no undo step.
+     * The current reference is refused. A selected cell on the slide just excluded is dropped,
+     * and the refresh re-samples without it (the exclusions are part of the sampling key) and
+     * rescores.
+     */
+    private void toggleExcluded(String slideId) {
+        Project<BufferedImage> project = qupath.getProject();
+        if (project == null || slideId == null) return;
+        if (slideId.equals(session.tree().getReferenceSlideId())) {
+            Dialogs.showWarningNotification("FlowPath", "Pick another reference first");
+            return;
+        }
+        CohortExclusions exclusions = CohortExclusions.of(project);
+        boolean exclude = !exclusions.isExcluded(slideId);
+        try {
+            exclusions.setExcluded(slideId, exclude);
+        } catch (IOException e) {
+            logger.error("Could not save the exclusion of {}", slideId, e);
+            Dialogs.showErrorMessage("FlowPath", "Could not save the project: " + e.getMessage());
+            return;
+        }
+        if (exclude && gridSelection != null && slideId.equals(gridSelection.slideId())) {
+            gridSelection = null;
+            ReviewItem selected = cohort.selected();
+            if (selected != null && slideId.equals(selected.key().slideId())) {
+                if (review.active() != null) endActiveReview();
+                cohort.select(null);
+            }
+        }
+        refreshCohort();
+        renderCohort();
+    }
+
+    /**
+     * "Use cohort value" for the grid's selected cell: drop that slide's setting on that gate, as
+     * one undo step, then the one resync path and a rescore.
+     */
+    private void clearSelectedSlideSetting() {
+        ReviewItem.Key key = gridSelection;
+        if (key == null) return;
+        GateNode gate = CohortSession.liveGate(session.tree(), key);
+        if (gate == null || gate.slideSetting(key.slideId()) == null) return;
+        session.recordEdit();
+        gate.setSlideSetting(key.slideId(), null);
+        resyncToTree();
+        cohortCoordinator.rescore(session.tree());
+        renderCohort();
+    }
+
+    /** A review key pressed in the Cohort window's grid; the same handlers as the main pane's keys. */
+    private void onCohortKey(ReviewKey key) {
+        switch (key) {
+            case LOOKS_RIGHT -> answerEnter();
+            case SKIP -> answerSkip();
+            case NEXT -> stepReview(+1);
+            case PREVIOUS -> stepReview(-1);
+            case BACK -> leaveReview();
+            case REVIEW_GROUP -> {
+                // Shift+Enter in the grid: the selected cell's column, as its "All look right".
+                if (gridSelection != null) {
+                    cohort.selectGroup(new ReviewGroup.Key(gridSelection.rootIndex(), gridSelection.gatePath()));
+                }
+                answerGroup();
+            }
+            case OPEN_IN_VIEWER -> adjustSelectedCell();
+            case TOGGLE_OVERLAY -> {
+                if (viewerGate() == null) return;
+                boundaryOverlay.toggle();
+                if (overlayViewer != null) overlayViewer.repaint();
+            }
+        }
     }
 
     /**
@@ -1337,7 +1448,7 @@ public class FlowPathPane extends BorderPane {
                 } else if (cohort.selectedGroup() != null) {
                     // Out of the gate's group: the list shows every item again.
                     cohort.selectGroup(null);
-                    renderNeedsALook();
+                    renderCohort();
                 } else {
                     return false;
                 }
@@ -1380,7 +1491,7 @@ public class FlowPathPane extends BorderPane {
         updateRunAllButton(busy);
         updateImportButton(busy, null);
         updateStatusBar();
-        renderNeedsALook();
+        renderCohort();
     }
 
     /**
@@ -2906,7 +3017,7 @@ public class FlowPathPane extends BorderPane {
         renderedCohortContext = cohortContext();
 
         updateStatusBar();
-        renderNeedsALook();
+        renderCohort();
         notice.ifPresent(this::showMigrationNotice);
     }
 
@@ -2956,9 +3067,7 @@ public class FlowPathPane extends BorderPane {
         cohortCoordinator.cancel();
         batchRun.close();
         mirageImport.close();
-        crops.cancel();
-        // shutdownNow: a crop still reading is for a pane that is gone.
-        cropExecutor.shutdownNow();
+        cohortWindow.close();
         ingest.close();
         derivations.close();
         umapWindow.close();
