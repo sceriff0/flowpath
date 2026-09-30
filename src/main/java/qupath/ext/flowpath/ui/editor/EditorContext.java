@@ -1,10 +1,16 @@
 package qupath.ext.flowpath.ui.editor;
 
 import javafx.collections.ObservableList;
+import qupath.ext.flowpath.cohort.CohortCurves;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.CompartmentCapability;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.MarkerStats;
+import qupath.ext.flowpath.model.SlideSetting;
+import qupath.ext.flowpath.model.cohort.Alignment;
+
+import java.util.List;
+import java.util.Set;
 
 /**
  * What a {@link GateTypeEditor} reads from, and reports to, the pane that hosts it.
@@ -25,6 +31,43 @@ public interface EditorContext {
 
     /** Cells in the shown gate's parent population, or {@code null} for a root gate. */
     boolean[] ancestorMask();
+
+    /**
+     * The open slide's alignment for {@code gate}'s {@code axis}; identity when nothing is
+     * corrected (correction off, the open slide is the reference, or no alignment is known).
+     * The gate's own numbers stay in reference units; only the values drawn pass through this.
+     */
+    Alignment displayAlignment(GateNode gate, int axis);
+
+    /** The reference slide's name, or null outside a cohort. */
+    String referenceName();
+
+    /**
+     * The shown gate's setting on the open slide ({@code Manual}, {@code Skip}, {@code Reviewed})
+     * or null. A {@code Manual} or {@code Skip} replaces what {@link #displayAlignment} implies
+     * for this slide, so anything that states the number applied here must ask this first.
+     */
+    SlideSetting slideSetting();
+
+    /**
+     * Whether the editor may move the shown gate's cut. False in This slide view when the gate
+     * has its own Manual or Skip on the open slide and is not the open review item: a drag would
+     * move every other slide's cut and not this one's. The editor then locks its cut controls.
+     */
+    boolean cutEditable();
+
+    /**
+     * Every sampled slide's values for {@code gate}, in reference units, for the All slides
+     * view; empty unless the pane is in All slides with a cohort available. A view only: the
+     * editor still edits the gate's reference numbers.
+     */
+    List<CohortCurves.SlideValues> cohortValues(GateNode gate);
+
+    /**
+     * The ids of the slides the review flagged on {@code gate}, for the All slides view to mark;
+     * empty unless the pane is in All slides.
+     */
+    Set<String> flaggedSlides(GateNode gate);
 
     /** The live channel list; channel pickers share it rather than copy it. */
     ObservableList<String> channelNames();

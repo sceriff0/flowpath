@@ -8,7 +8,9 @@ import qupath.ext.flowpath.model.Branch;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.testing.Cells;
 import qupath.lib.images.ImageData;
@@ -265,6 +267,40 @@ class IngestCoordinatorTest {
         assertEquals(IngestCoordinator.Cleared.NO_DETECTIONS, rig.host.cleared.get(rig.host.cleared.size() - 1));
         assertEquals(0, rig.background.pending());
         assertEquals(IngestCoordinator.Busy.IDLE, rig.host.lastBusy());
+    }
+
+    /**
+     * Spec §10 (pre-flight ruling C11): the cohort review loop opens another slide and expects the
+     * gate tree — and every slide's settings on it — to be exactly as the user left it. One case
+     * per kind of switch: a slide with cells, one without detections, and no image at all.
+     */
+    @Test
+    void anImageSwitchKeepsTheSameTreeWithItsSlideSettings() {
+        record Case(String name, ImageData<BufferedImage> next) {}
+        List<Case> table = List.of(
+                new Case("a slide with cells", imageWith("b", cd3Cells(4))),
+                new Case("a slide without detections", imageWith("empty", List.of())),
+                new Case("no image", null));
+        for (Case c : table) {
+            Rig rig = new Rig();
+            // Two roots on the same channel, each with a different setting for the same slide.
+            rig.root(0).setSlideSetting("2", new SlideSetting.Manual(GateValues.of(new double[]{7.0})));
+            rig.root(1).setSlideSetting("2", new SlideSetting.Skip());
+            rig.root(1).setSlideSetting("3", new SlideSetting.Reviewed(GateValues.of(new double[]{2.5})));
+            rig.coordinator.open(imageWith("a", cd3Cells(10)));
+            rig.background.runAll();
+            GateTree before = rig.session.tree();
+            var settings0 = new java.util.LinkedHashMap<>(rig.root(0).getSlideSettings());
+            var settings1 = new java.util.LinkedHashMap<>(rig.root(1).getSlideSettings());
+
+            rig.coordinator.open(c.next());
+            rig.background.runAll();
+
+            assertSame(before, rig.session.tree(), c.name() + ": the same tree instance");
+            assertEquals(2, rig.session.tree().getRoots().size(), c.name());
+            assertEquals(settings0, rig.root(0).getSlideSettings(), c.name() + ": root 0's slide settings");
+            assertEquals(settings1, rig.root(1).getSlideSettings(), c.name() + ": root 1's slide settings");
+        }
     }
 
     /**

@@ -1,5 +1,8 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.cohort.CohortIdentity;
+import qupath.ext.flowpath.cohort.ReviewAnswers;
+import qupath.ext.flowpath.engine.CleanMask;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
@@ -11,7 +14,9 @@ import qupath.ext.flowpath.model.UndoHistory;
 import qupath.lib.objects.PathObject;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -105,9 +110,27 @@ final class GatingSession {
      */
     private String lastUnchangedMigrationNotice;
 
+    /** The project whose first sighting {@link #applyDefaultReference} has already answered. */
+    private String defaultReferenceProject;
+
+    /** Told before any undo step that is not a gate edit is recorded; see {@link #setOnNonGateEdit}. */
+    private Runnable onNonGateEdit = () -> {};
+
     GatingSession(LongSupplier clock, GatingPass gatingPass) {
         this.undoHistory = new UndoHistory<>(UndoHistory.DEFAULT_MAX_DEPTH, GateTree::deepCopy, clock);
         this.gatingPass = Objects.requireNonNull(gatingPass, "gatingPass");
+    }
+
+    /**
+     * Called before every undo step recorded for something other than an edit of a gate's own
+     * cut: a load, a discrete edit (add, duplicate, delete, move, a quality-filter reset, a
+     * cleared slide setting), a quality-filter drag, the ROI toggle, an enabled checkbox, a
+     * default reference. An open review item listens and closes, so its answer can never fold
+     * such an edit into the item's one undo step. Gate edits and the review answers themselves
+     * ({@link #recordSlideEdit}, {@link #recordSlideEdits}) do not call it.
+     */
+    void setOnNonGateEdit(Runnable callback) {
+        this.onNonGateEdit = callback == null ? () -> {} : callback;
     }
 
     // ---- state -------------------------------------------------------------------------
@@ -281,31 +304,16 @@ final class GatingSession {
     private static Derived derive(DerivationInputs in, boolean[] reusableMask, MarkerStats reusable) {
         CellIndex idx = in.index();
         if (idx == null) return Derived.NONE;
-        RegionMask regions = in.roiFilterEnabled() ? usableRegions(idx, in.annotations()) : null;
-        boolean[] roi = regions != null ? regions.included() : null;
-        boolean[] quality = qualityMaskOf(idx, in.qualityFilter());
-        boolean[] combined = quality == null ? roi
-                : roi == null ? quality
-                : GatingEngine.combineMasks(quality, roi);
-        MarkerStats stats = reusable != null && Arrays.equals(combined, reusableMask)
+        // The one quality-then-ROI composition, shared with a batch run and the cohort's samples.
+        CleanMask clean = CleanMask.of(idx, in.qualityFilter(), in.roiFilterEnabled(), in.annotations());
+        MarkerStats stats = reusable != null && Arrays.equals(clean.combined(), reusableMask)
                 ? reusable
-                : MarkerStats.compute(idx, combined);
-        return new Derived(idx, in.roiFilterEnabled(), regions, quality, stats);
+                : MarkerStats.compute(idx, clean.combined());
+        return new Derived(idx, in.roiFilterEnabled(), clean.regions(), clean.quality(), stats);
     }
 
     private static boolean[] qualityMaskOf(CellIndex idx, QualityFilter filter) {
         return filter == null ? null : GatingEngine.computeQualityMask(idx, filter);
-    }
-
-    /**
-     * The regions to filter by, or {@code null} when there is nothing usable. Treated as "no
-     * filter" rather than "exclude everything": annotations that enclose no area answer
-     * {@code contains()} false everywhere, so the old behaviour emptied the entire view
-     * whenever the only annotation on the image was a point or a line.
-     */
-    private static RegionMask usableRegions(CellIndex index, List<PathObject> annotations) {
-        RegionMask computed = RegionMask.compute(index, annotations);
-        return computed.isEmpty() ? null : computed;
     }
 
     // ---- what changes the inputs -------------------------------------------------------
@@ -339,10 +347,39 @@ final class GatingSession {
      * seconds long.
      */
     void replaceTree(GateTree loaded) {
+        replaceTree(loaded, null, Map.of());
+    }
+
+    /**
+     * {@link #replaceTree(GateTree)}, giving a loaded tree that names no reference slide the
+     * default one — {@code openSlideId}, the slide whose cells the session holds — inside the
+     * load's own undo step, with the project's image names (final ruling I3). One undo takes the
+     * load and its default back together; recorded as a step of its own, it would leave the tree
+     * just loaded with no reference, and the cohort list would read "all clear" over slides no
+     * alignment was ever computed for. A tree whose recorded names contradict the project
+     * ({@code cohort/CohortIdentity}) is left as loaded: it is another project's.
+     *
+     * @param openSlideId  the default reference, or null when there is no cohort to anchor it in
+     * @param projectNames the project's images, id → name
+     */
+    void replaceTree(GateTree loaded, String openSlideId, Map<String, String> projectNames) {
         Objects.requireNonNull(loaded, "loaded");
+        onNonGateEdit.run();
         undoHistory.record(tree);
+        if (openSlideId != null && loaded.getReferenceSlideId() == null
+                && CohortIdentity.matches(loaded, projectNames)) {
+            setDefaultReference(loaded, openSlideId, projectNames);
+        }
         GateTree.transferCountsIfStructureMatches(loaded.getRoots(), tree.getRoots());
         this.tree = loaded;
+    }
+
+    /** {@code referenceId} becomes {@code target}'s reference, the project's names recorded beside it. */
+    private static void setDefaultReference(GateTree target, String referenceId, Map<String, String> projectNames) {
+        Map<String, String> names = new LinkedHashMap<>(target.getSlideNames());
+        names.putAll(projectNames);
+        target.setReferenceSlideId(referenceId);
+        target.setSlideNames(names);
     }
 
     /** Step back one edit; {@code true} if there was one. Follow with {@link #resync}. */
@@ -368,7 +405,87 @@ final class GatingSession {
      * {@linkplain #settle settles} once the edit is written.
      */
     void recordEdit() {
+        onNonGateEdit.run();
         undoHistory.record(tree);
+    }
+
+    /** A point to fold later undo steps back to; see {@link #collapseSince}. */
+    long undoMark() {
+        return undoHistory.undoMark();
+    }
+
+    /**
+     * Fold every undo step recorded after {@code mark} into its first — a review item's drags
+     * and its answer become the one step back to the item as it was opened.
+     */
+    void collapseSince(long mark) {
+        undoHistory.collapseSince(mark);
+    }
+
+    /**
+     * A slide-setting edit — a review answer, or a reference rebase — as one undo step: the tree
+     * is recorded as it is now (as {@link #recordEdit} does, but without telling an open review
+     * item to close: this is that item's own answer), {@code edit} runs, and {@code slideId}'s
+     * image name is recorded in the same step when the tree has none for it (see
+     * {@code cohort/CohortIdentity}), so undo takes the setting and the name back together.
+     * Settled; follow with {@link #resync}.
+     */
+    void recordSlideEdit(String slideId, String slideName, Runnable edit) {
+        undoHistory.record(tree);
+        edit.run();
+        ReviewAnswers.recordSlideName(tree, slideId, slideName);
+        settle();
+    }
+
+    /**
+     * {@link #recordSlideEdit} for an edit of several slides' settings at once — a gate's whole
+     * review group (Shift+Enter): the tree is recorded ONCE, {@code edit} writes every setting,
+     * and every slide's name in {@code slideNames} (id → name) is recorded in that same step, so
+     * one undo takes every setting and every name back together. Like {@link #recordSlideEdit} it
+     * does not tell an open review item to close: the caller decides what the answer does to it.
+     * Settled; follow with {@link #resync}.
+     */
+    void recordSlideEdits(Map<String, String> slideNames, Runnable edit) {
+        undoHistory.record(tree);
+        edit.run();
+        slideNames.forEach((id, name) -> ReviewAnswers.recordSlideName(tree, id, name));
+        settle();
+    }
+
+    /**
+     * The first time a project's cohort is seen with a tree that names no reference slide, the
+     * open slide becomes the reference (spec §3) — as one undo step recorded before the change,
+     * then settled (pre-flight ruling C9). It changes no number on the open slide, but it switches
+     * correction on for every other slide; left out of the undo history, every snapshot taken
+     * before it would hold no reference, and undoing past this moment would switch correction
+     * off without anything having recorded that it was ever on.
+     * <p>
+     * <b>Once per project</b> (final review M6): undoing past it restores the pre-state honestly —
+     * no reference, which the cohort then reports as "No reference slide" — and the next ingest
+     * of the same project does <em>not</em> apply it again. Re-applying it recorded a fresh step on
+     * every ingest after such an undo, and recording a step clears the redo stack: the undone
+     * work could never be redone. A tree loaded later gets its default inside the load's own step
+     * ({@link #replaceTree(GateTree, String, Map)}).
+     * <p>
+     * The project's id → name map is recorded in the same step: entry ids restart in every
+     * project, so the names are what later tells this tree's reference and slide settings apart
+     * from another project's images (see {@code cohort/CohortIdentity}).
+     *
+     * @param openSlideId  the project id of the slide whose cells the session holds; null outside
+     *                     a project, when nothing is set (and nothing is marked as seen)
+     * @param projectKey   which project the cohort is ({@code ui/ProjectSlides.projectDir})
+     * @param projectNames the project's images, id → name
+     * @return whether the reference was set (and a step recorded)
+     */
+    boolean applyDefaultReference(String openSlideId, String projectKey, Map<String, String> projectNames) {
+        if (openSlideId == null || Objects.equals(projectKey, defaultReferenceProject)) return false;
+        defaultReferenceProject = projectKey;
+        if (tree.getReferenceSlideId() != null) return false;
+        onNonGateEdit.run();
+        undoHistory.record(tree);
+        setDefaultReference(tree, openSlideId, projectNames);
+        settle();
+        return true;
     }
 
     /**
@@ -391,6 +508,7 @@ final class GatingSession {
      * which is the tree just before this one. Coalesced by source, so a drag is one step.
      */
     void recordAppliedEdit(EditSource source) {
+        if (source != EditSource.GATE) onNonGateEdit.run();
         undoHistory.recordCoalesced(settled, source);
         settle();
     }
@@ -400,6 +518,7 @@ final class GatingSession {
      * the settled tree, as one uncoalesced step.
      */
     void recordAppliedDiscreteEdit() {
+        onNonGateEdit.run();
         undoHistory.record(settled);
         settle();
     }
@@ -420,6 +539,7 @@ final class GatingSession {
      * its write (the quality-filter panel's before-change hook).
      */
     void recordEditCoalesced(EditSource source) {
+        if (source != EditSource.GATE) onNonGateEdit.run();
         undoHistory.recordCoalesced(tree, source);
     }
 
@@ -430,6 +550,7 @@ final class GatingSession {
      */
     void setRoiFilterEnabled(boolean enabled) {
         if (tree.isRoiFilterEnabled() == enabled) return;
+        onNonGateEdit.run();
         undoHistory.record(tree);
         tree.setRoiFilterEnabled(enabled);
     }

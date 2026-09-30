@@ -13,11 +13,13 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.EllipseGate;
+import qupath.ext.flowpath.model.GateValues;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
+import qupath.ext.flowpath.model.SlideSetting;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -30,7 +32,9 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Serializes and deserializes {@link GateTree} instances to/from JSON files.
@@ -47,7 +51,26 @@ public class FlowPathSerializer {
     // structurally a v3 file and an older FlowPath can still load it. Bumping would have
     // made those readers throw "Unsupported gate tree version" over a block they were
     // free to ignore.
-    private static final int CURRENT_VERSION = 3;
+    //
+    // v4 adds per-slide cohort settings (SlideSetting, keyed by slide id) and the flag
+    // controlling whether a gate corrects for staining, on every node, plus an optional
+    // tree-level reference slide id. A file written before v4 carries none of this: correction
+    // loads off (see deserializeNode) so opening an old tree never changes a number, and a gate
+    // with no "slideSettings" key simply has none.
+    //
+    // A tree that uses none of v4's cohort state is still written as version 3 (final review
+    // M2), so FlowPath 0.9.4 — which refuses anything above 3 — opens every tree a user who
+    // never touched a cohort saves. "Uses cohort state" means a field an older reader would drop
+    // with a consequence: a reference slide, recorded slide names, any per-slide setting (a Manual
+    // or Skip silently lost would move that slide's number), a lineage tick. See versionFor.
+    // correctStaining is deliberately not among them: it is written on every gate at every
+    // version, and a reader reads the key whenever it is present, whatever the version. Without a
+    // reference slide it changes no number anywhere, so an old reader ignoring it loses nothing,
+    // while this reader keeps the gate's own setting (new gates default on) instead of reading a
+    // tree it wrote itself as a legacy one. Only a gate with no key at all — a file written
+    // before v4 — loads with correction off, so opening an old tree still never changes a number.
+    private static final int CURRENT_VERSION = 4;
+    private static final int PRE_COHORT_VERSION = 3;
 
     private FlowPathSerializer() {
         // static utility class
@@ -102,17 +125,60 @@ public class FlowPathSerializer {
      * @throws IOException if writing fails
      */
     public static void save(GateTree tree, File file, Provenance provenance) throws IOException {
-        JsonObject root = new JsonObject();
-        root.addProperty("version", CURRENT_VERSION);
-        root.add("meta", serializeMeta(provenance));
-        root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
-        root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
-        root.add("gates", serializeNodeList(tree.getRoots()));
-
+        JsonObject root = serializeTree(tree, serializeMeta(provenance));
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
             writer.write(gson.toJson(root));
         }
+    }
+
+    /**
+     * The tree exactly as {@link #save} writes it, but with no {@code meta} block: what the tree
+     * says, and nothing about when or where it was saved. {@code meta.savedAt} changes every
+     * second, so a hash of the saved text would never match itself across two runs — a batch
+     * run's resume fingerprint hashes this instead (pre-flight ruling B20).
+     */
+    public static String toJson(GateTree tree) {
+        return new GsonBuilder().setPrettyPrinting().create().toJson(serializeTree(tree, null));
+    }
+
+    /** The saved document; {@code meta} is omitted when null. */
+    private static JsonObject serializeTree(GateTree tree, JsonObject meta) {
+        JsonObject root = new JsonObject();
+        root.addProperty("version", versionFor(tree));
+        if (meta != null) root.add("meta", meta);
+        root.add("qualityFilter", serializeQualityFilter(tree.getQualityFilter()));
+        root.addProperty("roiFilterEnabled", tree.isRoiFilterEnabled());
+        if (tree.getReferenceSlideId() != null) root.addProperty("referenceSlideId", tree.getReferenceSlideId());
+        if (!tree.getSlideNames().isEmpty()) {
+            JsonObject names = new JsonObject();
+            tree.getSlideNames().forEach(names::addProperty);
+            root.add("slideNames", names);
+        }
+        root.add("gates", serializeNodeList(tree.getRoots()));
+        return root;
+    }
+
+    /**
+     * The version a tree is written as: {@value #CURRENT_VERSION} when it carries any cohort state
+     * an older reader would drop with a consequence — a reference slide, recorded slide names, a
+     * per-slide setting or a lineage tick on any gate, enabled or not — else
+     * {@value #PRE_COHORT_VERSION}, which FlowPath 0.9.4 still opens. See the note on
+     * {@code CURRENT_VERSION} for why {@code correctStaining} is not in the list.
+     */
+    static int versionFor(GateTree tree) {
+        if (tree.getReferenceSlideId() != null || !tree.getSlideNames().isEmpty()) return CURRENT_VERSION;
+        return usesCohortState(tree.getRoots()) ? CURRENT_VERSION : PRE_COHORT_VERSION;
+    }
+
+    private static boolean usesCohortState(List<GateNode> nodes) {
+        for (GateNode node : nodes) {
+            if (!node.getSlideSettings().isEmpty() || node.isLineageMarker()) return true;
+            for (Branch b : node.getBranches()) {
+                if (usesCohortState(b.getChildren())) return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -203,6 +269,17 @@ public class FlowPathSerializer {
 
         if (root.has("roiFilterEnabled")) {
             tree.setRoiFilterEnabled(root.get("roiFilterEnabled").getAsBoolean());
+        }
+
+        tree.setReferenceSlideId(optString(root, "referenceSlideId"));
+        // Optional within version 4: a file saved before it existed loads with no names, which
+        // CohortIdentity treats as matching any project (nothing recorded to contradict).
+        if (root.has("slideNames") && root.get("slideNames").isJsonObject()) {
+            Map<String, String> names = new LinkedHashMap<>();
+            for (var e : root.getAsJsonObject("slideNames").entrySet()) {
+                if (e.getValue().isJsonPrimitive()) names.put(e.getKey(), e.getValue().getAsString());
+            }
+            tree.setSlideNames(names);
         }
 
         if (root.has("gates")) {
@@ -324,6 +401,13 @@ public class FlowPathSerializer {
         obj.addProperty("clipPercentileLow", node.getClipPercentileLow());
         obj.addProperty("clipPercentileHigh", node.getClipPercentileHigh());
         obj.addProperty("excludeOutliers", node.isExcludeOutliers());
+        obj.addProperty("correctStaining", node.isCorrectStaining());
+        if (node.isLineageMarker()) obj.addProperty("lineageMarker", true);
+        if (!node.getSlideSettings().isEmpty()) {
+            JsonObject settings = new JsonObject();
+            node.getSlideSettings().forEach((slideId, setting) -> settings.add(slideId, serializeSlideSetting(setting)));
+            obj.add("slideSettings", settings);
+        }
 
         if (node instanceof PolygonGate pg) {
             serializeRegionAxes(obj, pg);
@@ -430,6 +514,42 @@ public class FlowPathSerializer {
         obj.addProperty("statisticY", gate.getStatisticY().token());
     }
 
+    private static JsonObject serializeSlideSetting(SlideSetting setting) {
+        JsonObject o = new JsonObject();
+        switch (setting) {
+            case SlideSetting.Skip s -> o.addProperty("kind", "skip");
+            case SlideSetting.Manual m -> { o.addProperty("kind", "manual"); writeValues(o, m.values()); }
+            case SlideSetting.Reviewed r -> { o.addProperty("kind", "reviewed"); writeValues(o, r.appliedValues()); }
+        }
+        return o;
+    }
+
+    private static void writeValues(JsonObject o, GateValues values) {
+        JsonArray axes = new JsonArray();
+        for (int k = 0; k < values.axisCount(); k++) {
+            JsonArray axis = new JsonArray();
+            for (double v : values.axis(k)) axis.add(v);
+            axes.add(axis);
+        }
+        o.add("values", axes);
+    }
+
+    private static SlideSetting deserializeSlideSetting(JsonObject o) throws IOException {
+        String kind = optString(o, "kind");
+        if ("skip".equals(kind)) return new SlideSetting.Skip();
+        JsonArray axes = o.getAsJsonArray("values");
+        double[][] read = new double[axes.size()][];
+        for (int k = 0; k < axes.size(); k++) {
+            JsonArray axis = axes.get(k).getAsJsonArray();
+            read[k] = new double[axis.size()];
+            for (int i = 0; i < axis.size(); i++) read[k][i] = axis.get(i).getAsDouble();
+        }
+        GateValues values = read.length == 1 ? GateValues.of(read[0]) : GateValues.of(read[0], read[1]);
+        if ("manual".equals(kind)) return new SlideSetting.Manual(values);
+        if ("reviewed".equals(kind)) return new SlideSetting.Reviewed(values);
+        throw new IOException("Unknown slide setting kind: \"" + kind + "\"");
+    }
+
     private static List<GateNode> deserializeNodeList(JsonArray array) throws IOException {
         List<GateNode> nodes = new ArrayList<>();
         for (JsonElement elem : array) {
@@ -467,6 +587,17 @@ public class FlowPathSerializer {
                     + "This file may have been created by a newer version of FlowPath.");
         }
         result.setEnabled(enabled);
+        // Absent means a file written before v4 (every such gate lacks the key; this version writes
+        // it on every gate, a version-3 file included): correction off, so opening an old tree
+        // never changes a number.
+        result.setCorrectStaining(obj.has("correctStaining") && obj.get("correctStaining").getAsBoolean());
+        // Optional v4 field: absent (every older file, and every unticked gate) reads off.
+        result.setLineageMarker(obj.has("lineageMarker") && obj.get("lineageMarker").getAsBoolean());
+        if (obj.has("slideSettings")) {
+            for (var entry : obj.getAsJsonObject("slideSettings").entrySet()) {
+                result.setSlideSetting(entry.getKey(), deserializeSlideSetting(entry.getValue().getAsJsonObject()));
+            }
+        }
         return result;
     }
 

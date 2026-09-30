@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added — cohort gating
+
+- **Set each threshold once for the whole project.** In a project with two or more images the
+  gate editor gains **This slide / All slides**: every slide's population for the gate, aligned to
+  the reference slide's staining, under one threshold line.
+- **Correct staining**, per gate (on for new gates, off for trees saved before this version, so
+  opening an old tree never changes a number). Each slide × marker column is aligned to the
+  reference slide by its staining landmarks — the negative peak, and the positive peak when there
+  is one — in asinh space. Percentile matching is deliberately not offered: it assumes every
+  slide has the same % positive, which is what is being measured. Landmarks come from each
+  slide's clean cells under the tree's current quality and ROI filters, and follow them when they
+  change; a column's asinh scale is the reference slide's median |value|, so it does not depend on
+  which slides were sampled first or on the cache.
+- **Reference slide**: the open slide the first time FlowPath sees a project (once per project,
+  one undo step), or — for a loaded tree that names none — inside the load's own undo step. A tree
+  with no reference says **No reference slide** and offers the open slide as one, never an
+  all-clear.
+- **Needs a look (n)** under the gate tree lists only the slides where a gate is unsure: no clear
+  negative peak, unusual staining, a threshold on a peak, or too few (or too little measured)
+  cells to judge — each with its reason. Clicking one opens the slide at the tissue where the gate
+  decides, with a boundary overlay (`B`). Answer with **Looks right** (`Enter`), **Adjust** (drag,
+  then `Enter`) or **Skip slide for this gate** (`S`); `N`/`P` step, `Esc` returns to All slides.
+  Every answer is one undo step. A review is of a number: if the applied value later changes, the
+  item returns.
+- **Run on all slides** writes `batch_populations.csv`, one `<image>_gate_pheno.csv` per slide and
+  `gating_manifest.csv` — the exact threshold applied on every slide, per gate and axis, with its
+  source (`reference`, `corrected`, `uncorrected`, `manual`, `skipped`) and landmarks. Phenotypes
+  are saved into every slide's data file except the one open in the viewer (its CSV and population
+  rows come from its last saved file, as the report says). The run waits for sampling to finish,
+  its confirmation names slides that could not be sampled (they run uncorrected), and the status
+  line says **Ready to run** only when the button can start one.
+- **Cells per slide** for alignment and review is a preference (default 20 000; 0 = every cell).
+  Alignments are cached in `<project>/flowpath/alignment-cache.json` (safe to delete).
+- **Marker rules** turn the lineage the tree states into a number per slide: every gate implies the
+  ancestor branch it sits under, and gates ticked **Lineage marker** exclude each other. A slide
+  whose violation rate is far above the cohort's (median + 3 MAD, over 2%, at least 20 cells) is
+  flagged on the gate most likely at fault, with a direction ("CD3 threshold may be too high") and,
+  for double positives that vanish on the nuclear signal, "— try Nucleus". Rules only point; no
+  threshold is tuned for you.
+- **Review by gate**: items are grouped per gate; selecting a group shows every slide with the
+  flagged ones highlighted, and **Shift+Enter** marks the whole group reviewed in one undo step.
+  A gate and its duplicate under one branch are numbered (`CD3+/CD8`, `CD3+/CD8#2`) everywhere a
+  gate path appears, so an answer lands on the gate it names.
+- **Evidence crops**: each item shows a 200 µm tissue crop at the gate's boundary (marker green on
+  a per-slide range, DAPI blue, boundary cells outlined), so most items are answered without
+  opening the slide; **V** opens it in the viewer when a crop cannot settle it.
+- A **slide strip** (one square per slide: sampling, ready, needs a look, failed; click to filter)
+  and a status line (`38/40 sampled · 5 to review · Ready to run`) sit above the list.
+- **Robust and headless runs**: `FlowPathBatch.run(getProject(), treeJson, outDir)` runs the same
+  code from a QuPath script (e.g. on a cluster); runs resume where they stopped
+  (`.flowpath-run.json`); per-slide sanity checks are recorded, never fatal; every slide also gets
+  its own `<image>_populations.csv` and `<image>_qc.csv`, and every run leaves `flowpath.json`,
+  `gating_manifest.csv`, `qc_summary.csv` (long format) and `run_info.txt`.
+- Gate tree files that carry cohort state (a reference slide, slide names, per-slide settings or a
+  lineage tick) are saved as **version 4**; any other tree is still saved as version 3, so
+  FlowPath 0.9.4 opens it. Versions 1–3 load unchanged, and a gate saved before this version loads
+  with Correct staining off.
+
+### Known limits
+
+- Per-slide **Adjust** is not offered for region gates in v1 — only **Looks right** / **Skip**;
+  their shapes are still corrected slide-by-slide when Correct staining is on.
+- The review keys (`Enter`, `S`, `N`, `P`, `Esc`, `B`, `V`) act only while the FlowPath window has
+  focus — they share letters with QuPath's own tool shortcuts.
+- A resumed run's per-slide fingerprint hashes every cell's centroid but only a bounded,
+  deterministic sample of measurement values (first 100 cells plus a stride, at most 1000), so a
+  re-quantification confined to unsampled cells' values can be skipped as already done; delete
+  `.flowpath-run.json` (or use a fresh output folder) to force a full re-run.
+
 ## [0.9.4] - 21/09/2026
 
 Two post-release review rounds of the gating half — eighteen tasks, each reviewed against

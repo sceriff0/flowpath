@@ -46,6 +46,12 @@ public class ScatterPlotCanvas extends Canvas {
      * with, so plot and phenotype cannot drift apart.
      */
     private GateNode overlayGate;
+    /** The gate judges no cell here (a Skip on this slide): grey dots, no overlay drawn. */
+    private boolean unjudged;
+
+    /** All slides view: the other slides' points, pooled, in reference units; empty when off. */
+    private double[] cohortX = new double[0];
+    private double[] cohortY = new double[0];
 
     // Axis range overrides (null = use auto-computed from data)
     private Double overrideMinX, overrideMaxX, overrideMinY, overrideMaxY;
@@ -131,6 +137,27 @@ public class ScatterPlotCanvas extends Canvas {
     }
 
     /**
+     * The All slides view: the other sampled slides' points (already in reference units),
+     * pooled and drawn faintly under the open slide's dots. A view only — {@link #branchAt},
+     * the dot colours and the axis window still come from the open slide alone.
+     */
+    public void setCohortPoints(double[] xs, double[] ys) {
+        if (xs.length != ys.length) throw new IllegalArgumentException("unpaired cohort points");
+        cohortX = xs.clone();
+        cohortY = ys.clone();
+        repaint();
+    }
+
+    public void clearCohortPoints() {
+        setCohortPoints(new double[0], new double[0]);
+    }
+
+    /** How many pooled cohort points are held. Package-private for tests. */
+    int cohortPointCount() {
+        return cohortX.length;
+    }
+
+    /**
      * Show {@code gate} — its shape as the overlay outline, its geometry as the rule that
      * colours every dot. Pass the live gate: an in-place edit followed by a repaint is
      * then reflected without any copying, and the plot can never describe a different
@@ -172,6 +199,20 @@ public class ScatterPlotCanvas extends Canvas {
         gate.setThresholdX(thresholdX);
         gate.setThresholdY(thresholdY);
         setGateOverlay(gate);
+    }
+
+    /**
+     * Whether the shown gate judges no cell on this slide (a Skip): every dot is drawn grey and
+     * the overlay is not drawn, because no cut applies here.
+     */
+    public void setUnjudged(boolean unjudged) {
+        this.unjudged = unjudged;
+        repaint();
+    }
+
+    /** Package-private for the display/classification agreement test. */
+    boolean isUnjudged() {
+        return unjudged;
     }
 
     public void clearOverlay() {
@@ -557,6 +598,19 @@ public class ScatterPlotCanvas extends Canvas {
         int step = Math.max(1, xValues.length / MAX_DISPLAY_POINTS);
         double eMinX = effectiveMinX(), eMaxX = effectiveMaxX();
         double eMinY = effectiveMinY(), eMaxY = effectiveMaxY();
+
+        // Other slides first, so the open slide's coloured dots sit on top. Strided like the
+        // open slide's dots, so a large cohort costs no more than MAX_DISPLAY_POINTS squares.
+        gc.setFill(Color.gray(0.55, 0.35));
+        int cohortStep = Math.max(1, cohortX.length / MAX_DISPLAY_POINTS);
+        for (int i = 0; i < cohortX.length; i += cohortStep) {
+            double cx = cohortX[i], cy = cohortY[i];
+            if (!(cx >= eMinX && cx <= eMaxX && cy >= eMinY && cy <= eMaxY)) continue;
+            double px = PADDING_LEFT + valueToPixel(cx, eMinX, eMaxX, plotW);
+            double py = PADDING_TOP + plotH - valueToPixel(cy, eMinY, eMaxY, plotH);
+            gc.fillRect(px - 1, py - 1, 2, 2);
+        }
+
         int validInput = 0;
         int pointsDrawn = 0;
         for (int i = 0; i < xValues.length; i += step) {
@@ -573,7 +627,7 @@ public class ScatterPlotCanvas extends Canvas {
         }
 
         // Draw gate overlay
-        drawOverlay(gc, plotW, plotH);
+        if (!unjudged) drawOverlay(gc, plotW, plotH);
 
         // Draw in-progress drawing preview
         drawDrawingPreview(gc, plotW, plotH);
@@ -612,6 +666,7 @@ public class ScatterPlotCanvas extends Canvas {
     }
 
     private Color getPointColor(double x, double y) {
+        if (unjudged) return Color.gray(0.55, 0.6);
         int branch = branchAt(x, y);
         if (quadrantColors != null && overlayGate instanceof QuadrantGate) {
             return quadrantColors[branch];

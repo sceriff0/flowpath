@@ -23,15 +23,15 @@ class BusyStateTest {
         List<Case> cases = List.of(
                 new Case("idle", BusyState.IDLE, false, false, null),
                 new Case("reading an image's cells",
-                        new BusyState(true, false, false), true, true, "Reading detections…"),
+                        new BusyState(true, false, false, false, false), true, true, "Reading detections…"),
                 new Case("recomputing masks and statistics",
-                        new BusyState(false, true, false), true, true, "Recomputing statistics…"),
+                        new BusyState(false, true, false, false, false), true, true, "Recomputing statistics…"),
                 new Case("writing the CSV",
-                        new BusyState(false, false, true), false, true, null),
+                        new BusyState(false, false, true, false, false), false, true, null),
                 new Case("a read and an export at once",
-                        new BusyState(true, false, true), true, true, "Reading detections…"),
+                        new BusyState(true, false, true, false, false), true, true, "Reading detections…"),
                 new Case("a derivation and an export at once",
-                        new BusyState(false, true, true), true, true, "Recomputing statistics…"));
+                        new BusyState(false, true, true, false, false), true, true, "Recomputing statistics…"));
 
         for (Case c : cases) {
             assertEquals(c.editing(), c.state().editingBlocked(), c.name() + ": editing");
@@ -44,13 +44,46 @@ class BusyStateTest {
     @Test
     void readingIsReportedAheadOfRecomputing() {
         assertEquals(Optional.of("Reading detections…"),
-                new BusyState(true, true, false).message());
+                new BusyState(true, true, false, false, false).message());
     }
 
     /** An export never blocks editing: it works from a snapshot taken when it started. */
     @Test
     void anExportLeavesTheEditorAlone() {
-        assertFalse(new BusyState(false, false, true).editingBlocked());
-        assertTrue(new BusyState(false, false, true).exportBlocked());
+        assertFalse(new BusyState(false, false, true, false, false).editingBlocked());
+        assertTrue(new BusyState(false, false, true, false, false).exportBlocked());
+    }
+
+    @Test
+    void samplingBlocksOnlyABatchRunAndABatchRunBlocksExportButNotEditing() {
+        BusyState sampling = new BusyState(false, false, false, true, false);
+        assertFalse(sampling.editingBlocked());
+        assertFalse(sampling.exportBlocked());
+        // Final ruling I4: a run started mid-sampling would gate the slides not yet sampled
+        // uncorrected, against alignments the review never showed.
+        assertTrue(sampling.batchBlocked());
+        assertFalse(sampling.batchAllowed(true));
+        assertEquals(Optional.empty(), sampling.message(),
+                "long-running: its progress rides on the normal status line (CohortState.message), not over it");
+
+        BusyState batch = new BusyState(false, false, false, true, true);
+        assertFalse(batch.editingBlocked());
+        assertTrue(batch.exportBlocked());
+        assertTrue(batch.batchBlocked());
+        assertEquals(Optional.empty(), batch.message());
+        assertTrue(new BusyState(false, false, true, false, false).batchBlocked(), "one background writer at a time");
+    }
+
+    /** The one run predicate the button and the status line read: not blocked, and a gate to run. */
+    @Test
+    void aRunIsAllowedOnlyWhenIdleWithAnEnabledGate() {
+        assertTrue(BusyState.IDLE.batchAllowed(true));
+        assertFalse(BusyState.IDLE.batchAllowed(false));
+        for (BusyState busy : List.of(new BusyState(true, false, false, false, false),
+                new BusyState(false, true, false, false, false), new BusyState(false, false, true, false, false),
+                new BusyState(false, false, false, true, false), new BusyState(false, false, false, false, true))) {
+            assertTrue(busy.batchBlocked(), busy.toString());
+            assertFalse(busy.batchAllowed(true), busy.toString());
+        }
     }
 }

@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -13,6 +14,15 @@ public class GateTree {
     private List<GateNode> roots = new ArrayList<>();
     private QualityFilter qualityFilter = new QualityFilter();
     private boolean roiFilterEnabled;
+    private String referenceSlideId;
+    /**
+     * The project image names the slide ids in this tree were recorded against (id → name).
+     * QuPath's project entry ids are a per-project counter, so "1" in one project is a different
+     * image from "1" in the next; the names are what {@code cohort/CohortIdentity} checks before
+     * any per-slide setting or the reference id is honoured in a project. Empty on a tree that
+     * never met a cohort, and on every file saved before the field existed.
+     */
+    private Map<String, String> slideNames = Map.of();
 
     public GateTree() {
     }
@@ -47,6 +57,24 @@ public class GateTree {
 
     public void setRoiFilterEnabled(boolean roiFilterEnabled) {
         this.roiFilterEnabled = roiFilterEnabled;
+    }
+
+    public String getReferenceSlideId() {
+        return referenceSlideId;
+    }
+
+    public void setReferenceSlideId(String referenceSlideId) {
+        this.referenceSlideId = referenceSlideId;
+    }
+
+    /** Unmodifiable, in insertion order; never null. */
+    public Map<String, String> getSlideNames() {
+        return slideNames;
+    }
+
+    public void setSlideNames(Map<String, String> slideNames) {
+        this.slideNames = slideNames == null || slideNames.isEmpty() ? Map.of()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(slideNames));
     }
 
     // ---- moving a gate within the tree ---------------------------------------------------
@@ -206,6 +234,8 @@ public class GateTree {
         GateTree copy = new GateTree();
         copy.qualityFilter = this.qualityFilter.deepCopy();
         copy.roiFilterEnabled = this.roiFilterEnabled;
+        copy.referenceSlideId = this.referenceSlideId;
+        copy.slideNames = this.slideNames;   // unmodifiable: sharing it is copying it
         copy.roots = new ArrayList<>();
         for (GateNode root : this.roots) {
             copy.roots.add(root.deepCopy());

@@ -31,6 +31,12 @@ public interface GateTypeEditor {
     /** A branch colour changed: repaint whatever this editor draws in branch colours. */
     default void branchColorsChanged() {}
 
+    /**
+     * The shown gate's setting on the open slide changed (a Manual written by a review drag, a
+     * Skip, one cleared): redraw the cut the pass applies here. A refresh by default.
+     */
+    default void slideSettingChanged() { refresh(); }
+
     /** The gating pass updated branch counts: show them, if this editor shows any. */
     default void updatePopulationCounts() {}
 }

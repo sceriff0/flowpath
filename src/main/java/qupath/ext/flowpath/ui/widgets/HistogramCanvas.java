@@ -7,6 +7,8 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import qupath.ext.flowpath.model.GateNode;
 
+import java.util.List;
+import java.util.Set;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -28,6 +30,11 @@ public class HistogramCanvas extends Canvas {
     private double displayMax;
     private double threshold = Double.NaN;
     private GateNode gate;
+    /** The gate judges no cell here (a Skip on this slide): grey bars, no threshold, no drag. */
+    private boolean unjudged;
+    /** Whether a press on the plot may move the threshold (off while the cut is locked). */
+    private boolean draggable = true;
+    private static final Color UNJUDGED = Color.gray(0.5);
     private Color posColor = Color.rgb(0, 200, 0);
     private Color negColor = Color.rgb(160, 160, 160);
     private double maxCount;
@@ -35,6 +42,25 @@ public class HistogramCanvas extends Canvas {
     // Used to distinguish "truly empty" from "all values outside clip range"
     // when rendering the empty-histogram message.
     private int inputCount;
+
+    /** All slides view: one value array per sampled slide, in reference units; empty when off. */
+    private List<double[]> cohortCurves = List.of();
+    /** Which of {@link #cohortCurves} is the open slide, or -1. */
+    private int cohortCurrent = -1;
+    /**
+     * {@link #cohortCurves} binned over {@code [ridgeMin, ridgeMax]} and normalised to each
+     * slide's own peak (a null row for a slide with nothing in the window); null when not binned.
+     * Built in {@link #setCohortCurves} and in {@link #setData} when the window moves, so a
+     * repaint (every threshold drag tick) only strokes them.
+     */
+    private double[][] cohortRidges;
+    private double ridgeMin = Double.NaN;
+    private double ridgeMax = Double.NaN;
+    private int cohortBinPasses;
+    /** Indices into {@link #cohortCurves} of the slides flagged on the shown gate; stroked amber. */
+    private Set<Integer> flaggedCurves = Set.of();
+    /** A flagged slide's ridge: a fixed canvas swatch, like the bars and the grey ridges. */
+    private static final Color FLAGGED = Color.rgb(230, 140, 0);
 
     private int posCount = -1;
     private int negCount = -1;
@@ -125,6 +151,8 @@ public class HistogramCanvas extends Canvas {
             binEdges[i] = displayMin + i * binWidth;
         }
 
+        if (!cohortCurves.isEmpty() && (displayMin != ridgeMin || displayMax != ridgeMax)) binCohortCurves();
+
         for (double val : rawValues) {
             // NaN first, and explicitly. MIRAGE omits an absent measurement entirely, so
             // this column genuinely holds NaN for cells the marker was never measured on
@@ -185,6 +213,30 @@ public class HistogramCanvas extends Canvas {
         repaint();
     }
 
+    /**
+     * Whether the shown gate judges no cell on this slide (a Skip): every bar is drawn grey and
+     * no threshold is drawn or dragged, because none applies here.
+     */
+    public void setUnjudged(boolean unjudged) {
+        this.unjudged = unjudged;
+        repaint();
+    }
+
+    /** Whether a press on the plot may move the threshold. */
+    public void setDraggable(boolean draggable) {
+        this.draggable = draggable;
+        if (!draggable) dragging = false;
+    }
+
+    public boolean isDraggable() {
+        return draggable;
+    }
+
+    /** Package-private for the display/classification agreement test. */
+    boolean isUnjudged() {
+        return unjudged;
+    }
+
     public void setThreshold(double threshold) {
         this.threshold = threshold;
         repaint();
@@ -214,8 +266,117 @@ public class HistogramCanvas extends Canvas {
         repaint();
     }
 
+    /**
+     * The All slides view: each sampled slide's values (already in the axis's reference units)
+     * drawn as one ridge over the open slide's bars, the {@code currentIndex}th highlighted.
+     * The bars, the threshold and dragging are unchanged — this is a view only.
+     */
+    public void setCohortCurves(List<double[]> values, int currentIndex) {
+        boolean sameCurves = values.size() == cohortCurves.size();
+        for (int i = 0; sameCurves && i < values.size(); i++) sameCurves = values.get(i) == cohortCurves.get(i);
+        cohortCurrent = currentIndex;
+        flaggedCurves = Set.of();
+        if (!sameCurves || cohortRidges == null || displayMin != ridgeMin || displayMax != ridgeMax) {
+            cohortCurves = List.copyOf(values);
+            binCohortCurves();
+        }
+        repaint();
+    }
+
+    public void clearCohortCurves() {
+        setCohortCurves(List.of(), -1);
+    }
+
+    /**
+     * Mark the slides at {@code indices} (into the curves last set) as flagged on the shown gate:
+     * their ridges are stroked amber. A view only — the ridges already binned are re-stroked, never
+     * re-binned. {@link #setCohortCurves} clears the flags, so set them after the curves.
+     */
+    public void setFlaggedCurves(Set<Integer> indices) {
+        flaggedCurves = Set.copyOf(indices);
+        repaint();
+    }
+
+    /** How many slide curves are flagged. Package-private for tests. */
+    int flaggedCurveCount() {
+        return flaggedCurves.size();
+    }
+
+    /** How many slide curves are held. Package-private for tests. */
+    int cohortCurveCount() {
+        return cohortCurves.size();
+    }
+
+    /** How many times the curves have been binned. Package-private: tests pin that a repaint does not. */
+    int cohortBinPasses() {
+        return cohortBinPasses;
+    }
+
+    /**
+     * Bin every slide's values like the bars (same {@link #NUM_BINS} over the same window, NaN and
+     * out-of-window values skipped) and normalise each to its own peak. Needs a window, which
+     * exists only once {@link #setData} has had values.
+     */
+    private void binCohortCurves() {
+        if (cohortCurves.isEmpty() || binEdges == null) {
+            cohortRidges = null;
+            ridgeMin = ridgeMax = Double.NaN;
+            return;
+        }
+        cohortBinPasses++;
+        double binWidth = (displayMax - displayMin) / NUM_BINS;
+        double[][] ridges = new double[cohortCurves.size()][];
+        for (int i = 0; i < ridges.length; i++) {
+            double[] counts = new double[NUM_BINS];
+            double peak = 0;
+            for (double v : cohortCurves.get(i)) {
+                if (Double.isNaN(v) || v < displayMin || v > displayMax) continue;
+                int bin = (int) ((v - displayMin) / binWidth);
+                if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+                peak = Math.max(peak, ++counts[bin]);
+            }
+            if (peak <= 0) continue;
+            for (int b = 0; b < NUM_BINS; b++) counts[b] /= peak;
+            ridges[i] = counts;
+        }
+        cohortRidges = ridges;
+        ridgeMin = displayMin;
+        ridgeMax = displayMax;
+    }
+
     public void setOnMouseHover(DoubleConsumer callback) {
         this.onMouseHover = callback;
+    }
+
+    /**
+     * One ridge per slide (binned and normalised ahead of time, see {@link #binCohortCurves}),
+     * stacked bottom-up in the order given; other slides first, flagged ones over them in amber,
+     * the open slide last and heavier so it reads on top. The open slide is drawn as the open
+     * slide even when flagged: the legend under the canvas names it. Fixed canvas swatches, like the bars.
+     */
+    private void drawCohortCurves(GraphicsContext gc, double plotW, double plotH) {
+        if (binEdges == null || cohortRidges == null) return;
+        int k = cohortRidges.length;
+        double step = k > 1 ? plotH * 0.6 / (k - 1) : 0;
+        double amplitude = plotH * 0.4;
+        double binPixelWidth = plotW / NUM_BINS;
+        double[] xs = new double[NUM_BINS];
+        for (int b = 0; b < NUM_BINS; b++) xs[b] = PADDING_LEFT + (b + 0.5) * binPixelWidth;
+        double[] ys = new double[NUM_BINS];
+        // Three passes: the grey ridges, then the flagged ones over them, then the open slide on top.
+        for (int pass = 0; pass < 3; pass++) {
+            for (int i = 0; i < k; i++) {
+                boolean current = i == cohortCurrent;
+                int layer = current ? 2 : flaggedCurves.contains(i) ? 1 : 0;
+                if (layer != pass || cohortRidges[i] == null) continue;
+                double baseline = PADDING_TOP + plotH - i * step;
+                for (int b = 0; b < NUM_BINS; b++) ys[b] = baseline - cohortRidges[i][b] * amplitude;
+                gc.setStroke(layer == 2 ? posColor : layer == 1 ? FLAGGED : Color.gray(0.5, 0.7));
+                gc.setLineWidth(layer == 2 ? 2 : layer == 1 ? 1.5 : 1);
+                gc.strokePolyline(xs, ys, NUM_BINS);
+            }
+        }
+        gc.setLineWidth(1);
     }
 
     private void repaint() {
@@ -253,7 +414,8 @@ public class HistogramCanvas extends Canvas {
             double binCenter = (binEdges[i] + binEdges[i + 1]) / 2.0;
             boolean isPositive = isPositiveAt(binCenter);
 
-            Color barColor = isPositive ? posColor.deriveColor(0, 1, 1, 0.8) : negColor.deriveColor(0, 1, 1, 0.8);
+            Color barColor = unjudged ? UNJUDGED.deriveColor(0, 1, 1, 0.8)
+                    : isPositive ? posColor.deriveColor(0, 1, 1, 0.8) : negColor.deriveColor(0, 1, 1, 0.8);
             gc.setFill(barColor);
 
             double barH = (binCounts[i] / maxCount) * plotH;
@@ -263,8 +425,10 @@ public class HistogramCanvas extends Canvas {
             gc.fillRect(x, y, Math.max(binPixelWidth - 0.5, 1), barH);
         }
 
+        drawCohortCurves(gc, plotW, plotH);
+
         // Draw threshold line
-        if (!Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
+        if (!unjudged && !Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
             double threshX = PADDING_LEFT + ((threshold - displayMin) / (displayMax - displayMin)) * plotW;
             gc.setStroke(Color.RED);
             gc.setLineWidth(2);
@@ -278,7 +442,7 @@ public class HistogramCanvas extends Canvas {
         }
 
         // Draw pos/neg count annotations above the histogram
-        if (!Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
+        if (!unjudged && !Double.isNaN(threshold) && threshold >= displayMin && threshold <= displayMax) {
             double threshX = PADDING_LEFT + ((threshold - displayMin) / (displayMax - displayMin)) * plotW;
             gc.setFont(Font.font(10));
             if (negCount >= 0) {
@@ -332,7 +496,7 @@ public class HistogramCanvas extends Canvas {
     }
 
     private void handleMousePressed(MouseEvent e) {
-        if (binEdges == null) return;
+        if (binEdges == null || unjudged || !draggable) return;
         dragging = true;
         double val = xToValue(e.getX());
         threshold = val;

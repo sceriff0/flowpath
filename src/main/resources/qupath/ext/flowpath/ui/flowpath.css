@@ -62,6 +62,14 @@
     -fx-font-style: italic;
 }
 
+/* A flagged slide's name in the gate editor's All slides legend: themed text, marked by weight
+   and underline so it keeps full contrast on both bases. */
+.fp-flagged {
+    -fx-text-fill: -fx-text-background-color;
+    -fx-font-weight: bold;
+    -fx-underline: true;
+}
+
 .fp-mono-field {
     /* -fx-text-inner-color, not -fx-text-background-color: Modena's own modena.css names
        it explicitly as "text on top of -fx-control-inner-color" (read: the field's own
@@ -132,6 +140,20 @@
 .fp-pill-text {
     -fx-text-fill: white;
 }
+
+/*
+ * Needs a look: one fixed-colour square per slide (see the fixed-swatch note in the header,
+ * same reasoning as fp-bar-*/fp-badge-* above). They carry no text of their own -- the name and
+ * counts are in the square's Tooltip, not painted on it -- so they are out of scope for
+ * FlowpathStylesheetContrastTest's text-contrast check, the same way ScatterPlotCanvas and
+ * HistogramCanvas are.
+ */
+.fp-slide-square { -fx-background-radius: 2; -fx-border-radius: 2; }
+.fp-slide-sampling { -fx-background-color: #8a8a8a; }
+.fp-slide-ready { -fx-background-color: #3fa34d; }
+.fp-slide-needs-look { -fx-background-color: #e08a00; }
+.fp-slide-failed { -fx-background-color: #c23b3b; }
+.fp-slide-selected { -fx-border-color: -fx-text-background-color; -fx-border-width: 2; }
 
 /* ---- FlowPathCell: the drag-and-drop hover cue ---- */
 

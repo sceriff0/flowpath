@@ -114,7 +114,9 @@ final class ResolvedGate {
         int arity = twoAxis ? 2 : 1;
 
         List<String> channels = node.getChannels();
-        boolean usable = channels.size() >= arity;
+        // A gate the slide's settings skip compiles exactly like a gate whose channel the index
+        // lacks: unusable, so every cell reads UNMEASURED — never negative.
+        boolean usable = !node.isSkippedOnSlide() && channels.size() >= arity;
         for (int k = 0; usable && k < arity; k++) {
             usable = index.getMarkerIndex(channels.get(k)) >= 0;
         }

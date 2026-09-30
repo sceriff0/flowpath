@@ -10,7 +10,6 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import qupath.ext.flowpath.model.EllipseGate;
 import qupath.ext.flowpath.model.GateNode;
-import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.Region2DGate;
@@ -18,6 +17,7 @@ import qupath.ext.flowpath.ui.widgets.ScatterPlotCanvas;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleUnaryOperator;
 
 /**
  * A polygon, rectangle or ellipse gate: two channels, a shape toolbar and a scatter plot the
@@ -116,7 +116,7 @@ final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
             case EllipseGate _ -> plot.setDrawingMode(ScatterPlotCanvas.DrawingMode.ELLIPSE);
         }
 
-        root.getChildren().add(plot);
+        root.getChildren().addAll(plot, flaggedLegend);
         return root;
     }
 
@@ -169,14 +169,8 @@ final class Region2DGateEditor extends TwoAxisGateEditor<Region2DGate> {
      */
     @Override
     Runnable captureForRemap() {
-        MeasuredColumn oldX = axisColumn(0);
-        MeasuredColumn oldY = axisColumn(1);
-        return () -> {
-            MeasuredColumn newX = axisColumn(0);
-            MeasuredColumn newY = axisColumn(1);
-            gate.remapCoordinates(
-                    v -> AxisMath.remapRawThreshold(oldX, newX, v),
-                    v -> AxisMath.remapRawThreshold(oldY, newY, v));
-        };
+        DoubleUnaryOperator fx = remapAcrossColumns(0);
+        DoubleUnaryOperator fy = remapAcrossColumns(1);
+        return () -> gate.remapCoordinates(fx, fy);
     }
 }

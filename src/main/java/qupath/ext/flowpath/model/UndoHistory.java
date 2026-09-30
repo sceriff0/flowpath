@@ -37,7 +37,12 @@ public final class UndoHistory<T> {
     private final UnaryOperator<T> snapshotFn;
     private final LongSupplier clock;
 
-    private final Deque<T> undoStack = new ArrayDeque<>();
+    /** An undo entry and when it was recorded, counted by {@link #recorded}; see {@link #undoMark()}. */
+    private record Entry<T>(long seq, T value) {}
+
+    private final Deque<Entry<T>> undoStack = new ArrayDeque<>();
+    /** Every entry ever pushed onto the undo stack, counted; never decreases, never trimmed. */
+    private long recorded;
     private final Deque<T> redoStack = new ArrayDeque<>();
     private long lastRecordTime = 0;
     /** Which source the current coalescing burst belongs to; see {@link #recordCoalesced(Object, Object)}. */
@@ -58,7 +63,7 @@ public final class UndoHistory<T> {
      * depth cap by dropping the oldest entry if needed.
      */
     public void record(T current) {
-        undoStack.push(snapshotFn.apply(current));
+        undoStack.push(new Entry<>(++recorded, snapshotFn.apply(current)));
         if (undoStack.size() > maxDepth) {
             undoStack.removeLast();
         }
@@ -122,7 +127,7 @@ public final class UndoHistory<T> {
     public Optional<T> undo(T current) {
         if (undoStack.isEmpty()) return Optional.empty();
         redoStack.push(snapshotFn.apply(current));
-        T previous = undoStack.pop();
+        T previous = undoStack.pop().value();
         lastRecordTime = 0;
         lastSource = NO_BURST;
         return Optional.of(previous);
@@ -134,11 +139,36 @@ public final class UndoHistory<T> {
      */
     public Optional<T> redo(T current) {
         if (redoStack.isEmpty()) return Optional.empty();
-        undoStack.push(snapshotFn.apply(current));
+        undoStack.push(new Entry<>(++recorded, snapshotFn.apply(current)));
         T next = redoStack.pop();
         lastRecordTime = 0;
         lastSource = NO_BURST;
         return Optional.of(next);
+    }
+
+    /**
+     * A point in the history to fold later steps back to (see {@link #collapseSince}): a count
+     * of every step pushed so far, which only grows, so neither the depth cap trimming old
+     * steps nor an undo moves it.
+     */
+    public long undoMark() {
+        return recorded;
+    }
+
+    /**
+     * Fold every step recorded after {@code mark} into the first of them: the undo stack keeps
+     * only the state as it stood when the first step after the mark was recorded, so one undo
+     * returns there however many steps (drag bursts, an answer) followed. Nothing happens when
+     * at most one step was recorded since. Ends any burst in progress.
+     */
+    public void collapseSince(long mark) {
+        int after = 0;
+        for (Entry<T> e : undoStack) {
+            if (e.seq() <= mark) break;
+            after++;
+        }
+        for (int i = 1; i < after; i++) undoStack.pop();
+        lastSource = NO_BURST;
     }
 
     public boolean canUndo() {
