@@ -134,8 +134,6 @@ public final class CohortSession {
     private ViewMode viewMode = ViewMode.THIS_SLIDE;
     private boolean batchRunning;
     private String batchProgress;
-    /** The slide strip's selected square, by id (a value — CLAUDE.md "keyed on a value"); see {@link #setSlideFilter}. */
-    private String slideFilter;
 
     /**
      * One stable instance: the live pass reads whatever model is current when it runs. Answers
@@ -207,8 +205,6 @@ public final class CohortSession {
         for (SlideRef r : refs) ids.add(r.id());
         samples.keySet().retainAll(ids);
         failures.keySet().retainAll(ids);
-        // The filter is kept by id (a value); it survives a rescore but not the slide vanishing.
-        if (slideFilter != null && !ids.contains(slideFilter)) slideFilter = null;
         updateCorrectionDisabled();
     }
 
@@ -497,28 +493,15 @@ public final class CohortSession {
         return slides.size() - (int) slides.stream().filter(r -> excluded.contains(r.id())).count();
     }
 
-    /**
-     * The slide strip's filter: clicking a square filters the list to it, clicking the same
-     * square again clears it. Kept by id (a value), so it survives a rescore; {@link
-     * #setProjectSlides} drops it once the slide it names is gone.
-     */
-    public void setSlideFilter(String slideId) {
-        slideFilter = slideId == null || slideId.equals(slideFilter) ? null : slideId;
-    }
-
-    public String slideFilter() { return slideFilter; }
-
-    /** The selected group's items, else every item, narrowed to the filtered slide if any. */
-    public List<ReviewItem> visibleItems() {
+    /** What N / P step through, in order: the selected group's items, else every item. */
+    public List<ReviewItem> stepOrder() {
         ReviewGroup group = selectedGroup();
-        List<ReviewItem> items = group == null ? review.items() : group.items();
-        return slideFilter == null ? items : items.stream().filter(i -> i.key().slideId().equals(slideFilter)).toList();
+        return group == null ? review.items() : group.items();
     }
 
     public ReviewItem.Key step(int delta) {
-        // Task 16 carry: with a group or a slide filter shown, N/P must step only through what
-        // the list actually shows, never the whole review.
-        List<ReviewItem> items = visibleItems();
+        // Task 16 carry: with a group selected, N/P step only through its items.
+        List<ReviewItem> items = stepOrder();
         if (items.isEmpty()) return null;
         int at = -1;
         for (int i = 0; i < items.size(); i++) if (items.get(i).key().equals(selected)) at = i;

@@ -71,6 +71,71 @@ class FlowpathStylesheetContrastTest {
         assertClassesMeetContrast(MUTED_CONTRAST_CLASSES, DARK_BASE, 3.0);
     }
 
+    /**
+     * Final review item 12: the dark-theme bug was a selected cohort row's text on the selection
+     * bar. The {@code :selected} rule is pinned on a real {@link javafx.scene.control.TableView}:
+     * every cohort cell class in a selected row holds 4.5:1 against the row's own background.
+     */
+    @Test
+    void aSelectedCohortRowStaysReadableOnBothBases() {
+        for (String base : List.of(LIGHT_BASE, DARK_BASE)) assertSelectedCohortRowReadable(base);
+    }
+
+    private void assertSelectedCohortRowReadable(String base) {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        FxTestSupport.onFxRun(() -> {
+            javafx.scene.control.TableView<String> table = new javafx.scene.control.TableView<>();
+            table.getStyleClass().add("fp-cohort-table");
+            List<String> classes = List.of("fp-cohort-cell", "fp-cohort-cell-look");
+            for (String styleClass : classes) {
+                javafx.scene.control.TableColumn<String, String> col = new javafx.scene.control.TableColumn<>(styleClass);
+                col.setCellValueFactory(c -> new javafx.beans.property.ReadOnlyObjectWrapper<>("✓"));
+                col.setCellFactory(c -> {
+                    javafx.scene.control.TableCell<String, String> cell = new javafx.scene.control.TableCell<>() {
+                        @Override protected void updateItem(String item, boolean empty) {
+                            super.updateItem(item, empty);
+                            setText(empty ? null : item);
+                        }
+                    };
+                    cell.getStyleClass().add(styleClass);
+                    return cell;
+                });
+                table.getColumns().add(col);
+            }
+            table.getItems().setAll("row");
+            VBox root = new VBox(table);
+            root.getStyleClass().add("fp-panel");
+            root.setStyle("-fx-base: " + base + ";");
+            Scene scene = new Scene(root, 400, 300);
+            scene.getStylesheets().add(stylesheetUrl());
+            table.getSelectionModel().select(0);
+            root.applyCss();
+            root.layout();
+
+            javafx.scene.control.TableRow<?> row = (javafx.scene.control.TableRow<?>) table.lookupAll(".table-row-cell").stream()
+                    .filter(n -> n instanceof javafx.scene.control.TableRow<?> r && r.getIndex() == 0).findFirst().orElseThrow();
+            assertTrue(row.isSelected(), "fixture check: the row is selected");
+            Color rowBg = lastFill(row);
+            assertTrue(rowBg != null, "the selected row paints a background");
+            for (String styleClass : classes) {
+                Labeled cell = (Labeled) row.lookup("." + styleClass);
+                Color fg = cell.getTextFill() instanceof Color c ? c : null;
+                assertTrue(fg != null, styleClass + ": no solid text fill");
+                double ratio = contrastRatio(fg, rowBg);
+                assertTrue(ratio >= 4.5, String.format("selected %s on base=%s: contrast %.2f < 4.5 (fg=%s, bg=%s)",
+                        styleClass, base, ratio, fg, rowBg));
+            }
+        });
+    }
+
+    /** The topmost background fill: Modena paints a row as a border colour, then its background on top. */
+    private static Color lastFill(Region region) {
+        Background bg = region.getBackground();
+        if (bg == null || bg.getFills().isEmpty()) return null;
+        Paint fill = bg.getFills().get(bg.getFills().size() - 1).getFill();
+        return fill instanceof Color c ? c : null;
+    }
+
     private void assertClassesMeetContrast(List<String> styleClasses, String base, double minRatio) {
         assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
         FxTestSupport.onFxRun(() -> {

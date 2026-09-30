@@ -56,53 +56,32 @@ class CohortSessionStripTest {
     }
 
     @Test
-    void aSquareFiltersTheListAndASecondClickClears() {
-        CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree());
-        s.setSlideFilter("s1");
-        assertFalse(s.visibleItems().isEmpty());
-        assertTrue(s.visibleItems().stream().allMatch(i -> i.key().slideId().equals("s1")));
-        s.setSlideFilter("s1");
-        assertNull(s.slideFilter());
-        assertEquals(s.review().items(), s.visibleItems());
-    }
-
-    @Test
     void anUnavailableCohortHasNoStatusLine() {
         CohortSession s = new CohortSession();
         assertEquals("", s.statusLine(true));
         assertTrue(s.slideStrip().isEmpty());
     }
 
-    /**
-     * Task 16 carry: N/P must step only through the visible items. With a slide filter shown,
-     * stepping past the last visible item wraps to the first visible one, never one filtered out.
-     * "odd" is flagged on both roots (unusual staining), so it has two visible items to wrap over.
-     */
+    /** With no group selected, N / P step through every item and wrap. */
     @Test
-    void stepWrapsThroughOnlyTheVisibleItemsUnderASlideFilter() {
+    void stepWrapsThroughEveryItemWithNoGroupSelected() {
         CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree());
         List<qupath.ext.flowpath.cohort.ReviewItem> all = s.review().items();
-        assertTrue(all.stream().anyMatch(i -> !i.key().slideId().equals("odd")), "fixture check: more than one slide flagged");
-        s.setSlideFilter("odd");
-        List<qupath.ext.flowpath.cohort.ReviewItem> visible = s.visibleItems();
-        assertEquals(2, visible.size(), "fixture check: 'odd' is flagged on both roots");
-        assertTrue(visible.size() < all.size(), "fixture check: the filter actually narrows the list");
-
-        s.select(visible.get(visible.size() - 1).key());
-        assertEquals(visible.get(0).key(), s.step(+1), "wraps within the filtered slide, not the whole review");
-        assertTrue(s.selected().key().slideId().equals("odd"));
-        assertEquals(visible.get(visible.size() - 1).key(), s.step(-1));
+        assertEquals(all, s.stepOrder());
+        s.select(all.get(all.size() - 1).key());
+        assertEquals(all.get(0).key(), s.step(+1));
+        assertEquals(all.get(all.size() - 1).key(), s.step(-1));
     }
 
-    /** Task 16 carry: the same rule applies to a selected group, not only a slide filter. */
+    /** Task 16 carry: with a group selected, N / P step only through its items. */
     @Test
-    void stepWrapsThroughOnlyTheVisibleItemsUnderAGroupSelection() {
+    void stepWrapsThroughOnlyTheGroupsItemsUnderAGroupSelection() {
         CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree());
         List<ReviewGroup> groups = s.groups();
         assertTrue(groups.size() >= 2, "fixture check: more than one group");
         ReviewGroup group = groups.get(1);
         s.selectGroup(group.key());
-        List<qupath.ext.flowpath.cohort.ReviewItem> visible = s.visibleItems();
+        List<qupath.ext.flowpath.cohort.ReviewItem> visible = s.stepOrder();
         assertEquals(group.items(), visible);
 
         s.select(visible.get(visible.size() - 1).key());

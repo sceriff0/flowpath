@@ -5,9 +5,8 @@ import java.util.Arrays;
 /**
  * The one cohort-level median (pre-flight ruling C6): mean of the two middle values for an
  * even count, the middle value for an odd one. {@link AlignmentModel} uses it for the
- * per-column cofactor and for the shift/stretch spread that flags unusual staining; later
- * consumers ({@code MarkerRules}, {@code CohortSession.mostTypical}) are told to call this
- * rather than keep their own copy — three divergent copies of "median" is exactly the kind
+ * per-column cofactor and for the shift/stretch spread that flags unusual staining;
+ * {@code MarkerRules} and {@code Landmarks} call it too, rather than keep their own copy — three divergent copies of "median" is exactly the kind
  * of duplicated-predicate defect this codebase's invariants exist to rule out.
  */
 public final class CohortStats {

@@ -35,13 +35,24 @@ public interface CohortExclusions {
         };
     }
 
-    /** The QuPath adapter: the only code that touches a {@link ProjectImageEntry}'s exclusion flag. */
+    /**
+     * Whether {@code entry} is flagged excluded: the one reading of the metadata value, used by
+     * {@link #of} and by a batch run's slides ({@code FlowPathBatch.batchSlides}).
+     */
+    static boolean flagged(ProjectImageEntry<?> entry) {
+        return "true".equals(entry.getMetadataValue(KEY));
+    }
+
+    /**
+     * The QuPath adapter: with {@link #flagged}, the only code that touches a
+     * {@link ProjectImageEntry}'s exclusion flag.
+     */
     static CohortExclusions of(Project<?> project) {
         return new CohortExclusions() {
             @Override public Set<String> excluded() {
                 Set<String> out = new LinkedHashSet<>();
                 for (ProjectImageEntry<?> e : project.getImageList()) {
-                    if ("true".equals(e.getMetadataValue(KEY))) out.add(e.getID());
+                    if (flagged(e)) out.add(e.getID());
                 }
                 return out;
             }

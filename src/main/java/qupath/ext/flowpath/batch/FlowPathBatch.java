@@ -505,7 +505,7 @@ public final class FlowPathBatch {
             @Override public ImageData<BufferedImage> read() throws Exception { return e.readImageData(); }
             @Override public PathObjectHierarchy readHierarchy() throws Exception { return e.readHierarchy(); }
             @Override public void save(ImageData<BufferedImage> data) throws Exception { e.saveImageData(data); }
-            @Override public boolean cohortExcluded() { return "true".equals(e.getMetadataValue(CohortExclusions.KEY)); }
+            @Override public boolean cohortExcluded() { return CohortExclusions.flagged(e); }
         }).toList();
     }
 

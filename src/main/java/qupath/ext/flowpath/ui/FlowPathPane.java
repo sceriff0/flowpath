@@ -1031,7 +1031,7 @@ public class FlowPathPane extends BorderPane {
             cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks),
                     CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
         }
-        syncCrop(cohort.selected(), cohort.visibleItems());
+        syncCrop(cohort.selected(), cohort.stepOrder());
     }
 
     /**
