@@ -3,6 +3,7 @@ package qupath.ext.flowpath.engine;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.QualityFilter;
 import qupath.ext.flowpath.model.RegionMask;
+import qupath.ext.flowpath.model.RoundMask;
 import qupath.lib.geom.Point2;
 import qupath.lib.objects.PathObject;
 import qupath.lib.roi.interfaces.ROI;
@@ -32,10 +33,17 @@ import java.util.TreeMap;
  *                 nothing usable was annotated
  * @param quality  the quality filter's mask; null when the tree has no filter
  * @param combined the two combined; null when neither filters anything
+ * @param rounds   the round-QC failures under the same filter: not a cell mask (a failed round
+ *                 removes that round's markers, not the cell), carried here so the one place the
+ *                 filter is applied applies all of it; never null
  */
-public record CleanMask(RegionMask regions, boolean[] quality, boolean[] combined) {
+public record CleanMask(RegionMask regions, boolean[] quality, boolean[] combined, RoundMask rounds) {
 
-    public static final CleanMask NONE = new CleanMask(null, null, null);
+    public static final CleanMask NONE = new CleanMask(null, null, null, RoundMask.NONE);
+
+    public CleanMask {
+        rounds = rounds == null ? RoundMask.NONE : rounds;
+    }
 
     public static CleanMask of(CellIndex index, QualityFilter filter, boolean roiFilterEnabled,
                                List<PathObject> annotations) {
@@ -45,7 +53,8 @@ public record CleanMask(RegionMask regions, boolean[] quality, boolean[] combine
         boolean[] combined = quality == null ? roi
                 : roi == null ? quality
                 : GatingEngine.combineMasks(quality, roi);
-        return new CleanMask(regions, quality, combined);
+        RoundMask rounds = filter == null ? RoundMask.NONE : index.roundQc().mask(filter);
+        return new CleanMask(regions, quality, combined, rounds);
     }
 
     /** The ROI filter's inclusion mask, or null when it filters nothing. */

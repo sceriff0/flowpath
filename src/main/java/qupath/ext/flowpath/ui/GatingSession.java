@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.QualityFilter;
+import qupath.ext.flowpath.model.RoundMask;
 import qupath.ext.flowpath.model.RegionMask;
 import qupath.ext.flowpath.model.UndoHistory;
 import qupath.lib.objects.PathObject;
@@ -203,7 +204,9 @@ final class GatingSession {
         return index != null
                 && derived.index() == index
                 && derived.roiFilterEnabled() == tree.isRoiFilterEnabled()
-                && Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()));
+                && Arrays.equals(derived.qualityMask(), qualityMaskOf(index, tree.getQualityFilter()))
+                && (derived.stats() == null ? RoundMask.NONE : derived.stats().roundMask())
+                        .equals(roundMaskOf(index, tree.getQualityFilter()));
     }
 
     private void adopt(Derived derived) {
@@ -299,9 +302,14 @@ final class GatingSession {
         // The one quality-then-ROI composition, shared with a batch run and the cohort's samples.
         CleanMask clean = CleanMask.of(idx, in.qualityFilter(), in.roiFilterEnabled(), in.annotations());
         MarkerStats stats = reusable != null && Arrays.equals(clean.combined(), reusableMask)
+                && reusable.roundMask().equals(clean.rounds())
                 ? reusable
-                : MarkerStats.compute(idx, clean.combined());
+                : MarkerStats.compute(idx, clean.combined(), clean.rounds());
         return new Derived(idx, in.roiFilterEnabled(), clean.regions(), clean.quality(), stats);
+    }
+
+    private static RoundMask roundMaskOf(CellIndex idx, QualityFilter filter) {
+        return filter == null ? RoundMask.NONE : idx.roundQc().mask(filter);
     }
 
     private static boolean[] qualityMaskOf(CellIndex idx, QualityFilter filter) {

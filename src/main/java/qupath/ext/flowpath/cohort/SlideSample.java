@@ -48,8 +48,9 @@ public record SlideSample(String slideId, String name, CellIndex index, boolean[
     public SlideSample scopedTo(QualityFilter filter, boolean roiFilterEnabled) {
         String digest = CleanMask.inputsDigest(filter, roiFilterEnabled, annotations);
         if (digest.equals(scope)) return this;
-        boolean[] mask = CleanMask.of(index, filter, roiFilterEnabled, annotations).cleanOrAll(index.size());
-        return new SlideSample(slideId, name, index, mask, MarkerStats.compute(index, mask), detectionCount,
+        CleanMask clean = CleanMask.of(index, filter, roiFilterEnabled, annotations);
+        boolean[] mask = clean.cleanOrAll(index.size());
+        return new SlideSample(slideId, name, index, mask, MarkerStats.compute(index, mask, clean.rounds()), detectionCount,
                 fingerprint, annotations, digest);
     }
 

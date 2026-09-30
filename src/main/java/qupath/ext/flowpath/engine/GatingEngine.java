@@ -455,7 +455,7 @@ public final class GatingEngine {
     public static MarkerStats recomputeStats(CellIndex index, QualityFilter filter, boolean[] roi) {
         boolean[] qualityMask = computeQualityMask(index, filter);
         boolean[] mask = roi != null ? combineMasks(qualityMask, roi) : qualityMask;
-        return MarkerStats.compute(index, mask);
+        return MarkerStats.compute(index, mask, filter == null ? null : index.roundQc().mask(filter));
     }
 
     /**

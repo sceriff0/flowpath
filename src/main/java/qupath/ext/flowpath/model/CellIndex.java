@@ -605,6 +605,21 @@ public class CellIndex {
         }
     }
 
+    private volatile RoundQc roundQc;
+
+    /**
+     * The round-level QC this export carries ({@code QC: <Metric>: [<markers>]}), read on first
+     * ask and cached; {@link RoundQc#NONE} for an export without round keys.
+     */
+    public RoundQc roundQc() {
+        RoundQc cached = roundQc;
+        if (cached != null) return cached;
+        synchronized (this) {
+            if (roundQc == null) roundQc = RoundQc.discover(sampleKeys, this);
+            return roundQc;
+        }
+    }
+
     /** The quality field for {@code slug}, or {@code null} if this export has none. */
     public QualityField qualityField(String slug) {
         if (slug == null) return null;

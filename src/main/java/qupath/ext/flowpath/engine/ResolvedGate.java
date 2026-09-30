@@ -57,6 +57,13 @@ final class ResolvedGate {
     /** True for gates with a Y axis (quadrant and 2D region gates). */
     final boolean twoAxis;
 
+    /**
+     * The cells whose imaging round for the X / Y marker failed round QC, or {@code null} when
+     * none did. Such a cell is Unmeasured here, exactly like a NaN value.
+     */
+    final java.util.BitSet roundFailedX;
+    final java.util.BitSet roundFailedY;
+
     /** Percentile clip bounds per axis, NaN when outlier exclusion is off or unavailable. */
     final double clipLoX;
     final double clipHiX;
@@ -70,7 +77,7 @@ final class ResolvedGate {
     final ResolvedGate[][] children;
 
     private ResolvedGate(GateNode node, MeasuredColumn x, MeasuredColumn y, boolean usable,
-                         boolean twoAxis,
+                         boolean twoAxis, java.util.BitSet roundFailedX, java.util.BitSet roundFailedY,
                          double clipLoX, double clipHiX, double clipLoY, double clipHiY,
                          Branch[] branches, ResolvedGate[][] children) {
         this.node = node;
@@ -78,6 +85,8 @@ final class ResolvedGate {
         this.y = y;
         this.usable = usable;
         this.twoAxis = twoAxis;
+        this.roundFailedX = roundFailedX;
+        this.roundFailedY = roundFailedY;
         this.clipLoX = clipLoX;
         this.clipHiX = clipHiX;
         this.clipLoY = clipLoY;
@@ -151,7 +160,9 @@ final class ResolvedGate {
                     .toArray(new ResolvedGate[0]);
         }
 
-        ResolvedGate compiled = new ResolvedGate(node, x, y, usable, twoAxis,
+        java.util.BitSet failX = usable ? stats.roundMask().failedFor(channels.get(0)) : null;
+        java.util.BitSet failY = usable && twoAxis ? stats.roundMask().failedFor(channels.get(1)) : null;
+        ResolvedGate compiled = new ResolvedGate(node, x, y, usable, twoAxis, failX, failY,
                 loX, hiX, loY, hiY, branches, children);
         if (byNode != null) byNode.put(node, compiled);
         return compiled;
@@ -236,6 +247,10 @@ final class ResolvedGate {
         if (Double.isNaN(rawX)) return UNMEASURED;
         double rawY = twoAxis ? y.valueAt(cellIdx) : 0.0;
         if (twoAxis && Double.isNaN(rawY)) return UNMEASURED;
+        // A failed imaging round is no measurement either: the value is there, but QC says the
+        // round that produced it did not image this cell properly.
+        if (roundFailedX != null && roundFailedX.get(cellIdx)) return UNMEASURED;
+        if (twoAxis && roundFailedY != null && roundFailedY.get(cellIdx)) return UNMEASURED;
 
         // Step 2: the cell has a real value on every axis, so now it can be merely extreme.
         if (honourClip && (clipsX(rawX) || (twoAxis && clipsY(rawY)))) return CLIPPED;

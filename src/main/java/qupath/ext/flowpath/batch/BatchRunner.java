@@ -107,7 +107,7 @@ public final class BatchRunner {
             RegionMask regions = clean.regions();
             boolean[] roi = clean.roi();
             boolean[] quality = clean.quality();
-            MarkerStats stats = MarkerStats.compute(index, clean.combined());
+            MarkerStats stats = MarkerStats.compute(index, clean.combined(), clean.rounds());
             GatingEngine.AssignmentResult result = GatingEngine.assignAll(tree, index, stats, roi,
                     regions == null ? null : regions.regionOf(), regions == null ? 0 : regions.regionNames().size());
             PopulationStats population = PopulationStats.of(tree, result.getTally(),

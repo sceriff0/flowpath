@@ -41,6 +41,10 @@ public class MarkerStats {
     // Quality mask captured at compute time, so lazily-registered compartment
     // columns are summarised over the same cell population as the base markers.
     private boolean[] qualityMask;
+    // The round-QC failures under the same filter: a column leaves out the cells whose round
+    // for its marker failed, exactly as it leaves out NaN. Carried here because every reader
+    // of a gate's column -- the predicate, the plots, the cohort -- already holds these stats.
+    private RoundMask roundMask = RoundMask.NONE;
 
     private MarkerStats() {}
 
@@ -54,14 +58,28 @@ public class MarkerStats {
     }
 
     public static MarkerStats compute(CellIndex index, boolean[] qualityMask) {
+        return compute(index, qualityMask, RoundMask.NONE);
+    }
+
+    /**
+     * Statistics over the cells {@code qualityMask} keeps, each column also leaving out the cells
+     * whose round for its marker failed in {@code roundMask} ({@code engine/CleanMask.rounds()}).
+     */
+    public static MarkerStats compute(CellIndex index, boolean[] qualityMask, RoundMask roundMask) {
         MarkerStats s = new MarkerStats();
         s.qualityMask = qualityMask;
+        s.roundMask = roundMask == null ? RoundMask.NONE : roundMask;
 
         String[] markers = index.getMarkerNames();
         for (int m = 0; m < markers.length; m++) {
             s.putColumnStats(markers[m], index.getMarkerValues(m), qualityMask);
         }
         return s;
+    }
+
+    /** The round-QC failures these statistics leave out; {@link RoundMask#NONE} when none. */
+    public RoundMask roundMask() {
+        return roundMask;
     }
 
     /**
@@ -83,14 +101,16 @@ public class MarkerStats {
         // NaN, and NaN compares false against any threshold: the whole column silently went
         // negative (the gates no longer z-score, but the UMAP's feature scaling still does).
         // The infinite cell itself still classifies by its sign against the finite stats.
+        // A cell whose round for this column's marker failed QC is unmeasured here too.
+        java.util.BitSet failed = roundMask.failedFor(RoundMask.markerOf(name));
         int actualCount = 0;
         for (int i = 0; i < n; i++) {
-            if ((mask == null || mask[i]) && Double.isFinite(raw[i])) actualCount++;
+            if ((mask == null || mask[i]) && Double.isFinite(raw[i]) && (failed == null || !failed.get(i))) actualCount++;
         }
         double[] passing = new double[actualCount];
         int idx = 0;
         for (int i = 0; i < n; i++) {
-            if ((mask == null || mask[i]) && Double.isFinite(raw[i])) {
+            if ((mask == null || mask[i]) && Double.isFinite(raw[i]) && (failed == null || !failed.get(i))) {
                 passing[idx++] = raw[i];
             }
         }
