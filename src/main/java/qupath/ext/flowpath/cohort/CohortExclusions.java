@@ -49,12 +49,45 @@ public interface CohortExclusions {
             @Override public void setExcluded(String slideId, boolean excluded) throws IOException {
                 for (ProjectImageEntry<?> e : project.getImageList()) {
                     if (!e.getID().equals(slideId)) continue;
-                    if (excluded) e.putMetadataValue(KEY, "true"); else e.removeMetadataValue(KEY);
-                    project.syncChanges();
+                    write(new Flag() {
+                        @Override public String get() { return e.getMetadataValue(KEY); }
+                        @Override public void set(String value) {
+                            if (value == null) e.removeMetadataValue(KEY); else e.putMetadataValue(KEY, value);
+                        }
+                    }, excluded, project::syncChanges);
                     return;
                 }
                 throw new IOException("No image with id " + slideId + " in this project");
             }
         };
+    }
+
+    /** One entry's exclusion value; {@code null} means absent. The seam {@link #write} is tested through. */
+    interface Flag {
+        String get();
+
+        void set(String value);
+    }
+
+    /** Saving the project; may fail. */
+    @FunctionalInterface
+    interface Sync {
+        void run() throws IOException;
+    }
+
+    /**
+     * Set the flag and save, all or nothing: when the save fails the entry's previous value is
+     * restored before the failure is rethrown, so a refused write (a read-only project) cannot
+     * still take effect in memory on the next refresh.
+     */
+    static void write(Flag flag, boolean excluded, Sync sync) throws IOException {
+        String previous = flag.get();
+        flag.set(excluded ? "true" : null);
+        try {
+            sync.run();
+        } catch (IOException | RuntimeException ex) {
+            flag.set(previous);
+            throw ex;
+        }
     }
 }

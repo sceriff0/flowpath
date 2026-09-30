@@ -19,6 +19,10 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.WritableImage;
+import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 
@@ -48,6 +52,10 @@ public final class CohortGridPane extends BorderPane {
     final Button skip = new Button("Skip this gate (S)");
     final Button useCohortValue = new Button("Use cohort value");
     final TextField sampleSize = new TextField();
+    static final String CROP_LOADING = "Loading crop…";
+    /** The selected review item's evidence crop (spec §6); its pixels are fixed swatches, not themed text. */
+    final ImageView cropView = new ImageView();
+    final Label cropStatusLabel = unmnemonic(new Label());
 
     /** The columns the table was last built for; a re-render with the same ones keeps the TableColumns. */
     private List<CohortGridModel.Column> builtColumns;
@@ -115,7 +123,14 @@ public final class CohortGridPane extends BorderPane {
         sampleSize.setOnAction(e -> applySampleSize());
         HBox footer = new HBox(6, onlyLooks, new Label("Cells per slide:"), sampleSize);
         footer.setAlignment(Pos.CENTER_LEFT);
-        VBox bottom = new VBox(4, detailTitle, detailReasons, detailThresholdLabel, answers, footer);
+        cropView.setFitWidth(256);
+        cropView.setPreserveRatio(true);
+        cropStatusLabel.getStyleClass().add("fp-hint");
+        cropStatusLabel.setWrapText(true);
+        VBox detailText = new VBox(4, detailTitle, detailReasons, detailThresholdLabel, cropStatusLabel);
+        HBox.setHgrow(detailText, Priority.ALWAYS);
+        HBox detailRow = new HBox(8, cropView, detailText);
+        VBox bottom = new VBox(4, detailRow, answers, footer);
         bottom.getStyleClass().add("fp-cohort-detail");
         bottom.setPadding(new Insets(6));
         setBottom(bottom);
@@ -244,6 +259,32 @@ public final class CohortGridPane extends BorderPane {
         if (n < 0) { sampleSize.setText(Integer.toString(shownSampleSize)); return; }
         shownSampleSize = n;
         onSampleSizeChanged.accept(n);
+    }
+
+    /** A crop is being read for the selected item: no image, and a line saying so. */
+    public void showCropLoading() {
+        cropView.setImage(null);
+        cropStatusLabel.setText(CROP_LOADING);
+    }
+
+    /** The selected item's crop, or its error text when it failed; the item stays answerable either way. */
+    public void showCrop(EvidenceCrop.Crop crop) {
+        if (crop.ok()) {
+            WritableImage img = new WritableImage(crop.width(), crop.height());
+            img.getPixelWriter().setPixels(0, 0, crop.width(), crop.height(), PixelFormat.getIntArgbInstance(),
+                    crop.argb(), 0, crop.width());
+            cropView.setImage(img);
+            cropStatusLabel.setText("");
+        } else {
+            cropView.setImage(null);
+            cropStatusLabel.setText(crop.error());
+        }
+    }
+
+    /** No review item selected (none, or a cell with no item): no crop. */
+    public void clearCrop() {
+        cropView.setImage(null);
+        cropStatusLabel.setText("");
     }
 
     public void setOnCellChosen(Consumer<ReviewItem.Key> c) { onCellChosen = Objects.requireNonNull(c); }

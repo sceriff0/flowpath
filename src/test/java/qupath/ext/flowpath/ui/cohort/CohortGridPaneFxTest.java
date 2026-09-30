@@ -99,4 +99,35 @@ class CohortGridPaneFxTest {
         assertEquals(before.size() + 1, rebuilt.size());
         assertNotSame(before.get(1), rebuilt.get(1));
     }
+
+    @Test
+    void aCropShowsItsPixelsAndAFailedCropShowsItsText() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
+        Object[] shown = FxTestSupport.onFx(() -> {
+            pane.showCropLoading();
+            String loading = pane.cropStatusLabel.getText();
+            pane.showCrop(new qupath.ext.flowpath.cohort.EvidenceCrop.Crop(2, 1, new int[]{0xFF00FF00, 0xFF0000FF}, null));
+            boolean hasImage = pane.cropView.getImage() != null;
+            int pixel = pane.cropView.getImage().getPixelReader().getArgb(0, 0);
+            double width = pane.cropView.getImage().getWidth();
+            String okText = pane.cropStatusLabel.getText();
+            pane.showCrop(qupath.ext.flowpath.cohort.EvidenceCrop.Crop.failed("server gone"));
+            boolean clearedOnFailure = pane.cropView.getImage() == null;
+            String failedText = pane.cropStatusLabel.getText();
+            pane.showCrop(new qupath.ext.flowpath.cohort.EvidenceCrop.Crop(1, 1, new int[]{0xFF000000}, null));
+            pane.clearCrop();
+            return new Object[]{loading, hasImage, pixel, width, okText, clearedOnFailure, failedText,
+                    pane.cropView.getImage() == null, pane.cropStatusLabel.getText()};
+        });
+        assertEquals(CohortGridPane.CROP_LOADING, shown[0]);
+        assertEquals(true, shown[1], "an ok crop sets an image");
+        assertEquals(0xFF00FF00, shown[2]);
+        assertEquals(2.0, shown[3]);
+        assertEquals("", shown[4]);
+        assertEquals(true, shown[5], "a failed crop shows no stale image");
+        assertEquals("server gone", shown[6]);
+        assertEquals(true, shown[7], "clearCrop drops the image");
+        assertEquals("", shown[8]);
+    }
 }
