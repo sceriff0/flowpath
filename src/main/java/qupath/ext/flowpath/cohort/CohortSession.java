@@ -2,6 +2,7 @@ package qupath.ext.flowpath.cohort;
 
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.TreeResolver;
+import qupath.ext.flowpath.model.GateAxis;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
@@ -12,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -29,7 +31,23 @@ public final class CohortSession {
 
     public record SlideRef(String id, String name) {}
 
-    public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache) {}
+    /**
+     * What {@link #score} needs. {@code ranking} is the last adopted ranking with the inputs it was
+     * computed from; {@link #score} reuses it while they are unchanged, since every gating pass
+     * rescores and the ranking (a cofactor, landmarks and histograms per slide × column) does not
+     * depend on anything a pass changes.
+     */
+    public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache,
+                           RankingMemo ranking) {
+        public Snapshot {
+            ranking = ranking == null ? RankingMemo.NONE : ranking;
+        }
+    }
+
+    /** A ranking and the key of its inputs ({@link #rankingKey}); see {@link Snapshot}. */
+    public record RankingMemo(String key, ReferenceRanking.Result result) {
+        public static final RankingMemo NONE = new RankingMemo(null, ReferenceRanking.Result.NONE);
+    }
 
     /**
      * One scoring: the model, the review, the columns scored, the reference ranking, and the
@@ -37,7 +55,7 @@ public final class CohortSession {
      * filter and ROI, which {@link #adopt} keeps so the curves and crops read the same clean cells.
      */
     public record Scored(AlignmentModel model, ReviewScorer.Result review, List<String> columnKeys,
-                         ReferenceRanking.Result ranking, List<SlideSample> samples) {
+                         ReferenceRanking.Result ranking, List<SlideSample> samples, String rankingKey) {
         public Scored {
             samples = List.copyOf(samples);
             ranking = ranking == null ? ReferenceRanking.Result.NONE : ranking;
@@ -106,6 +124,8 @@ public final class CohortSession {
     /** The live tree's reference slide, as last handed in by {@link #setLiveTree} or {@link #snapshot}. */
     private volatile String referenceSlideId;
     private ReferenceRanking.Result ranking = ReferenceRanking.Result.NONE;
+    /** The adopted ranking with its inputs' key, handed to the next {@link #score} to reuse. */
+    private RankingMemo rankingMemo = RankingMemo.NONE;
     /** Slides the project marks {@code flowpath.cohort.excluded}: never sampled, ranked or reviewed. */
     private volatile Set<String> excluded = Set.of();
     private ReviewItem.Key selected;
@@ -164,6 +184,7 @@ public final class CohortSession {
             model = AlignmentModel.empty();
             review = NO_REVIEW;
             ranking = ReferenceRanking.Result.NONE;
+            rankingMemo = RankingMemo.NONE;
             excluded = Set.of();
             selected = null;
             selectedGroup = null;
@@ -242,7 +263,7 @@ public final class CohortSession {
     /** What {@link #score} needs, taken on the FX thread; a foreign tree is scored as having no reference. */
     public Snapshot snapshot(GateTree tree) {
         setLiveTree(tree);
-        return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache);
+        return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache, rankingMemo);
     }
 
     /**
@@ -255,17 +276,58 @@ public final class CohortSession {
         List<SlideSample> samples = snapshot.samples().stream().map(s -> s.scopedTo(treeCopy)).toList();
         Set<AlignmentModel.ColumnRef> columns = AlignmentModel.columnsOf(treeCopy);
         // Ranked whether or not a reference exists: the suggestion is what lets one be chosen.
-        ReferenceRanking.Result ranking = samples.size() >= 2 ? ReferenceRanking.rank(samples, columns)
-                : ReferenceRanking.Result.NONE;
+        // Only the columns a slide is corrected on count, and an unchanged input reuses the last answer.
+        Set<AlignmentModel.ColumnRef> ranked = rankedColumns(treeCopy);
+        String rankingKey = samples.size() >= 2 ? rankingKey(samples, ranked) : null;
+        ReferenceRanking.Result ranking = rankingKey == null ? ReferenceRanking.Result.NONE
+                : rankingKey.equals(snapshot.ranking().key()) ? snapshot.ranking().result()
+                : ReferenceRanking.rank(samples, ranked);
         if (snapshot.referenceSlideId() == null || samples.size() < 2) {
             // Nothing to align, but the persisted landmarks carry through: adopting an empty cache
             // here would throw them away and the next write would lose them.
-            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), ranking, samples);
+            return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), ranking, samples, rankingKey);
         }
         AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache());
         ReviewScorer.Result review = ReviewScorer.score(treeCopy, samples, model);
         List<String> keys = columns.stream().map(AlignmentModel.ColumnRef::key).toList();
-        return new Scored(model, review, keys, ranking, samples);
+        return new Scored(model, review, keys, ranking, samples, rankingKey);
+    }
+
+    /**
+     * The columns the reference ranking scores: those of the enabled gates ({@link GateWalk#enabled})
+     * with Correct staining on — the columns a slide is actually corrected on. A disabled or
+     * opted-out gate would otherwise count toward "most central on k of n" and could make every
+     * slide ineligible over a column nothing is aligned on.
+     */
+    public static Set<AlignmentModel.ColumnRef> rankedColumns(GateTree tree) {
+        Set<AlignmentModel.ColumnRef> out = new LinkedHashSet<>();
+        for (GateWalk.Entry e : GateWalk.enabled(tree)) {
+            GateNode gate = e.gate();
+            if (!gate.isCorrectStaining()) continue;
+            List<String> channels = gate.getChannels();
+            for (int k = 0; k < GateAxis.axisCount(gate) && k < channels.size(); k++) {
+                String channel = channels.get(k);
+                if (channel != null && !channel.isEmpty()) {
+                    out.add(new AlignmentModel.ColumnRef(channel, gate.compartmentAt(k), gate.statisticAt(k)));
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Everything {@link ReferenceRanking#rank} reads: each scoped sample's id, name and
+     * {@link SlideSample#cacheKey} (fingerprint plus the filter and ROI of its clean mask), in
+     * order, and the ranked columns.
+     */
+    static String rankingKey(List<SlideSample> samples, Set<AlignmentModel.ColumnRef> columns) {
+        StringBuilder sb = new StringBuilder();
+        for (SlideSample s : samples) {
+            sb.append(s.slideId()).append('\u0000').append(s.name()).append('\u0000').append(s.cacheKey()).append('\u0001');
+        }
+        sb.append('|');
+        for (AlignmentModel.ColumnRef c : columns) sb.append(c.key()).append('\u0001');
+        return sb.toString();
     }
 
     /** @return true when any sampled slide's alignment for any scored column changed */
@@ -290,6 +352,7 @@ public final class CohortSession {
         }
         review = scored.review();
         ranking = scored.ranking();
+        rankingMemo = scored.rankingKey() == null ? RankingMemo.NONE : new RankingMemo(scored.rankingKey(), ranking);
         return changed;
     }
 

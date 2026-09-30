@@ -111,4 +111,51 @@ class CohortSessionRankingTest {
         s.setProject("b", CohortSessionTest.refs("ref", "s1"));
         assertEquals(Set.of(), s.excluded());
     }
+
+    /**
+     * Final review item 2: the ranking counts only the columns a slide is corrected on — enabled
+     * gates with Correct staining on. A disabled gate and an opted-out one are not "gated columns".
+     */
+    @Test
+    void theRankingIgnoresDisabledAndOptedOutGates() {
+        GateTree plain = ReviewScorerTest.tree();
+        plain.setReferenceSlideId(null);
+        GateTree extra = ReviewScorerTest.tree();
+        extra.setReferenceSlideId(null);
+        qupath.ext.flowpath.model.GateNode disabled = new qupath.ext.flowpath.model.GateNode("CD3", 0.5);
+        disabled.setEnabled(false);
+        extra.addRoot(disabled);
+        qupath.ext.flowpath.model.GateNode optedOut = new qupath.ext.flowpath.model.GateNode("CD3", 0.5);
+        optedOut.setStatistic(qupath.ext.flowpath.model.Statistic.MEAN);
+        optedOut.setCorrectStaining(false);
+        extra.addRoot(optedOut);
+
+        assertEquals(1, CohortSession.rankedColumns(extra).size());
+        ReferenceRanking.Result withExtras = sampled(extra, Set.of()).ranking();
+        ReferenceRanking.Result without = sampled(plain, Set.of()).ranking();
+        assertEquals(1, withExtras.gatedColumns());
+        assertTrue(withExtras.uncorrectableColumns().isEmpty(), withExtras.uncorrectableColumns().toString());
+        assertEquals(without.suggestedId(), withExtras.suggestedId());
+        assertEquals(without.reason(), withExtras.reason());
+    }
+
+    /** Final review item 3: an unchanged cohort and column set reuse the last ranking, not recompute it. */
+    @Test
+    void aRescoreWithUnchangedInputsReusesTheRanking() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = sampled(tree, Set.of());
+        ReferenceRanking.Result first = s.ranking();
+        assertNotSame(ReferenceRanking.Result.NONE, first);
+        CohortSession.Scored again = CohortSession.score(s.snapshot(tree), tree.deepCopy());
+        assertSame(first, again.ranking(), "same samples, same columns: the memo answers");
+        s.adopt(again);
+        // A threshold nudge changes no ranked input either.
+        tree.getRoots().get(0).setThreshold(tree.getRoots().get(0).getThreshold() * 1.1);
+        assertSame(first, CohortSession.score(s.snapshot(tree), tree.deepCopy()).ranking());
+
+        s.setExcluded(Set.of("odd"));
+        CohortSession.Scored fewer = CohortSession.score(s.snapshot(tree), tree.deepCopy());
+        assertNotSame(first, fewer.ranking(), "a different set of slides is ranked afresh");
+        assertNull(fewer.ranking().rank("odd"));
+    }
 }
