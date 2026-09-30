@@ -56,6 +56,18 @@ class CohortSessionTest {
         assertEquals(List.of("s2.tif"), s.failedSlideNames(), "what the run's confirmation names as uncorrected");
     }
 
+    /** Final review item 13: the sampling message counts the slides being sampled, not the excluded ones. */
+    @Test
+    void theSamplingMessageLeavesExcludedSlidesOutOfItsDenominator() {
+        CohortSession s = new CohortSession();
+        s.setProjectSlides(refs("ref", "s1", "s2"));
+        s.setLiveTree(ReviewScorerTest.tree());
+        s.setExcluded(java.util.Set.of("s2"));
+        s.samplingStarted();
+        s.landed(new CohortSampler.Failed("s1", "s1.tif", "no detections on this slide"));
+        assertEquals("Sampling slides 1/2…", s.state().message());
+    }
+
     /** Review Focus 5. */
     @Test
     void aMissingReferenceSlideDisablesCorrectionWithAMessage() {

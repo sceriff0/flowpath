@@ -186,4 +186,7 @@
 .fp-cohort-table .table-row-cell:selected .fp-cohort-cell-look,
 .fp-cohort-table .table-row-cell:selected .table-cell,
 .fp-cohort-table .table-row-cell:selected .text { -fx-text-fill: -fx-selection-bar-text; }
+/* The cell the detail describes. No text colour of its own (the row's rules above hold): an outline
+   in the selected row's own text colour, so it reads on the selection bar under both bases. */
+.fp-cohort-table .fp-cohort-cell-selected { -fx-border-color: -fx-selection-bar-text; -fx-border-width: 2; -fx-font-weight: bold; }
 .fp-cohort-detail { -fx-padding: 6 8 6 8; }

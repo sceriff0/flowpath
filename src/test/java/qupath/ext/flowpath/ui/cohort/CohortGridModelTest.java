@@ -158,4 +158,86 @@ class CohortGridModelTest {
         assertEquals(1, m.detail().reasons().size());
         assertTrue(m.detail().reasons().get(0).contains("not measured"));
     }
+
+    /** Final review item 5: the model carries the selected cell, so the grid can highlight it. */
+    @Test
+    void theSelectedCellIsCarriedOnItsRow() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortSession s = CohortFixtures.sampled(tree);
+        String path1 = GateWalk.enabled(tree).get(1).gatePath();
+        ReviewItem.Key key = new ReviewItem.Key("s2", 1, path1);
+        CohortGridModel m = CohortGridModel.derive(s, tree, key, false);
+        assertEquals(1, row(m, "s2").selectedColumn());
+        for (String other : List.of("ref", "s1", "odd")) assertEquals(-1, row(m, other).selectedColumn(), other);
+
+        // N / P moved the selection: the next derive moves the highlight with it, over a fresh tree copy.
+        ReviewItem.Key next = new ReviewItem.Key("odd", 0, GateWalk.enabled(tree).get(0).gatePath());
+        CohortGridModel moved = CohortGridModel.derive(s, tree.deepCopy(), next, false);
+        assertEquals(-1, row(moved, "s2").selectedColumn());
+        assertEquals(0, row(moved, "odd").selectedColumn());
+        assertEquals(next, moved.detail().key());
+
+        assertTrue(CohortGridModel.derive(s, tree, null, false).rows().stream().allMatch(r -> r.selectedColumn() == -1));
+    }
+
+    /** Final review item 7: ☆ is clickable on a sampling row while there is no reference, not for a rebase. */
+    @Test
+    void aSamplingRowCanBeConfirmedButNotRebasedOnto() {
+        assertTrue(CohortGridModel.canBeReference(CohortGridModel.RowStatus.SAMPLING, false, null));
+        assertFalse(CohortGridModel.canBeReference(CohortGridModel.RowStatus.SAMPLING, false, "ref"));
+        assertTrue(CohortGridModel.canBeReference(CohortGridModel.RowStatus.READY, false, "ref"));
+        assertFalse(CohortGridModel.canBeReference(CohortGridModel.RowStatus.READY, true, "ref"));
+        assertFalse(CohortGridModel.canBeReference(CohortGridModel.RowStatus.EXCLUDED, false, null));
+        assertFalse(CohortGridModel.canBeReference(CohortGridModel.RowStatus.FAILED, false, null));
+
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        tree.setReferenceSlideId(null);
+        CohortSession s = new CohortSession();
+        s.setProjectSlides(List.of(new CohortSession.SlideRef("a", "a.tif"), new CohortSession.SlideRef("b", "b.tif")));
+        s.setLiveTree(tree);
+        s.samplingStarted();
+        CohortGridModel m = CohortGridModel.derive(s, tree, null, false);
+        assertEquals(CohortGridModel.RowStatus.SAMPLING, row(m, "a").status());
+        assertTrue(row(m, "a").canBeReference(), "spec §8: ☆ still clickable while sampling");
+    }
+
+    /** Final review item 8: the card names the reference and the guarded look count. */
+    @Test
+    void theCardNamesTheReferenceAndWhatToLookAt() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortSession s = CohortFixtures.sampled(tree);
+        int n = CohortGridModel.toLookAt(s, tree);
+        assertTrue(n > 0, "fixture check");
+        assertEquals("Cohort · 4 slides · ★ ref.tif · " + n + " to look at", CohortGridModel.cardLine(s, tree, true));
+
+        s.setExcluded(Set.of("odd"));
+        assertTrue(CohortGridModel.cardLine(s, tree, true).startsWith("Cohort · 3 slides · ★ ref.tif · "));
+
+        // A review scored for another reference counts nothing, as the grid shows nothing.
+        GateTree moved = tree.deepCopy();
+        moved.setReferenceSlideId("s1");
+        assertEquals(0, CohortGridModel.toLookAt(s, moved));
+
+        s.samplingStarted();
+        assertEquals(s.statusLine(true), CohortGridModel.cardLine(s, tree, true), "while sampling: the status line");
+    }
+
+    @Test
+    void withNoReferenceTheCardPromptsForTheSuggestion() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        tree.setReferenceSlideId(null);
+        CohortSession s = CohortFixtures.sampled(tree);
+        assertEquals("Pick a reference slide — suggested: " + s.slideName(s.suggestedReferenceId()),
+                CohortGridModel.cardLine(s, tree, true));
+    }
+
+    /** Final review item 9: the footer carries the "channels missing on some slides" notes. */
+    @Test
+    void theFooterCarriesTheMissingChannelNotes() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortGridModel m = CohortGridModel.derive(CohortFixtures.sampledWithout(tree, "s2", "CD8"), tree, null, false);
+        assertEquals(1, m.missingChannels().size(), "two roots on one channel say it once: " + m.missingChannels());
+        assertTrue(m.missingChannels().get(0).startsWith("s2.tif — CD8 is not measured"));
+        assertTrue(CohortGridModel.derive(CohortFixtures.sampled(tree), tree, null, false).missingChannels().isEmpty());
+    }
 }

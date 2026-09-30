@@ -919,7 +919,7 @@ public class FlowPathPane extends BorderPane {
     private void refreshCohort() {
         Project<BufferedImage> project = qupath.getProject();
         if (project == null) {
-            cohort.setProject(null, List.of());
+            if (cohort.setProject(null, List.of())) forgetCohortSelection();
             cohortCoordinator.cancel();
             lastSampledKey = null;
             updateBusyControls();
@@ -929,7 +929,7 @@ public class FlowPathPane extends BorderPane {
         // projects' "1".."N" must never share samples, alignments or a cache file.
         Path projectDir = ProjectSlides.projectDir(project);
         List<CohortSession.SlideRef> refs = ProjectSlides.refs(project);
-        cohort.setProject(projectDir.toString(), refs);
+        if (cohort.setProject(projectDir.toString(), refs)) forgetCohortSelection();
         Set<String> excluded = CohortExclusions.of(project).excluded();
         cohort.setExcluded(excluded);
         if (refs.size() < 2) {
@@ -952,6 +952,17 @@ public class FlowPathPane extends BorderPane {
         }
         cohortCoordinator.rescore(session.tree());
         updateBusyControls();
+    }
+
+    /**
+     * Entry ids restart in every project: a grid selection or a pending click-through kept by id
+     * would name a different image in the next project. Dropped when the project changes, as the
+     * session drops its own ({@link CohortSession#setProject}).
+     */
+    private void forgetCohortSelection() {
+        gridSelection = null;
+        pendingFocus = null;
+        pendingAdjust = null;
     }
 
     /**
@@ -986,14 +997,23 @@ public class FlowPathPane extends BorderPane {
                 editorPane.viewMode() == CohortSession.ViewMode.THIS_SLIDE));
     }
 
-    /** "Use the cohort value": drop the open slide's setting for the shown gate, as one undo step. */
+    /** "Use the cohort value" in the editor: drop the open slide's setting for the shown gate. */
     private void clearSlideSetting() {
-        GateNode gate = currentNode;
-        String id = currentSlideId();
-        if (gate == null || id == null || gate.slideSetting(id) == null) return;
+        clearSlideSetting(currentNode, currentSlideId());
+    }
+
+    /**
+     * "Use the cohort value" — the editor's and the Cohort window's, one implementation: drop
+     * {@code slideId}'s setting on {@code gate} as one undo step, then the one resync path and a
+     * rescore. Nothing happens when there is no setting to drop.
+     */
+    private void clearSlideSetting(GateNode gate, String slideId) {
+        if (gate == null || slideId == null || gate.slideSetting(slideId) == null) return;
         session.recordEdit();
-        gate.setSlideSetting(id, null);
+        gate.setSlideSetting(slideId, null);
         resyncToTree();
+        cohortCoordinator.rescore(session.tree());
+        renderCohort();
     }
 
     // --- The cohort (spec 2026-09-30 §3): the card, the window, the click-through and the answers ---
@@ -1002,11 +1022,8 @@ public class FlowPathPane extends BorderPane {
     private void renderCohort() {
         CohortState state = cohort.state();
         boolean noReference = session.tree().getReferenceSlideId() == null;
-        String suggested = cohort.suggestedReferenceId();
         String open = noReference && state.available() ? "Choose reference…" : "Open cohort…";
-        String line = noReference && suggested != null
-                ? "Pick a reference slide — suggested: " + cohort.slideName(suggested)
-                : cohort.statusLine(runAllowed(busyState()));
+        String line = CohortGridModel.cardLine(cohort, session.tree(), runAllowed(busyState()));
         // Shown while a run goes too, so its Cancel stays reachable (see updateRunAllButton).
         boolean running = batchRun != null && batchRun.running();
         cohortCard.render(line, open, state.available() || running);
@@ -1496,19 +1513,12 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * "Use cohort value" for the grid's selected cell: drop that slide's setting on that gate, as
-     * one undo step, then the one resync path and a rescore.
+     * "Use cohort value" for the grid's selected cell, through {@link #clearSlideSetting(GateNode, String)}.
      */
     private void clearSelectedSlideSetting() {
         ReviewItem.Key key = gridSelection;
         if (key == null) return;
-        GateNode gate = CohortSession.liveGate(session.tree(), key);
-        if (gate == null || gate.slideSetting(key.slideId()) == null) return;
-        session.recordEdit();
-        gate.setSlideSetting(key.slideId(), null);
-        resyncToTree();
-        cohortCoordinator.rescore(session.tree());
-        renderCohort();
+        clearSlideSetting(CohortSession.liveGate(session.tree(), key), key.slideId());
     }
 
     /** A review key pressed in the Cohort window's grid; the same handlers as the main pane's keys. */

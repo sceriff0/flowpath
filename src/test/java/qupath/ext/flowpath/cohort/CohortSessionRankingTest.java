@@ -112,6 +112,17 @@ class CohortSessionRankingTest {
         assertEquals(Set.of(), s.excluded());
     }
 
+    /** Final review item 6: the caller learns of a project change, to drop its own id-keyed selection. */
+    @Test
+    void setProjectSaysWhetherTheProjectChanged() {
+        CohortSession s = new CohortSession();
+        assertTrue(s.setProject("a", CohortSessionTest.refs("ref", "s1")));
+        assertFalse(s.setProject("a", CohortSessionTest.refs("ref", "s1", "s2")), "new slides, same project");
+        assertTrue(s.setProject("b", CohortSessionTest.refs("ref", "s1")));
+        assertTrue(s.setProject(null, List.of()));
+        assertFalse(s.setProject(null, List.of()));
+    }
+
     /**
      * Final review item 2: the ranking counts only the columns a slide is corrected on — enabled
      * gates with Correct staining on. A disabled gate and an opted-out one are not "gated columns".

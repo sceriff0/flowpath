@@ -22,9 +22,9 @@ class CohortGridPaneFxTest {
         var cols = List.of(new CohortGridModel.Column(0, "CD8", "CD8"));
         var rows = List.of(
                 new CohortGridModel.Row("1", "slide_A", true, CohortGridModel.RowStatus.READY, "", 2000,
-                        List.of(CohortGridModel.CellMark.OK), 0, false, false),
+                        List.of(CohortGridModel.CellMark.OK), 0, false, false, -1),
                 new CohortGridModel.Row("2", "slide_B", false, CohortGridModel.RowStatus.READY, "", 2000,
-                        List.of(CohortGridModel.CellMark.LOOK), 1, true, true));
+                        List.of(CohortGridModel.CellMark.LOOK), 1, true, true, 0));
         var banner = new CohortGridModel.Banner("★ slide_A · most central of 2", "2", "slide_B",
                 List.of("Suggested: slide_B — most central on 1 of 1 gated columns"));
         var detail = new CohortGridModel.Detail(new ReviewItem.Key("2", 0, "CD8"), "slide_B · CD8",
@@ -87,13 +87,14 @@ class CohortGridPaneFxTest {
         assertEquals(before.size(), after.size());
         for (int i = 0; i < before.size(); i++) assertSame(before.get(i), after.get(i));
         assertEquals(333, after.get(1).getPrefWidth());
-        assertEquals("2", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()));
+        assertEquals("2", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()),
+                "the model's selection, whatever the table had");
 
         var cols = List.of(new CohortGridModel.Column(0, "CD8", "CD8"), new CohortGridModel.Column(0, "CD4", "CD4"));
         var m = model();
         var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.status(),
                 r.statusText(), r.cells(), List.of(r.marks().get(0), r.marks().get(0)), r.lookCount(), r.canExclude(),
-                r.canBeReference())).toList();
+                r.canBeReference(), r.selectedColumn())).toList();
         FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), cols, rows, m.detail()), 20000));
         var rebuilt = FxTestSupport.onFx(() -> List.copyOf(pane.table.getColumns()));
         assertEquals(before.size() + 1, rebuilt.size());
@@ -129,5 +130,70 @@ class CohortGridPaneFxTest {
         assertEquals("server gone", shown[6]);
         assertEquals(true, shown[7], "clearCrop drops the image");
         assertEquals("", shown[8]);
+    }
+
+    private static CohortGridModel withSelection(CohortGridModel m, String slideId, List<String> notes) {
+        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.status(),
+                r.statusText(), r.cells(), r.marks(), r.lookCount(), r.canExclude(), r.canBeReference(),
+                r.slideId().equals(slideId) ? 0 : -1)).toList();
+        return new CohortGridModel(m.banner(), m.columns(), rows, m.detail(), notes);
+    }
+
+    /** Final review item 5: the highlighted row and cell are the model's selection, after it moves too. */
+    @Test
+    void theHighlightFollowsTheModelsSelection() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
+        FxTestSupport.onFxRun(() -> {
+            new javafx.scene.Scene(pane, 800, 600);
+            pane.render(model(), 20000);
+            pane.applyCss();
+            pane.layout();
+        });
+        assertEquals("2", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()));
+        assertEquals(List.of("⚠"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
+
+        FxTestSupport.onFxRun(() -> {
+            pane.render(withSelection(model(), "1", List.of()), 20000);
+            pane.applyCss();
+            pane.layout();
+        });
+        assertEquals("1", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()),
+                "N / P moved the selection to another slide: the row follows");
+        assertEquals(List.of("✓"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
+
+        FxTestSupport.onFxRun(() -> {
+            pane.render(withSelection(model(), null, List.of()), 20000);
+            pane.applyCss();
+            pane.layout();
+        });
+        assertNull(FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem()));
+        assertEquals(List.of(), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
+    }
+
+    private static List<String> selectedCellTexts(CohortGridPane pane) {
+        return pane.table.lookupAll(".fp-cohort-cell-selected").stream()
+                .filter(n -> n instanceof javafx.scene.control.TableCell<?, ?> c && !c.isEmpty() && c.isVisible())
+                .map(n -> ((Labeled) n).getText()).toList();
+    }
+
+    /** Final review item 9: a numeric ⚠ column sorts rows by what they have to look at; the footer shows the notes. */
+    @Test
+    void rowsSortByLookCountAndTheFooterShowsMissingChannels() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
+        FxTestSupport.onFxRun(() -> pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000));
+        List<String> order = FxTestSupport.onFx(() -> {
+            var looks = pane.table.getColumns().stream().filter(c -> "⚠".equals(c.getText())).findFirst().orElseThrow();
+            looks.setSortType(javafx.scene.control.TableColumn.SortType.DESCENDING);
+            pane.table.getSortOrder().setAll(List.of(looks));
+            pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000);
+            return pane.table.getItems().stream().map(CohortGridModel.Row::slideId).toList();
+        });
+        assertEquals(List.of("2", "1"), order, "most to look at first, kept across a re-render");
+        assertTrue(FxTestSupport.onFx(() -> pane.missingChannels.isVisible()));
+        assertEquals("1 note(s): channels missing on some slides", FxTestSupport.onFx(() -> pane.missingChannels.getText()));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        assertFalse(FxTestSupport.onFx(() -> pane.missingChannels.isVisible()));
     }
 }

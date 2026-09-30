@@ -174,9 +174,13 @@ public final class CohortSession {
      * project, so a change of {@code projectKey} drops every sample, failure, alignment, cached
      * landmark, review item and selection held for the previous project — kept by id, they would
      * be the other project's slides' numbers.
+     *
+     * @return whether the project changed: a caller holding its own id-keyed state (a selection, a
+     *         pending click-through) must drop it too
      */
-    public void setProject(String projectKey, List<SlideRef> refs) {
-        if (!Objects.equals(this.projectKey, projectKey)) {
+    public boolean setProject(String projectKey, List<SlideRef> refs) {
+        boolean changed = !Objects.equals(this.projectKey, projectKey);
+        if (changed) {
             this.projectKey = projectKey;
             samples.clear();
             failures.clear();
@@ -190,6 +194,7 @@ public final class CohortSession {
             selectedGroup = null;
         }
         setProjectSlides(refs);
+        return changed;
     }
 
     /** The slides of the current project; see {@link #setProject} for a change of project. */
@@ -483,9 +488,13 @@ public final class CohortSession {
                 : referenceSlideId == null ? "No reference slide"
                 : referenceExcluded ? "Reference slide excluded"
                 : "Ready to run";
-        return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(),
-                slides.size() - (int) slides.stream().filter(r -> excluded.contains(r.id())).count(),
+        return String.format(Locale.US, "%d/%d sampled · %d to review · %s", samples.size(), includedCount(),
                 review.items().size(), run);
+    }
+
+    /** The project's slides less the excluded ones: what sampling reads. */
+    private int includedCount() {
+        return slides.size() - (int) slides.stream().filter(r -> excluded.contains(r.id())).count();
     }
 
     /**
@@ -557,7 +566,7 @@ public final class CohortSession {
                 : foreign ? FOREIGN_TREE
                 : correctionDisabled ? (referenceExcluded ? REFERENCE_EXCLUDED : REFERENCE_MISSING)
                 : referenceSlideId == null ? NO_REFERENCE
-                : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), slides.size())
+                : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), includedCount())
                 : !failures.isEmpty() ? String.format(Locale.US, "%d slide(s) could not be sampled", failures.size())
                 : null;
         String suggestedId = suggestedReferenceId();

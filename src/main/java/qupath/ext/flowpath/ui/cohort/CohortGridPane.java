@@ -26,6 +26,7 @@ import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -52,6 +53,8 @@ public final class CohortGridPane extends BorderPane {
     final Button skip = new Button("Skip this gate (S)");
     final Button useCohortValue = new Button("Use cohort value");
     final TextField sampleSize = new TextField();
+    /** The footer's "channels missing on some slides" hint; its tooltip names each slide. */
+    final Label missingChannels = unmnemonic(new Label());
     static final String CROP_LOADING = "Loading crop…";
     /** The selected review item's evidence crop (spec §6); its pixels are fixed swatches, not themed text. */
     final ImageView cropView = new ImageView();
@@ -59,6 +62,9 @@ public final class CohortGridPane extends BorderPane {
 
     /** The columns the table was last built for; a re-render with the same ones keeps the TableColumns. */
     private List<CohortGridModel.Column> builtColumns;
+
+    /** One grid cell's value: its mark and whether it is the model's selected cell. */
+    record CellView(CohortGridModel.CellMark mark, boolean selected) {}
     private int shownSampleSize;
 
     private Consumer<ReviewItem.Key> onCellChosen = k -> {};
@@ -121,7 +127,10 @@ public final class CohortGridPane extends BorderPane {
         sampleSize.getStyleClass().add("fp-mono-field");
         sampleSize.setTooltip(new Tooltip("Cells sampled on each slide for ranking, alignment and review. 0 samples every cell."));
         sampleSize.setOnAction(e -> applySampleSize());
-        HBox footer = new HBox(6, onlyLooks, new Label("Cells per slide:"), sampleSize);
+        missingChannels.getStyleClass().add("fp-hint");
+        missingChannels.setVisible(false);
+        missingChannels.setManaged(false);
+        HBox footer = new HBox(6, onlyLooks, new Label("Cells per slide:"), sampleSize, missingChannels);
         footer.setAlignment(Pos.CENTER_LEFT);
         cropView.setFitWidth(256);
         cropView.setPreserveRatio(true);
@@ -164,6 +173,11 @@ public final class CohortGridPane extends BorderPane {
                 builtColumns = List.copyOf(m.columns());
             }
             setRows(m.rows());
+            List<String> missing = m.missingChannels();
+            missingChannels.setText(missing.isEmpty() ? "" : missing.size() + " note(s): channels missing on some slides");
+            missingChannels.setTooltip(missing.isEmpty() ? null : new Tooltip(String.join("\n", missing)));
+            missingChannels.setVisible(!missing.isEmpty());
+            missingChannels.setManaged(!missing.isEmpty());
             CohortGridModel.Detail d = m.detail();
             detailTitle.setText(d == null ? "Select a cell to review it" : d.title());
             detailReasons.setText(d == null ? "" : String.join("; ", d.reasons()));
@@ -181,20 +195,23 @@ public final class CohortGridPane extends BorderPane {
         }
     }
 
-    /** Replaces the rows in place, keeping the selected slide (by id) and the scroll position. */
+    /**
+     * Replaces the rows in place, keeping the user's sort and the scroll position. The selected
+     * row is the model's ({@link CohortGridModel.Row#selectedColumn}), never the table's own: after
+     * N / P or an answer the model's selection moved, and the highlight must follow the detail.
+     * Selecting here fires no callback — only a click reports a chosen cell.
+     */
     private void setRows(List<CohortGridModel.Row> rows) {
-        CohortGridModel.Row selected = table.getSelectionModel().getSelectedItem();
-        String selectedId = selected == null ? null : selected.slideId();
         javafx.scene.control.skin.VirtualFlow<?> flow = table.lookup(".virtual-flow") instanceof
                 javafx.scene.control.skin.VirtualFlow<?> f ? f : null;
         int first = -1;
         if (flow != null && flow.getFirstVisibleCell() != null) first = flow.getFirstVisibleCell().getIndex();
         table.getItems().setAll(rows);
-        if (selectedId != null) {
-            for (int i = 0; i < rows.size(); i++) {
-                if (rows.get(i).slideId().equals(selectedId)) { table.getSelectionModel().select(i); break; }
-            }
-        }
+        if (!table.getSortOrder().isEmpty()) table.sort();
+        CohortGridModel.Row selected = null;
+        for (CohortGridModel.Row r : table.getItems()) if (r.selectedColumn() >= 0) selected = r;
+        if (selected == null) table.getSelectionModel().clearSelection();
+        else table.getSelectionModel().select(selected);
         if (flow != null && first > 0 && first < rows.size()) flow.scrollTo(first);
     }
 
@@ -227,19 +244,29 @@ public final class CohortGridPane extends BorderPane {
         });
         TableColumn<CohortGridModel.Row, Number> cells = new TableColumn<>("Cells");
         cells.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().cells()));
-        table.getColumns().addAll(List.of(star, name, cells));
+        // Sortable by the number of cells to look at (spec §3.2), numerically.
+        TableColumn<CohortGridModel.Row, Number> looks = new TableColumn<>("⚠");
+        looks.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().lookCount()));
+        looks.setComparator(Comparator.comparingInt(Number::intValue));
+        table.getColumns().addAll(List.of(star, name, cells, looks));
         for (int i = 0; i < cols.size(); i++) {
             int at = i;
             CohortGridModel.Column col = cols.get(i);
-            TableColumn<CohortGridModel.Row, CohortGridModel.CellMark> tc = new TableColumn<>(col.header());
-            tc.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().marks().get(at)));
+            TableColumn<CohortGridModel.Row, CellView> tc = new TableColumn<>(col.header());
+            // The selection is part of the value, so a cell whose mark is unchanged still repaints
+            // when the selection moves onto or off it.
+            tc.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(
+                    new CellView(c.getValue().marks().get(at), c.getValue().selectedColumn() == at)));
+            tc.setComparator(Comparator.comparing(CellView::mark));
             tc.setCellFactory(c -> new TableCell<>() {
-                @Override protected void updateItem(CohortGridModel.CellMark mark, boolean empty) {
-                    super.updateItem(mark, empty);
-                    getStyleClass().removeAll("fp-cohort-cell", "fp-cohort-cell-look");
+                @Override protected void updateItem(CellView view, boolean empty) {
+                    super.updateItem(view, empty);
+                    getStyleClass().removeAll("fp-cohort-cell", "fp-cohort-cell-look", "fp-cohort-cell-selected");
+                    CohortGridModel.CellMark mark = view == null ? null : view.mark();
                     setText(empty || mark == null ? null : mark.glyph);
                     if (empty || mark == null) return;
                     getStyleClass().add(mark == CohortGridModel.CellMark.LOOK ? "fp-cohort-cell-look" : "fp-cohort-cell");
+                    if (view.selected()) getStyleClass().add("fp-cohort-cell-selected");
                     setOnMouseClicked(e -> {
                         CohortGridModel.Row row = getTableRow() == null ? null : getTableRow().getItem();
                         if (row != null) onCellChosen.accept(new ReviewItem.Key(row.slideId(), col.rootIndex(), col.gatePath()));

@@ -28,7 +28,8 @@ import java.util.Map;
  * order, keyed by value {@code (rootIndex, gatePath)}, never by a {@code GateNode} or a
  * {@code ReviewItem}'s gate (the review was scored on a deep copy of the tree).
  */
-public record CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail) {
+public record CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail,
+                              List<String> missingChannels) {
 
     public enum CellMark {
         OK("✓"), LOOK("⚠"), REVIEWED("↷"), ADJUSTED("✎"), SKIPPED("⊘"), NOT_MEASURED("—"),
@@ -43,8 +44,14 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
 
     public record Column(int rootIndex, String gatePath, String header) {}
 
+    /**
+     * One slide. {@code selectedColumn} is the index into {@link #columns()} of the selected cell
+     * when it is on this row, else -1: the selection is carried by the model (a value), so the
+     * grid highlights the cell the detail describes after N / P or an answer moved it.
+     */
     public record Row(String slideId, String name, boolean reference, RowStatus status, String statusText,
-                      int cells, List<CellMark> marks, int lookCount, boolean canExclude, boolean canBeReference) {
+                      int cells, List<CellMark> marks, int lookCount, boolean canExclude, boolean canBeReference,
+                      int selectedColumn) {
         public Row { marks = List.copyOf(marks); }
     }
 
@@ -62,6 +69,12 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
     public CohortGridModel {
         columns = List.copyOf(columns);
         rows = List.copyOf(rows);
+        missingChannels = missingChannels == null ? List.of() : List.copyOf(missingChannels);
+    }
+
+    /** A model with no footer notes. */
+    public CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail) {
+        this(banner, columns, rows, detail, List.of());
     }
 
     public static CohortGridModel derive(CohortSession session, GateTree tree, ReviewItem.Key selected,
@@ -69,8 +82,9 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         List<GateWalk.Entry> entries = GateWalk.enabled(tree);
         List<Column> columns = columns(entries);
         String reference = tree.getReferenceSlideId();
+        ReviewScorer.Result review = currentReview(session, tree);
         Map<String, ReviewItem> items = new HashMap<>();
-        for (ReviewItem i : currentReview(session, tree).items()) items.put(keyString(i.key()), i);
+        for (ReviewItem i : review.items()) items.put(keyString(i.key()), i);
 
         List<Row> rows = new ArrayList<>();
         for (CohortSession.SlideSquare sq : session.slideStrip()) {
@@ -88,19 +102,78 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
             };
             List<CellMark> marks = new ArrayList<>();
             int looks = 0;
-            for (GateWalk.Entry e : entries) {
+            int selectedColumn = -1;
+            for (int c = 0; c < entries.size(); c++) {
+                GateWalk.Entry e = entries.get(c);
                 CellMark mark = status != RowStatus.READY ? CellMark.NONE
                         : mark(session, e, sq.slideId(), reference, items);
                 if (mark == CellMark.LOOK) looks++;
                 marks.add(mark);
+                if (selected != null && selected.slideId().equals(sq.slideId())
+                        && selected.rootIndex() == e.rootIndex() && selected.gatePath().equals(e.gatePath())) {
+                    selectedColumn = c;
+                }
             }
             boolean isRef = sq.slideId().equals(reference);
             Row row = new Row(sq.slideId(), sq.name(), isRef, status, statusText, sq.cells(), marks, looks,
-                    !isRef, status == RowStatus.READY && !isRef);
+                    !isRef, canBeReference(status, isRef, reference), selectedColumn);
             if (!onlyLooks || looks > 0) rows.add(row);
         }
         return new CohortGridModel(banner(session, tree), columns, rows,
-                detail(session, tree, entries, selected, items));
+                detail(session, tree, entries, selected, items), missingChannels(review));
+    }
+
+    /**
+     * ☆ is offered on a ready row, and — while the tree has no reference — on a row still being
+     * sampled too (spec §8): confirming a reference needs no sample. A rebase does (it re-expresses
+     * every threshold through the current reference's alignments), so it waits for READY.
+     */
+    static boolean canBeReference(RowStatus status, boolean isReference, String reference) {
+        if (isReference) return false;
+        return status == RowStatus.READY || (reference == null && status == RowStatus.SAMPLING);
+    }
+
+    /**
+     * How many review items the card counts: the review the grid itself trusts
+     * ({@link #currentReview}, so a review scored for another reference counts none).
+     */
+    public static int toLookAt(CohortSession session, GateTree tree) {
+        return currentReview(session, tree).items().size();
+    }
+
+    /**
+     * The side card's line (spec §3.1). No reference and a suggestion: the prompt. A settled
+     * cohort with a reference: {@code Cohort · 4 slides · ★ slide_A · 4 to look at}. Otherwise —
+     * sampling, a batch running, correction off, no reference and no suggestion — the session's
+     * status line, which says why.
+     */
+    public static String cardLine(CohortSession session, GateTree tree, boolean runAllowed) {
+        CohortState state = session.state();
+        String suggested = session.suggestedReferenceId();
+        if (tree.getReferenceSlideId() == null && suggested != null) {
+            return "Pick a reference slide — suggested: " + session.slideName(suggested);
+        }
+        if (state.available() && state.referenceName() != null && !state.sampling() && !state.batchRunning()
+                && !state.correctionDisabled()) {
+            int included = (int) session.projectSlides().stream()
+                    .filter(r -> !session.excluded().contains(r.id())).count();
+            return String.format(Locale.US, "Cohort · %d slides · ★ %s · %d to look at", included,
+                    state.referenceName(), toLookAt(session, tree));
+        }
+        return session.statusLine(runAllowed);
+    }
+
+    /**
+     * The footer's "channels missing on some slides" notes, one per slide × message, from the
+     * review the grid trusts; empty when there are none.
+     */
+    private static List<String> missingChannels(ReviewScorer.Result review) {
+        List<String> out = new ArrayList<>();
+        for (ReviewItem.Info info : review.infos()) {
+            String line = info.slideName() + " — " + info.message();
+            if (!out.contains(line)) out.add(line);
+        }
+        return out;
     }
 
     /**
