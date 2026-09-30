@@ -9,6 +9,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.RegionMask;
+import qupath.ext.flowpath.model.RoundMask;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Statistic;
 
@@ -114,6 +115,9 @@ public class PhenotypeCsvExporter {
         boolean[] outlier = result.getOutlier();
         boolean[] unmeasured = result.getUnmeasured();
         boolean withRegion = regions != null && !regions.isEmpty();
+        // Which imaging rounds each cell failed, when the export carries round QC at all.
+        boolean withRoundQc = !index.roundQc().isEmpty();
+        RoundMask rounds = stats.roundMask();
 
         // Emitted only when the export actually carries labels. An all-blank column would
         // be worse than no column: join_flowpath.py branches on the column's *presence*,
@@ -145,6 +149,10 @@ public class PhenotypeCsvExporter {
             // it -- but written in the same True/False casing as its neighbours so pandas
             // infers a real boolean rather than a always-truthy string.
             writer.write(",Unmeasured");
+            // QC_failed_rounds: the imaging rounds this cell failed round QC in, by their
+            // marker lists ("[CD3, CD8]; [CD68]"), blank when none. Those markers read
+            // Unmeasured here (their _sign blank) while _raw keeps the measured value.
+            if (withRoundQc) writer.write(",QC_failed_rounds");
             if (withRegion) writer.write(",region");
             for (MeasuredColumn col : columns) {
                 // Escape the *whole* field, suffix included: a channel name containing a
@@ -168,6 +176,9 @@ public class PhenotypeCsvExporter {
                 writer.write(outlier[i] ? "True" : "False");
                 writer.write(',');
                 writer.write(unmeasured[i] ? "True" : "False");
+                if (withRoundQc) {
+                    writer.write(',' + CellTable.escape(String.join("; ", rounds.failedRoundLabels(i))));
+                }
                 if (withRegion) {
                     String region = regions.regionNameOf(i);
                     writer.write(',' + CellTable.escape(region == null ? "" : region));

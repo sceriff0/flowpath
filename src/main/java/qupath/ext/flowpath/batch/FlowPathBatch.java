@@ -17,6 +17,7 @@ import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.io.PopulationStatsExporter;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.RoundQc;
 import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.lib.images.ImageData;
@@ -359,6 +360,12 @@ public final class FlowPathBatch {
         qc(w, id, name, "cells_clean", "", count(g.assignment().getTally().cellsClean()));
         qc(w, id, name, "pct_quality_filtered", "", pct(countFalse(g.qualityMask()), n));
         qc(w, id, name, "pct_outside_roi", "", pct(countFalse(g.roi()), n));
+        // Round QC: of all cells, the share that failed each imaging round (subject: the round's
+        // marker list). Those cells are Unmeasured for that round's markers, not removed.
+        RoundQc roundQc = g.index().roundQc();
+        for (RoundQc.Round round : roundQc.rounds()) {
+            qc(w, id, name, "pct_round_qc_failed", round.label(), pct(g.stats().roundMask().failedCount(round.index()), n));
+        }
         TreeResolver.ResolvedTree resolved = g.result().resolved();
         GateReadout readout = GateReadout.compile(resolved.tree(), g.index(), g.stats());
         boolean[] base = g.roi() == null ? g.qualityMask()

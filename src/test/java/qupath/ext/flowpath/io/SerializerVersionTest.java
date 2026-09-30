@@ -223,4 +223,20 @@ class SerializerVersionTest {
         assertTrue(lp.isExcludeOutliers());
         assertEquals(2.0, lp.getClipPercentileLow());
     }
+
+    /** Namespaced ranges, round QC included, are saved and loaded under their exact slugs. */
+    @Test
+    void namespacedQualityRangesRoundTrip(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        qupath.ext.flowpath.model.GateTree tree = new qupath.ext.flowpath.model.GateTree();
+        qupath.ext.flowpath.model.QualityFilter f = new qupath.ext.flowpath.model.QualityFilter();
+        f.setMin("morph/area", 12.5);
+        f.setMax("qc/total_intensity", 900);
+        f.setMin("qcround/nuclear_retention", 0.5);
+        f.setMax("qcround/registration_displacement", 2.0);
+        tree.setQualityFilter(f);
+        java.io.File file = dir.resolve("t.json").toFile();
+        FlowPathSerializer.save(tree, file);
+        qupath.ext.flowpath.model.QualityFilter back = FlowPathSerializer.load(file).getQualityFilter();
+        assertEquals(f.ranges(), back.ranges());
+    }
 }

@@ -164,6 +164,21 @@ class FlowPathBatchTest {
         assertEquals(List.of("b"), reads);
     }
 
+    /** Each slide's share of cells failing each imaging round, subject the round's markers. */
+    @Test
+    void theQcSummaryReportsEachRoundsFailures(@TempDir Path dir) throws Exception {
+        GateTree tree = tree();
+        tree.getQualityFilter().setMin("qcround/nuclear_retention", 0.5);
+        List<String> none = new ArrayList<>();
+        // Retention below 0.5 on the first 50 of 200 cells, in the [CD3, CD8] round.
+        Cells a = cells(200).round("Nuclear retention", List.of("CD3", "CD8"), i -> i < 50 ? 0.1 : 1.0);
+        run(List.of(slide("a", a, none, none)), tree, dir.toFile(), new AtomicBoolean());
+        List<String> qc = Files.readAllLines(dir.resolve(FlowPathBatch.QC_SUMMARY));
+        assertTrue(qc.contains("a,a.tif,pct_round_qc_failed,\"[CD3, CD8]\",25.0000"), qc.toString());
+        // Those cells are Unmeasured at the CD3 root, never negative there.
+        assertTrue(qc.contains("a,a.tif,pct_unmeasured,0:CD3,25.0000"), qc.toString());
+    }
+
     @Test
     void sanityFlagsAreRecordedAndNeverFatal(@TempDir Path dir) throws Exception {
         GateTree tree = tree();
