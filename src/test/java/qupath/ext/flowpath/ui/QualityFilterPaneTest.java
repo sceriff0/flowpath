@@ -135,7 +135,7 @@ class QualityFilterPaneTest {
     /** The panel's sliders in grid order: min then max, per field. */
     private static List<Slider> sliders(QualityFilterPane pane) {
         List<Slider> out = new ArrayList<>();
-        for (Node n : pane.getContent().lookupAll(".slider")) out.add((Slider) n);
+        out.addAll(pane.sliders());
         return out;
     }
 
@@ -276,5 +276,40 @@ class QualityFilterPaneTest {
         int c = 0;
         for (boolean b : mask) if (b) c++;
         return c;
+    }
+
+    /** Cell QC and round QC are offered beside morphology, the round metric as one slider. */
+    @Test
+    void offersCellQcAndOneSliderPerRoundMetric() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        CellIndex index = Cells.of(10).marker("CD3", i -> i).marker("CD68", i -> i)
+                .area(i -> 50.0 + i)
+                .qc("Total intensity", i -> 100.0 + i)
+                .round("Nuclear retention", List.of("CD3"), i -> i / 10.0)
+                .round("Nuclear retention", List.of("CD68"), i -> 1.0 - i / 20.0)
+                .build();
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(new QualityFilter()));
+        FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
+
+        assertEquals(List.of(QualityFilter.AREA, QualityFilter.TOTAL_INTENSITY, "qcround/nuclear_retention"),
+                pane.shownFields(), "morphology, then cell QC, then one row for the metric across both rounds");
+    }
+
+    /** Dragging a round-QC slider writes the qcround range the gating pass reads. */
+    @Test
+    void aRoundQcSliderWritesItsNamespacedRange() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        CellIndex index = Cells.of(10).marker("CD3", i -> i)
+                .round("Nuclear retention", List.of("CD3"), i -> i / 10.0)
+                .build();
+        QualityFilter filter = new QualityFilter();
+        QualityFilterPane pane = FxTestSupport.onFx(() -> new QualityFilterPane(filter));
+        FxTestSupport.onFxRun(() -> pane.setCellIndex(index));
+        FxTestSupport.onFxRun(() -> pane.sliders().get(0).setValue(0.5));
+
+        assertEquals(0.5, filter.range("qcround/nuclear_retention").min(), 1e-9);
+        assertEquals(Double.POSITIVE_INFINITY, filter.range("qcround/nuclear_retention").max());
+        FxTestSupport.onFxRun(pane::resetToDefaults);
+        assertTrue(filter.range("qcround/nuclear_retention").isOpen());
     }
 }

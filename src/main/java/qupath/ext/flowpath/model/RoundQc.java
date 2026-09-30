@@ -111,6 +111,24 @@ public final class RoundQc {
         return col == null ? Double.NaN : col[cell];
     }
 
+    /**
+     * Metric {@code metric}'s smallest and largest value over every round it was exported for,
+     * or {@code null} when it has no finite value.
+     */
+    public double[] span(int metric) {
+        double lo = Double.POSITIVE_INFINITY;
+        double hi = Double.NEGATIVE_INFINITY;
+        for (float[] col : values[metric]) {
+            if (col == null) continue;
+            for (float v : col) {
+                if (Float.isNaN(v)) continue;
+                lo = Math.min(lo, v);
+                hi = Math.max(hi, v);
+            }
+        }
+        return Double.isFinite(lo) && Double.isFinite(hi) ? new double[]{lo, hi} : null;
+    }
+
     /** Whether metric {@code metric} was exported for round {@code round} at all. */
     public boolean has(int metric, int round) {
         return values[metric][round] != null;
