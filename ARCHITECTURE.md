@@ -369,7 +369,7 @@ small parent population never destabilises it. `cohort/CohortSampler` draws a fi
 per slide (`SEED`, xor'd with the slide id, so the same setting always gives the same sample);
 `cohort/AlignmentModel` turns the sample into one `model/cohort/Alignment` per (slide, column): a
 single multiplicative **factor** — a pure shift in natural-log space, as in UniFORM (Wang et al.
-2025) `[FULL]`. There is no stretch and no cofactor. Values enter on `model/cohort/LogScale` (ln of
+2025) `[FULL: main text + STAR Methods + pseudocode; code kunlunW/UniFORM @ c750a9a read in full; supplement PARTIAL — Tables S1–S5 and Fig S5 not read]`. There is no stretch and no cofactor. Values enter on `model/cohort/LogScale` (ln of
 values >= 1 by default; an optional ln(x+1) set per project in `cohort-settings.json`). The
 default (`AUTO`) mode is UniFORM's: a 1024-bin raw-count histogram over the column's min-max
 across slides, the integer bin shift `argmax(correlate(h_slide, h_ref, 'full')) - 1023`
@@ -384,7 +384,7 @@ outside the log domain, the slide's own vs the pooled-cohort Otsu threshold, `mo
 that feed the problem layer; diagnostics never change a factor. The method choice and its
 evidence are in
 [docs/research/2026-10-01-landmark-correction-method-choice.md](docs/research/2026-10-01-landmark-correction-method-choice.md)
-(UniFORM `[FULL]`, Harris et al. 2022 `[FULL]`, Hahne et al. 2010 `[PARTIAL: whole main text of
+(UniFORM as tagged above, Harris et al. 2022 `[FULL: main text incl. equations; figure images and supplement figures not viewed]`, Hahne et al. 2010 `[PARTIAL: whole main text of
 the author manuscript; missing Algorithm 1 body, figures, supplement S1-S9]`).
 
 The problem layer is separate from the correction: each check is a labelled `ReviewItem.Flag`

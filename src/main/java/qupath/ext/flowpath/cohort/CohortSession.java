@@ -35,7 +35,7 @@ public final class CohortSession {
     /**
      * What {@link #score} needs. {@code ranking} is the last adopted ranking with the inputs it was
      * computed from; {@link #score} reuses it while they are unchanged, since every gating pass
-     * rescores and the ranking (a cofactor, landmarks and histograms per slide × column) does not
+     * rescores and the ranking (landmarks and log histograms per slide × column, on the cohort's log scale) does not
      * depend on anything a pass changes.
      */
     public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache,

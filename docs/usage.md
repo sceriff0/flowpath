@@ -192,19 +192,22 @@ slide with an unusual stain, or one with no clear negative population to align o
 
 **Correct staining** is on by default for a new gate and off for a gate loaded from a tree saved
 before this version, so opening an old tree never changes a number. When it is on, each slide ×
-marker column is aligned to the reference slide with **UniFORM's shift** (Wang et al. 2025): one
+marker column is aligned to the reference slide with **UniFORM's shift** (Wang et al. 2025
+`[FULL: main text, STAR Methods and code; supplement Tables S1–S5 and Fig S5 not read]`): one
 multiplicative factor per slide and marker, found by sliding the slide's log-intensity histogram
 along the reference's until they overlap best. It is a shift only, never a stretch, and it does
 not match percentiles (percentile matching assumes every slide has the same % positive, which is
 exactly what gating is measuring). When the automatic shift looks wrong, pick the slide's
-negative peak on the histogram and the correction uses that landmark instead.
+negative peak on the histogram and the correction uses that landmark instead. Picked peaks are
+stored as raw intensities in the project image metadata (`flowpath.cohort.peak.<column>`), not in the gate tree file.
 
 Landmarks are found on each slide's **clean** cells — those passing the tree's quality filter
 and, when it is on, the annotation (ROI) filter — the same cells the gate tree counts as clean.
 Change the quality filter or switch the ROI filter and the landmarks, the review, the marker
-rules, the All slides curves and the crops all follow it. The log scale (natural log of values of at least 1 by default; an optional ln(x+1) per project) is
-the same for every slide, so the result does not depend on which slides were sampled first, or on
-whether the alignment cache existed.
+rules, the All slides curves and the crops all follow it. The log scale (natural log of
+values of at least 1 by default; an optional ln(x+1) per project, a documented departure from
+UniFORM) is stored in `<project>/flowpath/cohort-settings.json` and is the same for every slide, so the result does
+not depend on which slides were sampled first, or on whether the alignment cache existed.
 
 For a threshold or quadrant gate the cut moves exactly with the correction. For a polygon
 rectangle or ellipse gate, a rectangle or polygon is corrected exactly (every vertex or bound
@@ -360,7 +363,10 @@ and names any slide whose sampling failed: those run on the tree's own numbers, 
 | `reference_value`, `applied_value` | `412.0`, `538.6` |
 | `source` | `reference` \| `corrected` \| `uncorrected` \| `manual` \| `skipped` |
 | `ref_L1`, `ref_L2`, `slide_L1`, `slide_L2` | landmarks, raw intensities, blank if absent |
-| `review`, `flags` | `ok` when the item is answered (Looks right at today's value, an Adjust, or a Skip), else blank; the open problem flags as tokens: `peak-lock`, `no-negative-peak`, `cant-judge`, `otsu-discordance`, `shift-outlier`, `below-range`, `marker-rule`, `on-peak` |
+| `review`, `flags` | `ok` when the item is answered (Looks right at today's value, an Adjust, or a Skip), else blank; open problem flags as tokens (see below) |
+
+The flag tokens are `peak-lock`, `no-negative-peak`, `cant-judge`, `otsu-discordance`,
+`shift-outlier`, `below-range`, `marker-rule` and `on-peak`, in severity order.
 
 This is what makes per-slide thresholds acceptable in a methods section: every difference
 between slides is written down with its cause.
@@ -411,7 +417,8 @@ recorded, never fatal to the run:
 - a gated channel is missing on the slide.
 
 Every run also leaves a provenance bundle in `outDir`: `flowpath.json` (the tree exactly as run),
-`gating_manifest.csv`, `run_info.txt` (FlowPath version, date, sample size, reference slide, `log_scale`) and
+`gating_manifest.csv`, `run_info.txt` (FlowPath version, date, sample size, reference slide,
+`log_scale`) and
 `qc_summary.csv` — long format, one row per `(image_id, image_name, metric, subject, value)`,
 with these metrics:
 
