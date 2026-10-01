@@ -16,6 +16,12 @@ public interface EditorAlignment {
     /** The reference slide's name, or null outside a cohort. */
     String referenceName();
 
+    /** The open slide's name, or null when no slide resolves (none open, or a foreign tree). */
+    default String currentSlideName() { return null; }
+
+    /** Whether the open slide is the tree's reference. */
+    default boolean isReferenceSlide() { return false; }
+
     EditorAlignment IDENTITY = new EditorAlignment() {
         @Override public Alignment forAxis(GateNode gate, int axis) { return Alignment.identity(); }
         @Override public String referenceName() { return null; }

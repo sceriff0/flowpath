@@ -23,6 +23,7 @@ import qupath.ext.flowpath.batch.FlowPathBatch;
 import qupath.ext.flowpath.ui.cohort.CohortGridModel;
 import qupath.ext.flowpath.ui.cohort.CohortGridPane;
 import qupath.ext.flowpath.ui.cohort.CohortWindow;
+import qupath.ext.flowpath.ui.cohort.ReferenceChoice;
 import qupath.ext.flowpath.ui.cohort.ReviewKey;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
@@ -229,6 +230,15 @@ public class FlowPathPane extends BorderPane {
     private ReviewItem.Key pendingFocus;
     /** A non-item grid cell's [Adjust] on another slide, shown once that slide's cells have landed. */
     private ReviewItem.Key pendingAdjust;
+    /**
+     * The second half of a ☆ on a tree whose gates were drawn on another slide
+     * ({@link ReferenceChoice.Step#CONFIRM_THEN_REBASE}): {@link #pendingRebaseFrom} was confirmed
+     * as the reference, and {@link #pendingRebase} becomes it once the cohort has a model for the
+     * first ({@link #landPendingRebase}). Both null when nothing is pending; entry ids, so dropped
+     * with the project or the image ({@link #forgetCohortSelection}).
+     */
+    private String pendingRebase;
+    private String pendingRebaseFrom;
     /**
      * The item being answered (by value; its gate is found in the live tree on every use), its
      * baseline and its undo mark; what a drag or an answer on it does lives there, toolkit-free.
@@ -681,6 +691,7 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void cleared(IngestCoordinator.Cleared why) {
             indexSlideId = null;
+            forgetPendingRebase();
             // The outlines are the previous slide's cells.
             hideBoundaryOverlay();
             markerNames = Collections.emptyList();
@@ -912,6 +923,7 @@ public class FlowPathPane extends BorderPane {
             }
             updateBusyControls();
             onCohortScored();
+            landPendingRebase();
         }
     }
 
@@ -919,6 +931,8 @@ public class FlowPathPane extends BorderPane {
     private void onCohortScored() {
         // New samples or alignments: the All slides view re-reads them (a refresh, not a rebuild).
         if (cohort.viewMode() == CohortSession.ViewMode.ALL_SLIDES) editorPane.refreshEditor();
+        // A new model can change the open slide's factor, or the reference itself.
+        editorPane.refreshReferenceLine();
         renderCohort();
     }
 
@@ -987,6 +1001,12 @@ public class FlowPathPane extends BorderPane {
         gridSelection = null;
         pendingFocus = null;
         pendingAdjust = null;
+        forgetPendingRebase();
+    }
+
+    private void forgetPendingRebase() {
+        pendingRebase = null;
+        pendingRebaseFrom = null;
     }
 
     /**
@@ -1008,6 +1028,18 @@ public class FlowPathPane extends BorderPane {
             String reference = session.tree().getReferenceSlideId();
             return reference == null ? null : cohort.slideName(reference);
         }
+
+        @Override
+        public String currentSlideName() {
+            String slideId = currentSlideId();
+            return slideId == null ? null : cohort.slideName(slideId);
+        }
+
+        @Override
+        public boolean isReferenceSlide() {
+            String slideId = currentSlideId();
+            return slideId != null && slideId.equals(session.tree().getReferenceSlideId());
+        }
     };
 
     /** The shown gate's Manual/Skip on the open slide as the editor's banner, or none. */
@@ -1019,6 +1051,7 @@ public class FlowPathPane extends BorderPane {
         // review item — the drag would move every other slide's cut and not this one's.
         editorPane.setCutEditable(review.cutEditable(shown, slideId,
                 editorPane.viewMode() == CohortSession.ViewMode.THIS_SLIDE));
+        editorPane.refreshReferenceLine();
     }
 
     /** "Use the cohort value" in the editor: drop the open slide's setting for the shown gate. */
@@ -1490,46 +1523,105 @@ public class FlowPathPane extends BorderPane {
     }
 
     /**
-     * ☆ / "Use X" (spec 2026-09-30 §4.1). No reference yet: a tree with no gates takes {@code id}
-     * directly; a tree with gates first asks which slide they were drawn on — that slide becomes
-     * the reference (the numbers are its numbers), and the suggestion is offered again once the
-     * rescore lands. An existing reference is rebased, after one confirmation, as one undo step
-     * ({@link CohortSession#rebaseReference} through {@code recordSlideEdit}) — refused while the
-     * current reference has no sample or model ({@link CohortSession#rebaseRefusal}).
+     * ☆ / "Use X" (spec 2026-09-30 §4.1): the clicked slide becomes the reference, whatever the
+     * tree held ({@link ReferenceChoice#decide}). No reference yet: a tree with no gates takes
+     * {@code id} directly; a tree with gates first asks which slide they were drawn on, which is
+     * confirmed as the reference (its numbers are that slide's numbers) — and when that is not
+     * {@code id}, {@code id} is rebased onto once the cohort has a model for the first
+     * ({@link #landPendingRebase}), as a second undo step. An existing reference is rebased, after
+     * one confirmation, as one undo step ({@link CohortSession#rebaseReference} through
+     * {@code recordSlideEdit}) — refused while the current reference has no sample or model
+     * ({@link CohortSession#rebaseRefusal}).
      */
     private void chooseReference(String id) {
         if (id == null || !CohortIdentity.matches(session.tree(), cohort.projectNames())) return;
         GateTree tree = session.tree();
-        if (tree.getReferenceSlideId() == null) {
-            String chosen = id;
-            if (!tree.getRoots().isEmpty()) {
-                // Label → id, each label unique: two images may share a name, so a shared name is
-                // shown with its id and mapped back by the label, never by name.
-                Map<String, String> byLabel = SlideChoices.labels(cohort.projectSlides().stream()
-                        .filter(r -> !cohort.excluded().contains(r.id())).toList());
-                String preselect = SlideChoices.labelOf(byLabel, indexSlideId);
-                if (preselect == null) preselect = SlideChoices.labelOf(byLabel, id);
-                String picked = Dialogs.showChoiceDialog("Reference slide",
-                        "Which slide were these gates drawn on? Its thresholds are kept as they are; "
-                                + "you can switch to " + cohort.slideName(id) + " afterwards.",
-                        List.copyOf(byLabel.keySet()), preselect);
-                if (picked == null) return;
-                chosen = byLabel.get(picked);
-                if (chosen == null) return;
+        String current = tree.getReferenceSlideId();
+        boolean hasGates = !tree.getRoots().isEmpty();
+        String origin = null;
+        boolean cancelled = false;
+        if (current == null && hasGates) {
+            // Label → id, each label unique: two images may share a name, so a shared name is
+            // shown with its id and mapped back by the label, never by name.
+            Map<String, String> byLabel = SlideChoices.labels(cohort.projectSlides().stream()
+                    .filter(r -> !cohort.excluded().contains(r.id())).toList());
+            String preselect = SlideChoices.labelOf(byLabel, indexSlideId);
+            if (preselect == null) preselect = SlideChoices.labelOf(byLabel, id);
+            String picked = Dialogs.showChoiceDialog("Reference slide",
+                    "Which slide were these gates drawn on? That slide becomes the reference first, "
+                            + "keeping the thresholds as drawn; then " + cohort.slideName(id)
+                            + " becomes the reference and the thresholds are re-expressed on it. "
+                            + "Each step can be undone with Ctrl+Z.",
+                    List.copyOf(byLabel.keySet()), preselect);
+            origin = picked == null ? null : byLabel.get(picked);
+            cancelled = origin == null;
+        }
+        ReferenceChoice choice = ReferenceChoice.decide(current, id, origin, hasGates, cancelled);
+        switch (choice.step()) {
+            case NOTHING -> { return; }
+            case CONFIRM -> {
+                forgetPendingRebase();
+                session.confirmReference(choice.confirm(), cohort.projectNames());
             }
-            session.confirmReference(chosen, cohort.projectNames());
-        } else {
-            if (id.equals(tree.getReferenceSlideId())) return;
-            String refusal = cohort.rebaseRefusal(tree.getReferenceSlideId());
-            if (refusal != null) {
-                Dialogs.showWarningNotification("FlowPath", refusal);
+            case CONFIRM_THEN_REBASE -> {
+                session.confirmReference(choice.confirm(), cohort.projectNames());
+                pendingRebaseFrom = choice.confirm();
+                pendingRebase = choice.rebaseTo();
+            }
+            case REBASE -> {
+                String refusal = cohort.rebaseRefusal(current);
+                if (refusal != null) {
+                    Dialogs.showWarningNotification("FlowPath", refusal);
+                    return;
+                }
+                if (!Dialogs.showConfirmDialog("Reference slide",
+                        "Thresholds will be re-expressed on " + cohort.slideName(id) + ". Ctrl+Z undoes it.")) return;
+                forgetPendingRebase();
+                rebaseOnto(choice.rebaseTo());
                 return;
             }
-            if (!Dialogs.showConfirmDialog("Reference slide",
-                    "Thresholds will be re-expressed on " + cohort.slideName(id) + ". Ctrl+Z undoes it.")) return;
-            session.recordSlideEdit(id, cohort.slideName(id),
-                    () -> CohortSession.rebaseReference(session.tree(), id, alignments));
         }
+        afterReferenceChange();
+    }
+
+    /**
+     * The rebase half of {@link ReferenceChoice.Step#CONFIRM_THEN_REBASE}, once a rescore lands
+     * ({@link ReferenceChoice#landing}): rebased when the adopted model is the confirmed
+     * reference's and it can be rebased from, refused with the reason otherwise, dropped silently
+     * when the confirmation is gone (an undo, a load), and kept while the model is not yet built.
+     */
+    private void landPendingRebase() {
+        if (pendingRebaseFrom == null) return;
+        String from = pendingRebaseFrom;
+        String refusal = cohort.rebaseRefusal(from);
+        ReferenceChoice.Landing landing = ReferenceChoice.landing(from, session.tree().getReferenceSlideId(),
+                cohort.model().referenceSlideId(), refusal != null, cohortCoordinator.sampling());
+        switch (landing) {
+            case NONE, WAIT -> { }
+            case DROP -> forgetPendingRebase();
+            case REFUSE -> {
+                forgetPendingRebase();
+                Dialogs.showWarningNotification("FlowPath", refusal);
+            }
+            case REBASE -> {
+                String to = pendingRebase;
+                forgetPendingRebase();
+                rebaseOnto(to);
+                Dialogs.showInfoNotification("FlowPath",
+                        "Reference is now " + cohort.slideName(to) + "; Ctrl+Z returns to " + cohort.slideName(from));
+            }
+        }
+    }
+
+    /** Rebase the tree onto {@code id} as one undo step, then the reference-change tail. */
+    private void rebaseOnto(String id) {
+        session.recordSlideEdit(id, cohort.slideName(id),
+                () -> CohortSession.rebaseReference(session.tree(), id, alignments));
+        afterReferenceChange();
+    }
+
+    /** After the reference changed: end the open review, the one resync path, a rescore, the cohort views. */
+    private void afterReferenceChange() {
         endActiveReview();
         resyncToTree();
         cohortCoordinator.rescore(session.tree());

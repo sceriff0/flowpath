@@ -78,6 +78,8 @@ public class GateEditorPane extends VBox {
             "This slide has its own threshold — open it from the Cohort window, or use the cohort value";
 
     private final Label slideSettingLabel;
+    /** Which slide is the reference and what that means here ({@link EditorLabels#referenceLine}); shown with a cohort. */
+    private final Label referenceLineLabel = new Label();
     /** Shown while the cut is locked; see {@link #setCutEditable}. */
     private final Label cutLockedLabel = new Label(CUT_LOCKED_HINT);
     private boolean cutEditable = true;
@@ -164,6 +166,13 @@ public class GateEditorPane extends VBox {
             currentNode.setLineageMarker(val);
             fireDiscreteEdit();
         });
+
+        referenceLineLabel.getStyleClass().add("fp-hint");
+        referenceLineLabel.setWrapText(true);
+        // Slide names carry underscores; a mnemonic would swallow the first one.
+        referenceLineLabel.setMnemonicParsing(false);
+        referenceLineLabel.setVisible(false);
+        referenceLineLabel.managedProperty().bind(referenceLineLabel.visibleProperty());
 
         slideSettingLabel = new Label();
         slideSettingLabel.getStyleClass().add("fp-hint");
@@ -265,6 +274,7 @@ public class GateEditorPane extends VBox {
 
         getChildren().addAll(
             header,
+            referenceLineLabel,
             viewModeRow,
             slideSettingRow,
             cutLockedLabel,
@@ -296,6 +306,7 @@ public class GateEditorPane extends VBox {
         boolean anotherGate = node != this.currentNode;
         this.currentNode = node;
         updateLineageMarkerVisibility();
+        refreshReferenceLine();
         // The last gate's setting on the open slide is not this one's: the host hands the new
         // gate's in after showing it, and the editor built below must not draw the old cut. The
         // same gate rebuilt (a channel or column switch) keeps its setting: it still applies.
@@ -523,7 +534,26 @@ public class GateEditorPane extends VBox {
      */
     public void setEditorAlignment(EditorAlignment alignment) {
         this.editorAlignment = alignment == null ? EditorAlignment.IDENTITY : alignment;
+        refreshReferenceLine();
         refreshForNewData();
+    }
+
+    /**
+     * Re-read the reference line from the alignment seam: the tree's reference, the open slide and
+     * the shown gate's first-axis correction there. The host calls it whenever the open slide, the
+     * shown gate or the cohort's model may have changed.
+     */
+    public void refreshReferenceLine() {
+        referenceLineLabel.setVisible(cohortAvailable);
+        if (!cohortAvailable) return;
+        Alignment axis0 = currentNode == null ? null : editorAlignment.forAxis(currentNode, 0);
+        referenceLineLabel.setText(EditorLabels.referenceLine(editorAlignment.referenceName(),
+                editorAlignment.currentSlideName(), editorAlignment.isReferenceSlide(), axis0));
+    }
+
+    /** The reference line's text as shown, or null while it is hidden. For tests. */
+    String referenceLineText() {
+        return referenceLineLabel.isVisible() ? referenceLineLabel.getText() : null;
     }
 
     /**
@@ -537,6 +567,7 @@ public class GateEditorPane extends VBox {
         boolean changed = available != cohortAvailable;
         cohortAvailable = available;
         updateLineageMarkerVisibility();
+        refreshReferenceLine();
         if (changed && viewMode == CohortSession.ViewMode.ALL_SLIDES) refreshForNewData();
     }
 

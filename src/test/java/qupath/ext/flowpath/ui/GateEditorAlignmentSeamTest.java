@@ -227,6 +227,40 @@ class GateEditorAlignmentSeamTest {
         return pane;
     }
 
+    /**
+     * The reference line under the type label: hidden without a cohort, and with one it reads the
+     * seam — the reference, the open slide, the shown gate's first-axis factor — underscores intact.
+     */
+    @Test
+    void theReferenceLineReadsTheSeamAndShowsOnlyWithACohort() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        String[] lines = FxTestSupport.onFx(() -> {
+            GateEditorPane pane = new GateEditorPane();
+            boolean[] onReference = {false};
+            pane.setEditorAlignment(new EditorAlignment() {
+                @Override public Alignment forAxis(GateNode g, int axis) {
+                    return onReference[0] ? Alignment.identity() : BRIGHTER;
+                }
+                @Override public String referenceName() { return "slide_01"; }
+                @Override public String currentSlideName() { return onReference[0] ? "slide_01" : "slide_02"; }
+                @Override public boolean isReferenceSlide() { return onReference[0]; }
+            });
+            pane.setGateNode(Type.THRESHOLD.create.get());
+            String hidden = pane.referenceLineText();
+            pane.setCohortAvailable(true);
+            String corrected = pane.referenceLineText();
+            onReference[0] = true;
+            pane.refreshReferenceLine();
+            String reference = pane.referenceLineText();
+            Label label = find(pane, Label.class, l -> reference.equals(l.getText()));
+            return new String[]{hidden, corrected, reference, String.valueOf(label.isMnemonicParsing())};
+        });
+        assertNull(lines[0]);
+        assertEquals("★ Reference: slide_01 · this slide ×1.35 (automatic)", lines[1]);
+        assertEquals("★ Reference: slide_01 — you are on it; edits move every slide", lines[2]);
+        assertEquals("false", lines[3]);
+    }
+
     /** A locked cut: slider, field and histogram drag off, and a hint says what to do instead. */
     @Test
     void aLockedCutDisablesEveryWayToMoveItAndSaysWhy() {
