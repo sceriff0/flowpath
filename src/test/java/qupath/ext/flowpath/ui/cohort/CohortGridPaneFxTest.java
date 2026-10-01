@@ -191,7 +191,7 @@ class CohortGridPaneFxTest {
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
         FxTestSupport.onFxRun(() -> pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000));
         List<String> order = FxTestSupport.onFx(() -> {
-            var looks = pane.table.getColumns().stream().filter(c -> "⚠".equals(c.getText())).findFirst().orElseThrow();
+            var looks = pane.table.getColumns().stream().filter(c -> "To check".equals(c.getText())).findFirst().orElseThrow();
             looks.setSortType(javafx.scene.control.TableColumn.SortType.DESCENDING);
             pane.table.getSortOrder().setAll(List.of(looks));
             pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000);
@@ -202,5 +202,120 @@ class CohortGridPaneFxTest {
         assertEquals("1 note(s): channels missing on some slides", FxTestSupport.onFx(() -> pane.missingChannels.getText()));
         FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
         assertFalse(FxTestSupport.onFx(() -> pane.missingChannels.isVisible()));
+    }
+
+    private static java.util.prefs.Preferences scratch() {
+        return java.util.prefs.Preferences.userRoot().node("flowpath-test/" + java.util.UUID.randomUUID());
+    }
+
+    private static List<javafx.scene.control.TableCell<?, ?>> cellsOf(CohortGridPane pane) {
+        return pane.table.lookupAll(".table-cell").stream()
+                .filter(n -> n instanceof javafx.scene.control.TableCell<?, ?> c && !c.isEmpty())
+                .<javafx.scene.control.TableCell<?, ?>>map(n -> (javafx.scene.control.TableCell<?, ?>) n).toList();
+    }
+
+    private static void show(CohortGridPane pane, CohortGridModel m) {
+        FxTestSupport.onFxRun(() -> {
+            if (pane.getScene() == null) new javafx.scene.Scene(pane, 800, 600);
+            pane.render(m, 20000);
+            pane.applyCss();
+            pane.layout();
+        });
+    }
+
+    @Test
+    void rendersCellTextAndTooltip() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        show(pane, model());
+        List<String[]> got = FxTestSupport.onFx(() -> cellsOf(pane).stream()
+                .filter(c -> "⋀".equals(c.getText()))
+                .map(c -> new String[]{c.getText(), c.getTooltip() == null ? null : c.getTooltip().getText(),
+                        String.valueOf(c.getStyleClass().contains("fp-cohort-cell-look"))}).toList());
+        assertEquals(1, got.size());
+        assertEquals("Needs a look", got.get(0)[1]);
+        assertEquals("true", got.get(0)[2]);
+        boolean refLook = FxTestSupport.onFx(() -> cellsOf(pane).stream()
+                .filter(c -> "★".equals(c.getText()) && c.getStyleClass().contains("fp-cohort-cell-look")).findAny().isPresent());
+        assertFalse(refLook, "the look class is only for LOOK");
+    }
+
+    @Test
+    void starOnlyOnRowsThatCanBeReference() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        show(pane, model());
+        var star = FxTestSupport.onFx(() -> pane.table.getColumns().get(0));
+        List<String> texts = FxTestSupport.onFx(() -> pane.table.getItems().stream()
+                .map(r -> String.valueOf(star.getCellData(r))).toList());
+        assertEquals(List.of("★", "☆"), texts);
+        // a row that cannot be the reference shows nothing
+        var m = model();
+        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.open(),
+                r.status(), r.statusText(), r.cellCount(), r.cells(), r.lookCount(), r.canExclude(), false,
+                r.selectedColumn())).toList();
+        show(pane, new CohortGridModel(m.banner(), m.columns(), rows, m.detail()));
+        List<String> after = FxTestSupport.onFx(() -> pane.table.getItems().stream()
+                .map(r -> String.valueOf(star.getCellData(r))).toList());
+        assertEquals(List.of("★", ""), after);
+        assertEquals("Make slide_B the reference", CohortGridPane.starTooltip(m.rows().get(1)));
+    }
+
+    @Test
+    void theOpenSlideIsMarkedAndNamesKeepUnderscores() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        show(pane, model());
+        List<String> names = FxTestSupport.onFx(() -> cellsOf(pane).stream().map(javafx.scene.control.Labeled::getText)
+                .filter(t -> t != null && t.contains("slide_")).toList());
+        assertTrue(names.contains("● slide_B"), names.toString());
+        assertTrue(names.contains("slide_A"));
+        boolean tip = FxTestSupport.onFx(() -> cellsOf(pane).stream().anyMatch(c -> "● slide_B".equals(c.getText())
+                && c.getTooltip() != null && "Open in the viewer".equals(c.getTooltip().getText())));
+        assertTrue(tip);
+        assertTrue(FxTestSupport.onFx(() -> cellsOf(pane).stream().filter(c -> c.getText() != null && c.getText().contains("slide_"))
+                .noneMatch(javafx.scene.control.Labeled::isMnemonicParsing)));
+    }
+
+    @Test
+    void theReferenceRowIsStyled() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        show(pane, model());
+        List<Boolean> styled = FxTestSupport.onFx(() -> pane.table.lookupAll(".table-row-cell").stream()
+                .filter(n -> n instanceof javafx.scene.control.TableRow<?> r && !r.isEmpty())
+                .map(n -> (javafx.scene.control.TableRow<?>) n)
+                .sorted(java.util.Comparator.comparing(r -> ((CohortGridModel.Row) r.getItem()).slideId()))
+                .map(r -> r.getStyleClass().contains("fp-cohort-row-reference")).toList());
+        assertEquals(List.of(true, false), styled);
+    }
+
+    @Test
+    void legendCollapsesAndRemembers() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        var node = scratch();
+        try {
+            CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(node));
+            var m = model();
+            var withLegend = new CohortGridModel(m.banner(), m.columns(), m.rows(), m.detail(), List.of(),
+                    List.of(new CohortGridModel.LegendEntry("⋀", "needs a look"),
+                            new CohortGridModel.LegendEntry("★", "reference")));
+            show(pane, withLegend);
+            assertEquals(2, FxTestSupport.onFx(() -> pane.legendEntries.getChildren().size()));
+            assertEquals("⋀ needs a look", FxTestSupport.onFx(() -> ((Labeled) pane.legendEntries.getChildren().get(0)).getText()));
+            assertEquals("▾", FxTestSupport.onFx(() -> pane.legendToggle.getText()));
+            assertFalse(FxTestSupport.onFx(() -> pane.legendToggle.isMnemonicParsing()));
+            FxTestSupport.onFxRun(() -> pane.legendToggle.fire());
+            assertEquals("▸", FxTestSupport.onFx(() -> pane.legendToggle.getText()));
+            assertFalse(FxTestSupport.onFx(() -> pane.legendEntries.isVisible()));
+            assertTrue(FxTestSupport.onFx(() -> pane.legendToggle.isVisible()), "the toggle stays");
+            assertFalse(qupath.ext.flowpath.cohort.CohortPrefs.legendExpanded(node));
+            CohortGridPane again = FxTestSupport.onFx(() -> new CohortGridPane(node));
+            show(again, withLegend);
+            assertFalse(FxTestSupport.onFx(() -> again.legendEntries.isVisible()), "remembered");
+            assertEquals("▸", FxTestSupport.onFx(() -> again.legendToggle.getText()));
+        } finally {
+            try { node.removeNode(); } catch (Exception ignored) { }
+        }
     }
 }

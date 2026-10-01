@@ -189,4 +189,7 @@
 /* The cell the detail describes. No text colour of its own (the row's rules above hold): an outline
    in the selected row's own text colour, so it reads on the selection bar under both bases. */
 .fp-cohort-table .fp-cohort-cell-selected { -fx-border-color: -fx-selection-bar-text; -fx-border-width: 2; -fx-font-weight: bold; }
+/* The reference row reads as the anchor of the grid; weight, not colour, so it holds on both bases. */
+.fp-cohort-table .fp-cohort-row-reference .table-cell { -fx-font-weight: bold; }
+.fp-cohort-legend { -fx-padding: 4 8 4 8; }
 .fp-cohort-detail { -fx-padding: 6 8 6 8; }

@@ -853,6 +853,7 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void sampled(CohortSampler.Outcome outcome) {
             cohortCoordinator.rescore(session.tree());
+            renderCohort();
             updateBusyControls();
         }
 
@@ -955,6 +956,7 @@ public class FlowPathPane extends BorderPane {
                     .filter(source -> !excluded.contains(source.id())).toList(), session.tree(), cells, cacheFile);
         }
         cohortCoordinator.rescore(session.tree());
+        renderCohort();
         updateBusyControls();
     }
 
@@ -1033,7 +1035,7 @@ public class FlowPathPane extends BorderPane {
         cohortCard.render(line, open, state.available() || running);
         if (cohortWindow.isOpen()) {
             cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks,
-                            indexSlideId, false),
+                            indexSlideId, cohortCoordinator.scoring()),
                     CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
         }
         syncCrop(cohort.selected(), cohort.stepOrder());
@@ -2314,7 +2316,10 @@ public class FlowPathPane extends BorderPane {
         }
 
         // A rescore requests a pass only when an alignment changed, so this cannot loop.
-        if (cohort.state().available()) cohortCoordinator.rescore(session.tree());
+        if (cohort.state().available()) {
+            cohortCoordinator.rescore(session.tree());
+            renderCohort();
+        }
     }
 
     // --- UMAP handoff ---

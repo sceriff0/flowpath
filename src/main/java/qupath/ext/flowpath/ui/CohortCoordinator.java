@@ -49,6 +49,8 @@ final class CohortCoordinator {
     private volatile long sampleGeneration;
     private volatile long scoreGeneration;
     private boolean sampling;
+    /** A score request is out and neither landed nor was superseded; FX thread only. */
+    private boolean scoring;
     /**
      * The running (or last) run's slides, in order; FX thread only. {@link #sampleMore} appends
      * to it while a run goes, so an added slide is sampled after the others and the run still
@@ -131,6 +133,7 @@ final class CohortCoordinator {
     void cancel() {
         sampleGeneration++;
         scoreGeneration++;
+        scoring = false;
         cacheDue = false;
         if (sampling) {
             sampling = false;
@@ -161,9 +164,17 @@ final class CohortCoordinator {
         });
     }
 
+    /**
+     * True from a {@link #rescore} request until its result lands or a newer request or
+     * {@link #cancel} supersedes it. A failed pass ends it too, so the banner never claims
+     * "re-aligning" forever.
+     */
+    boolean scoring() { return scoring; }
+
     /** Re-score on a deep copy in the background; only the newest request is adopted. */
     void rescore(GateTree liveTree) {
         long generation = ++scoreGeneration;
+        scoring = true;
         CohortSession.Snapshot snapshot = session.snapshot(liveTree);
         GateTree copy = liveTree.deepCopy();
         background.execute(() -> {
@@ -172,6 +183,7 @@ final class CohortCoordinator {
                 CohortSession.Scored scored = CohortSession.score(snapshot, copy);
                 fxThread.execute(() -> {
                     if (generation != scoreGeneration) return;
+                    scoring = false;
                     host.scored(session.adopt(scored));
                     if (cacheDue) {
                         cacheDue = false;
@@ -183,6 +195,9 @@ final class CohortCoordinator {
                 // Error too: scoring walks every sample; an OutOfMemoryError must not escape the
                 // executor and leave the previous review silently in place with no log line.
                 logger.error("Could not score the cohort; the previous review stays in place", ex);
+                fxThread.execute(() -> {
+                    if (generation == scoreGeneration) scoring = false;
+                });
             }
         });
     }

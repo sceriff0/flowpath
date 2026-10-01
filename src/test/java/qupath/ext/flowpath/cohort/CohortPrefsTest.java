@@ -22,4 +22,18 @@ class CohortPrefsTest {
             node.removeNode();
         }
     }
+
+    @Test
+    void legendDefaultsToExpandedAndRoundTrips() throws Exception {
+        Preferences node = Preferences.userRoot().node("flowpath-test/" + UUID.randomUUID());
+        try {
+            assertEquals(true, CohortPrefs.legendExpanded(node));
+            CohortPrefs.setLegendExpanded(node, false);
+            assertEquals(false, CohortPrefs.legendExpanded(node));
+            CohortPrefs.setLegendExpanded(node, true);
+            assertEquals(true, CohortPrefs.legendExpanded(node));
+        } finally {
+            node.removeNode();
+        }
+    }
 }

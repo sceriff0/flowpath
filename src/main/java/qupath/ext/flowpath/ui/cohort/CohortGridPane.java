@@ -22,6 +22,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
+import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
+import java.util.prefs.Preferences;
 
 /**
  * The Cohort window's body: banner, slides × gates grid, detail and footer. Renders a
@@ -69,6 +71,11 @@ public final class CohortGridPane extends BorderPane {
     }
     private int shownSampleSize;
 
+    /** The legend strip under the table: the toggle stays when the entries collapse. */
+    final Button legendToggle = unmnemonic(new Button());
+    final HBox legendEntries = new HBox(12);
+    private final Preferences prefs;
+
     private Consumer<ReviewItem.Key> onCellChosen = k -> {};
     private Runnable onLooksRight = () -> {}, onSkip = () -> {}, onAdjust = () -> {}, onUseCohortValue = () -> {},
             onUseSuggested = () -> {};
@@ -79,6 +86,11 @@ public final class CohortGridPane extends BorderPane {
     private Consumer<ReviewKey> onKey = k -> {};
 
     public CohortGridPane() {
+        this(CohortPrefs.node());
+    }
+
+    public CohortGridPane(Preferences prefs) {
+        this.prefs = Objects.requireNonNull(prefs);
         getStyleClass().add("fp-panel");
         headline.getStyleClass().add("fp-cohort-headline");
         useSuggested.setOnAction(e -> onUseSuggested.run());
@@ -95,10 +107,11 @@ public final class CohortGridPane extends BorderPane {
         table.setRowFactory(tv -> new TableRow<>() {
             @Override protected void updateItem(CohortGridModel.Row row, boolean empty) {
                 super.updateItem(row, empty);
-                getStyleClass().remove("fp-cohort-row-muted");
+                getStyleClass().removeAll("fp-cohort-row-muted", "fp-cohort-row-reference");
                 setContextMenu(null);
                 if (empty || row == null) return;
                 if (row.status() != CohortGridModel.RowStatus.READY) getStyleClass().add("fp-cohort-row-muted");
+                if (row.reference()) getStyleClass().add("fp-cohort-row-reference");
                 MenuItem ref = unmnemonic(new MenuItem("★ Make " + row.name() + " the reference"));
                 ref.setDisable(!row.canBeReference());
                 ref.setOnAction(e -> onMakeReference.accept(row.slideId()));
@@ -115,7 +128,17 @@ public final class CohortGridPane extends BorderPane {
             if (k != null) { onKey.accept(k); e.consume(); }
         });
         onlyLooks.setOnAction(e -> onOnlyLooksChanged.accept(onlyLooks.isSelected()));
-        setCenter(table);
+        legendToggle.setOnAction(e -> {
+            CohortPrefs.setLegendExpanded(this.prefs, !CohortPrefs.legendExpanded(this.prefs));
+            applyLegendState();
+        });
+        legendEntries.setAlignment(Pos.CENTER_LEFT);
+        HBox legend = new HBox(8, legendToggle, legendEntries);
+        legend.setAlignment(Pos.CENTER_LEFT);
+        legend.getStyleClass().add("fp-cohort-legend");
+        applyLegendState();
+        setCenter(new VBox(table, legend));
+        VBox.setVgrow(table, Priority.ALWAYS);
 
         detailReasons.setWrapText(true);
         detailReasons.getStyleClass().add("fp-muted");
@@ -147,6 +170,18 @@ public final class CohortGridPane extends BorderPane {
         setBottom(bottom);
     }
 
+    private void applyLegendState() {
+        boolean open = CohortPrefs.legendExpanded(prefs);
+        legendToggle.setText(open ? "▾" : "▸");
+        legendEntries.setVisible(open);
+        legendEntries.setManaged(open);
+    }
+
+    /** The ☆'s tooltip: what clicking it does. */
+    static String starTooltip(CohortGridModel.Row row) {
+        return "Make " + row.name() + " the reference";
+    }
+
     private static <T extends javafx.scene.control.Labeled> T unmnemonic(T l) {
         l.setMnemonicParsing(false);
         return l;
@@ -174,6 +209,11 @@ public final class CohortGridPane extends BorderPane {
                 rebuildColumns(m.columns());
                 builtColumns = List.copyOf(m.columns());
             }
+            legendEntries.getChildren().setAll(m.legend().stream().map(e -> {
+                Label l = unmnemonic(new Label(e.glyph() + " " + e.label()));
+                l.getStyleClass().add("fp-hint");
+                return l;
+            }).toList());
             setRows(m.rows());
             List<String> missing = m.missingChannels();
             missingChannels.setText(missing.isEmpty() ? "" : missing.size() + " note(s): channels missing on some slides");
@@ -219,25 +259,28 @@ public final class CohortGridPane extends BorderPane {
     private void rebuildColumns(List<CohortGridModel.Column> cols) {
         table.getColumns().clear();
         TableColumn<CohortGridModel.Row, String> star = new TableColumn<>("Ref");
-        star.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().reference() ? "★" : "☆"));
+        star.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(
+                c.getValue().reference() ? "★" : c.getValue().canBeReference() ? "☆" : ""));
         star.setCellFactory(c -> new TableCell<>() {
             @Override protected void updateItem(String s, boolean empty) {
                 super.updateItem(s, empty);
                 setText(empty ? null : s);
-                setOnMouseClicked(e -> {
-                    CohortGridModel.Row row = getTableRow() == null ? null : getTableRow().getItem();
-                    if (row != null && row.canBeReference()) onMakeReference.accept(row.slideId());
-                });
+                CohortGridModel.Row row = empty || getTableRow() == null ? null : getTableRow().getItem();
+                boolean clickable = row != null && !row.reference() && row.canBeReference();
+                setTooltip(clickable ? new Tooltip(starTooltip(row)) : null);
+                setOnMouseClicked(clickable ? e -> onMakeReference.accept(row.slideId()) : null);
             }
         });
         TableColumn<CohortGridModel.Row, String> name = new TableColumn<>("Slide");
-        name.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().name()
+        name.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>((c.getValue().open() ? "● " : "") + c.getValue().name()
                 + (c.getValue().statusText().isEmpty() ? "" : "  (" + c.getValue().statusText() + ")")));
         name.setCellFactory(c -> {
             TableCell<CohortGridModel.Row, String> cell = new TableCell<>() {
                 @Override protected void updateItem(String s, boolean empty) {
                     super.updateItem(s, empty);
                     setText(empty ? null : s);
+                    CohortGridModel.Row row = empty || getTableRow() == null ? null : getTableRow().getItem();
+                    setTooltip(row != null && row.open() ? new Tooltip("Open in the viewer") : null);
                 }
             };
             cell.setMnemonicParsing(false);
@@ -246,7 +289,7 @@ public final class CohortGridPane extends BorderPane {
         TableColumn<CohortGridModel.Row, Number> cells = new TableColumn<>("Cells");
         cells.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().cellCount()));
         // Sortable by the number of cells to look at (spec §3.2), numerically.
-        TableColumn<CohortGridModel.Row, Number> looks = new TableColumn<>("⚠");
+        TableColumn<CohortGridModel.Row, Number> looks = new TableColumn<>("To check");
         looks.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().lookCount()));
         looks.setComparator(Comparator.comparingInt(Number::intValue));
         table.getColumns().addAll(List.of(star, name, cells, looks));
@@ -258,14 +301,17 @@ public final class CohortGridPane extends BorderPane {
             // when the selection moves onto or off it.
             tc.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(
                     new CellView(c.getValue().cells().get(at), c.getValue().selectedColumn() == at)));
-            tc.setComparator(Comparator.comparing(CellView::mark));
+            tc.setComparator(Comparator.comparing(CellView::mark).thenComparing(v -> v.cell().text()));
             tc.setCellFactory(c -> new TableCell<>() {
                 @Override protected void updateItem(CellView view, boolean empty) {
                     super.updateItem(view, empty);
                     getStyleClass().removeAll("fp-cohort-cell", "fp-cohort-cell-look", "fp-cohort-cell-selected");
+                    setTooltip(null);
                     CohortGridModel.CellMark mark = view == null ? null : view.mark();
                     setText(empty || mark == null ? null : view.cell().text());
                     if (empty || mark == null) return;
+                    String tip = view.cell().tooltip();
+                    if (tip != null && !tip.isEmpty()) setTooltip(new Tooltip(tip));
                     getStyleClass().add(mark == CohortGridModel.CellMark.LOOK ? "fp-cohort-cell-look" : "fp-cohort-cell");
                     if (view.selected()) getStyleClass().add("fp-cohort-cell-selected");
                     setOnMouseClicked(e -> {
