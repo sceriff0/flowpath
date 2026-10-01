@@ -367,18 +367,35 @@ A monotone map from reference units to one slide's units is a property of *how t
 stained and scanned* — never of a gate. Two gates on CD8 share one alignment; a child gate's
 small parent population never destabilises it. `cohort/CohortSampler` draws a fixed-seed sample
 per slide (`SEED`, xor'd with the slide id, so the same setting always gives the same sample);
-`cohort/AlignmentModel` turns the sample into `model/cohort/Landmarks` per (slide, column) —
-L1 the lowest-intensity *prominent* density peak (never the mode, which on a tumour-rich slide is
-the positive peak), L2 the highest peak at least two density bandwidths above L1 — and composes
-them into a `model/cohort/Alignment`. The per-column cofactor for the asinh transform is the
-**reference slide's** median |x| over its clean sample for that column (`Landmarks.cofactor`,
-through `CohortStats.median`) — a function of the reference alone, so it does not depend on the
-order samples arrived in, a build with no cache reproduces a cached one exactly, and the GUI and a
-headless run agree. With no reference sample there is no cofactor and no landmark: nothing to
-align to. The cache (`io/AlignmentCacheFile`, `<project>/flowpath/alignment-cache.json`) is keyed
+`cohort/AlignmentModel` turns the sample into one `model/cohort/Alignment` per (slide, column): a
+single multiplicative **factor** — a pure shift in natural-log space, as in UniFORM (Wang et al.
+2025) `[FULL]`. There is no stretch and no cofactor. Values enter on `model/cohort/LogScale` (ln of
+values >= 1 by default; an optional ln(x+1) set per project in `cohort-settings.json`). The
+default (`AUTO`) mode is UniFORM's: a 1024-bin raw-count histogram over the column's min-max
+across slides, the integer bin shift `argmax(correlate(h_slide, h_ref, 'full')) - 1023`
+(`model/cohort/UniformShift`, golden-tested against numpy), and the factor
+`exp(shift * (max - min) / 1023)`. The `LANDMARK` mode is UniFORM's landmark mode: the user picks
+the negative peak on a histogram (the reference's too, optionally; otherwise the detector's lowest
+peak) and the shift is the difference of the two peaks' bins. Picks are raw intensities in project
+image metadata (`cohort/CohortPeaks`, `flowpath.cohort.peak.<column>`), not in `flowpath.json`.
+`IDENTITY` is a slide or reference with fewer than 50 usable values, left uncorrected and flagged.
+Each alignment carries `ColumnDiagnostics` (the detector's lowest peaks, the share of values
+outside the log domain, the slide's own vs the pooled-cohort Otsu threshold, `model/cohort/Otsu`)
+that feed the problem layer; diagnostics never change a factor. The method choice and its
+evidence are in
+[docs/research/2026-10-01-landmark-correction-method-choice.md](docs/research/2026-10-01-landmark-correction-method-choice.md)
+(UniFORM `[FULL]`, Harris et al. 2022 `[FULL]`, Hahne et al. 2010 `[PARTIAL: whole main text of
+the author manuscript; missing Algorithm 1 body, figures, supplement S1-S9]`).
+
+The problem layer is separate from the correction: each check is a labelled `ReviewItem.Flag`
+(glyph, label, source), declared in severity order — peak lock, no negative peak, can't judge,
+Otsu discordance, shift outlier, below range, marker rule, on peak. A cell with several reasons
+shows the most serious one plus `+n`. The layer never moves a threshold.
+
+The cache (`io/AlignmentCacheFile`, `<project>/flowpath/alignment-cache.json`) is keyed
 by each slide's `SlideSample.cacheKey()` — the sample fingerprint plus the digest of the filter
 and ROI inputs its clean mask came from — and the recorded sample size; a cached landmark is
-reused only under that key and the cofactor in force now. The live view
+reused only under that key and the log scale in force now. The live view
 (`ui/CohortCoordinator`), the Cohort window and the batch run (`batch/FlowPathBatch`,
 `batch/CohortEvidence`) all read the same model through `engine/AlignmentLookup` — the batch run
 reuses it exactly, recomputing only when the cache is missing or its fingerprint has moved,
@@ -479,8 +496,8 @@ applied, and is never the current reference or an excluded slide.
 ### The suggestion is the joint medoid of eligible slides
 
 `cohort/ReferenceRanking` ranks the sampled, non-excluded slides over the gated columns. A slide
-is **eligible** only if, on every gated column, `Landmarks.find` with `Landmarks.cofactor` of its
-own clean values finds an L1 — the same finder and cofactor `AlignmentModel.build` would use were
+is **eligible** only if, on every gated column, `Landmarks.find` on the log scale over its
+own clean values finds an L1 — the same finder and scale `AlignmentModel.build` would use were
 it the reference, so the ranking cannot call a slide a good reference that the engine would then
 fail to align to (the old failure: `Alignment.between` silently answering identity for a column
 whose reference lacked L1) — and has at least the cohort's modal landmark count (fdaNorm's rule).
@@ -556,8 +573,9 @@ says so whenever a slide was skipped for being open.
   siblings carries its ordinal (`CD3+/CD8#2`), and so does a repeated branch name among those
   siblings' branches (`CD3+/CD8+#2/CD4`), so every `(rootIndex, gatePath)` names one gate;
   `CohortSession.liveGate` refuses a key two gates still answer to
-- `model/cohort/Density`, `Landmarks`, `Alignment` — peak-finding in asinh space and the
-  monotone map (and inverse) it produces; toolkit-free, no `PathObject`
+- `model/cohort/Density`, `Landmarks`, `Alignment`, `LogScale`, `UniformShift`, `Otsu` — peak-finding
+  on the log scale, UniFORM's histogram shift, Otsu's threshold, and the one-factor map (and
+  inverse) they produce; toolkit-free, no `PathObject`
 - `engine/TreeResolver`, `engine/AlignmentLookup` — the one resolution point (above), and the
   narrow `(slideId, column) → Alignment` interface it and every cohort reader depend on instead
   of `AlignmentModel` directly
@@ -570,10 +588,11 @@ says so whenever a slide was skipped for being open.
   sample (scoped to the scored tree's filters, above), its source of detections (project or
   headless), and the sampled-cells-per-slide preference (default 20 000;
   `CohortPrefs.DEFAULT_SAMPLED_CELLS`)
-- `cohort/AlignmentModel` — `(slide, column) → Alignment`, the reference-slide cofactor per
-  column, the landmark cache and the cohort-median/MAD unusual-staining check
-- `cohort/ReviewScorer`, `ReviewItem`, `ReviewAnswers`, `BoundaryHotspot` — the four review flags
-  (no landmark, unusual staining, on a peak, can't judge), the three answers and their undo
+- `cohort/AlignmentModel`, `CohortPeaks` — `(slide, column) → Alignment` with its
+  `ColumnDiagnostics`, the landmark cache, the picked peaks (project metadata) and the
+  cohort-median/MAD shift-outlier check
+- `cohort/ReviewScorer`, `ReviewItem`, `ReviewAnswers`, `BoundaryHotspot` — the eight labelled
+  review flags (`ReviewItem.Flag`, in severity order), the three answers and their undo
   handling, and the sample-tile hotspot both the viewer centring and the evidence crop use
 - `cohort/CohortCurves`, `CohortCurvesCache` — every sample's aligned values for the shown gate
   (All slides), memoised on gate identity + axis triples + correction + ancestor fingerprint
@@ -600,8 +619,10 @@ says so whenever a slide was skipped for being open.
   `model/MeasurementKeySample`'s bounded sample of values, so a re-quantification confined to
   unsampled cells' values is not detected and the slide resumes unchanged
 - `io/AlignmentCacheFile` — `<project>/flowpath/alignment-cache.json`; derived, safe to delete,
-  never in undo; each landmark is stored with the cofactor it was found with, so one found under
-  an earlier reference is never reused as if found under the current one
+  never in undo; each landmark is stored with the log scale it was found with, so one found under
+  an earlier reference or scale is never reused as if found under the current one
+- `io/CohortSettingsFile` — `<project>/flowpath/cohort-settings.json`, the project's log scale;
+  not in `flowpath.json`, not in undo
 - `ui/CohortCoordinator`, `BatchRunCoordinator` — one background worker each, one slide per task
   for the batch run, so other work (a gating pass, an export) interleaves rather than queuing
   behind a 50-slide run
@@ -609,7 +630,7 @@ says so whenever a slide was skipped for being open.
   `refs()`, the `(id, name)` pairs `CohortSession` turns into the `projectNames` map
   `CohortIdentity` checks against
 - `cohort/ReferenceRanking` — the suggestion (above): eligibility through the alignment's own
-  landmark finder and cofactor, then the joint medoid; pure
+  landmark finder on the log scale, then the joint medoid; pure
 - `cohort/CohortExclusions` — excluded slides as project-entry metadata, not `flowpath.json`; the
   QuPath adapter (`of(project)`) is the only code that touches the entry's flag
 - `ui/cohort/CohortGridModel` — the slides × gates grid, its banner and the selected cell's

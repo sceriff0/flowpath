@@ -192,17 +192,19 @@ slide with an unusual stain, or one with no clear negative population to align o
 
 **Correct staining** is on by default for a new gate and off for a gate loaded from a tree saved
 before this version, so opening an old tree never changes a number. When it is on, each slide ×
-marker column is aligned to the reference slide by matching staining **landmarks** — the
-negative peak, and the positive peak when the slide has one — in asinh space, not by matching
-percentiles: percentile matching assumes every slide has the same % positive, which is exactly
-what gating is measuring.
+marker column is aligned to the reference slide with **UniFORM's shift** (Wang et al. 2025): one
+multiplicative factor per slide and marker, found by sliding the slide's log-intensity histogram
+along the reference's until they overlap best. It is a shift only, never a stretch, and it does
+not match percentiles (percentile matching assumes every slide has the same % positive, which is
+exactly what gating is measuring). When the automatic shift looks wrong, pick the slide's
+negative peak on the histogram and the correction uses that landmark instead.
 
 Landmarks are found on each slide's **clean** cells — those passing the tree's quality filter
 and, when it is on, the annotation (ROI) filter — the same cells the gate tree counts as clean.
 Change the quality filter or switch the ROI filter and the landmarks, the review, the marker
-rules, the All slides curves and the crops all follow it. The asinh scale for a marker column is
-set by the reference slide alone (the median |value| of its clean cells for that column), so it
-does not depend on which slides were sampled first, or on whether the alignment cache existed.
+rules, the All slides curves and the crops all follow it. The log scale (natural log of values of at least 1 by default; an optional ln(x+1) per project) is
+the same for every slide, so the result does not depend on which slides were sampled first, or on
+whether the alignment cache existed.
 
 For a threshold or quadrant gate the cut moves exactly with the correction. For a polygon
 rectangle or ellipse gate, a rectangle or polygon is corrected exactly (every vertex or bound
@@ -357,8 +359,8 @@ and names any slide whose sampling failed: those run on the tree's own numbers, 
 | `column` | `CD8: Cell: Median` |
 | `reference_value`, `applied_value` | `412.0`, `538.6` |
 | `source` | `reference` \| `corrected` \| `uncorrected` \| `manual` \| `skipped` |
-| `ref_L1`, `ref_L2`, `slide_L1`, `slide_L2` | landmarks, asinh units, blank if absent |
-| `review`, `flags` | `ok` when the item is answered (Looks right at today's value, an Adjust, or a Skip), else blank; `unusual-staining` |
+| `ref_L1`, `ref_L2`, `slide_L1`, `slide_L2` | landmarks, raw intensities, blank if absent |
+| `review`, `flags` | `ok` when the item is answered (Looks right at today's value, an Adjust, or a Skip), else blank; the open problem flags as tokens: `peak-lock`, `no-negative-peak`, `cant-judge`, `otsu-discordance`, `shift-outlier`, `below-range`, `marker-rule`, `on-peak` |
 
 This is what makes per-slide thresholds acceptable in a methods section: every difference
 between slides is written down with its cause.
@@ -409,15 +411,17 @@ recorded, never fatal to the run:
 - a gated channel is missing on the slide.
 
 Every run also leaves a provenance bundle in `outDir`: `flowpath.json` (the tree exactly as run),
-`gating_manifest.csv`, `run_info.txt` (FlowPath version, date, sample size, reference slide) and
+`gating_manifest.csv`, `run_info.txt` (FlowPath version, date, sample size, reference slide, `log_scale`) and
 `qc_summary.csv` — long format, one row per `(image_id, image_name, metric, subject, value)`,
 with these metrics:
 
 - `cells`, `cells_clean` — total and clean cell counts;
 - `pct_quality_filtered`, `pct_outside_roi` — fractions excluded by the quality filter / ROI;
 - `pct_unmeasured` (subject = gate path) — fraction a gate could not judge;
-- `staining_offset`, `staining_stretch` (subject = column) — this slide's alignment vs. the
-  cohort's;
+- `staining_factor` (subject = column) — the multiplicative factor that carries the reference
+  threshold onto this slide; `alignment_kind` — `identity`, `auto` or `landmark`;
+  `below_range_pct` — percent of the slide's usable cells outside the log scale's domain;
+  `otsu_discordance` — log-scale gap between the slide's own and the pooled-cohort Otsu threshold;
 - `rule_violation_pct` (subject = the rule, e.g. `1:CD8+ => 1:CD3+`) — the marker-rule rate;
 - `open_flags`, `reviewed_flags` — how many review (⚠) items were open / already reviewed;
 - `sanity` (subject = the flag) — the per-slide sanity issues above.
