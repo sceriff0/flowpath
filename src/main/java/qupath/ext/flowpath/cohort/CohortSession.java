@@ -306,7 +306,7 @@ public final class CohortSession {
         String rankingKey = samples.size() >= 2 ? rankingKey(samples, ranked, snapshot.scale()) : null;
         ReferenceRanking.Result ranking = rankingKey == null ? ReferenceRanking.Result.NONE
                 : rankingKey.equals(snapshot.ranking().key()) ? snapshot.ranking().result()
-                : ReferenceRanking.rank(samples, ranked);
+                : ReferenceRanking.rank(samples, ranked, snapshot.scale());
         if (snapshot.referenceSlideId() == null || samples.size() < 2) {
             // Nothing to align, but the persisted landmarks carry through: adopting an empty cache
             // here would throw them away and the next write would lose them.

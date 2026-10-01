@@ -19,13 +19,14 @@ import java.util.function.Function;
  * Which slide to suggest as the cohort's reference, and why (spec §4.2). Pure.
  * <p>
  * <b>Eligibility</b> uses the alignment's own landmark finder: a slide R qualifies only
- * if, on every gated column, {@code Landmarks.find(R's clean values, null, LogScale.LN)} has an L1 — exactly what {@link AlignmentModel#build} computes when R is the
+ * if, on every gated column, {@code Landmarks.find(R's clean values, null, scale)} has an L1 — exactly what {@link AlignmentModel#build} computes when R is the
  * reference — and at least the cohort's modal landmark count (fdaNorm's rule, Hahne et al. 2010).
  * <p>
  * <b>The suggestion</b> is the medoid of the eligible slides under the L1 distance between
- * normalised log(1 + x) histograms, summed over the gated columns. flowLearn (Lux et al. 2018)
+ * normalised histograms on the same log scale, summed over the gated columns. flowLearn (Lux et al. 2018)
  * chooses its prototype by k-medoids on L1 density distance per channel; summing over channels to
- * pick ONE slide is a FlowPath extension, because every gate is drawn on one slide.
+ * pick ONE slide is a FlowPath extension, because every gate is drawn on one slide. The medoid now
+ * runs on UniFORM's scale, so eligibility, alignment and ranking read one transform.
  */
 public final class ReferenceRanking {
 
@@ -100,7 +101,7 @@ public final class ReferenceRanking {
     static final Comparator<SlideRank> ORDER = Comparator.comparingDouble(SlideRank::score)
             .thenComparing(SlideRank::name).thenComparing(SlideRank::slideId);
 
-    public static Result rank(List<SlideSample> samples, Set<AlignmentModel.ColumnRef> columns) {
+    public static Result rank(List<SlideSample> samples, Set<AlignmentModel.ColumnRef> columns, LogScale scale) {
         if (samples.isEmpty() || columns.isEmpty()) return Result.NONE;
         Map<String, List<String>> reasons = new LinkedHashMap<>();
         for (SlideSample s : samples) reasons.put(s.slideId(), new ArrayList<>());
@@ -116,7 +117,7 @@ public final class ReferenceRanking {
                 double[] v = AlignmentModel.cleanValues(s, col);
                 if (v == null) continue;
                 perValues.put(col.key(), v);
-                perColumn.put(col.key(), Landmarks.find(v, null, LogScale.LN));
+                perColumn.put(col.key(), Landmarks.find(v, null, scale));
             }
             landmarks.put(s.slideId(), perColumn);
             values.put(s.slideId(), perValues);
@@ -162,7 +163,7 @@ public final class ReferenceRanking {
         for (SlideSample s : eligible) score.put(s.slideId(), 0.0);
         if (eligible.size() >= 2) {
             for (AlignmentModel.ColumnRef col : usable) {
-                double[][] h = histograms(eligible, values, col.key());
+                double[][] h = histograms(eligible, values, col.key(), scale);
                 String best = null;
                 double bestSum = Double.POSITIVE_INFINITY;
                 for (int i = 0; i < eligible.size(); i++) {
@@ -213,13 +214,14 @@ public final class ReferenceRanking {
         return same > 1 ? col.key() : col.channel();
     }
 
-    /** Normalised histograms of log(1 + max(x, 0)) on one grid shared by the eligible slides. */
-    private static double[][] histograms(List<SlideSample> slides, Map<String, Map<String, double[]>> values, String key) {
+    /** Normalised histograms of {@code scale.toLog(x)} (out-of-domain values skipped) on one grid shared by the eligible slides. */
+    private static double[][] histograms(List<SlideSample> slides, Map<String, Map<String, double[]>> values, String key,
+                                         LogScale scale) {
         double lo = Double.POSITIVE_INFINITY, hi = Double.NEGATIVE_INFINITY;
         for (SlideSample s : slides) {
             for (double v : values.get(s.slideId()).get(key)) {
-                if (!Double.isFinite(v)) continue;
-                double u = Math.log1p(Math.max(v, 0));
+                double u = scale.toLog(v);
+                if (Double.isNaN(u)) continue;
                 lo = Math.min(lo, u);
                 hi = Math.max(hi, u);
             }
@@ -230,8 +232,9 @@ public final class ReferenceRanking {
         for (int i = 0; i < slides.size(); i++) {
             int n = 0;
             for (double v : values.get(slides.get(i).slideId()).get(key)) {
-                if (!Double.isFinite(v)) continue;
-                int bin = (int) Math.min(GRID_BINS - 1, (Math.log1p(Math.max(v, 0)) - lo) / width);
+                double u = scale.toLog(v);
+                if (Double.isNaN(u)) continue;
+                int bin = (int) Math.min(GRID_BINS - 1, (u - lo) / width);
                 out[i][bin]++;
                 n++;
             }

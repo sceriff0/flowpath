@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.testing.Cells;
 
 import java.util.ArrayList;
@@ -50,7 +51,7 @@ class ReferenceRankingTest {
 
     @Test
     void theCentralSlideIsSuggested() {
-        ReferenceRanking.Result r = ReferenceRanking.rank(centred(), cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(centred(), cols(cd8Tree()), LogScale.LN);
         assertEquals("ref", r.suggestedId());
         assertEquals(1, r.position("ref"));
         assertEquals("most central on 1 of 1 gated columns", r.reason());
@@ -60,7 +61,7 @@ class ReferenceRankingTest {
     void aSlideMissingTheColumnIsIneligible() {
         List<SlideSample> s = centred();
         s.add(ReviewScorerTest.slide("nocd8", 5, 0.0, 3000, false));
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN);
         ReferenceRanking.SlideRank rank = r.rank("nocd8");
         assertFalse(rank.eligible());
         assertEquals(List.of("CD8 not measured"), rank.ineligibleBecause());
@@ -72,21 +73,21 @@ class ReferenceRankingTest {
         List<SlideSample> s = centred();
         s.add(noPeak("flat"));
         GateTree tree = cd8Tree();
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(tree));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(tree), LogScale.LN);
         assertEquals(List.of("no negative peak on CD8"), r.rank("flat").ineligibleBecause());
         String key = cols(tree).iterator().next().key();
         // The engine agrees: with "flat" as reference, its own landmarks have no L1 ...
-        AlignmentModel asFlat = AlignmentModel.build("flat", s, cols(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
+        AlignmentModel asFlat = AlignmentModel.build("flat", s, cols(tree), AlignmentModel.Cache.empty(), LogScale.LN, java.util.Map.of());
         assertFalse(asFlat.referenceLandmarks(key).hasL1());
         // ... and with the suggestion as reference, they do.
-        AlignmentModel asSuggested = AlignmentModel.build(r.suggestedId(), s, cols(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
+        AlignmentModel asSuggested = AlignmentModel.build(r.suggestedId(), s, cols(tree), AlignmentModel.Cache.empty(), LogScale.LN, java.util.Map.of());
         assertTrue(asSuggested.referenceLandmarks(key).hasL1());
     }
 
     @Test
     void twoEligibleSlidesGiveNoSuggestion() {
         List<SlideSample> s = centred().subList(0, 2);
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN);
         assertNull(r.suggestedId());
         assertEquals(2, r.eligibleCount());
     }
@@ -94,7 +95,7 @@ class ReferenceRankingTest {
     @Test
     void noSlideWithANegativePeakNamesTheColumn() {
         List<SlideSample> s = List.of(noPeak("a"), noPeak("b"), noPeak("c"));
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN);
         assertNull(r.suggestedId());
         assertEquals(List.of("CD8"), r.uncorrectableColumns());
     }
@@ -104,18 +105,18 @@ class ReferenceRankingTest {
         // Three identical slides: equal scores; the first name wins.
         List<SlideSample> s = new ArrayList<>();
         for (String id : List.of("c", "a", "b")) s.add(ReviewScorerTest.slide(id, 7, 0.0, 3000, true));
-        assertEquals("a", ReferenceRanking.rank(s, cols(cd8Tree())).suggestedId());
+        assertEquals("a", ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN).suggestedId());
     }
 
     @Test
     void noColumnsNoRanking() {
-        assertNull(ReferenceRanking.rank(centred(), Set.of()).suggestedId());
+        assertNull(ReferenceRanking.rank(centred(), Set.of(), LogScale.LN).suggestedId());
     }
 
     @Test
     void notesSayWhatTheReferenceLacks() {
         List<SlideSample> s = centred();
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN);
         // "odd" is eligible but not the medoid: the per-column note names the medoid.
         List<String> notes = r.notesFor("odd", id -> id + ".tif");
         assertTrue(notes.contains("for CD8 the most central slide is ref.tif"), notes.toString());
@@ -162,7 +163,7 @@ class ReferenceRankingTest {
             s.add(sample("s" + k, "s" + k + ".tif", Cells.of(n).marker("CD8", bimodal(k + 1, shift, n, 0.3))
                     .marker("CD4", i -> Double.NaN).build()));
         }
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()), LogScale.LN);
         assertNotNull(r.suggestedId());
         assertEquals(List.of("CD4"), r.uncorrectableColumns());
         assertEquals(4, r.eligibleCount());
@@ -176,7 +177,7 @@ class ReferenceRankingTest {
         int n = 3000;
         // Unimodal negative: an L1 but no positive peak, while the rest of the cohort shows both.
         s.add(sample("neg", "neg.tif", Cells.of(n).marker("CD3", i -> 1.0).marker("CD8", bimodal(9, 0.0, n, 0.0)).build()));
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN);
         assertEquals(List.of("shows no CD8+ peak; most slides do"), r.rank("neg").ineligibleBecause());
         assertFalse(r.rank("neg").eligible());
     }
@@ -198,7 +199,7 @@ class ReferenceRankingTest {
         List<SlideSample> s = List.of(
                 twoMarkers("ref", 1, 0.0, 0.0), twoMarkers("s1", 2, 0.2, -0.2),
                 twoMarkers("s2", 3, -0.2, 0.2), twoMarkers("odd", 4, 1.5, 1.5));
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()), LogScale.LN);
         assertEquals("ref", r.suggestedId());
         assertEquals(2, r.rank("ref").columnsMostCentral());
         assertEquals("most central on 2 of 2 gated columns", r.reason());
@@ -215,7 +216,7 @@ class ReferenceRankingTest {
         // CD8 is most central on b, CD4 on c: two distinct medoids among three eligible slides.
         List<SlideSample> s = List.of(
                 twoMarkers("a", 1, -1.0, -1.0), twoMarkers("b", 2, 0.0, 1.0), twoMarkers("c", 3, 1.0, 0.0));
-        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()));
+        ReferenceRanking.Result r = ReferenceRanking.rank(s, cols(cd8AndCd4Tree()), LogScale.LN);
         assertEquals("b", r.columnMedoids().get("CD8"));
         assertEquals("c", r.columnMedoids().get("CD4"));
         assertTrue(r.heterogeneous());
@@ -229,6 +230,21 @@ class ReferenceRankingTest {
             SlideSample t = ReviewScorerTest.slide(id, 7, 0.0, 3000, true);
             s.add(sample(id, "shared.tif", t.index()));
         }
-        assertEquals("a1", ReferenceRanking.rank(s, cols(cd8Tree())).suggestedId());
+        assertEquals("a1", ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN).suggestedId());
+    }
+
+    @Test
+    void rankingUnderLn1pCountsSubOneCells() {
+        List<SlideSample> s = centred();
+        int n = 3000;
+        Random r = new Random(11);
+        double[] raw = new double[n];
+        // Most cells sit below 1: LN ignores them, LN1P keeps them as the negative mode.
+        for (int i = 0; i < n; i++)
+            raw[i] = r.nextDouble() < 0.3 ? 6.0 * Math.exp(0.15 * r.nextGaussian()) : Math.min(0.95, Math.max(0.1, 0.5 + 0.15 * r.nextGaussian()));
+        s.add(sample("low", "low.tif", Cells.of(n).marker("CD3", i -> 1.0).marker("CD8", raw).build()));
+        assertFalse(ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN).rank("low").eligible());
+        ReferenceRanking.SlideRank low = ReferenceRanking.rank(s, cols(cd8Tree()), LogScale.LN1P).rank("low");
+        assertTrue(low.eligible(), low.ineligibleBecause().toString());
     }
 }
