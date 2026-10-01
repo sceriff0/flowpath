@@ -1,5 +1,5 @@
 {
-  "name": "FlowPath",
+  "name": "FlowPath catalog",
   "description": "FlowJo-style single-cell analysis for multiplexed tissue imaging in QuPath.",
   "extensions": [
     {
