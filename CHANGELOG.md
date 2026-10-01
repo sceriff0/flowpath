@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] - 01/10/2026
+
+### Changed — Cohort window and an explicit reference slide
+
+- **Cohort window** replaces the "Needs a look" panel. The side panel keeps a small cohort card
+  (status line, **Open cohort…**, **Run on all slides…**); the window shows one row per slide and
+  one column per gate: ✓ corrected, ⚠ needs a look, ↷ looks right, ✎ adjusted, ⊘ skipped,
+  — marker not measured, = not corrected. Selecting a cell shows its reasons, the reference →
+  applied threshold and the evidence crop; **Looks right**, **Adjust in editor**, **Skip this
+  gate** and **Use cohort value** answer it, and a column's menu answers the whole gate. A "⚠"
+  column sorts slides by how much they need a look; **Only ⚠** hides the rest.
+- **The reference slide is suggested, then confirmed** — never set silently from the open slide.
+  The suggestion is the most central slide of the cohort (the medoid of the slides' marker
+  distributions over the corrected gates), restricted to slides with a clear negative peak on
+  every corrected column, and the banner says why. Until a reference is confirmed, thresholds
+  are not corrected between slides. A tree that already has gates asks which slide they were
+  drawn on; changing the reference later re-expresses the thresholds on the new slide as one
+  undo step.
+- **Exclude a slide** from a row's menu: it is no longer sampled, ranked or reviewed, and is
+  stored with the project (not in the gate tree). Run on all slides still gates it, uncorrected,
+  and `qc_summary.csv` records `cohort_excluded`. The current reference cannot be excluded; an
+  excluded reference (after an undo or a load) switches correction off and says so.
+
+### Fixed
+
+- Slide names containing `_` (e.g. `patient_03`) are shown in full; buttons dropped the
+  underscore.
+- The cohort controls no longer truncate at side-panel width, and the selected row is readable
+  in the dark theme.
+
 ## [0.9.6] - 30/09/2026
 
 ### Added — New project from MIRAGE
