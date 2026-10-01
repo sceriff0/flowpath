@@ -207,8 +207,37 @@ class AlignmentModelTest {
         AlignmentModel m = build("ref", cohort(1.0), Map.of("s1", Map.of("CD8", 1e9)));
         Alignment a = m.alignment("s1", "CD8");
         assertEquals(Alignment.Kind.LANDMARK, a.kind());
-        assertTrue(a.shiftBins() <= UniformShift.BINS - 1);
+        UniformShift.Grid g = m.grid("CD8");
+        assertEquals(UniformShift.BINS - 1 - UniformShift.binOf(m.referencePeak("CD8"), g), a.shiftBins(),
+                "the pick lands in the last bin, measured from the reference's L1 bin");
         assertTrue(Double.isFinite(a.factor()));
+    }
+
+    /** Rule 3: a pick below 1 has no ln, so the slide is left uncorrected — not auto, not a detector fallback. */
+    @Test
+    void aPickOutsideTheScaleDomainLeavesTheSlideUncorrected() {
+        AlignmentModel m = build("ref", cohort(1.0), Map.of("s1", Map.of("CD8", 0.5)));
+        Alignment a = m.alignment("s1", "CD8");
+        assertEquals(Alignment.Kind.IDENTITY, a.kind());
+        assertEquals(1.0, a.factor(), 0.0);
+        assertTrue(m.diagnostics("s1", "CD8").peakPicked(), "the pick exists, it just cannot be binned");
+        assertEquals(Alignment.Kind.AUTO, m.alignment("s2", "CD8").kind(), "unpicked slides are unaffected");
+    }
+
+    /** Rule 3: a reference pick below 1 makes the reference peak NaN, so every landmark-mode slide stays uncorrected. */
+    @Test
+    void aReferencePickOutsideTheScaleDomainLeavesEveryPickedSlideUncorrected() {
+        AlignmentModel m = build("ref", cohort(1.0), Map.of("ref", Map.of("CD8", 0.5),
+                "s1", Map.of("CD8", 70.0), "s3", Map.of("CD8", 80.0)));
+        assertTrue(Double.isNaN(m.referencePeak("CD8")), "no detector-L1 fallback when the reference was picked");
+        for (String id : List.of("s1", "s3")) {
+            Alignment a = m.alignment(id, "CD8");
+            assertEquals(Alignment.Kind.IDENTITY, a.kind(), id);
+            assertEquals(1.0, a.factor(), 0.0, id);
+            assertTrue(m.diagnostics(id, "CD8").peakPicked(), id);
+        }
+        assertFalse(m.diagnostics("ref", "CD8").peakPicked(), "the reference never reports a pick");
+        assertEquals(Alignment.Kind.AUTO, m.alignment("s2", "CD8").kind(), "an unpicked slide still auto-aligns");
     }
 
     /** Review Focus 2. */
