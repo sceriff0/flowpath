@@ -200,6 +200,13 @@ not match percentiles (percentile matching assumes every slide has the same % po
 exactly what gating is measuring). When the automatic shift looks wrong, pick the slide's
 negative peak on the histogram and the correction uses that landmark instead. Picked peaks are
 stored as raw intensities in the project image metadata (`flowpath.cohort.peak.<column>`), not in the gate tree file.
+A landmark needs the reference's negative peak too, found automatically or picked on the
+reference. When a pick cannot be used, the slide is left uncorrected and its cell asks for a look
+with the reason: **∅ No negative peak** when the reference has no peak to pair it with (pick the
+reference's peak), **# Too few cells** when the pick — the slide's or the reference's — lies
+outside the current log scale (below 1 on ln, for example after switching from ln(x+1)). **Use
+automatic** and **Use automatic (reference)** clear a stored pick even when it cannot be drawn on
+the current scale.
 
 Landmarks are found on each slide's **clean** cells — those passing the tree's quality filter
 and, when it is on, the annotation (ROI) filter — the same cells the gate tree counts as clean.
@@ -427,8 +434,12 @@ with these metrics:
 - `pct_unmeasured` (subject = gate path) — fraction a gate could not judge;
 - `staining_factor` (subject = column) — the multiplicative factor that carries the reference
   threshold onto this slide; `alignment_kind` — `identity`, `auto` or `landmark`;
-  `below_range_pct` — percent of the slide's usable cells outside the log scale's domain;
-  `otsu_discordance` — log-scale gap between the slide's own and the pooled-cohort Otsu threshold;
+  `below_range_pct` — percent (0–100) of the slide's clean cells with a value that lie outside
+  the log scale's domain (below 1 on ln, below 0 on ln(x + 1)), out of all those cells, inside
+  the domain or not; these cells are corrected like the rest but not used to estimate the shift;
+  `otsu_discordance_pct` — percent (0–100) of the slide's in-domain clean cells that its own Otsu
+  threshold and the pooled cohort's Otsu threshold classify differently, on the corrected log
+  values (Harris et al. 2022's discordance; the review flags it above 10%);
 - `rule_violation_pct` (subject = the rule, e.g. `1:CD8+ => 1:CD3+`) — the marker-rule rate;
 - `open_flags`, `reviewed_flags` — how many review (⚠) items were open / already reviewed;
 - `sanity` (subject = the flag) — the per-slide sanity issues above.
