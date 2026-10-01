@@ -234,11 +234,15 @@ public class FlowPathPane extends BorderPane {
      * The second half of a ☆ on a tree whose gates were drawn on another slide
      * ({@link ReferenceChoice.Step#CONFIRM_THEN_REBASE}): {@link #pendingRebaseFrom} was confirmed
      * as the reference, and {@link #pendingRebase} becomes it once the cohort has a model for the
-     * first ({@link #landPendingRebase}). Both null when nothing is pending; entry ids, so dropped
-     * with the project or the image ({@link #forgetCohortSelection}).
+     * first ({@link #landPendingRebase}). Both null when nothing is pending. Kept across image
+     * switches — opening a slide is the ordinary next gesture — but entry ids are project-scoped,
+     * so a project change drops it ({@link #forgetCohortSelection}). The names are taken when it
+     * is set, so a drop after a project change can still say which slides it meant.
      */
     private String pendingRebase;
     private String pendingRebaseFrom;
+    private String pendingRebaseName;
+    private String pendingRebaseFromName;
     /**
      * The item being answered (by value; its gate is found in the live tree on every use), its
      * baseline and its undo mark; what a drag or an answer on it does lives there, toolkit-free.
@@ -691,7 +695,6 @@ public class FlowPathPane extends BorderPane {
         @Override
         public void cleared(IngestCoordinator.Cleared why) {
             indexSlideId = null;
-            forgetPendingRebase();
             // The outlines are the previous slide's cells.
             hideBoundaryOverlay();
             markerNames = Collections.emptyList();
@@ -1001,12 +1004,24 @@ public class FlowPathPane extends BorderPane {
         gridSelection = null;
         pendingFocus = null;
         pendingAdjust = null;
-        forgetPendingRebase();
+        // The tree is unchanged, so the confirmed slide stays; named as it was in its own project.
+        dropPendingRebase(pendingRebaseFromName, null);
     }
 
+    /** Silently: the user's own new reference choice supersedes a pending one. */
     private void forgetPendingRebase() {
         pendingRebase = null;
         pendingRebaseFrom = null;
+        pendingRebaseName = null;
+        pendingRebaseFromName = null;
+    }
+
+    /** Drop a pending rebase and say so, naming both slides ({@link ReferenceChoice#notMadeReference}). */
+    private void dropPendingRebase(String staysName, String reason) {
+        if (pendingRebaseFrom == null) return;
+        String message = ReferenceChoice.notMadeReference(pendingRebaseName, staysName, reason);
+        forgetPendingRebase();
+        Dialogs.showWarningNotification("FlowPath", message);
     }
 
     /**
@@ -1565,8 +1580,11 @@ public class FlowPathPane extends BorderPane {
             }
             case CONFIRM_THEN_REBASE -> {
                 session.confirmReference(choice.confirm(), cohort.projectNames());
+                forgetPendingRebase();
                 pendingRebaseFrom = choice.confirm();
                 pendingRebase = choice.rebaseTo();
+                pendingRebaseFromName = cohort.slideName(pendingRebaseFrom);
+                pendingRebaseName = cohort.slideName(pendingRebase);
             }
             case REBASE -> {
                 String refusal = cohort.rebaseRefusal(current);
@@ -1587,8 +1605,9 @@ public class FlowPathPane extends BorderPane {
     /**
      * The rebase half of {@link ReferenceChoice.Step#CONFIRM_THEN_REBASE}, once a rescore lands
      * ({@link ReferenceChoice#landing}): rebased when the adopted model is the confirmed
-     * reference's and it can be rebased from, refused with the reason otherwise, dropped silently
-     * when the confirmation is gone (an undo, a load), and kept while the model is not yet built.
+     * reference's and it can be rebased from, refused with the reason otherwise, dropped when the
+     * confirmation is gone (an undo, a load) — both said aloud, naming both slides — and kept
+     * while the model is not yet built.
      */
     private void landPendingRebase() {
         if (pendingRebaseFrom == null) return;
@@ -1598,11 +1617,12 @@ public class FlowPathPane extends BorderPane {
                 cohort.model().referenceSlideId(), refusal != null, cohortCoordinator.sampling());
         switch (landing) {
             case NONE, WAIT -> { }
-            case DROP -> forgetPendingRebase();
-            case REFUSE -> {
-                forgetPendingRebase();
-                Dialogs.showWarningNotification("FlowPath", refusal);
+            case DROP -> {
+                // An undo or a load replaced the confirmation: name the reference the tree has now.
+                String now = session.tree().getReferenceSlideId();
+                dropPendingRebase(now == null ? null : cohort.slideName(now), null);
             }
+            case REFUSE -> dropPendingRebase(pendingRebaseFromName, refusal);
             case REBASE -> {
                 String to = pendingRebase;
                 forgetPendingRebase();

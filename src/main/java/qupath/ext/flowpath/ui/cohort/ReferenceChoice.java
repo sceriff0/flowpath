@@ -31,6 +31,18 @@ public record ReferenceChoice(Step step, String confirm, String rebaseTo) {
         REBASE
     }
 
+    /**
+     * What the user is told when a pending rebase onto {@code toName} is dropped or refused —
+     * always, whatever the reason, so ☆ never silently does less than it said. {@code staysName}
+     * is the reference the tree keeps (null when an undo left it with none); {@code reason} is the
+     * refusal, or null.
+     */
+    public static String notMadeReference(String toName, String staysName, String reason) {
+        String line = toName + " was not made the reference; "
+                + (staysName == null ? "there is no reference slide" : staysName + " stays the reference");
+        return reason == null ? line : line + ". " + reason;
+    }
+
     private static final ReferenceChoice NOTHING = new ReferenceChoice(Step.NOTHING, null, null);
 
     /**

@@ -34,4 +34,22 @@ class EditorLabelsTest {
         assertEquals("★ Reference: slide_A · this slide not corrected",
                 EditorLabels.referenceLine("slide_A", "slide_B", false, Alignment.identity()));
     }
+
+    /** The grid's format, ×%.2f: a strong correction rounds like it does in the grid. */
+    @Test
+    void theFactorUsesTheGridsFormat() {
+        // exp(-300 * 0.01) = 0.0498
+        assertEquals("★ Reference: slide_A · this slide ×0.05 (automatic)",
+                EditorLabels.referenceLine("slide_A", "slide_B", false, Alignment.auto(-300, 0.01)));
+        // exp(250 * 0.01) = 12.18
+        assertEquals("★ Reference: slide_A · this slide ×12.18 (picked peak)",
+                EditorLabels.referenceLine("slide_A", "slide_B", false, Alignment.landmark(250, 0.01)));
+    }
+
+    /** No open slide, or no gate shown: the reference alone, nothing claimed about this slide. */
+    @Test
+    void withoutAnOpenSlideOrAGateOnlyTheReferenceIsNamed() {
+        assertEquals("★ Reference: slide_A", EditorLabels.referenceLine("slide_A", null, false, Alignment.auto(-20, 0.01)));
+        assertEquals("★ Reference: slide_A", EditorLabels.referenceLine("slide_A", "slide_B", false, null));
+    }
 }

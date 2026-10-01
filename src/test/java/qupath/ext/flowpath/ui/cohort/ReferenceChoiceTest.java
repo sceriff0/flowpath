@@ -68,4 +68,28 @@ class ReferenceChoiceTest {
         assertEquals(Landing.REBASE, ReferenceChoice.landing("A", "A", "A", false, false));
         assertEquals(Landing.REBASE, ReferenceChoice.landing("A", "A", "A", false, true));
     }
+
+    /** Every drop says so and names both slides: after an undo, a load, a project change or a refusal. */
+    @Test
+    void aDroppedRebaseNamesBothSlidesAndTheReason() {
+        // DROP after a load: the tree's reference changed under the pending rebase.
+        assertEquals(ReferenceChoice.Landing.DROP, ReferenceChoice.landing("A", "C", "C", false, false));
+        assertEquals("slide_B was not made the reference; slide_C stays the reference",
+                ReferenceChoice.notMadeReference("slide_B", "slide_C", null));
+        // DROP after an undo of the confirmation: no reference left.
+        assertEquals(ReferenceChoice.Landing.DROP, ReferenceChoice.landing("A", null, "A", false, false));
+        assertEquals("slide_B was not made the reference; there is no reference slide",
+                ReferenceChoice.notMadeReference("slide_B", null, null));
+        // REFUSE: the confirmed slide stays, with the reason.
+        assertEquals("slide_B was not made the reference; slide_A stays the reference. Not aligned yet",
+                ReferenceChoice.notMadeReference("slide_B", "slide_A", "Not aligned yet"));
+    }
+
+    /** An image switch is not a drop: nothing but the tree's and the model's reference decides. */
+    @Test
+    void openingAnotherSlideDoesNotDropThePendingRebase() {
+        // The landing has no notion of the open slide: a rescore after a switch still waits or rebases.
+        assertEquals(ReferenceChoice.Landing.WAIT, ReferenceChoice.landing("A", "A", null, false, false));
+        assertEquals(ReferenceChoice.Landing.REBASE, ReferenceChoice.landing("A", "A", "A", false, false));
+    }
 }

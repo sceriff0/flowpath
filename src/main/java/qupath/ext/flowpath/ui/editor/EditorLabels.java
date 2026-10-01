@@ -44,13 +44,13 @@ public final class EditorLabels {
         if (slideName == null || axis0 == null) return head;
         return switch (axis0.kind()) {
             case IDENTITY -> head + " · this slide not corrected";
-            case AUTO -> head + " · this slide ×" + factor(axis0.factor()) + " (automatic)";
-            case LANDMARK -> head + " · this slide ×" + factor(axis0.factor()) + " (picked peak)";
+            case AUTO -> head + " · this slide " + factor(axis0.factor()) + " (automatic)";
+            case LANDMARK -> head + " · this slide " + factor(axis0.factor()) + " (picked peak)";
         };
     }
 
-    /** Two decimals; two significant digits below 0.1, so a strong correction never reads ×0.00. */
+    /** The Cohort grid's factor format, so the panel and the grid print one number the same way. */
     private static String factor(double f) {
-        return Math.abs(f) >= 0.1 || f == 0 ? String.format(Locale.US, "%.2f", f) : String.format(Locale.US, "%.2g", f);
+        return String.format(Locale.US, "×%.2f", f);
     }
 }
