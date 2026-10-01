@@ -6,6 +6,7 @@ import javafx.scene.control.Labeled;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.cohort.ReviewItem;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.testing.FxTestSupport;
 
 import java.util.List;
@@ -42,7 +43,7 @@ class CohortGridPaneFxTest {
     void slideNamesKeepTheirUnderscores() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
-        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
         List<Labeled> labeled = FxTestSupport.onFx(() -> pane.lookupAll("*").stream()
                 .filter(n -> n instanceof Labeled).map(n -> (Labeled) n).toList());
         for (Labeled l : labeled) {
@@ -57,7 +58,7 @@ class CohortGridPaneFxTest {
     void theDetailShowsReferenceToApplied() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
-        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
         String text = FxTestSupport.onFx(() -> pane.detailThresholdLabel.getText());
         assertEquals("reference 412 → this slide 587", text);
     }
@@ -66,7 +67,7 @@ class CohortGridPaneFxTest {
     void onlyAFlaggedCellTakesLooksRightAndSkip() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
-        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
         assertFalse(FxTestSupport.onFx(() -> pane.looksRight.isDisable()));
         assertFalse(FxTestSupport.onFx(() -> pane.skip.isDisable()));
         CohortGridModel m = model();
@@ -74,7 +75,7 @@ class CohortGridPaneFxTest {
         var reviewed = new CohortGridModel.Detail(d.key(), d.title(), CohortGridModel.CellMark.REVIEWED,
                 d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), d.histogram(), d.canPickPeak(),
                 d.hasPickedPeak(), d.region());
-        FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), m.columns(), m.rows(), reviewed), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), m.columns(), m.rows(), reviewed), 20000, LogScale.LN));
         assertTrue(FxTestSupport.onFx(() -> pane.looksRight.isDisable()));
         assertTrue(FxTestSupport.onFx(() -> pane.skip.isDisable()));
     }
@@ -83,12 +84,12 @@ class CohortGridPaneFxTest {
     void aRerenderWithTheSameColumnsKeepsTheTableColumnsAndTheSelection() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
-        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
         var before = FxTestSupport.onFx(() -> List.copyOf(pane.table.getColumns()));
         FxTestSupport.onFxRun(() -> {
             before.get(1).setPrefWidth(333);
             pane.table.getSelectionModel().select(1);
-            pane.render(model(), 20000);
+            pane.render(model(), 20000, LogScale.LN);
         });
         var after = FxTestSupport.onFx(() -> List.copyOf(pane.table.getColumns()));
         assertEquals(before.size(), after.size());
@@ -102,7 +103,7 @@ class CohortGridPaneFxTest {
         var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.open(),
                 r.status(), r.statusText(), r.cellCount(), List.of(r.cells().get(0), r.cells().get(0)), r.lookCount(), r.canExclude(),
                 r.canBeReference(), r.selectedColumn())).toList();
-        FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), cols, rows, m.detail()), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), cols, rows, m.detail()), 20000, LogScale.LN));
         var rebuilt = FxTestSupport.onFx(() -> List.copyOf(pane.table.getColumns()));
         assertEquals(before.size() + 1, rebuilt.size());
         assertNotSame(before.get(1), rebuilt.get(1));
@@ -153,7 +154,7 @@ class CohortGridPaneFxTest {
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
         FxTestSupport.onFxRun(() -> {
             new javafx.scene.Scene(pane, 800, 600);
-            pane.render(model(), 20000);
+            pane.render(model(), 20000, LogScale.LN);
             pane.applyCss();
             pane.layout();
         });
@@ -161,7 +162,7 @@ class CohortGridPaneFxTest {
         assertEquals(List.of("⋀"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
 
         FxTestSupport.onFxRun(() -> {
-            pane.render(withSelection(model(), "1", List.of()), 20000);
+            pane.render(withSelection(model(), "1", List.of()), 20000, LogScale.LN);
             pane.applyCss();
             pane.layout();
         });
@@ -170,7 +171,7 @@ class CohortGridPaneFxTest {
         assertEquals(List.of("★"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
 
         FxTestSupport.onFxRun(() -> {
-            pane.render(withSelection(model(), null, List.of()), 20000);
+            pane.render(withSelection(model(), null, List.of()), 20000, LogScale.LN);
             pane.applyCss();
             pane.layout();
         });
@@ -189,18 +190,18 @@ class CohortGridPaneFxTest {
     void rowsSortByLookCountAndTheFooterShowsMissingChannels() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
-        FxTestSupport.onFxRun(() -> pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000, LogScale.LN));
         List<String> order = FxTestSupport.onFx(() -> {
             var looks = pane.table.getColumns().stream().filter(c -> "To check".equals(c.getText())).findFirst().orElseThrow();
             looks.setSortType(javafx.scene.control.TableColumn.SortType.DESCENDING);
             pane.table.getSortOrder().setAll(List.of(looks));
-            pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000);
+            pane.render(withSelection(model(), null, List.of("slide_B — CD8 is not measured")), 20000, LogScale.LN);
             return pane.table.getItems().stream().map(CohortGridModel.Row::slideId).toList();
         });
         assertEquals(List.of("2", "1"), order, "most to look at first, kept across a re-render");
         assertTrue(FxTestSupport.onFx(() -> pane.missingChannels.isVisible()));
         assertEquals("1 note(s): channels missing on some slides", FxTestSupport.onFx(() -> pane.missingChannels.getText()));
-        FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
         assertFalse(FxTestSupport.onFx(() -> pane.missingChannels.isVisible()));
     }
 
@@ -217,7 +218,7 @@ class CohortGridPaneFxTest {
     private static void show(CohortGridPane pane, CohortGridModel m) {
         FxTestSupport.onFxRun(() -> {
             if (pane.getScene() == null) new javafx.scene.Scene(pane, 800, 600);
-            pane.render(m, 20000);
+            pane.render(m, 20000, LogScale.LN);
             pane.applyCss();
             pane.layout();
         });
@@ -317,5 +318,111 @@ class CohortGridPaneFxTest {
         } finally {
             try { node.removeNode(); } catch (Exception ignored) { }
         }
+    }
+
+    // --- Task 9: the detail histogram, peak picking and the scale chooser ---
+
+    private static CohortGridModel.HistogramView histogram() {
+        return new CohortGridModel.HistogramView(0.0, 8.0, new long[]{1, 4, 9, 4, 1, 0, 2, 1},
+                new long[]{0, 2, 6, 9, 3, 1, 1, 2}, 2.5, 3.2, Double.NaN, Double.NaN, 5.0, 5.7, LogScale.LN);
+    }
+
+    private static CohortGridModel withDetail(boolean canPick, boolean hasPicked) {
+        var m = model();
+        var d = m.detail();
+        var detail = new CohortGridModel.Detail(d.key(), d.title(), d.mark(), d.reasons(), d.valuesLine(),
+                d.correctionLine(), d.usageLine(), histogram(), canPick, hasPicked, d.region());
+        return new CohortGridModel(m.banner(), m.columns(), m.rows(), detail);
+    }
+
+    @Test
+    void pickButtonsDisabledWhenCannotPick() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        FxTestSupport.onFxRun(() -> pane.render(withDetail(false, true), 20000, LogScale.LN));
+        assertTrue(FxTestSupport.onFx(() -> pane.pickSlidePeak.isDisable()));
+        assertTrue(FxTestSupport.onFx(() -> pane.pickReferencePeak.isDisable()));
+        assertTrue(FxTestSupport.onFx(() -> pane.useAutomatic.isDisable()), "even with a pick, when it cannot pick");
+
+        FxTestSupport.onFxRun(() -> pane.render(withDetail(true, false), 20000, LogScale.LN));
+        assertFalse(FxTestSupport.onFx(() -> pane.pickSlidePeak.isDisable()));
+        assertFalse(FxTestSupport.onFx(() -> pane.pickReferencePeak.isDisable()));
+        assertTrue(FxTestSupport.onFx(() -> pane.useAutomatic.isDisable()), "nothing picked: nothing to clear");
+
+        FxTestSupport.onFxRun(() -> pane.render(withDetail(true, true), 20000, LogScale.LN));
+        assertFalse(FxTestSupport.onFx(() -> pane.useAutomatic.isDisable()));
+        List<Runnable> cleared = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnClearPeak(() -> cleared.add(() -> {}));
+            pane.useAutomatic.fire();
+        });
+        assertEquals(1, cleared.size());
+
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN));
+        assertTrue(FxTestSupport.onFx(() -> pane.pickSlidePeak.isDisable()));
+        assertFalse(FxTestSupport.onFx(() -> pane.histogramBox.isVisible()), "no histogram: no canvas");
+    }
+
+    private static void click(javafx.scene.canvas.Canvas c, double x) {
+        javafx.event.Event.fireEvent(c, new javafx.scene.input.MouseEvent(javafx.scene.input.MouseEvent.MOUSE_CLICKED,
+                x, 40, x, 40, javafx.scene.input.MouseButton.PRIMARY, 1, false, false, false, false,
+                true, false, false, true, false, true, null));
+    }
+
+    @Test
+    void armedClickReportsLogValue() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        List<Object[]> picked = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnPickPeak((t, u) -> picked.add(new Object[]{t, u}));
+            pane.render(withDetail(true, false), 20000, LogScale.LN);
+            click(pane.histogramCanvas, 150);          // not armed: nothing
+        });
+        assertEquals(0, picked.size());
+        double expected = FxTestSupport.onFx(() -> {
+            pane.pickReferencePeak.fire();
+            return pane.histogramCanvas.logAtCanvasX(150);
+        });
+        assertEquals(CohortHistogramCanvas.PickTarget.REFERENCE, FxTestSupport.onFx(() -> pane.histogramCanvas.armed()));
+        FxTestSupport.onFxRun(() -> click(pane.histogramCanvas, 150));
+        assertEquals(1, picked.size());
+        assertEquals(CohortHistogramCanvas.PickTarget.REFERENCE, picked.get(0)[0]);
+        assertEquals(expected, (Double) picked.get(0)[1], 1e-12);
+        assertTrue(expected > 0.0 && expected < 8.0, "inside the grid: " + expected);
+        assertEquals(CohortHistogramCanvas.PickTarget.NONE, FxTestSupport.onFx(() -> pane.histogramCanvas.armed()),
+                "a click disarms");
+        FxTestSupport.onFxRun(() -> click(pane.histogramCanvas, 150));
+        assertEquals(1, picked.size());
+
+        FxTestSupport.onFxRun(() -> {
+            pane.pickSlidePeak.fire();
+            javafx.event.Event.fireEvent(pane.histogramCanvas, new javafx.scene.input.KeyEvent(
+                    javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", javafx.scene.input.KeyCode.ESCAPE,
+                    false, false, false, false));
+            click(pane.histogramCanvas, 150);
+        });
+        assertEquals(1, picked.size(), "Esc disarms");
+    }
+
+    @Test
+    void scaleChooserReportsChange() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        List<LogScale> changes = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnScaleChanged(changes::add);
+            pane.render(model(), 20000, LogScale.LN);
+            pane.render(model(), 20000, LogScale.LN1P);   // a render reports nothing
+        });
+        assertEquals(List.of(), changes);
+        assertEquals(LogScale.LN1P, FxTestSupport.onFx(() -> pane.scaleChoice.getValue()));
+        FxTestSupport.onFxRun(() -> pane.scaleChoice.setValue(LogScale.LN));
+        assertEquals(List.of(LogScale.LN), changes);
+        assertEquals(LogScale.LN.describe(), FxTestSupport.onFx(() -> pane.scaleChoice.getConverter().toString(LogScale.LN)));
+        FxTestSupport.onFxRun(() -> pane.render(model(), 20000, LogScale.LN1P));
+        assertEquals(LogScale.LN1P, FxTestSupport.onFx(() -> pane.scaleChoice.getValue()),
+                "a failed write re-renders the session's scale, reverting the choice");
+        assertEquals(List.of(LogScale.LN), changes);
     }
 }

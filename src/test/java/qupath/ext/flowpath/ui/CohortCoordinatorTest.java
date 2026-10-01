@@ -42,6 +42,7 @@ class CohortCoordinatorTest {
         @Override public void sampled(CohortSampler.Outcome o) { events.add("sampled " + o.slideId()); }
         @Override public void samplingFinished() { events.add("finished"); }
         @Override public void scored(boolean changed) { events.add("scored"); }
+        @Override public void scoringFailed() { events.add("failed"); }
         @Override public void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) {
             events.add("cache " + file.getFileName() + " " + cache.slides().keySet().stream().sorted().toList());
         }
@@ -179,6 +180,7 @@ class CohortCoordinatorTest {
         }
         @Override public void samplingFinished() { events.add("finished"); }
         @Override public void scored(boolean changed) { events.add("scored"); }
+        @Override public void scoringFailed() { events.add("failed"); }
         @Override public void cacheSettled(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) {
             events.add("cache " + file + " " + cache.slides().keySet().stream().sorted().toList());
         }
@@ -250,5 +252,31 @@ class CohortCoordinatorTest {
         qupath.ext.flowpath.model.GateTree tree = GateTreeFixtures.twoRootsOnCd3AndCd8(1, 2);
         tree.setReferenceSlideId(id);
         return tree;
+    }
+
+    /**
+     * Task 8 review carry-over: a failed pass ends {@link CohortCoordinator#scoring()} AND tells the
+     * host, so the banner's " · re-aligning…" is re-rendered away; a superseded failure says nothing.
+     */
+    @Test
+    void aFailedScoringEndsScoringAndTellsTheHost() {
+        ManualExecutor bg = new ManualExecutor(), fx = new ManualExecutor();
+        CohortSession session = new CohortSession();
+        RecordingHost host = new RecordingHost();
+        CohortCoordinator c = new CohortCoordinator(session, bg, fx, host,
+                (snapshot, tree) -> { throw new IllegalStateException("boom"); });
+        c.rescore(withReference("a"));
+        assertTrue(c.scoring());
+        bg.runAll();
+        fx.runAll();
+        assertFalse(c.scoring());
+        assertEquals(List.of("failed"), host.events);
+
+        c.rescore(withReference("a"));
+        bg.runAll();
+        c.rescore(withReference("a"));   // supersedes the failed one before it lands
+        fx.runAll();
+        assertTrue(c.scoring(), "the newer request is still out");
+        assertEquals(List.of("failed"), host.events, "a superseded failure is not reported");
     }
 }

@@ -5,6 +5,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
@@ -22,14 +23,20 @@ import javafx.scene.layout.VBox;
 import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.util.StringConverter;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.EvidenceCrop;
 import qupath.ext.flowpath.cohort.ReviewGroup;
 import qupath.ext.flowpath.cohort.ReviewItem;
+import qupath.ext.flowpath.model.cohort.LogScale;
+import qupath.ext.flowpath.ui.cohort.CohortHistogramCanvas.PickTarget;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 import java.util.prefs.Preferences;
@@ -50,6 +57,20 @@ public final class CohortGridPane extends BorderPane {
     final Label detailTitle = unmnemonic(new Label());
     final Label detailReasons = unmnemonic(new Label());
     final Label detailThresholdLabel = unmnemonic(new Label());
+    final Label detailCorrection = unmnemonic(new Label());
+    final Label detailUsage = unmnemonic(new Label());
+    /** The selected cell's histogram (spec U2); hidden, with its buttons, when the detail has none. */
+    final CohortHistogramCanvas histogramCanvas = new CohortHistogramCanvas();
+    final Button pickSlidePeak = new Button("Pick this slide's negative peak");
+    final Button pickReferencePeak = new Button("Pick the reference's negative peak");
+    final Button useAutomatic = new Button("Use automatic");
+    final VBox histogramBox;
+    /** The project's log scale (spec U4); set by {@link #render}, reported only when the user changes it. */
+    final ChoiceBox<LogScale> scaleChoice = new ChoiceBox<>();
+    /** True while {@link #render} sets {@link #scaleChoice}: a render reports no change. */
+    private boolean rendering;
+    /** The detail the canvas was armed for: another cell's detail disarms it. */
+    private ReviewItem.Key shownDetailKey;
     final Button looksRight = new Button("Looks right (Enter)");
     final Button adjust = new Button("Adjust in editor");
     final Button skip = new Button("Skip this gate (S)");
@@ -84,6 +105,9 @@ public final class CohortGridPane extends BorderPane {
     private IntConsumer onSampleSizeChanged = n -> {};
     private Consumer<Boolean> onOnlyLooksChanged = b -> {};
     private Consumer<ReviewKey> onKey = k -> {};
+    private BiConsumer<PickTarget, Double> onPickPeak = (t, u) -> {};
+    private Runnable onClearPeak = () -> {};
+    private Consumer<LogScale> onScaleChanged = s -> {};
 
     public CohortGridPane() {
         this(CohortPrefs.node());
@@ -155,15 +179,43 @@ public final class CohortGridPane extends BorderPane {
         missingChannels.getStyleClass().add("fp-hint");
         missingChannels.setVisible(false);
         missingChannels.setManaged(false);
-        HBox footer = new HBox(6, onlyLooks, new Label("Cells per slide:"), sampleSize, missingChannels);
+        scaleChoice.getItems().setAll(LogScale.values());
+        scaleChoice.setConverter(new StringConverter<>() {
+            @Override public String toString(LogScale s) { return s == null ? "" : s.describe(); }
+            @Override public LogScale fromString(String text) { return null; }
+        });
+        scaleChoice.setTooltip(new Tooltip("The log scale every column's shift is estimated on, for the whole project."));
+        scaleChoice.valueProperty().addListener((obs, old, now) -> {
+            if (!rendering && now != null && now != old) onScaleChanged.accept(now);
+        });
+        HBox footer = new HBox(6, onlyLooks, new Label("Cells per slide:"), sampleSize,
+                new Label("Shift estimated on:"), scaleChoice, missingChannels);
         footer.setAlignment(Pos.CENTER_LEFT);
         cropView.setFitWidth(256);
         cropView.setPreserveRatio(true);
         cropStatusLabel.getStyleClass().add("fp-hint");
         cropStatusLabel.setWrapText(true);
-        VBox detailText = new VBox(4, detailTitle, detailReasons, detailThresholdLabel, cropStatusLabel);
+        detailCorrection.getStyleClass().add("fp-primary-text");
+        detailUsage.getStyleClass().add("fp-hint");
+        detailUsage.setWrapText(true);
+        VBox detailText = new VBox(4, detailTitle, detailReasons, detailThresholdLabel, detailCorrection, detailUsage,
+                cropStatusLabel);
         HBox.setHgrow(detailText, Priority.ALWAYS);
-        HBox detailRow = new HBox(8, cropView, detailText);
+        pickSlidePeak.setOnAction(e -> histogramCanvas.arm(PickTarget.SLIDE));
+        pickReferencePeak.setOnAction(e -> histogramCanvas.arm(PickTarget.REFERENCE));
+        useAutomatic.setOnAction(e -> onClearPeak.run());
+        useAutomatic.setTooltip(new Tooltip("Forget this slide's picked peak and estimate it automatically"));
+        histogramCanvas.setOnPicked((t, u) -> onPickPeak.accept(t, u));
+        HBox pickRow = new HBox(4, pickSlidePeak, pickReferencePeak, useAutomatic);
+        histogramBox = new VBox(4, histogramCanvas, pickRow);
+        // Esc cancels a pick wherever the focus is, and is not also the review's "back".
+        addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if (e.getCode() == KeyCode.ESCAPE && histogramCanvas.armed() != PickTarget.NONE) {
+                histogramCanvas.arm(PickTarget.NONE);
+                e.consume();
+            }
+        });
+        HBox detailRow = new HBox(8, cropView, detailText, histogramBox);
         VBox bottom = new VBox(4, detailRow, answers, footer);
         bottom.getStyleClass().add("fp-cohort-detail");
         bottom.setPadding(new Insets(6));
@@ -192,8 +244,9 @@ public final class CohortGridPane extends BorderPane {
         return m;
     }
 
-    public void render(CohortGridModel m, int sampleSizeValue) {
-        {
+    public void render(CohortGridModel m, int sampleSizeValue, LogScale scale) {
+        rendering = true;
+        try {
             headline.setText(m.banner().headline());
             notes.getChildren().setAll(m.banner().notes().stream().map(t -> {
                 Label l = unmnemonic(new Label(t));
@@ -233,7 +286,29 @@ public final class CohortGridPane extends BorderPane {
                     && d.mark() != CohortGridModel.CellMark.SKIPPED && d.mark() != CohortGridModel.CellMark.REVIEWED));
             shownSampleSize = sampleSizeValue;
             if (!sampleSize.isFocused()) sampleSize.setText(Integer.toString(sampleSizeValue));
+            renderHistogram(d);
+            scaleChoice.setValue(scale == null ? LogScale.LN : scale);
+        } finally {
+            rendering = false;
         }
+    }
+
+    /** The histogram and its buttons: all three disabled unless the detail can take a pick. */
+    private void renderHistogram(CohortGridModel.Detail d) {
+        detailCorrection.setText(d == null ? "" : d.correctionLine());
+        detailUsage.setText(d == null ? "" : d.usageLine());
+        CohortGridModel.HistogramView h = d == null ? null : d.histogram();
+        ReviewItem.Key key = d == null ? null : d.key();
+        if (!Objects.equals(key, shownDetailKey)) histogramCanvas.arm(PickTarget.NONE);
+        shownDetailKey = key;
+        histogramCanvas.show(h, d != null && d.region());
+        histogramBox.setVisible(h != null);
+        histogramBox.setManaged(h != null);
+        boolean canPick = d != null && d.canPickPeak() && h != null;
+        pickSlidePeak.setDisable(!canPick);
+        pickReferencePeak.setDisable(!canPick);
+        useAutomatic.setDisable(!(d != null && d.canPickPeak() && d.hasPickedPeak()));
+        if (!canPick) histogramCanvas.arm(PickTarget.NONE);
     }
 
     /**
@@ -373,4 +448,10 @@ public final class CohortGridPane extends BorderPane {
     public void setOnSampleSizeChanged(IntConsumer c) { onSampleSizeChanged = Objects.requireNonNull(c); }
     public void setOnOnlyLooksChanged(Consumer<Boolean> c) { onOnlyLooksChanged = Objects.requireNonNull(c); }
     public void setOnKey(Consumer<ReviewKey> c) { onKey = Objects.requireNonNull(c); }
+    /** A pick landed: the target and the LOG value clicked. */
+    public void setOnPickPeak(BiConsumer<PickTarget, Double> c) { onPickPeak = Objects.requireNonNull(c); }
+    /** "Use automatic": forget this slide's pick. */
+    public void setOnClearPeak(Runnable r) { onClearPeak = Objects.requireNonNull(r); }
+    /** The user chose another log scale; a re-render with the session's scale reverts a refused one. */
+    public void setOnScaleChanged(Consumer<LogScale> c) { onScaleChanged = Objects.requireNonNull(c); }
 }

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.BiFunction;
 
 /**
  * Runs the sampler and the scoring on the shared {@code flowpath-background} executor and lands
@@ -32,6 +33,12 @@ final class CohortCoordinator {
         void scored(boolean alignmentsChanged);
 
         /**
+         * The newest scoring request failed (logged); {@link #scoring()} is already false. The
+         * previous review stays in place, but whatever showed "re-aligning…" must render again.
+         */
+        void scoringFailed();
+
+        /**
          * The first scoring adopted after a run finished: {@code cache} holds every landmark that
          * run found, to be written to {@code file} — the cache file of the project the run was
          * started for, captured then, never looked up again — and {@code sampledCellsPerSlide},
@@ -45,6 +52,8 @@ final class CohortCoordinator {
     private final Executor background;
     private final Executor fxThread;
     private final Host host;
+    /** {@link CohortSession#score}; a seam only so a test can make a pass fail. */
+    private final BiFunction<CohortSession.Snapshot, GateTree, CohortSession.Scored> scorer;
     /** Read on the background thread to drop superseded work before it starts; written on the FX thread. */
     private volatile long sampleGeneration;
     private volatile long scoreGeneration;
@@ -65,10 +74,16 @@ final class CohortCoordinator {
     private int sampledCellsPerSlide = -1;
 
     CohortCoordinator(CohortSession session, Executor background, Executor fxThread, Host host) {
+        this(session, background, fxThread, host, CohortSession::score);
+    }
+
+    CohortCoordinator(CohortSession session, Executor background, Executor fxThread, Host host,
+                      BiFunction<CohortSession.Snapshot, GateTree, CohortSession.Scored> scorer) {
         this.session = Objects.requireNonNull(session);
         this.background = Objects.requireNonNull(background);
         this.fxThread = Objects.requireNonNull(fxThread);
         this.host = Objects.requireNonNull(host);
+        this.scorer = Objects.requireNonNull(scorer);
     }
 
     boolean sampling() { return sampling; }
@@ -180,7 +195,7 @@ final class CohortCoordinator {
         background.execute(() -> {
             if (generation != scoreGeneration) return;
             try {
-                CohortSession.Scored scored = CohortSession.score(snapshot, copy);
+                CohortSession.Scored scored = scorer.apply(snapshot, copy);
                 fxThread.execute(() -> {
                     if (generation != scoreGeneration) return;
                     scoring = false;
@@ -196,7 +211,10 @@ final class CohortCoordinator {
                 // executor and leave the previous review silently in place with no log line.
                 logger.error("Could not score the cohort; the previous review stays in place", ex);
                 fxThread.execute(() -> {
-                    if (generation == scoreGeneration) scoring = false;
+                    // A superseded failure says nothing: the newer request is still out.
+                    if (generation != scoreGeneration) return;
+                    scoring = false;
+                    host.scoringFailed();
                 });
             }
         });

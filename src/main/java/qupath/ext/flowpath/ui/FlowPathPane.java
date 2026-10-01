@@ -45,6 +45,8 @@ import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.AlignmentCacheFile;
 import qupath.ext.flowpath.io.CohortSettingsFile;
+import qupath.ext.flowpath.model.cohort.LogScale;
+import qupath.ext.flowpath.ui.cohort.CohortHistogramCanvas;
 import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
@@ -614,6 +616,9 @@ public class FlowPathPane extends BorderPane {
             renderCohort();
         });
         cohortGrid.setOnKey(this::onCohortKey);
+        cohortGrid.setOnPickPeak((target, u) -> setPickedPeak(target, cohort.scale().fromLog(u)));
+        cohortGrid.setOnClearPeak(() -> setPickedPeak(CohortHistogramCanvas.PickTarget.SLIDE, null));
+        cohortGrid.setOnScaleChanged(this::changeScale);
         // The sample size is part of the sampling key, so the refresh re-samples.
         cohortGrid.setOnSampleSizeChanged(n -> {
             CohortPrefs.setSampledCellsPerSlide(CohortPrefs.node(), n);
@@ -862,6 +867,12 @@ public class FlowPathPane extends BorderPane {
             updateBusyControls();
         }
 
+        /** The previous review stays; the banner's "re-aligning…" must go. */
+        @Override
+        public void scoringFailed() {
+            renderCohort();
+        }
+
         /**
          * The landmarks a finished run found are derived data: written in the background to the
          * cache file captured when that run started (see {@link CohortCoordinator#start}).
@@ -1036,9 +1047,65 @@ public class FlowPathPane extends BorderPane {
         if (cohortWindow.isOpen()) {
             cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks,
                             indexSlideId, cohortCoordinator.scoring()),
-                    CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
+                    CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()), cohort.scale());
         }
         syncCrop(cohort.selected(), cohort.stepOrder());
+    }
+
+    /**
+     * A picked negative peak (spec U2, UniFORM's landmark mode) for the grid's selected cell's
+     * axis-0 column, on this slide or on the reference; {@code raw == null} clears it. Project
+     * metadata ({@link CohortPeaks}), not a tree edit, so no undo step: "Use automatic" is the way
+     * back. A failed save shows an error and changes nothing; otherwise the session takes the
+     * project's peaks and the cohort rescores through the one coordinator.
+     */
+    private void setPickedPeak(CohortHistogramCanvas.PickTarget target, Double raw) {
+        Project<BufferedImage> project = qupath.getProject();
+        ReviewItem.Key key = gridSelection;
+        if (project == null || key == null || target == null || target == CohortHistogramCanvas.PickTarget.NONE) return;
+        if (raw != null && !Double.isFinite(raw)) return;
+        GateNode gate = CohortSession.liveGate(session.tree(), key);
+        if (gate == null || gate.getChannels().isEmpty() || gate.getChannels().get(0) == null) return;
+        String column = new AlignmentModel.ColumnRef(gate.getChannels().get(0), gate.compartmentAt(0),
+                gate.statisticAt(0)).key();
+        String slideId = target == CohortHistogramCanvas.PickTarget.SLIDE ? key.slideId()
+                : cohort.model().referenceSlideId();
+        if (slideId == null) return;
+        CohortPeaks peaks = CohortPeaks.of(project);
+        try {
+            peaks.setPeak(slideId, column, raw);
+        } catch (IOException e) {
+            logger.error("Could not save the picked peak of {} on {}", column, slideId, e);
+            Dialogs.showErrorMessage("FlowPath", "Could not save the picked peak: " + e.getMessage());
+            return;
+        }
+        cohort.setPeaks(peaks.peaks());
+        cohortCoordinator.rescore(session.tree());
+        renderCohort();
+    }
+
+    /**
+     * The project's log scale (spec U4), written to {@code cohort-settings.json} first so a
+     * headless run uses the same one. A failed write shows an error and re-renders, which puts
+     * the chooser back on the session's scale.
+     */
+    private void changeScale(LogScale scale) {
+        Project<BufferedImage> project = qupath.getProject();
+        if (project == null || scale == null || scale == cohort.scale()) {
+            renderCohort();
+            return;
+        }
+        try {
+            CohortSettingsFile.write(CohortSettingsFile.pathFor(ProjectSlides.projectDir(project)), scale);
+        } catch (IOException e) {
+            logger.error("Could not save the cohort's log scale", e);
+            Dialogs.showErrorMessage("FlowPath", "Could not save the cohort settings: " + e.getMessage());
+            renderCohort();
+            return;
+        }
+        cohort.setScale(scale);
+        cohortCoordinator.rescore(session.tree());
+        renderCohort();
     }
 
     /**
