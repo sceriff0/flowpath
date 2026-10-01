@@ -319,7 +319,7 @@ class MarkerRulesTest {
     void ruleFindingsMergeIntoTheReviewListAndAReviewHidesThem() {
         GateTree tree = treeWithSameChannelTwin();
         List<SlideSample> samples = cohort();
-        AlignmentModel model = AlignmentModel.build("s1", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("s1", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         ReviewScorer.Result result = ReviewScorer.score(tree, samples, model);
         ReviewItem item = result.items().stream()
                 .filter(i -> i.key().equals(new ReviewItem.Key("bad", 0, "CD3"))).findFirst().orElseThrow();
@@ -340,7 +340,7 @@ class MarkerRulesTest {
     void theMergedListStaysTopDown() {
         GateTree tree = treeWithSameChannelTwin();
         List<SlideSample> samples = cohort();
-        AlignmentModel model = AlignmentModel.build("s1", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("s1", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         List<ReviewItem> items = ReviewScorer.score(tree, samples, model).items();
         List<String> slideOrder = samples.stream().map(SlideSample::slideId).toList();
         List<GateNode> gateOrder = qupath.ext.flowpath.model.GateWalk.enabled(tree).stream()

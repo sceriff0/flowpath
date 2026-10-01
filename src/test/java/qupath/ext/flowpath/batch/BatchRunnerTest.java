@@ -336,7 +336,7 @@ class BatchRunnerTest {
         GateTree tree = tree();
         List<qupath.ext.flowpath.cohort.SlideSample> samples = List.of(sample("ref", 1, 0.0), sample("s1", 2, 0.2));
         qupath.ext.flowpath.cohort.AlignmentModel model = qupath.ext.flowpath.cohort.AlignmentModel.build("ref", samples,
-                qupath.ext.flowpath.cohort.AlignmentModel.columnsOf(tree), qupath.ext.flowpath.cohort.AlignmentModel.Cache.empty());
+                qupath.ext.flowpath.cohort.AlignmentModel.columnsOf(tree), qupath.ext.flowpath.cohort.AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         String column = qupath.ext.flowpath.cohort.AlignmentModel.columnsOf(tree).stream()
                 .map(qupath.ext.flowpath.cohort.AlignmentModel.ColumnRef::key)
                 .filter(k -> model.landmarks("s1", k) != null && model.referenceLandmarks(k) != null)

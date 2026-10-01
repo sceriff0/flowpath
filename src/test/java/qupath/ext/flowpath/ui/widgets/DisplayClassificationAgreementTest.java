@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.ui.widgets;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
@@ -477,20 +476,19 @@ class DisplayClassificationAgreementTest {
         });
     }
 
-    @Disabled("rewritten in Task 3")
     @Test
     void thresholdGateAgreesUnderANonIdentityAlignment() {
         assumeTrue(FxTestSupport.toolkitAvailable());
         GateNode gate = named(new GateNode(MX, 0.5));
         GateNode sibling = sameChannelSibling();
-        double[] px = {-1.0, 0.0, 0.5, 1.0, 1.2, 2.0, 5.0};
+        double[] px = {-1.0, 0.0, 0.5, 0.6, 1.2, 2.0, 5.0};
         CellIndex index = indexOf(px, new double[px.length]);
         int[][] classified = classifyOnSlide(gate, sibling, index);
         double[] shown = aligned(columnOf(index, MX));
         assertArrayEquals(classified[0], displayThreshold(gate, shown));
         assertArrayEquals(classified[1], displayThreshold(sibling, shown), "the same-channel sibling");
-        assertNotEquals(classified[0][3], new GateNode(MX, 0.5).branchFor(1.0, 0),
-                "fixture check: the alignment moves the cut past 1.0");
+        assertNotEquals(classified[0][3], new GateNode(MX, 0.5).branchFor(0.6, 0),
+                "fixture check: the factor (e^0.3) moves the cut past 0.6");
     }
 
     @Test

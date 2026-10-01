@@ -11,13 +11,21 @@ import static org.junit.jupiter.api.Assertions.*;
 class ReviewGroupTest {
 
     static AlignmentModel model(GateTree tree, List<SlideSample> samples) {
-        return AlignmentModel.build(tree.getReferenceSlideId(), samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        return AlignmentModel.build(tree.getReferenceSlideId(), samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
+    }
+
+    /** The shared cohort plus a slide with no negative peak, which both CD8 roots flag. */
+    static List<SlideSample> samples() {
+        List<SlideSample> s = ReviewScorerTest.cohort();
+        s.add(ReviewScorerTest.flat());
+        return s;
     }
 
     @Test
     void itemsGroupByGateTopDownAndSameChannelRootsStayApart() {
         GateTree tree = ReviewScorerTest.tree();                 // two CD8 roots
-        List<ReviewItem> items = ReviewScorer.score(tree, ReviewScorerTest.cohort(), model(tree, ReviewScorerTest.cohort())).items();
+        List<SlideSample> samples = samples();
+        List<ReviewItem> items = ReviewScorer.score(tree, samples, model(tree, samples)).items();
         List<ReviewGroup> groups = ReviewGroup.of(items);
         assertEquals(List.of(new ReviewGroup.Key(0, "CD8"), new ReviewGroup.Key(1, "CD8")),
                 groups.stream().map(ReviewGroup::key).toList());
@@ -27,7 +35,7 @@ class ReviewGroupTest {
     @Test
     void oneAnswerReviewsTheWholeGroupAndEmptiesIt() {
         GateTree tree = ReviewScorerTest.tree();
-        List<SlideSample> samples = ReviewScorerTest.cohort();
+        List<SlideSample> samples = samples();
         AlignmentModel m = model(tree, samples);
         ReviewGroup group = ReviewGroup.of(ReviewScorer.score(tree, samples, m).items()).get(1);
         int reviewed = ReviewAnswers.looksRightAll(tree, group, m::alignment);
@@ -59,7 +67,7 @@ class ReviewGroupTest {
     @Test
     void anAnswerGivenSinceTheListWasScoredIsLeftAlone() {
         GateTree tree = ReviewScorerTest.tree();
-        List<SlideSample> samples = ReviewScorerTest.cohort();
+        List<SlideSample> samples = samples();
         AlignmentModel m = model(tree, samples);
         ReviewGroup group = ReviewGroup.of(ReviewScorer.score(tree, samples, m).items()).get(1);
         assertTrue(group.slideIds().size() >= 2, "the fixture flags root 1 on several slides");

@@ -51,7 +51,7 @@ public final class AlignmentCacheFile {
                     JsonObject c = col.getValue().getAsJsonObject();
                     columns.put(col.getKey(), new Landmarks(scale, optDouble(c, "l1"), optDouble(c, "l2")));
                 }
-                slides.put(slide.getKey(), new AlignmentModel.SlideEntry(s.get("fingerprint").getAsString(), columns));
+                slides.put(slide.getKey(), new AlignmentModel.SlideEntry(s.get("fingerprint").getAsString(), scale, columns));
             }
             return new AlignmentModel.Cache(slides);
         } catch (IOException | RuntimeException e) {
@@ -78,8 +78,8 @@ public final class AlignmentCacheFile {
 
     /**
      * Writes {@code cache} to {@code file}, creating the {@code flowpath} directory if needed,
-     * recording the sample size its landmarks were found from and the scale each
-     * slide's landmarks are in. An empty cache is never written: it holds nothing worth
+     * recording the sample size its landmarks were found from and each slide's one
+     * {@link AlignmentModel.SlideEntry#scale} (also the suffix of its fingerprint). An empty cache is never written: it holds nothing worth
      * keeping, and over an existing file it would throw away every landmark.
      */
     public static void write(Path file, AlignmentModel.Cache cache, int sampledCellsPerSlide) throws IOException {
@@ -92,8 +92,7 @@ public final class AlignmentCacheFile {
             JsonObject s = new JsonObject();
             s.addProperty("fingerprint", entry.fingerprint());
             JsonObject columns = new JsonObject();
-            LogScale scale = entry.columns().values().stream().findFirst().map(Landmarks::scale).orElse(LogScale.LN);
-            s.addProperty("scale", scale.token());
+            s.addProperty("scale", entry.scale().token());
             entry.columns().forEach((key, lm) -> {
                 JsonObject c = new JsonObject();
                 if (lm.hasL1()) c.addProperty("l1", lm.l1());

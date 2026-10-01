@@ -76,7 +76,8 @@ class CohortSessionStripTest {
     /** Task 16 carry: with a group selected, N / P step only through its items. */
     @Test
     void stepWrapsThroughOnlyTheGroupsItemsUnderAGroupSelection() {
-        CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree());
+        // The flat slide has no negative peak, so both roots are flagged on it: two groups.
+        CohortSession s = CohortSessionTest.sampledSession(ReviewScorerTest.tree(), ReviewScorerTest.flat());
         List<ReviewGroup> groups = s.groups();
         assertTrue(groups.size() >= 2, "fixture check: more than one group");
         ReviewGroup group = groups.get(1);

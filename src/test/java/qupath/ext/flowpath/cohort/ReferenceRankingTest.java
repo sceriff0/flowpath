@@ -76,10 +76,10 @@ class ReferenceRankingTest {
         assertEquals(List.of("no negative peak on CD8"), r.rank("flat").ineligibleBecause());
         String key = cols(tree).iterator().next().key();
         // The engine agrees: with "flat" as reference, its own landmarks have no L1 ...
-        AlignmentModel asFlat = AlignmentModel.build("flat", s, cols(tree), AlignmentModel.Cache.empty());
+        AlignmentModel asFlat = AlignmentModel.build("flat", s, cols(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         assertFalse(asFlat.referenceLandmarks(key).hasL1());
         // ... and with the suggestion as reference, they do.
-        AlignmentModel asSuggested = AlignmentModel.build(r.suggestedId(), s, cols(tree), AlignmentModel.Cache.empty());
+        AlignmentModel asSuggested = AlignmentModel.build(r.suggestedId(), s, cols(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         assertTrue(asSuggested.referenceLandmarks(key).hasL1());
     }
 

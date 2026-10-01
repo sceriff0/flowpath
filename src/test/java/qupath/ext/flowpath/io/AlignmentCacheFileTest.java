@@ -19,7 +19,7 @@ class AlignmentCacheFileTest {
         Path file = AlignmentCacheFile.pathFor(project);
         assertEquals(project.resolve("flowpath").resolve("alignment-cache.json"), file);
         AlignmentModel.Cache cache = new AlignmentModel.Cache(
-                Map.of("a3f", new AlignmentModel.SlideEntry("fp", Map.of("CD8: Cell: Median",
+                Map.of("a3f", new AlignmentModel.SlideEntry("fp", LogScale.LN, Map.of("CD8: Cell: Median",
                         new Landmarks(LogScale.LN, 1.25, Double.NaN)))));
         AlignmentCacheFile.write(file, cache, 5000);
         AlignmentModel.Cache back = AlignmentCacheFile.read(file);
@@ -38,9 +38,10 @@ class AlignmentCacheFileTest {
     void theScaleRoundTripsPerSlide(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
         AlignmentModel.Cache cache = new AlignmentModel.Cache(
-                Map.of("now", new AlignmentModel.SlideEntry("f1", Map.of("CD8", new Landmarks(LogScale.LN1P, 1.0, 3.0)))));
+                Map.of("now", new AlignmentModel.SlideEntry("f1", LogScale.LN1P, Map.of("CD8", new Landmarks(LogScale.LN1P, 1.0, 3.0)))));
         AlignmentCacheFile.write(file, cache, 5000);
         assertEquals(LogScale.LN1P, AlignmentCacheFile.read(file).slides().get("now").columns().get("CD8").scale());
+        assertEquals(LogScale.LN1P, AlignmentCacheFile.read(file).slides().get("now").scale(), "one scale per slide entry");
     }
 
     /** An earlier FlowPath's cache (version 1, asinh landmarks) is ignored, never converted. */
@@ -70,7 +71,7 @@ class AlignmentCacheFileTest {
     void anEmptyCacheNeverOverwritesAStoredOne(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
         AlignmentModel.Cache cache = new AlignmentModel.Cache(
-                Map.of("a", new AlignmentModel.SlideEntry("f", Map.of("CD8", new Landmarks(LogScale.LN, 1.0, 2.0)))));
+                Map.of("a", new AlignmentModel.SlideEntry("f", LogScale.LN, Map.of("CD8", new Landmarks(LogScale.LN, 1.0, 2.0)))));
         AlignmentCacheFile.write(file, cache, 5000);
         AlignmentCacheFile.write(file, AlignmentModel.Cache.empty(), 1);
         assertEquals(1.0, AlignmentCacheFile.read(file).slides().get("a").columns().get("CD8").l1());

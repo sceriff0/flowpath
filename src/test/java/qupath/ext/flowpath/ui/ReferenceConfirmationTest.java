@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.ui;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.cohort.CohortSampler;
 import qupath.ext.flowpath.cohort.CohortSession;
@@ -87,7 +86,6 @@ class ReferenceConfirmationTest {
     }
 
     /** Undo past a confirmation leaves correction consistent: no reference, every slide on the reference numbers. */
-    @Disabled("rewritten in Task 3")
     @Test
     void undoingTheConfirmationLeavesCorrectionConsistent() {
         GatingSession session = new GatingSession(() -> 0L, input -> {});

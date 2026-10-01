@@ -8,6 +8,7 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.CohortStats;
+import qupath.ext.flowpath.model.cohort.LogScale;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -293,7 +294,8 @@ public final class CohortSession {
             // here would throw them away and the next write would lose them.
             return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), ranking, samples, rankingKey);
         }
-        AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache());
+        AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache(),
+                LogScale.LN, Map.of());   // Task 5 plumbs the project scale and picked peaks
         ReviewScorer.Result review = ReviewScorer.score(treeCopy, samples, model);
         List<String> keys = columns.stream().map(AlignmentModel.ColumnRef::key).toList();
         return new Scored(model, review, keys, ranking, samples, rankingKey);

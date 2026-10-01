@@ -7,7 +7,6 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
-import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.lib.images.servers.ImageChannel;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.regions.RegionRequest;
@@ -70,7 +69,7 @@ public final class EvidenceCrop {
         GateNode gate = CohortSession.liveGate(tree, item.key());
         if (gate == null || gate.getChannels().isEmpty()) return null;
         String slideId = item.key().slideId();
-        BoundaryHotspot.Boundary boundary = BoundaryHotspot.ofSample(tree, gate, sample, lookup, LogScale.LN);
+        BoundaryHotspot.Boundary boundary = BoundaryHotspot.ofSample(tree, gate, sample, lookup, model.scale());
         BoundaryHotspot.Hotspot hot = BoundaryHotspot.hotspot(sample.index(), boundary.cells(), fieldPixels);
         if (hot == null) return null;
 

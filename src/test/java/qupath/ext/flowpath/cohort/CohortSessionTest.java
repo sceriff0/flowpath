@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.cohort;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.TreeResolver;
@@ -12,6 +11,7 @@ import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -24,10 +24,19 @@ class CohortSessionTest {
     }
 
     static CohortSession sampledSession(GateTree tree) {
+        return sampledSession(tree, new SlideSample[0]);
+    }
+
+    /** As {@link #sampledSession(GateTree)}, with {@code extra} slides in the project and sampled too. */
+    static CohortSession sampledSession(GateTree tree, SlideSample... extra) {
         CohortSession s = new CohortSession();
-        s.setProjectSlides(refs("ref", "s1", "s2", "odd"));
+        List<String> ids = new ArrayList<>(List.of("ref", "s1", "s2", "odd"));
+        for (SlideSample e : extra) ids.add(e.slideId());
+        s.setProjectSlides(refs(ids.toArray(String[]::new)));
         s.samplingStarted();
-        for (SlideSample sample : ReviewScorerTest.cohort()) s.landed(new CohortSampler.Sampled(sample));
+        List<SlideSample> samples = ReviewScorerTest.cohort();
+        samples.addAll(List.of(extra));
+        for (SlideSample sample : samples) s.landed(new CohortSampler.Sampled(sample));
         s.samplingFinished();
         s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
         return s;
@@ -283,7 +292,6 @@ class CohortSessionTest {
     }
 
     /** Fix 5: the feedback-loop guard must also say yes. */
-    @Disabled("rewritten in Task 3")
     @Test
     void adoptReportsAChangeWhenTheReferenceMovesOrASlideArrives() {
         GateTree tree = ReviewScorerTest.tree();

@@ -110,7 +110,7 @@ class EvidenceCropTest {
     void theSpecCentresOnTheItemsOwnGatesHotspotAndMapsTheReferenceLandmarks() {
         List<SlideSample> samples = placedCohort();
         GateTree tree = twoRootsOnCd8();
-        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
 
         EvidenceCrop.Spec second = EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model,
                 model::alignment, 512);
@@ -139,7 +139,7 @@ class EvidenceCropTest {
         List<SlideSample> samples = placedCohort();
         GateTree tree = twoRootsOnCd8();
         tree.getRoots().get(1).setCorrectStaining(false);
-        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
 
         EvidenceCrop.Spec spec = EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model,
                 model::alignment, 512);
@@ -153,7 +153,7 @@ class EvidenceCropTest {
         List<SlideSample> samples = placedCohort();
         GateTree tree = twoRootsOnCd8();
         tree.getRoots().get(1).setThreshold(1e9);
-        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         assertNull(EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model, model::alignment, 512));
     }
 
@@ -171,7 +171,7 @@ class EvidenceCropTest {
     void aSpecOverPointDetectionsRendersWithEachCellAsADot() {
         List<SlideSample> samples = placedCohort();
         GateTree tree = twoRootsOnCd8();
-        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+        AlignmentModel model = AlignmentModel.build("ref", samples, AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         EvidenceCrop.Spec spec = EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model,
                 model::alignment, 512);
         assertFalse(spec.outlines().isEmpty());

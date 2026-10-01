@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.cohort;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
@@ -56,7 +55,7 @@ class ReviewScorerTest {
 
     static ReviewScorer.Result score(GateTree tree, List<SlideSample> samples) {
         AlignmentModel model = AlignmentModel.build(tree.getReferenceSlideId(), samples,
-                AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty());
+                AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(), qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
         return ReviewScorer.score(tree, samples, model);
     }
 
@@ -74,24 +73,39 @@ class ReviewScorerTest {
         assertEquals(new ReviewItem.Key("s1", 1, "CD8"), onPeak.key());
     }
 
-    @Disabled("rewritten in Task 3")
+    /**
+     * A much brighter slide is corrected by its factor rather than flagged "unusual staining" (that
+     * check is gone); how far its shift sits from the cohort's is a diagnostic the problem layer reads.
+     */
     @Test
-    void unusualStainingIsFlaggedWithItsReason() {
-        ReviewItem odd = itemsFor(score(tree(), cohort()), "odd", 0).get(0);
-        assertTrue(odd.flags().contains(UNUSUAL_STAINING));
-        assertTrue(odd.reasons().get(0).endsWith("brighter than typical"), odd.reasons().toString());
+    void aBrighterSlideIsCorrectedAndItsShiftIsReportedAsAnOutlier() {
+        GateTree tree = tree();
+        List<SlideSample> samples = cohort();
+        ReviewScorer.Result r = score(tree, samples);
+        assertTrue(r.items().stream().noneMatch(i -> i.flags().contains(UNUSUAL_STAINING)));
+        AlignmentModel model = AlignmentModel.build(tree.getReferenceSlideId(), samples,
+                AlignmentModel.columnsOf(tree), AlignmentModel.Cache.empty(),
+                qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of());
+        String column = AlignmentModel.columnsOf(tree).iterator().next().key();
+        assertEquals(1.2, model.alignment("odd", column).logShift(), 0.1, "corrected by about e^1.2");
+        assertTrue(model.diagnostics("odd", column).shiftOutlier());
+        assertFalse(model.diagnostics("s1", column).shiftOutlier());
     }
 
-    @Disabled("rewritten in Task 3")
+    /** A slide with no negative peak on the log scale: ln values exponentially distributed, densest at the edge. */
+    static SlideSample flat() {
+        Random r = new Random(9);
+        double[] flat = new double[3000];
+        for (int i = 0; i < flat.length; i++) flat[i] = Math.exp(-Math.log(1 - r.nextDouble()));
+        CellIndex index = Cells.of(flat.length).marker("CD3", i -> 1.0).marker("CD8", flat).build();
+        return new SlideSample("flat", "flat.tif", index, Cells.allTrue(flat.length),
+                MarkerStats.compute(index), flat.length, "f");
+    }
+
     @Test
     void noLandmarkOnlyWhenCorrectionIsOn() {
         List<SlideSample> samples = cohort();
-        Random r = new Random(9);
-        double[] flat = new double[3000];
-        for (int i = 0; i < flat.length; i++) flat[i] = 100 * Math.sinh(-Math.log(1 - r.nextDouble()));
-        CellIndex index = Cells.of(flat.length).marker("CD3", i -> 1.0).marker("CD8", flat).build();
-        samples.add(new SlideSample("flat", "flat.tif", index, Cells.allTrue(flat.length),
-                MarkerStats.compute(index), flat.length, "f"));
+        samples.add(flat());
         GateTree tree = tree();
         ReviewItem item = itemsFor(score(tree, samples), "flat", 0).get(0);
         assertTrue(item.flags().contains(NO_LANDMARK));
@@ -108,12 +122,7 @@ class ReviewScorerTest {
     @Test
     void noLandmarkIsNotFlaggedWhileTheReferenceIsNotInTheProject() {
         List<SlideSample> samples = new ArrayList<>(cohort().subList(1, 4));
-        Random r = new Random(9);
-        double[] flat = new double[3000];
-        for (int i = 0; i < flat.length; i++) flat[i] = 100 * Math.sinh(-Math.log(1 - r.nextDouble()));
-        CellIndex index = Cells.of(flat.length).marker("CD3", i -> 1.0).marker("CD8", flat).build();
-        samples.add(new SlideSample("flat", "flat.tif", index, Cells.allTrue(flat.length),
-                MarkerStats.compute(index), flat.length, "f"));
+        samples.add(flat());
         GateTree tree = tree();
         assertTrue(samples.stream().noneMatch(s -> s.slideId().equals(tree.getReferenceSlideId())));
         ReviewScorer.Result result = score(tree, samples);

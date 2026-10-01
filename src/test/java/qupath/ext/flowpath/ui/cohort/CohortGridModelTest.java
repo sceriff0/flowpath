@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.ui.cohort;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.ReviewItem;
@@ -111,7 +110,6 @@ class CohortGridModelTest {
         assertEquals(m1.detail().title(), m2.detail().title());
     }
 
-    @Disabled("rewritten in Task 3")
     @Test
     void detailShowsReferenceAndAppliedValues() {
         GateTree tree = CohortFixtures.twoCd8Roots();

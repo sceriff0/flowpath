@@ -110,7 +110,7 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         List<SlideSample> samples = session.samples();
         for (SlideSample s : samples) {
             AlignmentModel.SlideEntry cached = cache.slides().get(s.slideId());
-            if (cached != null && cached.fingerprint().equals(s.cacheKey())) hits++;
+            if (cached != null && cached.fingerprint().equals(AlignmentModel.fingerprint(s, session.model().scale()))) hits++;
         }
         String referenceName = slides.stream().filter(s -> s.id().equals(tree.getReferenceSlideId()))
                 .map(BatchSlide::name).findFirst().orElse(null);

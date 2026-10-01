@@ -161,7 +161,7 @@ class CohortCleanScopeTest {
         GateTree tree = tree();
         CohortSession s = session(alternating(), tree, tree);
         String key = s.sample("s1").cacheKey();
-        assertEquals(key, s.model().cache().slides().get("s1").fingerprint());
+        assertEquals(key + "|ln", s.model().cache().slides().get("s1").fingerprint());
         Landmarks first = s.model().landmarks("s1", "CD8");
 
         // A gate edit changes no filter: the same key, the cached landmarks reused as they are.
@@ -177,7 +177,7 @@ class CohortCleanScopeTest {
         rescore(s, filtered);
         String filteredKey = s.sample("s1").cacheKey();
         assertNotEquals(key, filteredKey);
-        assertEquals(filteredKey, s.model().cache().slides().get("s1").fingerprint());
+        assertEquals(filteredKey + "|ln", s.model().cache().slides().get("s1").fingerprint());
         assertNotSame(first, s.model().landmarks("s1", "CD8"));
 
         // The same ROI flag and filter from another tree object: the same key again.

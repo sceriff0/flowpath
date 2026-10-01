@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.batch;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.cohort.AlignmentModel;
@@ -477,7 +476,6 @@ class FlowPathBatchTest {
         };
     }
 
-    @Disabled("rewritten in Task 3")
     @Test
     void anExcludedSlideIsGatedUncorrectedAndFlaggedInQc(@TempDir Path dir) throws Exception {
         java.util.function.Supplier<Cells> shifted = () -> Cells.of(200).atGrid(10, 10)
@@ -489,9 +487,9 @@ class FlowPathBatchTest {
 
         List<String> qc = Files.readAllLines(dir.resolve("qc_summary.csv"));
         assertTrue(qc.contains("c,c.tif,cohort_excluded,,1"), "1: " + qc);
-        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,staining_offset,")),
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,staining_factor,CD3,") && !l.endsWith(",1.0000")),
                 "the same data on an included slide IS corrected: " + qc);
-        assertTrue(qc.stream().noneMatch(l -> l.startsWith("c,c.tif,staining_offset,")), "3: " + qc);
+        assertTrue(qc.stream().noneMatch(l -> l.startsWith("c,c.tif,staining_factor,")), "3: " + qc);
 
         List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
         List<String> rows = manifest.stream().filter(l -> l.startsWith("c,c.tif,")).toList();

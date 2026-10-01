@@ -107,12 +107,6 @@ public final class ReviewScorer {
                         reasons.add("No clear negative peak — not corrected");
                     }
 
-                    String unusual = model.unusualStaining(s.slideId(), column);
-                    if (unusual != null) {
-                        flags.add(ReviewItem.Flag.UNUSUAL_STAINING);
-                        reasons.add(unusual);
-                    }
-
                     MeasuredColumn measuredColumn = s.index().column(gate, k, s.stats());
                     double[] raw = measuredColumn.values();
 
@@ -134,8 +128,7 @@ public final class ReviewScorer {
                     }
 
                     if (oneDimensionalCut) {
-                        // Task 3 switches this to model.scale().
-                        LogScale scale = LogScale.LN;
+                        LogScale scale = model.scale();
                         Density density = Density.of(Landmarks.toLog(raw, parent, scale));
                         double u = scale.toLog(applied.applied().axis(k)[0]);
                         if (!Double.isNaN(u)) {

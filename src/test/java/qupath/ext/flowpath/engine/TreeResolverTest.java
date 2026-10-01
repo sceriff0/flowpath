@@ -1,6 +1,5 @@
 package qupath.ext.flowpath.engine;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.EllipseGate;
@@ -195,12 +194,11 @@ class TreeResolverTest {
      * extent) unchanged rather than mapping it, so the reported applied value must be read back
      * from the copy the gate actually holds, not computed from {@code reference.map(...)}.
      */
-    @Disabled("rewritten in Task 3")
     @Test
     void aDegenerateRectangleUnderCorrectionReportsTheNumbersTheCopyActuallyHolds() {
         GateTree tree = new GateTree();
         tree.setReferenceSlideId("ref");
-        RectangleGate rect = new RectangleGate("CD3", "CD4", 0, 0, 0, 0);
+        RectangleGate rect = new RectangleGate("CD3", "CD4", 5, 5, 5, 5);
         rect.setStatisticX(Statistic.MEAN);
         rect.setStatisticY(Statistic.MEAN);
         tree.addRoot(rect);
@@ -208,16 +206,17 @@ class TreeResolverTest {
         TreeResolver.ResolvedTree r = TreeResolver.resolve(tree, "s1", lookup(Map.of("CD3", BRIGHTER, "CD4", BRIGHTER)));
         assertEquals(List.of(CORRECTED, CORRECTED), r.applied(rect).sources());
         RectangleGate resolved = (RectangleGate) r.resolvedOf(rect);
-        // remapCoordinates refused to touch a zero-extent rectangle, so it is still (0,0,0,0) --
-        // not BRIGHTER.apply(0), which is a different, nonzero number for this non-identity map.
-        assertEquals(0.0, resolved.getMinX());
-        assertEquals(0.0, resolved.getMaxX());
-        assertEquals(0.0, resolved.getMinY());
-        assertEquals(0.0, resolved.getMaxY());
+        // remapCoordinates refused to touch a zero-extent rectangle, so it is still (5,5,5,5) --
+        // not BRIGHTER.apply(5), a different number for this factor (a factor maps 0 to 0, so the
+        // fixture sits at 5 to tell the two apart).
+        assertEquals(5.0, resolved.getMinX());
+        assertEquals(5.0, resolved.getMaxX());
+        assertEquals(5.0, resolved.getMinY());
+        assertEquals(5.0, resolved.getMaxY());
         TreeResolver.Applied applied = r.applied(rect);
-        assertEquals(0.0, applied.applied().axis(0)[0]);
-        assertEquals(0.0, applied.applied().axis(0)[1]);
-        assertNotEquals(BRIGHTER.apply(0.0), applied.applied().axis(0)[1],
+        assertEquals(5.0, applied.applied().axis(0)[0]);
+        assertEquals(5.0, applied.applied().axis(0)[1]);
+        assertNotEquals(BRIGHTER.apply(5.0), applied.applied().axis(0)[1],
                 "the reported value must be what the copy holds, not the unmapped-but-computed reference.map()");
     }
 
