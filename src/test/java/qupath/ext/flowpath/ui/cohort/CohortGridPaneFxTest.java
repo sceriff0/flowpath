@@ -18,17 +18,23 @@ class CohortGridPaneFxTest {
     @BeforeAll
     static void fx() throws InterruptedException { FxTestSupport.startToolkit(); }
 
+    private static final CohortGridModel.Cell REFERENCE_CELL =
+            new CohortGridModel.Cell(CohortGridModel.CellMark.REFERENCE, "★", "The reference row", List.of());
+    private static final CohortGridModel.Cell LOOK_CELL = new CohortGridModel.Cell(CohortGridModel.CellMark.LOOK,
+            "⋀", "Needs a look", List.of(ReviewItem.Flag.ON_PEAK));
+
     private static CohortGridModel model() {
         var cols = List.of(new CohortGridModel.Column(0, "CD8", "CD8"));
         var rows = List.of(
-                new CohortGridModel.Row("1", "slide_A", true, CohortGridModel.RowStatus.READY, "", 2000,
-                        List.of(CohortGridModel.CellMark.OK), 0, false, false, -1),
-                new CohortGridModel.Row("2", "slide_B", false, CohortGridModel.RowStatus.READY, "", 2000,
-                        List.of(CohortGridModel.CellMark.LOOK), 1, true, true, 0));
+                new CohortGridModel.Row("1", "slide_A", true, false, CohortGridModel.RowStatus.READY, "", 2000,
+                        List.of(REFERENCE_CELL), 0, false, false, -1),
+                new CohortGridModel.Row("2", "slide_B", false, true, CohortGridModel.RowStatus.READY, "", 2000,
+                        List.of(LOOK_CELL), 1, true, true, 0));
         var banner = new CohortGridModel.Banner("★ slide_A · most central of 2", "2", "slide_B",
                 List.of("Suggested: slide_B — most central on 1 of 1 gated columns"));
         var detail = new CohortGridModel.Detail(new ReviewItem.Key("2", 0, "CD8"), "slide_B · CD8",
-                CohortGridModel.CellMark.LOOK, List.of("Threshold sits on a peak, not in a valley"), "412", "587");
+                CohortGridModel.CellMark.LOOK, List.of("Threshold sits on a peak, not in a valley"),
+                "reference 412 → this slide 587", "×1.42 · automatic (UniFORM)", "", null, true, false);
         return new CohortGridModel(banner, cols, rows, detail);
     }
 
@@ -53,7 +59,7 @@ class CohortGridPaneFxTest {
         CohortGridPane pane = FxTestSupport.onFx(CohortGridPane::new);
         FxTestSupport.onFxRun(() -> pane.render(model(), 20000));
         String text = FxTestSupport.onFx(() -> pane.detailThresholdLabel.getText());
-        assertEquals("412 → 587", text);
+        assertEquals("reference 412 → this slide 587", text);
     }
 
     @Test
@@ -66,7 +72,8 @@ class CohortGridPaneFxTest {
         CohortGridModel m = model();
         var d = m.detail();
         var reviewed = new CohortGridModel.Detail(d.key(), d.title(), CohortGridModel.CellMark.REVIEWED,
-                d.reasons(), d.referenceValue(), d.appliedValue());
+                d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), d.histogram(), d.canPickPeak(),
+                d.hasPickedPeak());
         FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), m.columns(), m.rows(), reviewed), 20000));
         assertTrue(FxTestSupport.onFx(() -> pane.looksRight.isDisable()));
         assertTrue(FxTestSupport.onFx(() -> pane.skip.isDisable()));
@@ -92,8 +99,8 @@ class CohortGridPaneFxTest {
 
         var cols = List.of(new CohortGridModel.Column(0, "CD8", "CD8"), new CohortGridModel.Column(0, "CD4", "CD4"));
         var m = model();
-        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.status(),
-                r.statusText(), r.cells(), List.of(r.marks().get(0), r.marks().get(0)), r.lookCount(), r.canExclude(),
+        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.open(),
+                r.status(), r.statusText(), r.cellCount(), List.of(r.cells().get(0), r.cells().get(0)), r.lookCount(), r.canExclude(),
                 r.canBeReference(), r.selectedColumn())).toList();
         FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), cols, rows, m.detail()), 20000));
         var rebuilt = FxTestSupport.onFx(() -> List.copyOf(pane.table.getColumns()));
@@ -133,8 +140,8 @@ class CohortGridPaneFxTest {
     }
 
     private static CohortGridModel withSelection(CohortGridModel m, String slideId, List<String> notes) {
-        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.status(),
-                r.statusText(), r.cells(), r.marks(), r.lookCount(), r.canExclude(), r.canBeReference(),
+        var rows = m.rows().stream().map(r -> new CohortGridModel.Row(r.slideId(), r.name(), r.reference(), r.open(),
+                r.status(), r.statusText(), r.cellCount(), r.cells(), r.lookCount(), r.canExclude(), r.canBeReference(),
                 r.slideId().equals(slideId) ? 0 : -1)).toList();
         return new CohortGridModel(m.banner(), m.columns(), rows, m.detail(), notes);
     }
@@ -151,7 +158,7 @@ class CohortGridPaneFxTest {
             pane.layout();
         });
         assertEquals("2", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()));
-        assertEquals(List.of("⚠"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
+        assertEquals(List.of("⋀"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
 
         FxTestSupport.onFxRun(() -> {
             pane.render(withSelection(model(), "1", List.of()), 20000);
@@ -160,7 +167,7 @@ class CohortGridPaneFxTest {
         });
         assertEquals("1", FxTestSupport.onFx(() -> pane.table.getSelectionModel().getSelectedItem().slideId()),
                 "N / P moved the selection to another slide: the row follows");
-        assertEquals(List.of("✓"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
+        assertEquals(List.of("★"), FxTestSupport.onFx(() -> selectedCellTexts(pane)));
 
         FxTestSupport.onFxRun(() -> {
             pane.render(withSelection(model(), null, List.of()), 20000);

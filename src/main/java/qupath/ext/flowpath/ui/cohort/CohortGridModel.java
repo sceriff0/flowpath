@@ -3,6 +3,7 @@ package qupath.ext.flowpath.ui.cohort;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
+import qupath.ext.flowpath.cohort.ColumnDiagnostics;
 import qupath.ext.flowpath.cohort.ReferenceRanking;
 import qupath.ext.flowpath.cohort.ReviewItem;
 import qupath.ext.flowpath.cohort.ReviewScorer;
@@ -15,6 +16,9 @@ import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Alignment;
+import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
+import qupath.ext.flowpath.model.cohort.UniformShift;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,20 +28,34 @@ import java.util.Map;
 
 /**
  * What the Cohort window shows, derived — never set (CLAUDE.md "UI state is derived"). Pure: no
- * JavaFX. Rows are the project's slides in project order; columns the enabled gates in tree
- * order, keyed by value {@code (rootIndex, gatePath)}, never by a {@code GateNode} or a
- * {@code ReviewItem}'s gate (the review was scored on a deep copy of the tree).
+ * JavaFX. Rows are the reference slide first, then the project's slides in project order; columns
+ * the enabled gates in tree order, keyed by value {@code (rootIndex, gatePath)}, never by a
+ * {@code GateNode} or a {@code ReviewItem}'s gate (the review was scored on a deep copy of the
+ * tree). Every cell carries its own text and tooltip (design spec §4, U6), so the pane decides
+ * nothing about what a mark looks like.
  */
 public record CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail,
-                              List<String> missingChannels) {
+                              List<String> missingChannels, List<LegendEntry> legend) {
 
+    /** A cell's mark, in the design spec §4 order (which is also the legend's order after the flags). */
     public enum CellMark {
-        OK("✓"), LOOK("⚠"), REVIEWED("↷"), ADJUSTED("✎"), SKIPPED("⊘"), NOT_MEASURED("—"),
-        NOT_CORRECTED("="), NONE("");
+        LOOK("needs a look"),
+        OK("automatically corrected by this factor"),
+        MANUAL_PEAK("corrected from a hand-picked peak"),
+        REFERENCE("the reference row"),
+        REVIEWED("you confirmed it"),
+        ADJUSTED("this slide has its own threshold"),
+        SKIPPED("skipped; its cells are unmeasured"),
+        NOT_MEASURED("the marker is not on this slide"),
+        NOT_CORRECTED("not corrected"),
+        NONE("");
 
-        public final String glyph;
+        private final String meaning;
 
-        CellMark(String glyph) { this.glyph = glyph; }
+        CellMark(String meaning) { this.meaning = meaning; }
+
+        /** What the mark means, as the spec §4 table says it; the legend's label and the tooltip's first line. */
+        public String meaning() { return meaning; }
     }
 
     public enum RowStatus { READY, SAMPLING, FAILED, EXCLUDED }
@@ -45,40 +63,75 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
     public record Column(int rootIndex, String gatePath, String header) {}
 
     /**
+     * One slide × gate cell. {@code flags} are the review item's, most serious first, and empty
+     * unless the mark is {@link CellMark#LOOK}.
+     */
+    public record Cell(CellMark mark, String text, String tooltip, List<ReviewItem.Flag> flags) {
+        public Cell { flags = List.copyOf(flags); }
+    }
+
+    /** One glyph on screen and what it means. */
+    public record LegendEntry(String glyph, String label) {}
+
+    /**
      * One slide. {@code selectedColumn} is the index into {@link #columns()} of the selected cell
      * when it is on this row, else -1: the selection is carried by the model (a value), so the
-     * grid highlights the cell the detail describes after N / P or an answer moved it.
+     * grid highlights the cell the detail describes after N / P or an answer moved it. {@code open}
+     * says the slide is the one open in the viewer.
      */
-    public record Row(String slideId, String name, boolean reference, RowStatus status, String statusText,
-                      int cells, List<CellMark> marks, int lookCount, boolean canExclude, boolean canBeReference,
+    public record Row(String slideId, String name, boolean reference, boolean open, RowStatus status, String statusText,
+                      int cellCount, List<Cell> cells, int lookCount, boolean canExclude, boolean canBeReference,
                       int selectedColumn) {
-        public Row { marks = List.copyOf(marks); }
+        public Row { cells = List.copyOf(cells); }
     }
 
     public record Banner(String headline, String suggestedId, String suggestedName, List<String> notes) {
         public Banner { notes = List.copyOf(notes); }
     }
 
+    /**
+     * What the detail pane's histogram draws, for the selected cell's axis-0 column. Everything is
+     * on {@code scale}'s log axis; a value that does not exist is NaN, and an array is null when
+     * that slide has no histogram for the column.
+     */
+    public record HistogramView(double gridMin, double gridMax, long[] reference, long[] slide,
+                                double referenceL1, double slideL1, double pickedSlidePeak, double pickedReferencePeak,
+                                double referenceThreshold, double appliedThreshold, LogScale scale) {}
+
+    /** The selected cell, every line labelled so the numbers read without the grid beside them. */
     public record Detail(ReviewItem.Key key, String title, CellMark mark, List<String> reasons,
-                         String referenceValue, String appliedValue) {
+                         String valuesLine, String correctionLine, String usageLine, HistogramView histogram,
+                         boolean canPickPeak, boolean hasPickedPeak) {
         public Detail { reasons = List.copyOf(reasons); }
     }
 
     public static final String SCOPE_NOTE = "correction assumes positive/negative markers, not graded intensity";
+    public static final String REALIGNING = " · re-aligning…";
 
     public CohortGridModel {
         columns = List.copyOf(columns);
         rows = List.copyOf(rows);
         missingChannels = missingChannels == null ? List.of() : List.copyOf(missingChannels);
+        legend = legend == null ? List.of() : List.copyOf(legend);
     }
 
-    /** A model with no footer notes. */
+    /** A model with no footer notes and no legend. */
     public CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail) {
-        this(banner, columns, rows, detail, List.of());
+        this(banner, columns, rows, detail, List.of(), List.of());
     }
 
+    /** A model with no legend. */
+    public CohortGridModel(Banner banner, List<Column> columns, List<Row> rows, Detail detail,
+                           List<String> missingChannels) {
+        this(banner, columns, rows, detail, missingChannels, List.of());
+    }
+
+    /**
+     * @param openSlideId the slide open in the viewer, or null; its row is {@link Row#open}
+     * @param rescoring   a rescore is in flight: the headline says the cells are about to change
+     */
     public static CohortGridModel derive(CohortSession session, GateTree tree, ReviewItem.Key selected,
-                                         boolean onlyLooks) {
+                                         boolean onlyLooks, String openSlideId, boolean rescoring) {
         List<GateWalk.Entry> entries = GateWalk.enabled(tree);
         List<Column> columns = columns(entries);
         String reference = tree.getReferenceSlideId();
@@ -87,6 +140,7 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         for (ReviewItem i : review.items()) items.put(keyString(i.key()), i);
 
         List<Row> rows = new ArrayList<>();
+        Row referenceRow = null;
         for (CohortSession.SlideSquare sq : session.slideStrip()) {
             RowStatus status = switch (sq.status()) {
                 case EXCLUDED -> RowStatus.EXCLUDED;
@@ -100,27 +154,32 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
                 case SAMPLING -> "sampling…";
                 case READY -> "";
             };
-            List<CellMark> marks = new ArrayList<>();
+            List<Cell> cells = new ArrayList<>();
             int looks = 0;
             int selectedColumn = -1;
             for (int c = 0; c < entries.size(); c++) {
                 GateWalk.Entry e = entries.get(c);
-                CellMark mark = status != RowStatus.READY ? CellMark.NONE
-                        : mark(session, e, sq.slideId(), reference, items);
-                if (mark == CellMark.LOOK) looks++;
-                marks.add(mark);
+                Cell cell = status != RowStatus.READY ? EMPTY : cell(session, e, sq.slideId(), reference, items);
+                if (cell.mark() == CellMark.LOOK) looks++;
+                cells.add(cell);
                 if (selected != null && selected.slideId().equals(sq.slideId())
                         && selected.rootIndex() == e.rootIndex() && selected.gatePath().equals(e.gatePath())) {
                     selectedColumn = c;
                 }
             }
             boolean isRef = sq.slideId().equals(reference);
-            Row row = new Row(sq.slideId(), sq.name(), isRef, status, statusText, sq.cells(), marks, looks,
-                    !isRef, canBeReference(status, isRef, reference), selectedColumn);
-            if (!onlyLooks || looks > 0) rows.add(row);
+            Row row = new Row(sq.slideId(), sq.name(), isRef, sq.slideId().equals(openSlideId), status, statusText,
+                    sq.cells(), cells, looks, !isRef, canBeReference(status, isRef, reference), selectedColumn);
+            if (onlyLooks && looks == 0) continue;
+            if (isRef) referenceRow = row;
+            else rows.add(row);
         }
-        return new CohortGridModel(banner(session, tree), columns, rows,
-                detail(session, tree, entries, selected, items), missingChannels(review));
+        if (referenceRow != null) rows.add(0, referenceRow);
+        Banner banner = banner(session, tree);
+        if (rescoring) banner = new Banner(banner.headline() + REALIGNING, banner.suggestedId(),
+                banner.suggestedName(), banner.notes());
+        return new CohortGridModel(banner, columns, rows, detail(session, tree, entries, selected, items),
+                missingChannels(review), legend(rows));
     }
 
     /**
@@ -204,10 +263,13 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         return k.slideId() + "\u0000" + k.rootIndex() + "\u0000" + k.gatePath();
     }
 
+    private static final Cell EMPTY = new Cell(CellMark.NONE, "", "", List.of());
+
     /**
      * The mark of one slide x gate cell. Slide settings win, then a review flag, then "not
-     * measured". The reference row is {@code OK} even with Correct staining off, because the
-     * reference is identity by definition.
+     * measured", then a confirmation; only then is the cell about its correction: none without a
+     * reference, the reference row itself, Correct staining off or an axis left uncorrected, a
+     * hand-picked peak on any axis, else automatic.
      */
     static CellMark mark(CohortSession session, GateWalk.Entry e, String slideId, String reference,
                          Map<String, ReviewItem> items) {
@@ -226,16 +288,136 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         }
         if (setting instanceof SlideSetting.Reviewed) return CellMark.REVIEWED;
         if (reference == null) return CellMark.NOT_CORRECTED;
-        if (slideId.equals(reference)) return CellMark.OK;
+        if (slideId.equals(reference)) return CellMark.REFERENCE;
         if (!gate.isCorrectStaining()) return CellMark.NOT_CORRECTED;
-        List<String> channels = gate.getChannels();
-        for (int k = 0; k < GateAxis.axisCount(gate) && k < channels.size(); k++) {
-            String key = new AlignmentModel.ColumnRef(channels.get(k), gate.compartmentAt(k),
-                    gate.statisticAt(k)).key();
-            Alignment a = session.lookup().alignment(slideId, key);
+        boolean landmark = false;
+        for (Alignment a : axisAlignments(session, gate, slideId)) {
             if (a == null || a.kind() == Alignment.Kind.IDENTITY) return CellMark.NOT_CORRECTED;
+            if (a.kind() == Alignment.Kind.LANDMARK) landmark = true;
         }
-        return CellMark.OK;
+        return landmark ? CellMark.MANUAL_PEAK : CellMark.OK;
+    }
+
+    /** Each axis's alignment on {@code slideId} through the session's guarded lookup; null where unknown. */
+    private static List<Alignment> axisAlignments(CohortSession session, GateNode gate, String slideId) {
+        List<String> channels = gate.getChannels();
+        List<Alignment> out = new ArrayList<>();
+        for (int k = 0; k < GateAxis.axisCount(gate) && k < channels.size(); k++) {
+            String key = columnKey(gate, k);
+            out.add(key == null ? null : session.lookup().alignment(slideId, key));
+        }
+        return out;
+    }
+
+    /** The column key of {@code gate}'s axis {@code k}, as the alignment model keys it; null without a channel. */
+    private static String columnKey(GateNode gate, int k) {
+        List<String> channels = gate.getChannels();
+        String ch = k < channels.size() ? channels.get(k) : null;
+        if (ch == null || ch.isEmpty()) return null;
+        return new AlignmentModel.ColumnRef(ch, gate.compartmentAt(k), gate.statisticAt(k)).key();
+    }
+
+    private static Cell cell(CohortSession session, GateWalk.Entry e, String slideId, String reference,
+                             Map<String, ReviewItem> items) {
+        CellMark mark = mark(session, e, slideId, reference, items);
+        ReviewItem item = mark == CellMark.LOOK
+                ? items.get(keyString(new ReviewItem.Key(slideId, e.rootIndex(), e.gatePath()))) : null;
+        List<ReviewItem.Flag> flags = item == null ? List.of() : item.flags();
+        // A factor is shown only where it is applied: a LOOK or confirmed cell is still corrected.
+        List<Alignment> alignments = switch (mark) {
+            case OK, MANUAL_PEAK, LOOK, REVIEWED -> slideId.equals(reference) || !e.gate().isCorrectStaining()
+                    ? List.of() : axisAlignments(session, e.gate(), slideId);
+            default -> List.of();
+        };
+        double factor = alignments.isEmpty() || alignments.get(0) == null ? Double.NaN : alignments.get(0).factor();
+        return new Cell(mark, cellText(mark, flags, factor), tooltip(mark, item, e.gate(), alignments), flags);
+    }
+
+    /**
+     * A cell's text (spec §4): a LOOK cell shows its most serious flag's glyph and {@code +n} for
+     * the rest; a corrected cell its factor (axis 0's on a 2D gate).
+     */
+    static String cellText(CellMark mark, List<ReviewItem.Flag> flags, double factor) {
+        return switch (mark) {
+            case LOOK -> flags.isEmpty() ? "" : flags.get(0).glyph() + (flags.size() > 1 ? "+" + (flags.size() - 1) : "");
+            case OK -> factorText(factor);
+            case MANUAL_PEAK -> MANUAL_GLYPH + factorText(factor);
+            default -> glyphOf(mark);
+        };
+    }
+
+    private static final String FACTOR_GLYPH = "×";
+    private static final String MANUAL_GLYPH = "◆";
+
+    private static String factorText(double factor) {
+        return String.format(Locale.US, FACTOR_GLYPH + "%.2f", factor);
+    }
+
+    /** The glyph that stands for {@code mark} in a cell and in the legend. */
+    private static String glyphOf(CellMark mark) {
+        return switch (mark) {
+            case LOOK, NONE -> "";
+            case OK -> FACTOR_GLYPH;
+            case MANUAL_PEAK -> MANUAL_GLYPH;
+            case REFERENCE -> "★";
+            case REVIEWED -> "☑";
+            case ADJUSTED -> "✎";
+            case SKIPPED -> "⊘";
+            case NOT_MEASURED -> "n/a";
+            case NOT_CORRECTED -> "raw";
+        };
+    }
+
+    /**
+     * The mark's meaning, then each flag as {@code glyph label — reason (source)}, then each
+     * corrected axis's factor and how it was found.
+     */
+    private static String tooltip(CellMark mark, ReviewItem item, GateNode gate, List<Alignment> alignments) {
+        if (mark == CellMark.NONE) return "";
+        List<String> lines = new ArrayList<>();
+        lines.add(capitalised(mark.meaning()));
+        if (item != null) {
+            for (ReviewItem.Flag f : item.flags()) {
+                List<String> why = item.reasonsFor(f);
+                lines.add(f.glyph() + " " + f.label() + (why.isEmpty() ? "" : " — " + String.join("; ", why))
+                        + " (" + f.source() + ")");
+            }
+        }
+        boolean twoAxes = alignments.size() > 1;
+        for (int k = 0; k < alignments.size(); k++) {
+            Alignment a = alignments.get(k);
+            if (a == null || a.kind() == Alignment.Kind.IDENTITY) continue;
+            String how = a.kind() == Alignment.Kind.LANDMARK ? "from picked peak" : "automatic";
+            lines.add("Factor " + factorText(a.factor()) + " (" + how + ")"
+                    + (twoAxes ? " on " + gate.getChannels().get(k) : ""));
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String capitalised(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    /**
+     * One entry per glyph on screen (U6): the most serious flag of each LOOK cell in severity
+     * order, then each other mark in spec §4 order. A glyph no visible cell shows is not listed.
+     */
+    private static List<LegendEntry> legend(List<Row> rows) {
+        java.util.EnumSet<ReviewItem.Flag> flags = java.util.EnumSet.noneOf(ReviewItem.Flag.class);
+        java.util.EnumSet<CellMark> marks = java.util.EnumSet.noneOf(CellMark.class);
+        for (Row r : rows) {
+            for (Cell c : r.cells()) {
+                if (c.mark() == CellMark.LOOK) {
+                    if (!c.flags().isEmpty()) flags.add(c.flags().get(0));
+                } else if (c.mark() != CellMark.NONE) {
+                    marks.add(c.mark());
+                }
+            }
+        }
+        List<LegendEntry> out = new ArrayList<>();
+        for (ReviewItem.Flag f : flags) out.add(new LegendEntry(f.glyph(), f.label()));
+        for (CellMark m : marks) out.add(new LegendEntry(glyphOf(m), m.meaning()));
+        return out;
     }
 
     /** ReviewScorer's rule: every axis needs a non-null channel the slide's index carries. */
@@ -290,36 +472,108 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
             if (e.rootIndex() == selected.rootIndex() && e.gatePath().equals(selected.gatePath())) entry = e;
         }
         if (entry == null) return null;
+        GateNode gate = entry.gate();
         String slideId = selected.slideId();
+        String reference = tree.getReferenceSlideId();
         ReviewItem item = items.get(keyString(selected));
-        CellMark mark = mark(session, entry, slideId, tree.getReferenceSlideId(), items);
-        TreeResolver.Applied applied = TreeResolver.resolve(tree, slideId, session.lookup()).applied(entry.gate());
-        String ref = applied == null ? "" : format(entry.gate(), applied.reference());
-        String app = applied == null ? "" : format(entry.gate(), applied.applied());
+        CellMark mark = mark(session, entry, slideId, reference, items);
+        TreeResolver.Applied applied = TreeResolver.resolve(tree, slideId, session.lookup()).applied(gate);
         String title = session.slideName(slideId) + " · " + entry.gatePath();
         List<String> reasons = new ArrayList<>();
         if (item != null) reasons.addAll(item.reasons());
         if (mark == CellMark.NOT_MEASURED) {
             // By value (slide + the gate's channels), never by Info.gate() identity.
             for (ReviewItem.Info info : currentReview(session, tree).infos()) {
-                if (info.slideId().equals(slideId) && info.gate().getChannels().equals(entry.gate().getChannels())) {
+                if (info.slideId().equals(slideId) && info.gate().getChannels().equals(gate.getChannels())) {
                     // Two roots on one channel yield the same message; say it once.
                     if (!reasons.contains(info.message())) reasons.add(info.message());
                 }
             }
         }
-        return new Detail(selected, title, mark, reasons, ref, app);
+        String values = applied == null ? ""
+                : gate instanceof Region2DGate ? "region"
+                : "reference " + format(applied.reference()) + " → this slide " + format(applied.applied());
+
+        AlignmentModel model = currentModel(session, tree);
+        String column = columnKey(gate, 0);
+        ColumnDiagnostics d = model == null || column == null ? null : model.diagnostics(slideId, column);
+        Alignment correction = TreeResolver.correctionFor(tree, gate, 0, slideId, session.lookup());
+        boolean canPick = gate.isCorrectStaining() && reference != null && !slideId.equals(reference)
+                && model != null && column != null && model.grid(column) != null;
+        return new Detail(selected, title, mark, reasons, values, correctionLine(correction),
+                model == null ? "" : usageLine(d, model.scale()),
+                histogram(session, model, column, slideId, reference, gate, applied),
+                canPick, d != null && d.peakPicked());
     }
 
-    /** Each axis's values joined with ", ", the axes joined with " / "; a region gate has no single cut. */
-    private static String format(GateNode gate, GateValues v) {
-        if (gate instanceof Region2DGate) return "region";
+    /** {@code ×0.82 · automatic (UniFORM)}, {@code ×0.82 · from your picked peak (UniFORM landmark mode)} or {@code not corrected}. */
+    static String correctionLine(Alignment a) {
+        if (a == null || a.kind() == Alignment.Kind.IDENTITY) return "not corrected";
+        return factorText(a.factor()) + (a.kind() == Alignment.Kind.LANDMARK
+                ? " · from your picked peak (UniFORM landmark mode)" : " · automatic (UniFORM)");
+    }
+
+    /**
+     * {@code 9,458 of 9,870 cells used · 412 below 1 not used to estimate the shift; corrected like
+     * the rest}: the clean cells inside the scale's domain of all clean cells with a value, and those
+     * outside it (below 1 on ln, below 0 on ln(x + 1)); {@code ""} when nothing was aligned.
+     */
+    static String usageLine(ColumnDiagnostics d, LogScale scale) {
+        if (d == null) return "";
+        int seen = d.usable() + d.outsideDomain();
+        String line = String.format(Locale.US, "%,d of %,d cells used", d.usable(), seen);
+        if (d.outsideDomain() > 0) {
+            line += String.format(Locale.US, " · %,d below %s not used to estimate the shift; corrected like the rest",
+                    d.outsideDomain(), scale == LogScale.LN1P ? "0" : "1");
+        }
+        return line;
+    }
+
+    /** Axis 0's column on the shared grid: both histograms, landmarks, picks and thresholds, on the log axis. */
+    private static HistogramView histogram(CohortSession session, AlignmentModel model, String column, String slideId,
+                                           String reference, GateNode gate, TreeResolver.Applied applied) {
+        if (model == null || column == null) return null;
+        UniformShift.Grid grid = model.grid(column);
+        if (grid == null) return null;
+        LogScale scale = model.scale();
+        Landmarks refLm = model.referenceLandmarks(column);
+        Landmarks lm = model.landmarks(slideId, column);
+        boolean cut = applied != null && !(gate instanceof Region2DGate);
+        return new HistogramView(grid.min(), grid.max(),
+                reference == null ? null : model.histogram(reference, column), model.histogram(slideId, column),
+                refLm == null ? Double.NaN : refLm.l1(), lm == null ? Double.NaN : lm.l1(),
+                pickedLog(session, slideId, column, scale), pickedLog(session, reference, column, scale),
+                cut ? scale.toLog(applied.reference().axis(0)[0]) : Double.NaN,
+                cut ? scale.toLog(applied.applied().axis(0)[0]) : Double.NaN, scale);
+    }
+
+    private static double pickedLog(CohortSession session, String slideId, String column, LogScale scale) {
+        if (slideId == null) return Double.NaN;
+        Map<String, Double> m = session.peaks().get(slideId);
+        Double raw = m == null ? null : m.get(column);
+        return raw == null ? Double.NaN : scale.toLog(raw);
+    }
+
+    /** The alignment model, only while it was built for the live tree's reference (as {@link #currentReview}). */
+    private static AlignmentModel currentModel(CohortSession session, GateTree tree) {
+        String ref = tree.getReferenceSlideId();
+        AlignmentModel model = session.model();
+        return ref != null && model != null && ref.equals(model.referenceSlideId()) ? model : null;
+    }
+
+    /** Each axis's values joined with ", ", the axes joined with " / ". */
+    private static String format(GateValues v) {
         List<String> axes = new ArrayList<>();
         for (int k = 0; k < v.axisCount(); k++) {
             List<String> values = new ArrayList<>();
-            for (double d : v.axis(k)) values.add(String.format(Locale.US, "%.4g", d));
+            for (double x : v.axis(k)) values.add(number(x));
             axes.add(String.join(", ", values));
         }
         return String.join(" / ", axes);
+    }
+
+    /** Two decimals below 100, whole numbers above: a cut reads the same at either intensity range. */
+    private static String number(double x) {
+        return String.format(Locale.US, Math.abs(x) >= 100 ? "%.0f" : "%.2f", x);
     }
 }

@@ -3,8 +3,11 @@ package qupath.ext.flowpath.cohort;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateValues;
 
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * One slide × gate that needs a look, and why, in words. Remembered across recomputes by its
@@ -14,7 +17,30 @@ import java.util.Locale;
  * ({@code CohortSession.liveGate}), never through this field.
  */
 public record ReviewItem(Key key, String slideName, GateNode gate, List<Flag> flags, List<String> reasons,
-                         GateValues applied) {
+                         GateValues applied, Map<Flag, List<String>> reasonsByFlag) {
+
+    /**
+     * {@code reasons} is every reason in the order it was found; {@code reasonsByFlag} says which
+     * flag raised which, so a tooltip can name a flag's own reason (flags are sorted by severity,
+     * reasons are not, and one flag can raise several — so the two lists cannot be paired by index).
+     */
+    public ReviewItem {
+        flags = List.copyOf(flags);
+        reasons = List.copyOf(reasons);
+        Map<Flag, List<String>> byFlag = new EnumMap<>(Flag.class);
+        if (reasonsByFlag != null) reasonsByFlag.forEach((f, r) -> byFlag.put(f, List.copyOf(r)));
+        reasonsByFlag = Collections.unmodifiableMap(byFlag);
+    }
+
+    /** An item whose reasons are not attributed to flags ({@link #reasonsFor} answers empty). */
+    public ReviewItem(Key key, String slideName, GateNode gate, List<Flag> flags, List<String> reasons, GateValues applied) {
+        this(key, slideName, gate, flags, reasons, applied, Map.of());
+    }
+
+    /** The reasons {@code flag} raised on this item; empty when none were attributed. */
+    public List<String> reasonsFor(Flag flag) {
+        return reasonsByFlag.getOrDefault(flag, List.of());
+    }
 
     public record Key(String slideId, int rootIndex, String gatePath) {}
 

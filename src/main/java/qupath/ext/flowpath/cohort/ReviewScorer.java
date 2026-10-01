@@ -16,6 +16,7 @@ import qupath.ext.flowpath.model.cohort.LogScale;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
@@ -96,8 +97,7 @@ public final class ReviewScorer {
                 int parentCount = 0;
                 for (boolean b : parent) if (b) parentCount++;
 
-                Set<ReviewItem.Flag> flags = new LinkedHashSet<>();
-                Set<String> reasons = new LinkedHashSet<>();
+                Findings found = new Findings();
                 boolean oneDimensionalCut = !(gate instanceof Region2DGate);
 
                 for (int k = 0; k < GateAxis.axisCount(gate); k++) {
@@ -108,15 +108,14 @@ public final class ReviewScorer {
                     // reference, and not while correction is off for want of a reference sample).
                     if (gate.isCorrectStaining() && !s.slideId().equals(model.referenceSlideId())
                             && !model.referenceMissing()) {
-                        correctionFlags(model, s.slideId(), column, channel, flags, reasons);
+                        correctionFlags(model, s.slideId(), column, channel, found);
                     }
 
                     MeasuredColumn measuredColumn = s.index().column(gate, k, s.stats());
                     double[] raw = measuredColumn.values();
 
                     if (parentCount < MIN_PARENT_CELLS) {
-                        flags.add(ReviewItem.Flag.CANT_JUDGE);
-                        reasons.add(String.format(Locale.US, "Only %d cells reach this gate", parentCount));
+                        found.add(ReviewItem.Flag.CANT_JUDGE, String.format(Locale.US, "Only %d cells reach this gate", parentCount));
                         continue;
                     }
 
@@ -125,8 +124,7 @@ public final class ReviewScorer {
                         if (parent[i] && Double.isFinite(raw[i])) measured++;
                     }
                     if (measured < MIN_COVERAGE * parentCount) {
-                        flags.add(ReviewItem.Flag.CANT_JUDGE);
-                        reasons.add(String.format(Locale.US, "Only %d%% of cells reaching this gate are measured on %s",
+                        found.add(ReviewItem.Flag.CANT_JUDGE, String.format(Locale.US, "Only %d%% of cells reaching this gate are measured on %s",
                                 (int) Math.floor(100.0 * measured / parentCount), channel));
                         continue;
                     }
@@ -138,16 +136,15 @@ public final class ReviewScorer {
                         if (!Double.isNaN(u)) {
                             Density.Peak peak = density.nearestPeak(u);
                             if (peak != null && density.at(u) >= ON_PEAK_FRACTION * peak.height()) {
-                                flags.add(ReviewItem.Flag.ON_PEAK);
-                                reasons.add("Threshold sits on a peak, not in a valley");
+                                found.add(ReviewItem.Flag.ON_PEAK, "Threshold sits on a peak, not in a valley");
                             }
                         }
                     }
                 }
 
-                if (!flags.isEmpty()) {
+                if (!found.flags.isEmpty()) {
                     items.add(new ReviewItem(new ReviewItem.Key(s.slideId(), e.rootIndex(), e.gatePath()), s.name(), gate,
-                            sorted(flags), List.copyOf(reasons), applied.applied()));
+                            sorted(found.flags), List.copyOf(found.reasons), applied.applied(), found.byFlag()));
                 }
             }
         }
@@ -162,40 +159,34 @@ public final class ReviewScorer {
      * NO_NEGATIVE_PEAK. A NaN Otsu discordance never raises.
      */
     private static void correctionFlags(AlignmentModel model, String slideId, String column, String channel,
-                                        Set<ReviewItem.Flag> flags, Set<String> reasons) {
+                                        Findings found) {
         ColumnDiagnostics d = model.diagnostics(slideId, column);
         if (d == null) return;
         if (d.tooFew()) {
-            flags.add(ReviewItem.Flag.CANT_JUDGE);
-            reasons.add("Fewer than 50 usable values on this slide or the reference \u2014 not corrected");
+            found.add(ReviewItem.Flag.CANT_JUDGE, "Fewer than 50 usable values on this slide or the reference \u2014 not corrected");
             return;
         }
         Landmarks lm = model.landmarks(slideId, column);
         if (!d.peakPicked()) {
             if (lm != null && !lm.hasL1()) {
-                flags.add(ReviewItem.Flag.NO_NEGATIVE_PEAK);
-                reasons.add("No negative peak found on " + channel);
+                found.add(ReviewItem.Flag.NO_NEGATIVE_PEAK, "No negative peak found on " + channel);
             }
             if (d.peakLock()) {
                 double factor = model.alignment(slideId, column).factor();
-                flags.add(ReviewItem.Flag.PEAK_LOCK);
-                reasons.add(String.format(Locale.US, "Automatic shift \u00D7%.2f, but the negative peaks differ by \u00D7%.2f"
+                found.add(ReviewItem.Flag.PEAK_LOCK, String.format(Locale.US, "Automatic shift \u00D7%.2f, but the negative peaks differ by \u00D7%.2f"
                         + " \u2014 the alignment may have locked onto positive cells", factor, Math.exp(d.detectorLogShift())));
             }
         }
         if (d.otsuDiscordance() > OTSU_DISCORDANCE_CUT) {
-            flags.add(ReviewItem.Flag.OTSU_DISCORDANCE);
-            reasons.add(String.format(Locale.US, "Otsu thresholds disagree on %d%% of cells after correction",
+            found.add(ReviewItem.Flag.OTSU_DISCORDANCE, String.format(Locale.US, "Otsu thresholds disagree on %d%% of cells after correction",
                     Math.round(100 * d.otsuDiscordance())));
         }
         if (d.shiftOutlier()) {
-            flags.add(ReviewItem.Flag.SHIFT_OUTLIER);
-            reasons.add(String.format(Locale.US, "Shift \u00D7%.2f vs cohort median \u00D7%.2f",
+            found.add(ReviewItem.Flag.SHIFT_OUTLIER, String.format(Locale.US, "Shift \u00D7%.2f vs cohort median \u00D7%.2f",
                     model.alignment(slideId, column).factor(), Math.exp(d.cohortMedianLogShift())));
         }
         if (d.outsideFraction() > BELOW_RANGE_CUT) {
-            flags.add(ReviewItem.Flag.BELOW_RANGE);
-            reasons.add(String.format(Locale.US, "%d%% of cells are below %s and were not used to estimate the shift",
+            found.add(ReviewItem.Flag.BELOW_RANGE, String.format(Locale.US, "%d%% of cells are below %s and were not used to estimate the shift",
                     Math.round(100 * d.outsideFraction()), model.scale() == LogScale.LN ? "1" : "0"));
         }
     }
@@ -226,15 +217,13 @@ public final class ReviewScorer {
             }
             if (at < 0) {
                 items.add(new ReviewItem(key, s.name(), gate, List.of(ReviewItem.Flag.MARKER_RULE),
-                        List.of(f.reason()), applied.applied()));
+                        List.of(f.reason()), applied.applied(), Map.of(ReviewItem.Flag.MARKER_RULE, List.of(f.reason()))));
             } else {
                 ReviewItem old = items.get(at);
-                Set<ReviewItem.Flag> flags = new LinkedHashSet<>(old.flags());
-                flags.add(ReviewItem.Flag.MARKER_RULE);
-                Set<String> reasons = new LinkedHashSet<>(old.reasons());
-                reasons.add(f.reason());
-                items.set(at, new ReviewItem(key, old.slideName(), old.gate(), sorted(flags),
-                        List.copyOf(reasons), old.applied()));
+                Findings found = Findings.of(old);
+                found.add(ReviewItem.Flag.MARKER_RULE, f.reason());
+                items.set(at, new ReviewItem(key, old.slideName(), old.gate(), sorted(found.flags),
+                        List.copyOf(found.reasons), old.applied(), found.byFlag()));
             }
         }
         Map<GateNode, Integer> gateOrder = new IdentityHashMap<>();
@@ -257,6 +246,33 @@ public final class ReviewScorer {
         SlideSetting setting = gate.slideSetting(slideId);
         if (setting instanceof SlideSetting.Skip || setting instanceof SlideSetting.Manual) return true;
         return setting instanceof SlideSetting.Reviewed rv && rv.appliedValues().matches(applied);
+    }
+
+    /** One item's flags and reasons as they are found, remembering which flag raised which reason. */
+    private static final class Findings {
+        final Set<ReviewItem.Flag> flags = new LinkedHashSet<>();
+        final Set<String> reasons = new LinkedHashSet<>();
+        private final Map<ReviewItem.Flag, Set<String>> byFlag = new EnumMap<>(ReviewItem.Flag.class);
+
+        static Findings of(ReviewItem item) {
+            Findings f = new Findings();
+            f.flags.addAll(item.flags());
+            f.reasons.addAll(item.reasons());
+            item.reasonsByFlag().forEach((flag, r) -> f.byFlag.put(flag, new LinkedHashSet<>(r)));
+            return f;
+        }
+
+        void add(ReviewItem.Flag flag, String reason) {
+            flags.add(flag);
+            reasons.add(reason);
+            byFlag.computeIfAbsent(flag, k -> new LinkedHashSet<>()).add(reason);
+        }
+
+        Map<ReviewItem.Flag, List<String>> byFlag() {
+            Map<ReviewItem.Flag, List<String>> out = new EnumMap<>(ReviewItem.Flag.class);
+            byFlag.forEach((flag, r) -> out.put(flag, List.copyOf(r)));
+            return out;
+        }
     }
 
     private static List<ReviewItem.Flag> sorted(Set<ReviewItem.Flag> flags) {

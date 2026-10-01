@@ -1032,7 +1032,8 @@ public class FlowPathPane extends BorderPane {
         boolean running = batchRun != null && batchRun.running();
         cohortCard.render(line, open, state.available() || running);
         if (cohortWindow.isOpen()) {
-            cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks),
+            cohortGrid.render(CohortGridModel.derive(cohort, session.tree(), gridSelection, onlyLooks,
+                            indexSlideId, false),
                     CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()));
         }
         syncCrop(cohort.selected(), cohort.stepOrder());

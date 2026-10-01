@@ -63,8 +63,10 @@ public final class CohortGridPane extends BorderPane {
     /** The columns the table was last built for; a re-render with the same ones keeps the TableColumns. */
     private List<CohortGridModel.Column> builtColumns;
 
-    /** One grid cell's value: its mark and whether it is the model's selected cell. */
-    record CellView(CohortGridModel.CellMark mark, boolean selected) {}
+    /** One grid cell's value: the model's cell and whether it is the model's selected cell. */
+    record CellView(CohortGridModel.Cell cell, boolean selected) {
+        CohortGridModel.CellMark mark() { return cell.mark(); }
+    }
     private int shownSampleSize;
 
     private Consumer<ReviewItem.Key> onCellChosen = k -> {};
@@ -181,12 +183,11 @@ public final class CohortGridPane extends BorderPane {
             CohortGridModel.Detail d = m.detail();
             detailTitle.setText(d == null ? "Select a cell to review it" : d.title());
             detailReasons.setText(d == null ? "" : String.join("; ", d.reasons()));
-            detailThresholdLabel.setText(d == null || d.referenceValue().isEmpty() ? ""
-                    : d.referenceValue() + " → " + d.appliedValue());
+            detailThresholdLabel.setText(d == null ? "" : d.valuesLine());
             boolean none = d == null;
             boolean flagged = !none && d.mark() == CohortGridModel.CellMark.LOOK;
             looksRight.setDisable(!flagged);
-            adjust.setDisable(none || "region".equals(d.referenceValue()));
+            adjust.setDisable(none || "region".equals(d.valuesLine()));
             skip.setDisable(!flagged);
             useCohortValue.setDisable(none || (d.mark() != CohortGridModel.CellMark.ADJUSTED
                     && d.mark() != CohortGridModel.CellMark.SKIPPED && d.mark() != CohortGridModel.CellMark.REVIEWED));
@@ -243,7 +244,7 @@ public final class CohortGridPane extends BorderPane {
             return cell;
         });
         TableColumn<CohortGridModel.Row, Number> cells = new TableColumn<>("Cells");
-        cells.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().cells()));
+        cells.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().cellCount()));
         // Sortable by the number of cells to look at (spec §3.2), numerically.
         TableColumn<CohortGridModel.Row, Number> looks = new TableColumn<>("⚠");
         looks.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue().lookCount()));
@@ -256,14 +257,14 @@ public final class CohortGridPane extends BorderPane {
             // The selection is part of the value, so a cell whose mark is unchanged still repaints
             // when the selection moves onto or off it.
             tc.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(
-                    new CellView(c.getValue().marks().get(at), c.getValue().selectedColumn() == at)));
+                    new CellView(c.getValue().cells().get(at), c.getValue().selectedColumn() == at)));
             tc.setComparator(Comparator.comparing(CellView::mark));
             tc.setCellFactory(c -> new TableCell<>() {
                 @Override protected void updateItem(CellView view, boolean empty) {
                     super.updateItem(view, empty);
                     getStyleClass().removeAll("fp-cohort-cell", "fp-cohort-cell-look", "fp-cohort-cell-selected");
                     CohortGridModel.CellMark mark = view == null ? null : view.mark();
-                    setText(empty || mark == null ? null : mark.glyph);
+                    setText(empty || mark == null ? null : view.cell().text());
                     if (empty || mark == null) return;
                     getStyleClass().add(mark == CohortGridModel.CellMark.LOOK ? "fp-cohort-cell-look" : "fp-cohort-cell");
                     if (view.selected()) getStyleClass().add("fp-cohort-cell-selected");
