@@ -547,7 +547,8 @@ public class GateEditorPane extends VBox {
         referenceLineLabel.setVisible(cohortAvailable);
         if (!cohortAvailable) return;
         Alignment axis0 = currentNode == null ? null : editorAlignment.forAxis(currentNode, 0);
-        referenceLineLabel.setText(EditorLabels.referenceLine(editorAlignment.referenceName(),
+        referenceLineLabel.setText(EditorLabels.referenceLine(editorAlignment.correctionOffReason(),
+                editorAlignment.referenceName(),
                 editorAlignment.currentSlideName(), editorAlignment.isReferenceSlide(), axis0));
     }
 

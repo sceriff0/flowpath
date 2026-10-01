@@ -46,7 +46,11 @@ public record ReviewItem(Key key, String slideName, GateNode gate, List<Flag> fl
 
     /**
      * The review flags, declared in severity order ({@code ordinal()} sorts a slide's flags).
-     * Each carries the glyph the grid shows, a plain label and where its rule comes from.
+     * Each carries the glyph the grid shows, a plain label and where its rule comes from. The
+     * sources' read depth (from docs/research/2026-10-01-landmark-correction-method-choice.md):
+     * Wang et al. 2025 [FULL: Results, Discussion, Limitations, STAR Methods, pseudocode images]; Hahne et al. 2010
+     * [PARTIAL: whole main text of the author manuscript; missing Algorithm 1 body (image), figures, supplement S1–S9]; Harris et al. 2022
+     * [FULL: main text incl. MathML equations; figure images not viewed].
      */
     public enum Flag {
         PEAK_LOCK("\u21C6", "Aligned on the positive peak?", "Heuristic on UniFORM's stated assumption (Wang et al. 2025)"),

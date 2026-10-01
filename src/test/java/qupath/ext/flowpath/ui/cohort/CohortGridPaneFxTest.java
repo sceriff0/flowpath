@@ -442,7 +442,7 @@ class CohortGridPaneFxTest {
                 h.appliedThreshold(), LogScale.LN1P);
         var withPick = new CohortGridModel(m.banner(), m.columns(), m.rows(), new CohortGridModel.Detail(d.key(),
                 d.title(), d.mark(), d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), picked,
-                d.canPickPeak(), d.hasPickedPeak(), d.region()));
+                d.canPickPeak(), d.hasPickedPeak(), true, d.region()));
         List<String> cleared = new java.util.ArrayList<>();
         FxTestSupport.onFxRun(() -> {
             pane.setOnClearReferencePeak(() -> cleared.add("reference"));
@@ -455,5 +455,24 @@ class CohortGridPaneFxTest {
         assertEquals(List.of("reference"), cleared);
         assertTrue(FxTestSupport.onFx(() -> pane.pickReferencePeak.getTooltip().getText()
                 .contains("only for slides whose own negative peak was picked")));
+    }
+
+    /**
+     * Final review T9: a reference pick that reads NaN on the current scale (stored under ln1p
+     * below 1, shown on ln) has no diamond to draw, but the button that clears it stays enabled —
+     * the stored pick, not its log value, decides.
+     */
+    @Test
+    void useAutomaticReferenceIsEnabledForAStoredPickThatReadsNaN() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        var m = withDetail(true, false);
+        var d = m.detail();
+        assertTrue(Double.isNaN(d.histogram().pickedReferencePeak()), "fixture: nothing to draw");
+        var stored = new CohortGridModel(m.banner(), m.columns(), m.rows(), new CohortGridModel.Detail(d.key(),
+                d.title(), d.mark(), d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), d.histogram(),
+                d.canPickPeak(), d.hasPickedPeak(), true, d.region()));
+        FxTestSupport.onFxRun(() -> pane.render(stored, 20000, LogScale.LN));
+        assertFalse(FxTestSupport.onFx(() -> pane.useAutomaticReference.isDisable()));
     }
 }

@@ -30,10 +30,13 @@ import java.util.StringJoiner;
  * Scores every slide x gate against the review flags, top-down in tree order, then merges in the
  * marker-rule findings ({@link MarkerRules}) under the same answered/hidden rule. A flag is a
  * labelled problem; its source is the one stated on {@link ReviewItem.Flag}:
- * PEAK_LOCK (heuristic on UniFORM's assumption, Wang et al. 2025), NO_NEGATIVE_PEAK (Hahne et al.
- * 2010), CANT_JUDGE, BELOW_RANGE, MARKER_RULE and ON_PEAK (FlowPath heuristics), OTSU_DISCORDANCE
- * (Harris et al. 2022 metric, FlowPath's 10% cut), SHIFT_OUTLIER (Hahne et al. 2010, FlowPath's
- * 3-MAD cut). A picked peak silences PEAK_LOCK and NO_NEGATIVE_PEAK. Flags sort by severity
+ * PEAK_LOCK (heuristic on UniFORM's assumption, Wang et al. 2025
+ * [FULL: Results, Discussion, Limitations, STAR Methods, pseudocode images]), NO_NEGATIVE_PEAK (Hahne et al.
+ * 2010 [PARTIAL: whole main text of the author manuscript; missing Algorithm 1 body (image), figures, supplement S1–S9]),
+ * CANT_JUDGE, BELOW_RANGE, MARKER_RULE and ON_PEAK (FlowPath heuristics), OTSU_DISCORDANCE
+ * (Harris et al. 2022 metric [FULL: main text incl. MathML equations; figure images not viewed], FlowPath's 10% cut),
+ * SHIFT_OUTLIER (Hahne et al. 2010 [PARTIAL], FlowPath's 3-MAD cut). Tags are copied from
+ * docs/research/2026-10-01-landmark-correction-method-choice.md. A picked peak silences PEAK_LOCK and NO_NEGATIVE_PEAK. Flags sort by severity
  * (declaration order). Pure — no JavaFX, no mutation.
  */
 public final class ReviewScorer {
@@ -156,7 +159,8 @@ public final class ReviewScorer {
     /**
      * The correction-quality flags of one slide x column (design spec §3). {@code tooFew} wins:
      * a slide not corrected at all raises only CANT_JUDGE. A picked peak answers PEAK_LOCK and
-     * NO_NEGATIVE_PEAK. A NaN Otsu discordance never raises.
+     * NO_NEGATIVE_PEAK; a pick that could not be used raises its own reason instead (NO_NEGATIVE_PEAK
+     * when the reference has no peak to pair it with, else CANT_JUDGE). A NaN Otsu discordance never raises.
      */
     private static void correctionFlags(AlignmentModel model, String slideId, String column, String channel,
                                         Findings found) {
@@ -165,6 +169,13 @@ public final class ReviewScorer {
         if (d.tooFew()) {
             found.add(ReviewItem.Flag.CANT_JUDGE, "Fewer than 50 usable values on this slide or the reference \u2014 not corrected");
             return;
+        }
+        // A pick that could not be used leaves the slide raw: say so, never a silent "not corrected".
+        ColumnDiagnostics.PickProblem problem = d.pickProblem();
+        if (problem != ColumnDiagnostics.PickProblem.NONE) {
+            found.add(problem == ColumnDiagnostics.PickProblem.NO_REFERENCE_PEAK
+                    ? ReviewItem.Flag.NO_NEGATIVE_PEAK : ReviewItem.Flag.CANT_JUDGE,
+                    pickUnusedReason(problem, model.scale(), channel));
         }
         Landmarks lm = model.landmarks(slideId, column);
         if (!d.peakPicked()) {
@@ -189,6 +200,20 @@ public final class ReviewScorer {
             found.add(ReviewItem.Flag.BELOW_RANGE, String.format(Locale.US, "%d%% of cells are below %s and were not used to estimate the shift",
                     Math.round(100 * d.outsideFraction()), model.scale() == LogScale.LN ? "1" : "0"));
         }
+    }
+
+    /** Why a picked peak was not used, in words; null for {@link ColumnDiagnostics.PickProblem#NONE}. */
+    public static String pickUnusedReason(ColumnDiagnostics.PickProblem problem, LogScale scale, String channel) {
+        String outside = scale == LogScale.LN1P ? "below 0, outside the ln(x + 1) scale" : "below 1, outside the ln scale";
+        return switch (problem == null ? ColumnDiagnostics.PickProblem.NONE : problem) {
+            case NONE -> null;
+            case SLIDE_PICK_OUTSIDE_SCALE -> "Your picked peak is " + outside
+                    + " \u2014 not corrected; pick it again or use automatic";
+            case REFERENCE_PICK_OUTSIDE_SCALE -> "The reference's picked peak is " + outside
+                    + " \u2014 your pick has nothing to pair with; not corrected";
+            case NO_REFERENCE_PEAK -> "The reference has no negative peak on " + channel
+                    + " to pair with your pick \u2014 pick the reference's peak too; not corrected";
+        };
     }
 
     /**

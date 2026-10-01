@@ -20,7 +20,8 @@ import java.util.function.Function;
  * <p>
  * <b>Eligibility</b> uses the alignment's own landmark finder: a slide R qualifies only
  * if, on every gated column, {@code Landmarks.find(R's clean values, null, scale)} has an L1 — exactly what {@link AlignmentModel#build} computes when R is the
- * reference — and at least the cohort's modal landmark count (fdaNorm's rule, Hahne et al. 2010).
+ * reference — and at least the cohort's modal landmark count (fdaNorm's rule, Hahne et al. 2010
+ * [PARTIAL: whole main text of the author manuscript; missing Algorithm 1 body (image), figures, supplement S1–S9]).
  * <p>
  * <b>The suggestion</b> is the medoid of the eligible slides under the L1 distance between
  * normalised histograms on the same log scale, summed over the gated columns. flowLearn (Lux et al. 2018)

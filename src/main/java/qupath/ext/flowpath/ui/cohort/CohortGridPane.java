@@ -319,7 +319,9 @@ public final class CohortGridPane extends BorderPane {
         pickReferencePeak.setDisable(!canPick);
         useAutomatic.setDisable(!(d != null && d.canPickPeak() && d.hasPickedPeak()));
         // Ruling R8: a wrong reference pick shifts every landmark-mode slide on the column, so it must be undoable here.
-        useAutomaticReference.setDisable(h == null || !Double.isFinite(h.pickedReferencePeak()));
+        // The stored pick decides, not its log value: one that reads NaN on this scale still stops
+        // every landmark-mode slide on the column, and this button is the way out.
+        useAutomaticReference.setDisable(!(d != null && d.hasPickedReferencePeak()));
         shownScale = h == null ? null : h.scale();
         if (!canPick) histogramCanvas.arm(PickTarget.NONE);
     }

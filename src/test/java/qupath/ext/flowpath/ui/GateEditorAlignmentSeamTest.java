@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui;
 
+import qupath.ext.flowpath.cohort.CohortSession;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
@@ -259,6 +260,25 @@ class GateEditorAlignmentSeamTest {
         assertEquals("★ Reference: slide_01 · this slide ×1.35 (automatic)", lines[1]);
         assertEquals("★ Reference: slide_01 — you are on it; edits move every slide", lines[2]);
         assertEquals("false", lines[3]);
+    }
+
+    /** Final review I1: correction off for a reason the cohort states — the line says that, names no slide. */
+    @Test
+    void theReferenceLineSaysWhyCorrectionIsOff() {
+        assumeTrue(FxTestSupport.toolkitAvailable(), "JavaFX toolkit unavailable (headless)");
+        String line = FxTestSupport.onFx(() -> {
+            GateEditorPane pane = new GateEditorPane();
+            pane.setEditorAlignment(new EditorAlignment() {
+                @Override public Alignment forAxis(GateNode g, int axis) { return Alignment.identity(); }
+                @Override public String referenceName() { return null; }
+                @Override public String correctionOffReason() { return CohortSession.FOREIGN_TREE; }
+                @Override public String currentSlideName() { return "slide_02"; }
+            });
+            pane.setGateNode(Type.THRESHOLD.create.get());
+            pane.setCohortAvailable(true);
+            return pane.referenceLineText();
+        });
+        assertEquals(CohortSession.FOREIGN_TREE, line);
     }
 
     /** A locked cut: slider, field and histogram drag off, and a hint says what to do instead. */

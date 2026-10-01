@@ -438,9 +438,13 @@ public final class FlowPathBatch {
      * the lookup answers nothing), its marker-rule rates as the review computed them, and its
      * review state. {@code staining_factor} is the multiplicative factor that carries a
      * reference threshold onto the slide ({@link Alignment#factor}), {@code alignment_kind} how it was
-     * obtained, {@code below_range_pct} the share (percent) of the slide's usable cells outside the
-     * alignment's domain and {@code otsu_discordance} the log-scale gap between the detector's and
-     * Otsu's shift ({@link ColumnDiagnostics}); blank when not finite. Rule subjects carry root indices
+     * obtained. Two rates from {@link ColumnDiagnostics}, both percents (0–100), blank when not
+     * finite: {@code below_range_pct}, the percentage of the slide's clean cells with a finite value
+     * that lie outside the log scale's domain (below 1 on ln, below 0 on ln(x + 1)) — denominator
+     * the cells inside the domain plus those outside it; and {@code otsu_discordance_pct}, the
+     * percentage of the slide's in-domain clean cells that its own Otsu threshold and the pooled
+     * cohort's Otsu threshold classify differently on the corrected log values (the discordance of
+     * Harris et al. 2022 [FULL: main text incl. MathML equations; figure images not viewed]). Rule subjects carry root indices
      * ({@link MarkerRules.Rule#indexedLabel}). {@code reviewed_flags} counts the enabled gates
      * {@link ReviewScorer#answered} on this slide.
      */
@@ -456,7 +460,7 @@ public final class FlowPathBatch {
             ColumnDiagnostics d = evidence.model().diagnostics(id, col.key());
             if (d != null) {
                 qc(w, id, name, "below_range_pct", col.key(), decimal(100.0 * d.outsideFraction()));
-                qc(w, id, name, "otsu_discordance", col.key(), decimal(d.otsuDiscordance()));
+                qc(w, id, name, "otsu_discordance_pct", col.key(), decimal(100.0 * d.otsuDiscordance()));
             }
         }
         for (MarkerRules.RuleRate rate : evidence.review().rules().rates()) {

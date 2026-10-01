@@ -558,6 +558,17 @@ public final class CohortSession {
 
     public void batchFinished() { batchRunning = false; batchProgress = null; }
 
+    /**
+     * Why correction between slides is off although the live tree names a reference — a tree from
+     * another project, a reference missing from or excluded in this one — or null when it is not
+     * off for any of those. The words the banner and the status line use.
+     */
+    public String correctionOffReason() {
+        return foreign ? FOREIGN_TREE
+                : correctionDisabled ? (referenceExcluded ? REFERENCE_EXCLUDED : REFERENCE_MISSING)
+                : null;
+    }
+
     public CohortState state() {
         if (slides.size() < 2) {
             // Nothing to offer, but a tree from another project is still resolved with no slide
@@ -566,8 +577,7 @@ public final class CohortSession {
                     : CohortState.UNAVAILABLE;
         }
         String message = batchRunning ? batchProgress
-                : foreign ? FOREIGN_TREE
-                : correctionDisabled ? (referenceExcluded ? REFERENCE_EXCLUDED : REFERENCE_MISSING)
+                : correctionOffReason() != null ? correctionOffReason()
                 : referenceSlideId == null ? NO_REFERENCE
                 : sampling ? String.format(Locale.US, "Sampling slides %d/%d…", samples.size() + failures.size(), includedCount())
                 : !failures.isEmpty() ? String.format(Locale.US, "%d slide(s) could not be sampled", failures.size())

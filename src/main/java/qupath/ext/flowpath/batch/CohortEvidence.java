@@ -65,6 +65,16 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         }
     }
 
+    /**
+     * The scale to record for a run gated with {@code model}: the model's own whenever it was built
+     * for a reference, since that is the scale its alignments were estimated on; the session's
+     * only when there is no such model (nothing is corrected, so nothing depends on it). A scale
+     * change whose rescore has not landed must not be recorded beside the previous model's factors.
+     */
+    public static LogScale recordedScale(AlignmentModel model, LogScale sessionScale) {
+        return model != null && model.referenceSlideId() != null ? model.scale() : sessionScale;
+    }
+
     /** A headless {@link #sample}: the evidence, and each sampled slide's full detection fingerprint. */
     public record Sampled(CohortEvidence evidence, Map<String, String> detectionFingerprints) {
         public Sampled {

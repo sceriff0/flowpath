@@ -521,4 +521,71 @@ class CohortGridModelTest {
         assertTrue(m.missingChannels().get(0).startsWith("s2.tif — CD8 is not measured"));
         assertTrue(derive(CohortFixtures.sampled(tree), tree, null, false).missingChannels().isEmpty());
     }
+
+    /**
+     * Final review M2: entry ids restart in every project, so a foreign tree's reference id names
+     * an unrelated slide here. No row is starred, sorted first or described as the reference.
+     */
+    @Test
+    void aForeignTreeMarksNoRowAsTheReference() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        tree.setSlideNames(Map.of("ref", "another-project-ref.tif", "s1", "another-project-s1.tif"));
+        CohortSession s = CohortFixtures.sampled(tree);
+        tree.setReferenceSlideId("s2");
+        s.setLiveTree(tree);
+        assertTrue(s.state().correctionDisabled(), "fixture check: foreign");
+        String path = GateWalk.enabled(tree).get(0).gatePath();
+        CohortGridModel m = derive(s, tree, new ReviewItem.Key("s2", 0, path), false);
+        assertTrue(m.rows().stream().noneMatch(CohortGridModel.Row::reference), "no row is the reference");
+        assertEquals(List.of("ref", "s1", "s2", "odd"), m.rows().stream().map(CohortGridModel.Row::slideId).toList(),
+                "project order: nothing sorted first");
+        for (CohortGridModel.Row r : m.rows()) {
+            assertTrue(marks(r).stream().noneMatch(k -> k == REFERENCE), r.slideId() + ": " + marks(r));
+        }
+        assertNotEquals(CohortGridModel.REFERENCE_CORRECTION, m.detail().correctionLine());
+    }
+
+    /**
+     * Final review I2: a pick below 1 on ln is ignored; the cell needs a look and both the
+     * tooltip and the detail's correction line say why, rather than a silent "raw".
+     */
+    @Test
+    void anUnusablePickIsALookWithItsReasonInTheTooltipAndDetail() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortSession s = CohortFixtures.sampled(tree);
+        String key = columnKey(tree, 0);
+        s.setPeaks(Map.of("s1", Map.of(key, 0.5)));
+        rescore(s, tree);
+        String reason = "Your picked peak is below 1, outside the ln scale \u2014 not corrected; pick it again or use automatic";
+        String path = GateWalk.enabled(tree).get(0).gatePath();
+        CohortGridModel m = derive(s, tree, new ReviewItem.Key("s1", 0, path), false);
+        CohortGridModel.Cell cell = row(m, "s1").cells().get(0);
+        assertEquals(LOOK, cell.mark(), cell.toString());
+        assertTrue(cell.tooltip().contains(reason), cell.tooltip());
+        CohortGridModel.Detail d = m.detail();
+        assertEquals("not corrected \u2014 " + reason, d.correctionLine());
+        assertTrue(d.reasons().contains(reason), d.reasons().toString());
+        assertTrue(d.hasPickedPeak(), "the stored pick can be cleared");
+    }
+
+    /**
+     * Final review T9 / I2: a reference pick stored under ln1p below 1 reads NaN on ln; the detail
+     * still reports it, from the stored raw pick, so "Use automatic (reference)" can clear it.
+     */
+    @Test
+    void aReferencePickThatReadsNaNOnThisScaleIsStillReported() {
+        GateTree tree = CohortFixtures.twoCd8Roots();
+        CohortSession s = CohortFixtures.sampled(tree);
+        String key = columnKey(tree, 0);
+        s.setPeaks(Map.of("ref", Map.of(key, 0.5)));
+        rescore(s, tree);
+        String path = GateWalk.enabled(tree).get(0).gatePath();
+        CohortGridModel.Detail d = derive(s, tree, new ReviewItem.Key("s1", 0, path), false).detail();
+        assertTrue(Double.isNaN(d.histogram().pickedReferencePeak()), "fixture: NaN on ln");
+        assertTrue(d.hasPickedReferencePeak());
+        assertFalse(d.hasPickedPeak());
+        CohortGridModel.Detail none = derive(CohortFixtures.sampled(tree), tree, new ReviewItem.Key("s1", 0, path), false)
+                .detail();
+        assertFalse(none.hasPickedReferencePeak());
+    }
 }

@@ -492,7 +492,8 @@ class FlowPathBatchTest {
         assertTrue(qc.stream().noneMatch(l -> l.startsWith("c,c.tif,staining_factor,")), "3: " + qc);
         assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,alignment_kind,CD3,")), qc.toString());
         assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,below_range_pct,CD3,")), qc.toString());
-        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,otsu_discordance,CD3,")), qc.toString());
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,otsu_discordance_pct,CD3,")), qc.toString());
+        assertTrue(qc.stream().noneMatch(l -> l.contains(",otsu_discordance,")), "renamed: " + qc);
         assertTrue(qc.stream().noneMatch(l -> l.contains("staining_stretch") || l.contains("staining_offset")), qc.toString());
         assertTrue(Files.readAllLines(dir.resolve("run_info.txt")).contains("log_scale=ln"), "provenance");
 
@@ -516,5 +517,80 @@ class FlowPathBatchTest {
         CohortEvidence evidence = CohortEvidence.sample(slides, tree(), AlignmentModel.Cache.empty(), 0,
                 CohortEvidence.FROM_ARGUMENT, qupath.ext.flowpath.model.cohort.LogScale.LN, () -> false).evidence();
         assertSame(qupath.ext.flowpath.engine.AlignmentLookup.NONE, evidence.lookup());
+    }
+
+    /** {@code slide} with hand-picked peaks, everything else delegated. */
+    static BatchSlide picked(BatchSlide slide, Map<String, Double> peaks) {
+        return new BatchSlide() {
+            @Override public String id() { return slide.id(); }
+            @Override public String name() { return slide.name(); }
+            @Override public ImageData<BufferedImage> read() throws Exception { return slide.read(); }
+            @Override public PathObjectHierarchy readHierarchy() throws Exception { return slide.readHierarchy(); }
+            @Override public void save(ImageData<BufferedImage> d) throws Exception { slide.save(d); }
+            @Override public Map<String, Double> peaks() { return peaks; }
+        };
+    }
+
+    static List<BatchSlide> pickedOnB(Log log) {
+        Cells shifted = Cells.of(200).atGrid(10, 10).marker("CD3", i -> 1.5 * i + 5).marker("CD8", i -> 2.0 * i)
+                .area(100.0);
+        // The reference's own pick too: the fixture's uniform CD3 has no detected negative peak to pair with.
+        return List.of(picked(slide("a", cells(200), log), Map.of("CD3", 50.0)),
+                picked(slide("b", shifted, log), Map.of("CD3", 80.0)), slide("c", cells(200), log));
+    }
+
+    /**
+     * Final review T5: headless/GUI parity of the hand fix. An ln1p project records
+     * {@code log_scale=ln1p}, and a slide's picked peak ({@link BatchSlide#peaks}) reaches the model:
+     * the slide is aligned in landmark mode and {@code qc_summary} carries that factor.
+     */
+    @Test
+    void anLn1pRunWithAPickRecordsTheScaleAndAlignsTheSlideByItsPick(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        var scale = qupath.ext.flowpath.model.cohort.LogScale.LN1P;
+        CohortEvidence expected = CohortEvidence.sample(pickedOnB(log), tree(), AlignmentModel.Cache.empty(), 0,
+                CohortEvidence.FROM_ARGUMENT, scale, () -> false).evidence();
+        var alignment = expected.lookup().alignment("b", "CD3");
+        assertEquals(qupath.ext.flowpath.model.cohort.Alignment.Kind.LANDMARK, alignment.kind(), "the pick reached the model");
+        assertEquals(scale, expected.model().scale());
+
+        FlowPathBatch.run(pickedOnB(log), tree(), dir.toFile(), AlignmentModel.Cache.empty(), 0,
+                CohortEvidence.FROM_ARGUMENT, scale, null, (i, n) -> {}, () -> false);
+        assertTrue(runInfo(dir).contains("log_scale=ln1p"), runInfo(dir).toString());
+        List<String> qc = Files.readAllLines(dir.resolve("qc_summary.csv"));
+        assertTrue(qc.contains("b,b.tif,alignment_kind,CD3,landmark"), qc.toString());
+        assertTrue(qc.contains(String.format(java.util.Locale.US, "b,b.tif,staining_factor,CD3,%.4f", alignment.factor())),
+                "factor " + alignment.factor() + ": " + qc);
+        assertTrue(qc.contains("c,c.tif,alignment_kind,CD3,auto"), "an unpicked slide stays automatic: " + qc);
+    }
+
+    /** Final review I3: both per-column rates are percents, so they read on one scale. */
+    @Test
+    void theOtsuDiscordanceRowIsAPercent(@TempDir Path dir) throws Exception {
+        Log log = new Log();
+        CohortEvidence evidence = CohortEvidence.sample(pickedOnB(log), tree(), AlignmentModel.Cache.empty(), 0,
+                CohortEvidence.FROM_ARGUMENT, qupath.ext.flowpath.model.cohort.LogScale.LN, () -> false).evidence();
+        run(pickedOnB(log), tree(), dir.toFile(), new AtomicBoolean());
+        List<String> qc = Files.readAllLines(dir.resolve("qc_summary.csv"));
+        boolean checked = false;
+        for (String id : List.of("b", "c")) {
+            double fraction = evidence.model().diagnostics(id, "CD3").otsuDiscordance();
+            if (!Double.isFinite(fraction)) continue;
+            checked = true;
+            assertTrue(qc.contains(String.format(java.util.Locale.US, "%s,%s.tif,otsu_discordance_pct,CD3,%.4f",
+                    id, id, 100.0 * fraction)), id + " " + fraction + ": " + qc);
+        }
+        assertTrue(checked, "fixture: at least one judged slide");
+    }
+
+    /** Final review minor: the GUI batch records the scale of the model it gates with. */
+    @Test
+    void theRecordedScaleIsTheModelsWhenItHasAReference() {
+        var ln1p = qupath.ext.flowpath.model.cohort.LogScale.LN1P;
+        var ln = qupath.ext.flowpath.model.cohort.LogScale.LN;
+        CohortEvidence built = CohortEvidence.sample(pickedOnB(new Log()), tree(), AlignmentModel.Cache.empty(), 0,
+                CohortEvidence.FROM_ARGUMENT, ln1p, () -> false).evidence();
+        assertEquals(ln1p, CohortEvidence.recordedScale(built.model(), ln), "the model's, not the session's newer one");
+        assertEquals(ln, CohortEvidence.recordedScale(AlignmentModel.empty(), ln), "no model: the session's");
     }
 }

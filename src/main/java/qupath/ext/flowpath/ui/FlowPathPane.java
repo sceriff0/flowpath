@@ -1024,38 +1024,14 @@ public class FlowPathPane extends BorderPane {
         Dialogs.showWarningNotification("FlowPath", message);
     }
 
-    /**
-     * The open slide's alignment per gate axis, for the editor's display seam. Read live on every
-     * call — the tree, the open slide and the cohort's model are the session's current ones — and
-     * answered by {@link TreeResolver#correctionFor}, the same rule the live pass resolves with,
-     * so the editor cannot draw an axis as corrected that the pass gates uncorrected. Identity
-     * when correction is off, the open slide is the reference, or the tree is foreign
-     * ({@link #currentSlideId()} is null).
-     */
-    private final EditorAlignment editorAlignment = new EditorAlignment() {
-        @Override
-        public Alignment forAxis(GateNode gate, int axis) {
-            return TreeResolver.correctionFor(session.tree(), gate, axis, currentSlideId(), alignments);
-        }
+    /** The editor's display seam onto the cohort; see {@link CohortEditorAlignment}. */
+    private final EditorAlignment editorAlignment = new CohortEditorAlignment(
+            this::liveTree, this::currentSlideId, cohort, () -> alignments);
 
-        @Override
-        public String referenceName() {
-            String reference = session.tree().getReferenceSlideId();
-            return reference == null ? null : cohort.slideName(reference);
-        }
-
-        @Override
-        public String currentSlideName() {
-            String slideId = currentSlideId();
-            return slideId == null ? null : cohort.slideName(slideId);
-        }
-
-        @Override
-        public boolean isReferenceSlide() {
-            String slideId = currentSlideId();
-            return slideId != null && slideId.equals(session.tree().getReferenceSlideId());
-        }
-    };
+    /** The session's tree, read when called (a method, so a field initialiser may refer to it). */
+    private GateTree liveTree() {
+        return session.tree();
+    }
 
     /** The shown gate's Manual/Skip on the open slide as the editor's banner, or none. */
     private void showSlideSetting() {
@@ -3156,7 +3132,8 @@ public class FlowPathPane extends BorderPane {
         CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup, new CohortEvidence.Provenance(
                 sampled >= 0 ? sampled : CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()),
                 sampled >= 0 ? CohortEvidence.FROM_REVIEWED_MODEL : CohortEvidence.FROM_PREFERENCE,
-                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId()), cohort.scale()),
+                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId()),
+                CohortEvidence.recordedScale(model, cohort.scale())),
                 cohort.excluded());
         cohort.batchStarted();
         batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence));

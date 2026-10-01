@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.ui.cohort;
 
 import qupath.ext.flowpath.cohort.AlignmentModel;
+import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortSession;
 import qupath.ext.flowpath.cohort.CohortState;
 import qupath.ext.flowpath.cohort.ColumnDiagnostics;
@@ -101,8 +102,17 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
     /** The selected cell, every line labelled so the numbers read without the grid beside them. */
     public record Detail(ReviewItem.Key key, String title, CellMark mark, List<String> reasons,
                          String valuesLine, String correctionLine, String usageLine, HistogramView histogram,
-                         boolean canPickPeak, boolean hasPickedPeak, boolean region) {
+                         boolean canPickPeak, boolean hasPickedPeak, boolean hasPickedReferencePeak,
+                         boolean region) {
         public Detail { reasons = List.copyOf(reasons); }
+
+        /** With no reference pick stored for the column. */
+        public Detail(ReviewItem.Key key, String title, CellMark mark, List<String> reasons, String valuesLine,
+                      String correctionLine, String usageLine, HistogramView histogram, boolean canPickPeak,
+                      boolean hasPickedPeak, boolean region) {
+            this(key, title, mark, reasons, valuesLine, correctionLine, usageLine, histogram, canPickPeak,
+                    hasPickedPeak, false, region);
+        }
     }
 
     public static final String SCOPE_NOTE = "correction assumes positive/negative markers, not graded intensity";
@@ -136,7 +146,7 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
                                          boolean onlyLooks, String openSlideId, boolean rescoring) {
         List<GateWalk.Entry> entries = GateWalk.enabled(tree);
         List<Column> columns = columns(entries);
-        String reference = tree.getReferenceSlideId();
+        String reference = shownReference(session, tree);
         ReviewScorer.Result review = currentReview(session, tree);
         Map<String, ReviewItem> items = new HashMap<>();
         for (ReviewItem i : review.items()) items.put(keyString(i.key()), i);
@@ -171,7 +181,8 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
             }
             boolean isRef = sq.slideId().equals(reference);
             Row row = new Row(sq.slideId(), sq.name(), isRef, sq.slideId().equals(openSlideId), status, statusText,
-                    sq.cells(), cells, looks, !isRef, canBeReference(status, isRef, reference), selectedColumn);
+                    sq.cells(), cells, looks, !isRef, canBeReference(status, isRef, tree.getReferenceSlideId()),
+                    selectedColumn);
             if (onlyLooks && looks == 0) continue;
             if (isRef) referenceRow = row;
             else rows.add(row);
@@ -182,6 +193,15 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
                 banner.suggestedName(), banner.notes());
         return new CohortGridModel(banner, columns, rows, detail(session, tree, entries, selected, items),
                 missingChannels(review), legend(rows));
+    }
+
+    /**
+     * The reference row the grid marks: the tree's reference, or none for a tree from another
+     * project — entry ids restart in every project, so its id names an unrelated slide here, which
+     * must not be starred, sorted first or described as the reference (final review M2).
+     */
+    private static String shownReference(CohortSession session, GateTree tree) {
+        return CohortIdentity.matches(tree, session.projectNames()) ? tree.getReferenceSlideId() : null;
     }
 
     /**
@@ -476,7 +496,7 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         if (entry == null) return null;
         GateNode gate = entry.gate();
         String slideId = selected.slideId();
-        String reference = tree.getReferenceSlideId();
+        String reference = shownReference(session, tree);
         ReviewItem item = items.get(keyString(selected));
         CellMark mark = mark(session, entry, slideId, reference, items);
         TreeResolver.Applied applied = TreeResolver.resolve(tree, slideId, session.lookup()).applied(gate);
@@ -502,12 +522,17 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         Alignment correction = TreeResolver.correctionFor(tree, gate, 0, slideId, session.lookup());
         boolean canPick = gate.isCorrectStaining() && reference != null && !slideId.equals(reference)
                 && model != null && column != null && model.grid(column) != null;
+        String unused = d == null || !gate.isCorrectStaining() ? null
+                : ReviewScorer.pickUnusedReason(d.pickProblem(), model.scale(), gate.getChannels().get(0));
         String correctionLine = reference != null && slideId.equals(reference) ? REFERENCE_CORRECTION
-                : correctionLine(correction);
+                : correctionLine(correction) + (unused == null ? "" : " \u2014 " + unused);
+        // The stored raw picks decide the clear buttons, never their log values: a pick that reads
+        // NaN on this scale still moves the alignment (or stops it), and must be clearable.
         return new Detail(selected, title, mark, reasons, values, correctionLine,
                 model == null ? "" : usageLine(d, model.scale()),
                 histogram(session, model, column, slideId, reference, gate, applied),
-                canPick, d != null && d.peakPicked(), gate instanceof Region2DGate);
+                canPick, storedPick(session, slideId, column), storedPick(session, reference, column),
+                gate instanceof Region2DGate);
     }
 
     /** {@code ×0.82 · automatic (UniFORM)}, {@code ×0.82 · from your picked peak (UniFORM landmark mode)} or {@code not corrected}. */
@@ -549,6 +574,13 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
                 pickedLog(session, slideId, column, scale), pickedLog(session, reference, column, scale),
                 cut ? scale.toLog(applied.reference().axis(0)[0]) : Double.NaN,
                 cut ? scale.toLog(applied.applied().axis(0)[0]) : Double.NaN, scale);
+    }
+
+    /** Whether {@code slideId} has a hand-picked peak stored for {@code column}, whatever the scale reads it as. */
+    private static boolean storedPick(CohortSession session, String slideId, String column) {
+        if (slideId == null || column == null) return false;
+        Map<String, Double> m = session.peaks().get(slideId);
+        return m != null && m.get(column) != null;
     }
 
     private static double pickedLog(CohortSession session, String slideId, String column, LogScale scale) {

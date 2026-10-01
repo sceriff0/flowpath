@@ -38,6 +38,17 @@ public final class EditorLabels {
      * {@code slideName} is the open slide's name, or null when none resolves.
      */
     public static String referenceLine(String referenceName, String slideName, boolean onReference, Alignment axis0) {
+        return referenceLine(null, referenceName, slideName, onReference, axis0);
+    }
+
+    /**
+     * As {@link #referenceLine(String, String, boolean, Alignment)}, with the cohort's reason
+     * correction is off ({@code offReason}, null when it is on): that reason is the whole line,
+     * never a reference name that is not this project's reference.
+     */
+    public static String referenceLine(String offReason, String referenceName, String slideName, boolean onReference,
+                                       Alignment axis0) {
+        if (offReason != null) return offReason;
         if (referenceName == null) return "No reference slide — thresholds are not corrected between slides";
         String head = "★ Reference: " + referenceName;
         if (onReference) return head + " — you are on it; edits move every slide";

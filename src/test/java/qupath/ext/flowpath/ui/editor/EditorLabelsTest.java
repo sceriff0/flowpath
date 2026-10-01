@@ -52,4 +52,14 @@ class EditorLabelsTest {
         assertEquals("★ Reference: slide_A", EditorLabels.referenceLine("slide_A", null, false, Alignment.auto(-20, 0.01)));
         assertEquals("★ Reference: slide_A", EditorLabels.referenceLine("slide_A", "slide_B", false, null));
     }
+
+    /** Final review I1: correction off for a reason the cohort states — that reason is the line. */
+    @Test
+    void aCorrectionOffReasonIsTheWholeLine() {
+        assertEquals("Reference slide is excluded — include it or pick another reference",
+                EditorLabels.referenceLine("Reference slide is excluded — include it or pick another reference",
+                        "slide_A", "slide_B", false, Alignment.identity()));
+        assertEquals("★ Reference: slide_A · this slide not corrected",
+                EditorLabels.referenceLine(null, "slide_A", "slide_B", false, Alignment.identity()));
+    }
 }

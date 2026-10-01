@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.Statistic;
@@ -322,6 +323,64 @@ class ReviewScorerTest {
         s.add(flat());
         ReviewScorer.Result r = scoreWith(oneRoot(AT_VALLEY), s, java.util.Map.of("flat", java.util.Map.of("CD8", 70.0)));
         assertTrue(itemsFor(r, "flat", 0).stream().noneMatch(i -> i.flags().contains(NO_NEGATIVE_PEAK)));
+    }
+
+    /** Final review I2: a pick below 1 on ln cannot be binned; the slide is raw, and the review says why. */
+    @Test
+    void aPickOutsideTheScaleIsCantJudgeWithItsReason() {
+        List<SlideSample> s = typical();
+        AlignmentModel model = AlignmentModel.build("ref", s, CD8, AlignmentModel.Cache.empty(),
+                qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of("s1", java.util.Map.of("CD8", 0.5)));
+        assertEquals(Alignment.Kind.IDENTITY, model.alignment("s1", "CD8").kind(), "fixture: the pick is unusable");
+        assertEquals(ColumnDiagnostics.PickProblem.SLIDE_PICK_OUTSIDE_SCALE, model.diagnostics("s1", "CD8").pickProblem());
+        ReviewItem item = only(ReviewScorer.score(oneRoot(AT_VALLEY), s, model), "s1");
+        assertTrue(item.flags().contains(CANT_JUDGE), item.toString());
+        assertTrue(item.reasonsFor(CANT_JUDGE).contains(
+                "Your picked peak is below 1, outside the ln scale \u2014 not corrected; pick it again or use automatic"),
+                item.reasons().toString());
+    }
+
+    /** Final review I2: the reference has no detected L1 and no pick, so a slide's pick has nothing to pair with. */
+    @Test
+    void aPickWithNoReferencePeakIsNoNegativePeakWithItsReason() {
+        List<SlideSample> s = typical();
+        SlideSample fl = flat();
+        s.set(0, new SlideSample("ref", "ref.tif", fl.index(), fl.clean(), fl.stats(), 3000, "f-ref"));
+        AlignmentModel model = AlignmentModel.build("ref", s, CD8, AlignmentModel.Cache.empty(),
+                qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of("s1", java.util.Map.of("CD8", 70.0)));
+        assertFalse(model.landmarks("ref", "CD8").hasL1(), "fixture: the reference has no negative peak");
+        assertEquals(Alignment.Kind.IDENTITY, model.alignment("s1", "CD8").kind());
+        assertEquals(ColumnDiagnostics.PickProblem.NO_REFERENCE_PEAK, model.diagnostics("s1", "CD8").pickProblem());
+        ReviewItem item = only(ReviewScorer.score(oneRoot(AT_VALLEY), s, model), "s1");
+        assertTrue(item.flags().contains(NO_NEGATIVE_PEAK), item.toString());
+        assertTrue(item.reasonsFor(NO_NEGATIVE_PEAK).contains("The reference has no negative peak on CD8 to pair with"
+                + " your pick \u2014 pick the reference's peak too; not corrected"), item.reasons().toString());
+    }
+
+    /** Final review I2: a reference pick below 1 on ln reads NaN, so every landmark-mode slide is raw; say so. */
+    @Test
+    void aReferencePickOutsideTheScaleIsCantJudgeOnThePickedSlide() {
+        List<SlideSample> s = typical();
+        AlignmentModel model = AlignmentModel.build("ref", s, CD8, AlignmentModel.Cache.empty(),
+                qupath.ext.flowpath.model.cohort.LogScale.LN, java.util.Map.of(
+                        "ref", java.util.Map.of("CD8", 0.5), "s1", java.util.Map.of("CD8", 70.0)));
+        assertEquals(Alignment.Kind.IDENTITY, model.alignment("s1", "CD8").kind());
+        assertEquals(ColumnDiagnostics.PickProblem.REFERENCE_PICK_OUTSIDE_SCALE,
+                model.diagnostics("s1", "CD8").pickProblem());
+        assertEquals(ColumnDiagnostics.PickProblem.NONE, model.diagnostics("s2", "CD8").pickProblem(),
+                "a slide with no pick is aligned automatically, untouched");
+        ReviewItem item = only(ReviewScorer.score(oneRoot(AT_VALLEY), s, model), "s1");
+        assertTrue(item.reasonsFor(CANT_JUDGE).contains("The reference's picked peak is below 1, outside the ln scale"
+                + " \u2014 your pick has nothing to pair with; not corrected"), item.reasons().toString());
+    }
+
+    @Test
+    void theLn1pScaleNamesItsOwnDomainEdge() {
+        assertEquals("Your picked peak is below 0, outside the ln(x + 1) scale \u2014 not corrected; pick it again or use automatic",
+                ReviewScorer.pickUnusedReason(ColumnDiagnostics.PickProblem.SLIDE_PICK_OUTSIDE_SCALE,
+                        qupath.ext.flowpath.model.cohort.LogScale.LN1P, "CD8"));
+        assertNull(ReviewScorer.pickUnusedReason(ColumnDiagnostics.PickProblem.NONE,
+                qupath.ext.flowpath.model.cohort.LogScale.LN, "CD8"));
     }
 
     @Test

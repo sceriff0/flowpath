@@ -265,9 +265,11 @@ public final class AlignmentModel {
             for (Logs l : present) {
                 String id = l.sample().slideId();
                 boolean isRef = id.equals(referenceSlideId);
+                Double picked = isRef ? null : pick(peaks, id, key);
                 diagnostics.computeIfAbsent(id, k -> new HashMap<>()).put(key, diagnosticsFor(l, isRef,
                         tooFew.get(id), aligned.get(id), landmarks.get(id).get(key), refLm, discordance.get(id),
-                        median, mad, !isRef && pick(peaks, id, key) != null));
+                        median, mad, picked != null,
+                        tooFew.get(id) ? ColumnDiagnostics.PickProblem.NONE : pickProblem(picked, refPick, refPeak, scale)));
             }
         }
         return new AlignmentModel(referenceSlideId, !referenceSampled, scale, landmarks, alignments, grids, histograms,
@@ -294,6 +296,21 @@ public final class AlignmentModel {
     private static Double pick(Map<String, Map<String, Double>> peaks, String slideId, String columnKey) {
         Map<String, Double> m = peaks.get(slideId);
         return m == null ? null : m.get(columnKey);
+    }
+
+    /**
+     * Why {@link #alignmentFor} could not use a slide's pick — the same two conditions it tests, in
+     * the same order — so the problem layer can name it instead of leaving the slide silently raw.
+     */
+    private static ColumnDiagnostics.PickProblem pickProblem(Double picked, Double refPick, double refPeak,
+                                                             LogScale scale) {
+        if (picked == null) return ColumnDiagnostics.PickProblem.NONE;
+        if (Double.isNaN(scale.toLog(picked))) return ColumnDiagnostics.PickProblem.SLIDE_PICK_OUTSIDE_SCALE;
+        if (Double.isNaN(refPeak)) {
+            return refPick != null ? ColumnDiagnostics.PickProblem.REFERENCE_PICK_OUTSIDE_SCALE
+                    : ColumnDiagnostics.PickProblem.NO_REFERENCE_PEAK;
+        }
+        return ColumnDiagnostics.PickProblem.NONE;
     }
 
     /**
@@ -373,7 +390,8 @@ public final class AlignmentModel {
     /** Rules 5 and 7, and the counts of rule 1, as one record. */
     private static ColumnDiagnostics diagnosticsFor(Logs l, boolean isReference, boolean tooFew, Alignment a,
                                                     Landmarks lm, Landmarks refLm, double discordance,
-                                                    double median, double mad, boolean peakPicked) {
+                                                    double median, double mad, boolean peakPicked,
+                                                    ColumnDiagnostics.PickProblem pickProblem) {
         int seen = l.usable() + l.outsideDomain();
         double outsideFraction = seen == 0 ? 0.0 : l.outsideDomain() / (double) seen;
         double detector = lm != null && lm.hasL1() && refLm != null && refLm.hasL1() ? lm.l1() - refLm.l1() : Double.NaN;
@@ -382,7 +400,7 @@ public final class AlignmentModel {
         boolean outlier = !isReference && a.kind() != Alignment.Kind.IDENTITY && !Double.isNaN(median)
                 && Math.abs(a.logShift() - median) > MAD_LIMIT * mad;
         return new ColumnDiagnostics(l.usable(), l.outsideDomain(), outsideFraction, tooFew, peakLock, detector,
-                discordance, outlier, median, peakPicked);
+                discordance, outlier, median, peakPicked, pickProblem);
     }
 
     /**
