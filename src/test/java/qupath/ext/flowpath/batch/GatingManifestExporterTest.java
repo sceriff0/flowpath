@@ -116,11 +116,11 @@ class GatingManifestExporterTest {
                 new GatingManifestExporter.Annotations() {
                     @Override public Landmarks reference(String column) { return new Landmarks(qupath.ext.flowpath.model.cohort.LogScale.LN, 1.25, Double.NaN); }
                     @Override public Landmarks slide(String slideId, String column) { return new Landmarks(qupath.ext.flowpath.model.cohort.LogScale.LN, 1.5, 4.5); }
-                    @Override public String flags(String slideId, int rootIndex, String gatePath) { return "unusual-staining"; }
+                    @Override public String flags(String slideId, int rootIndex, String gatePath) { return "shift-outlier"; }
                 });
         List<String> lines = Files.readAllLines(file.toPath());
         String yRow = lines.get(4);
         assertTrue(yRow.startsWith("s2,s2.tif,1,CD8+/CD3 vs CD4,y,CD4,6.0,,corrected,"), yRow);
-        assertTrue(lines.get(1).endsWith(",1.25,,1.5,4.5,,unusual-staining"), lines.get(1));
+        assertTrue(lines.get(1).endsWith(",1.25,,1.5,4.5,,shift-outlier"), lines.get(1));
     }
 }

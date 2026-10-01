@@ -164,7 +164,7 @@ class AlignmentModelTest {
     }
 
     /** {@code below} cells uniform on [0, 0.99), the rest of {@code n} a 20%-positive mixture. */
-    private static double[] subOne(int below, int n) {
+    static double[] subOne(int below, int n) {
         Random r = new Random(32);
         double[] tail = mixture(33, 4.0, 6.0, 0.20, n - below, 1.0);
         double[] out = new double[n];

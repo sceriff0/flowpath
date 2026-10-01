@@ -26,16 +26,22 @@ import java.util.Set;
 import java.util.StringJoiner;
 
 /**
- * Scores every slide x gate against the four flags of spec §6, top-down in tree order: no
- * landmark, unusual staining, on a peak, can't judge — then merges in the marker-rule findings
- * ({@link MarkerRules}, flag type 5) under the same answered/hidden rule. Pure — no JavaFX, no
- * mutation.
+ * Scores every slide x gate against the review flags, top-down in tree order, then merges in the
+ * marker-rule findings ({@link MarkerRules}) under the same answered/hidden rule. A flag is a
+ * labelled problem; its source is the one stated on {@link ReviewItem.Flag}:
+ * PEAK_LOCK (heuristic on UniFORM's assumption, Wang et al. 2025), NO_NEGATIVE_PEAK (Hahne et al.
+ * 2010), CANT_JUDGE, BELOW_RANGE, MARKER_RULE and ON_PEAK (FlowPath heuristics), OTSU_DISCORDANCE
+ * (Harris et al. 2022 metric, FlowPath's 10% cut), SHIFT_OUTLIER (Hahne et al. 2010, FlowPath's
+ * 3-MAD cut). A picked peak silences PEAK_LOCK and NO_NEGATIVE_PEAK. Flags sort by severity
+ * (declaration order). Pure — no JavaFX, no mutation.
  */
 public final class ReviewScorer {
 
     public static final int MIN_PARENT_CELLS = 300;
     public static final double MIN_COVERAGE = 0.90;
     public static final double ON_PEAK_FRACTION = 0.5;
+    public static final double OTSU_DISCORDANCE_CUT = 0.10;
+    public static final double BELOW_RANGE_CUT = 0.20;
 
     /**
      * {@code rules} carries every slide's marker-rule rates, so a reader ({@code qc_summary.csv}'s
@@ -98,13 +104,11 @@ public final class ReviewScorer {
                     String column = applied.columns().get(k);
                     String channel = gate.getChannels().get(k);
 
-                    // Not while correction is off for want of a reference sample: nothing is
-                    // corrected then, so "not corrected" would single this slide out for nothing.
-                    Landmarks lm = model.landmarks(s.slideId(), column);
+                    // Correction flags: only where a correction is applied (Correct staining on, not the
+                    // reference, and not while correction is off for want of a reference sample).
                     if (gate.isCorrectStaining() && !s.slideId().equals(model.referenceSlideId())
-                            && !model.referenceMissing() && lm != null && !lm.hasL1()) {
-                        flags.add(ReviewItem.Flag.NO_LANDMARK);
-                        reasons.add("No clear negative peak — not corrected");
+                            && !model.referenceMissing()) {
+                        correctionFlags(model, s.slideId(), column, channel, flags, reasons);
                     }
 
                     MeasuredColumn measuredColumn = s.index().column(gate, k, s.stats());
@@ -143,13 +147,57 @@ public final class ReviewScorer {
 
                 if (!flags.isEmpty()) {
                     items.add(new ReviewItem(new ReviewItem.Key(s.slideId(), e.rootIndex(), e.gatePath()), s.name(), gate,
-                            List.copyOf(flags), List.copyOf(reasons), applied.applied()));
+                            sorted(flags), List.copyOf(reasons), applied.applied()));
                 }
             }
         }
         MarkerRules.Evaluation rules = MarkerRules.evaluate(tree, samples, resolved);
         mergeRuleFindings(rules, tree, samples, resolved, items);
         return new Result(List.copyOf(items), List.copyOf(infos), rules);
+    }
+
+    /**
+     * The correction-quality flags of one slide x column (design spec §3). {@code tooFew} wins:
+     * a slide not corrected at all raises only CANT_JUDGE. A picked peak answers PEAK_LOCK and
+     * NO_NEGATIVE_PEAK. A NaN Otsu discordance never raises.
+     */
+    private static void correctionFlags(AlignmentModel model, String slideId, String column, String channel,
+                                        Set<ReviewItem.Flag> flags, Set<String> reasons) {
+        ColumnDiagnostics d = model.diagnostics(slideId, column);
+        if (d == null) return;
+        if (d.tooFew()) {
+            flags.add(ReviewItem.Flag.CANT_JUDGE);
+            reasons.add("Fewer than 50 usable values on this slide or the reference \u2014 not corrected");
+            return;
+        }
+        Landmarks lm = model.landmarks(slideId, column);
+        if (!d.peakPicked()) {
+            if (lm != null && !lm.hasL1()) {
+                flags.add(ReviewItem.Flag.NO_NEGATIVE_PEAK);
+                reasons.add("No negative peak found on " + channel);
+            }
+            if (d.peakLock()) {
+                double factor = model.alignment(slideId, column).factor();
+                flags.add(ReviewItem.Flag.PEAK_LOCK);
+                reasons.add(String.format(Locale.US, "Automatic shift \u00D7%.2f, but the negative peaks differ by \u00D7%.2f"
+                        + " \u2014 the alignment may have locked onto positive cells", factor, Math.exp(d.detectorLogShift())));
+            }
+        }
+        if (d.otsuDiscordance() > OTSU_DISCORDANCE_CUT) {
+            flags.add(ReviewItem.Flag.OTSU_DISCORDANCE);
+            reasons.add(String.format(Locale.US, "Otsu thresholds disagree on %d%% of cells after correction",
+                    Math.round(100 * d.otsuDiscordance())));
+        }
+        if (d.shiftOutlier()) {
+            flags.add(ReviewItem.Flag.SHIFT_OUTLIER);
+            reasons.add(String.format(Locale.US, "Shift \u00D7%.2f vs cohort median \u00D7%.2f",
+                    model.alignment(slideId, column).factor(), Math.exp(d.cohortMedianLogShift())));
+        }
+        if (d.outsideFraction() > BELOW_RANGE_CUT) {
+            flags.add(ReviewItem.Flag.BELOW_RANGE);
+            reasons.add(String.format(Locale.US, "%d%% of cells are below %s and were not used to estimate the shift",
+                    Math.round(100 * d.outsideFraction()), model.scale() == LogScale.LN ? "1" : "0"));
+        }
     }
 
     /**
@@ -185,7 +233,7 @@ public final class ReviewScorer {
                 flags.add(ReviewItem.Flag.MARKER_RULE);
                 Set<String> reasons = new LinkedHashSet<>(old.reasons());
                 reasons.add(f.reason());
-                items.set(at, new ReviewItem(key, old.slideName(), old.gate(), List.copyOf(flags),
+                items.set(at, new ReviewItem(key, old.slideName(), old.gate(), sorted(flags),
                         List.copyOf(reasons), old.applied()));
             }
         }
@@ -209,6 +257,10 @@ public final class ReviewScorer {
         SlideSetting setting = gate.slideSetting(slideId);
         if (setting instanceof SlideSetting.Skip || setting instanceof SlideSetting.Manual) return true;
         return setting instanceof SlideSetting.Reviewed rv && rv.appliedValues().matches(applied);
+    }
+
+    private static List<ReviewItem.Flag> sorted(Set<ReviewItem.Flag> flags) {
+        return flags.stream().sorted().toList();
     }
 
     /** The first axis channel {@code s}'s sample does not carry, or null when every axis is measured. */
