@@ -187,7 +187,7 @@ public final class CohortGridPane extends BorderPane {
             boolean none = d == null;
             boolean flagged = !none && d.mark() == CohortGridModel.CellMark.LOOK;
             looksRight.setDisable(!flagged);
-            adjust.setDisable(none || "region".equals(d.valuesLine()));
+            adjust.setDisable(none || d.region());
             skip.setDisable(!flagged);
             useCohortValue.setDisable(none || (d.mark() != CohortGridModel.CellMark.ADJUSTED
                     && d.mark() != CohortGridModel.CellMark.SKIPPED && d.mark() != CohortGridModel.CellMark.REVIEWED));

@@ -34,7 +34,7 @@ class CohortGridPaneFxTest {
                 List.of("Suggested: slide_B — most central on 1 of 1 gated columns"));
         var detail = new CohortGridModel.Detail(new ReviewItem.Key("2", 0, "CD8"), "slide_B · CD8",
                 CohortGridModel.CellMark.LOOK, List.of("Threshold sits on a peak, not in a valley"),
-                "reference 412 → this slide 587", "×1.42 · automatic (UniFORM)", "", null, true, false);
+                "reference 412 → this slide 587", "×1.42 · automatic (UniFORM)", "", null, true, false, false);
         return new CohortGridModel(banner, cols, rows, detail);
     }
 
@@ -73,7 +73,7 @@ class CohortGridPaneFxTest {
         var d = m.detail();
         var reviewed = new CohortGridModel.Detail(d.key(), d.title(), CohortGridModel.CellMark.REVIEWED,
                 d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), d.histogram(), d.canPickPeak(),
-                d.hasPickedPeak());
+                d.hasPickedPeak(), d.region());
         FxTestSupport.onFxRun(() -> pane.render(new CohortGridModel(m.banner(), m.columns(), m.rows(), reviewed), 20000));
         assertTrue(FxTestSupport.onFx(() -> pane.looksRight.isDisable()));
         assertTrue(FxTestSupport.onFx(() -> pane.skip.isDisable()));

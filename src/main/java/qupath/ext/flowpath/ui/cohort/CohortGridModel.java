@@ -101,12 +101,14 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
     /** The selected cell, every line labelled so the numbers read without the grid beside them. */
     public record Detail(ReviewItem.Key key, String title, CellMark mark, List<String> reasons,
                          String valuesLine, String correctionLine, String usageLine, HistogramView histogram,
-                         boolean canPickPeak, boolean hasPickedPeak) {
+                         boolean canPickPeak, boolean hasPickedPeak, boolean region) {
         public Detail { reasons = List.copyOf(reasons); }
     }
 
     public static final String SCOPE_NOTE = "correction assumes positive/negative markers, not graded intensity";
     public static final String REALIGNING = " · re-aligning…";
+    /** The reference row's correction line (ruling R7): the reference is what every other slide is corrected onto. */
+    public static final String REFERENCE_CORRECTION = "reference slide — its thresholds are the ones you draw";
 
     public CohortGridModel {
         columns = List.copyOf(columns);
@@ -500,10 +502,12 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         Alignment correction = TreeResolver.correctionFor(tree, gate, 0, slideId, session.lookup());
         boolean canPick = gate.isCorrectStaining() && reference != null && !slideId.equals(reference)
                 && model != null && column != null && model.grid(column) != null;
-        return new Detail(selected, title, mark, reasons, values, correctionLine(correction),
+        String correctionLine = reference != null && slideId.equals(reference) ? REFERENCE_CORRECTION
+                : correctionLine(correction);
+        return new Detail(selected, title, mark, reasons, values, correctionLine,
                 model == null ? "" : usageLine(d, model.scale()),
                 histogram(session, model, column, slideId, reference, gate, applied),
-                canPick, d != null && d.peakPicked());
+                canPick, d != null && d.peakPicked(), gate instanceof Region2DGate);
     }
 
     /** {@code ×0.82 · automatic (UniFORM)}, {@code ×0.82 · from your picked peak (UniFORM landmark mode)} or {@code not corrected}. */
@@ -572,8 +576,16 @@ public record CohortGridModel(Banner banner, List<Column> columns, List<Row> row
         return String.join(" / ", axes);
     }
 
-    /** Two decimals below 100, whole numbers above: a cut reads the same at either intensity range. */
-    private static String number(double x) {
-        return String.format(Locale.US, Math.abs(x) >= 100 ? "%.0f" : "%.2f", x);
+    /**
+     * Four significant digits, never scientific notation, whole numbers from 1000 up: a cut on a
+     * [0, 1] or pre-standardised column (0.00412) keeps its shift visible, as does one at 1235.
+     */
+    static String number(double x) {
+        if (!Double.isFinite(x)) return String.valueOf(x);
+        if (x == 0) return "0";
+        java.math.BigDecimal b = new java.math.BigDecimal(x);
+        b = Math.abs(x) >= 1000 ? b.setScale(0, java.math.RoundingMode.HALF_UP)
+                : b.round(new java.math.MathContext(4, java.math.RoundingMode.HALF_UP));
+        return b.stripTrailingZeros().toPlainString();
     }
 }

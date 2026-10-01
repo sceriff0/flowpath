@@ -308,7 +308,8 @@ class CohortGridModelTest {
 
         CohortGridModel.Detail ref = derive(s, tree, new ReviewItem.Key("ref", 0, path), false).detail();
         assertFalse(ref.canPickPeak(), "the reference is not picked against itself");
-        assertEquals("not corrected", ref.correctionLine());
+        assertEquals("reference slide — its thresholds are the ones you draw", ref.correctionLine());
+        assertFalse(d.region(), "a threshold gate is not a region");
 
         CohortSession p = withPickedPeakOnS1(tree);
         CohortGridModel.Detail picked = derive(p, tree, new ReviewItem.Key("s1", 0, path), false).detail();
@@ -323,6 +324,16 @@ class CohortGridModelTest {
         CohortGridModel.Detail raw = derive(s, tree, new ReviewItem.Key("odd", 0, path), false).detail();
         assertFalse(raw.canPickPeak(), "Correct staining off");
         assertEquals("not corrected", raw.correctionLine());
+    }
+
+    /** Review I1: a cut on a [0, 1] or pre-standardised column keeps its digits; no scientific notation. */
+    @Test
+    void valuesKeepFourSignificantDigits() {
+        Object[][] table = {
+                {0.00412, "0.00412"}, {0.5, "0.5"}, {0.982, "0.982"}, {12.345, "12.35"}, {99.996, "100"},
+                {1234.5, "1235"}, {123456.7, "123457"}, {-0.03141, "-0.03141"}, {-2.5, "-2.5"}, {0.0, "0"},
+        };
+        for (Object[] r : table) assertEquals(r[1], CohortGridModel.number((double) r[0]), String.valueOf(r[0]));
     }
 
     @Test
