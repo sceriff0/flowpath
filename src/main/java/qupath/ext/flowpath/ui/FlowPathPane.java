@@ -616,8 +616,15 @@ public class FlowPathPane extends BorderPane {
             renderCohort();
         });
         cohortGrid.setOnKey(this::onCohortKey);
-        cohortGrid.setOnPickPeak((target, u) -> setPickedPeak(target, cohort.scale().fromLog(u)));
+        // The log value is on the scale the histogram was drawn in (the model's), not cohort.scale():
+        // between a scale change and the rescore that follows, the two differ, and converting with
+        // the session's would store a wrong raw peak.
+        cohortGrid.setOnPickPeak((target, u) -> {
+            LogScale drawn = cohortGrid.shownScale();
+            if (drawn != null) setPickedPeak(target, drawn.fromLog(u));
+        });
         cohortGrid.setOnClearPeak(() -> setPickedPeak(CohortHistogramCanvas.PickTarget.SLIDE, null));
+        cohortGrid.setOnClearReferencePeak(() -> setPickedPeak(CohortHistogramCanvas.PickTarget.REFERENCE, null));
         cohortGrid.setOnScaleChanged(this::changeScale);
         // The sample size is part of the sampling key, so the refresh re-samples.
         cohortGrid.setOnSampleSizeChanged(n -> {

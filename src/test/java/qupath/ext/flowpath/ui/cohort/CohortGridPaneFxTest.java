@@ -425,4 +425,35 @@ class CohortGridPaneFxTest {
                 "a failed write re-renders the session's scale, reverting the choice");
         assertEquals(List.of(LogScale.LN), changes);
     }
+
+    /** Ruling R8: the reference's pick can be cleared, and only when there is one. */
+    @Test
+    void useAutomaticReferenceFollowsTheReferencePick() {
+        assumeTrue(FxTestSupport.toolkitAvailable());
+        CohortGridPane pane = FxTestSupport.onFx(() -> new CohortGridPane(scratch()));
+        FxTestSupport.onFxRun(() -> pane.render(withDetail(true, false), 20000, LogScale.LN));
+        assertTrue(FxTestSupport.onFx(() -> pane.useAutomaticReference.isDisable()), "no reference pick");
+
+        var m = withDetail(true, false);
+        var d = m.detail();
+        var h = d.histogram();
+        var picked = new CohortGridModel.HistogramView(h.gridMin(), h.gridMax(), h.reference(), h.slide(),
+                h.referenceL1(), h.slideL1(), h.pickedSlidePeak(), 2.7, h.referenceThreshold(),
+                h.appliedThreshold(), LogScale.LN1P);
+        var withPick = new CohortGridModel(m.banner(), m.columns(), m.rows(), new CohortGridModel.Detail(d.key(),
+                d.title(), d.mark(), d.reasons(), d.valuesLine(), d.correctionLine(), d.usageLine(), picked,
+                d.canPickPeak(), d.hasPickedPeak(), d.region()));
+        List<String> cleared = new java.util.ArrayList<>();
+        FxTestSupport.onFxRun(() -> {
+            pane.setOnClearReferencePeak(() -> cleared.add("reference"));
+            pane.render(withPick, 20000, LogScale.LN);
+        });
+        assertFalse(FxTestSupport.onFx(() -> pane.useAutomaticReference.isDisable()));
+        assertEquals(LogScale.LN1P, FxTestSupport.onFx(pane::shownScale),
+                "a pick converts with the histogram's scale, not the session's");
+        FxTestSupport.onFxRun(() -> pane.useAutomaticReference.fire());
+        assertEquals(List.of("reference"), cleared);
+        assertTrue(FxTestSupport.onFx(() -> pane.pickReferencePeak.getTooltip().getText()
+                .contains("only for slides whose own negative peak was picked")));
+    }
 }

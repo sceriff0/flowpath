@@ -64,6 +64,7 @@ public final class CohortGridPane extends BorderPane {
     final Button pickSlidePeak = new Button("Pick this slide's negative peak");
     final Button pickReferencePeak = new Button("Pick the reference's negative peak");
     final Button useAutomatic = new Button("Use automatic");
+    final Button useAutomaticReference = new Button("Use automatic (reference)");
     final VBox histogramBox;
     /** The project's log scale (spec U4); set by {@link #render}, reported only when the user changes it. */
     final ChoiceBox<LogScale> scaleChoice = new ChoiceBox<>();
@@ -71,6 +72,8 @@ public final class CohortGridPane extends BorderPane {
     private boolean rendering;
     /** The detail the canvas was armed for: another cell's detail disarms it. */
     private ReviewItem.Key shownDetailKey;
+    /** The scale the shown histogram was drawn in; null when none is shown. */
+    private LogScale shownScale;
     final Button looksRight = new Button("Looks right (Enter)");
     final Button adjust = new Button("Adjust in editor");
     final Button skip = new Button("Skip this gate (S)");
@@ -106,7 +109,7 @@ public final class CohortGridPane extends BorderPane {
     private Consumer<Boolean> onOnlyLooksChanged = b -> {};
     private Consumer<ReviewKey> onKey = k -> {};
     private BiConsumer<PickTarget, Double> onPickPeak = (t, u) -> {};
-    private Runnable onClearPeak = () -> {};
+    private Runnable onClearPeak = () -> {}, onClearReferencePeak = () -> {};
     private Consumer<LogScale> onScaleChanged = s -> {};
 
     public CohortGridPane() {
@@ -205,8 +208,15 @@ public final class CohortGridPane extends BorderPane {
         pickReferencePeak.setOnAction(e -> histogramCanvas.arm(PickTarget.REFERENCE));
         useAutomatic.setOnAction(e -> onClearPeak.run());
         useAutomatic.setTooltip(new Tooltip("Forget this slide's picked peak and estimate it automatically"));
+        useAutomaticReference.setOnAction(e -> onClearReferencePeak.run());
+        useAutomaticReference.setTooltip(new Tooltip("Forget the reference's picked peak on this column and "
+                + "estimate it automatically, for every slide whose own negative peak was picked"));
+        pickSlidePeak.setTooltip(new Tooltip("Click this slide's negative peak on the histogram; "
+                + "its shift is then taken from your pick (UniFORM landmark mode). Esc cancels."));
+        pickReferencePeak.setTooltip(new Tooltip("Click the reference's negative peak on the histogram. It is used "
+                + "only for slides whose own negative peak was picked (UniFORM landmark mode). Esc cancels."));
         histogramCanvas.setOnPicked((t, u) -> onPickPeak.accept(t, u));
-        HBox pickRow = new HBox(4, pickSlidePeak, pickReferencePeak, useAutomatic);
+        HBox pickRow = new HBox(4, pickSlidePeak, pickReferencePeak, useAutomatic, useAutomaticReference);
         histogramBox = new VBox(4, histogramCanvas, pickRow);
         // Esc cancels a pick wherever the focus is, and is not also the review's "back".
         addEventFilter(KeyEvent.KEY_PRESSED, e -> {
@@ -308,6 +318,9 @@ public final class CohortGridPane extends BorderPane {
         pickSlidePeak.setDisable(!canPick);
         pickReferencePeak.setDisable(!canPick);
         useAutomatic.setDisable(!(d != null && d.canPickPeak() && d.hasPickedPeak()));
+        // Ruling R8: a wrong reference pick shifts every landmark-mode slide on the column, so it must be undoable here.
+        useAutomaticReference.setDisable(h == null || !Double.isFinite(h.pickedReferencePeak()));
+        shownScale = h == null ? null : h.scale();
         if (!canPick) histogramCanvas.arm(PickTarget.NONE);
     }
 
@@ -450,6 +463,13 @@ public final class CohortGridPane extends BorderPane {
     public void setOnKey(Consumer<ReviewKey> c) { onKey = Objects.requireNonNull(c); }
     /** A pick landed: the target and the LOG value clicked. */
     public void setOnPickPeak(BiConsumer<PickTarget, Double> c) { onPickPeak = Objects.requireNonNull(c); }
+    /**
+     * The log scale the shown histogram — and so a pick's reported log value — is on: the model's,
+     * which can differ from the session's between a scale change and the rescore that follows.
+     */
+    public LogScale shownScale() { return shownScale; }
+    /** "Use automatic (reference)": forget the reference's pick on this column. */
+    public void setOnClearReferencePeak(Runnable r) { onClearReferencePeak = Objects.requireNonNull(r); }
     /** "Use automatic": forget this slide's pick. */
     public void setOnClearPeak(Runnable r) { onClearPeak = Objects.requireNonNull(r); }
     /** The user chose another log scale; a re-render with the session's scale reverts a refused one. */
