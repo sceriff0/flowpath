@@ -39,9 +39,11 @@ public final class CohortSession {
      * depend on anything a pass changes.
      */
     public record Snapshot(String referenceSlideId, List<SlideSample> samples, AlignmentModel.Cache cache,
-                           RankingMemo ranking) {
+                           RankingMemo ranking, LogScale scale, Map<String, Map<String, Double>> peaks) {
         public Snapshot {
             ranking = ranking == null ? RankingMemo.NONE : ranking;
+            scale = scale == null ? LogScale.LN : scale;
+            peaks = peaks == null ? Map.of() : peaks;
         }
     }
 
@@ -129,6 +131,9 @@ public final class CohortSession {
     private RankingMemo rankingMemo = RankingMemo.NONE;
     /** Slides the project marks {@code flowpath.cohort.excluded}: never sampled, ranked or reviewed. */
     private volatile Set<String> excluded = Set.of();
+    /** The project's log scale and hand-picked peaks (slide -> column key -> raw intensity). */
+    private volatile LogScale scale = LogScale.LN;
+    private volatile Map<String, Map<String, Double>> peaks = Map.of();
     private ReviewItem.Key selected;
     /** The gate whose group is being reviewed, as a value; see {@link #selectGroup}. */
     private ReviewGroup.Key selectedGroup;
@@ -242,6 +247,19 @@ public final class CohortSession {
 
     public Set<String> excluded() { return excluded; }
 
+    public void setScale(LogScale scale) { this.scale = scale == null ? LogScale.LN : scale; }
+
+    public LogScale scale() { return scale; }
+
+    /** slide id -&gt; column key -&gt; raw intensity; copied so a later edit of the argument cannot reach a scoring. */
+    public void setPeaks(Map<String, Map<String, Double>> peaks) {
+        Map<String, Map<String, Double>> copy = new LinkedHashMap<>();
+        if (peaks != null) peaks.forEach((k, v) -> copy.put(k, Map.copyOf(v)));
+        this.peaks = Collections.unmodifiableMap(copy);
+    }
+
+    public Map<String, Map<String, Double>> peaks() { return peaks; }
+
     public void samplingStarted() {
         sampling = true;
         samples.clear();
@@ -270,7 +288,7 @@ public final class CohortSession {
     /** What {@link #score} needs, taken on the FX thread; a foreign tree is scored as having no reference. */
     public Snapshot snapshot(GateTree tree) {
         setLiveTree(tree);
-        return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache, rankingMemo);
+        return new Snapshot(foreign ? null : referenceSlideId, List.copyOf(samples.values()), cache, rankingMemo, scale, peaks);
     }
 
     /**
@@ -285,7 +303,7 @@ public final class CohortSession {
         // Ranked whether or not a reference exists: the suggestion is what lets one be chosen.
         // Only the columns a slide is corrected on count, and an unchanged input reuses the last answer.
         Set<AlignmentModel.ColumnRef> ranked = rankedColumns(treeCopy);
-        String rankingKey = samples.size() >= 2 ? rankingKey(samples, ranked) : null;
+        String rankingKey = samples.size() >= 2 ? rankingKey(samples, ranked, snapshot.scale()) : null;
         ReferenceRanking.Result ranking = rankingKey == null ? ReferenceRanking.Result.NONE
                 : rankingKey.equals(snapshot.ranking().key()) ? snapshot.ranking().result()
                 : ReferenceRanking.rank(samples, ranked);
@@ -295,7 +313,7 @@ public final class CohortSession {
             return new Scored(AlignmentModel.empty(snapshot.cache()), NO_REVIEW, List.of(), ranking, samples, rankingKey);
         }
         AlignmentModel model = AlignmentModel.build(snapshot.referenceSlideId(), samples, columns, snapshot.cache(),
-                LogScale.LN, Map.of());   // Task 5 plumbs the project scale and picked peaks
+                snapshot.scale(), snapshot.peaks());
         ReviewScorer.Result review = ReviewScorer.score(treeCopy, samples, model);
         List<String> keys = columns.stream().map(AlignmentModel.ColumnRef::key).toList();
         return new Scored(model, review, keys, ranking, samples, rankingKey);
@@ -328,13 +346,14 @@ public final class CohortSession {
      * {@link SlideSample#cacheKey} (fingerprint plus the filter and ROI of its clean mask), in
      * order, and the ranked columns.
      */
-    static String rankingKey(List<SlideSample> samples, Set<AlignmentModel.ColumnRef> columns) {
+    static String rankingKey(List<SlideSample> samples, Set<AlignmentModel.ColumnRef> columns, LogScale scale) {
         StringBuilder sb = new StringBuilder();
         for (SlideSample s : samples) {
             sb.append(s.slideId()).append('\u0000').append(s.name()).append('\u0000').append(s.cacheKey()).append('\u0001');
         }
         sb.append('|');
         for (AlignmentModel.ColumnRef c : columns) sb.append(c.key()).append('\u0001');
+        sb.append('|').append(scale.token());
         return sb.toString();
     }
 

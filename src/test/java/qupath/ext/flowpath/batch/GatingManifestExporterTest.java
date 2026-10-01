@@ -121,6 +121,7 @@ class GatingManifestExporterTest {
         List<String> lines = Files.readAllLines(file.toPath());
         String yRow = lines.get(4);
         assertTrue(yRow.startsWith("s2,s2.tif,1,CD8+/CD3 vs CD4,y,CD4,6.0,,corrected,"), yRow);
-        assertTrue(lines.get(1).endsWith(",1.25,,1.5,4.5,,shift-outlier"), lines.get(1));
+        assertTrue(lines.get(1).endsWith("," + Math.exp(1.25) + ",," + Math.exp(1.5) + "," + Math.exp(4.5) + ",,shift-outlier"),
+                "landmarks are raw intensities: " + lines.get(1));
     }
 }

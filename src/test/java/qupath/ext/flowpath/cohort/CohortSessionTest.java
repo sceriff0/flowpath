@@ -353,4 +353,41 @@ class CohortSessionTest {
         s.setLiveTree(tree);
         assertFalse(s.state().correctionDisabled(), "names that agree: this project's tree");
     }
+
+    @Test
+    void theProjectScaleReachesTheModelAndTheRankingKey() {
+        GateTree tree = ReviewScorerTest.tree();
+        CohortSession s = new CohortSession();
+        s.setProjectSlides(refs("ref", "s1", "s2", "odd"));
+        s.samplingStarted();
+        for (SlideSample sample : ReviewScorerTest.cohort()) s.landed(new CohortSampler.Sampled(sample));
+        s.samplingFinished();
+        assertEquals(qupath.ext.flowpath.model.cohort.LogScale.LN, s.scale());
+        s.setScale(qupath.ext.flowpath.model.cohort.LogScale.LN1P);
+        assertEquals(qupath.ext.flowpath.model.cohort.LogScale.LN1P, s.scale());
+        CohortSession.Snapshot snap = s.snapshot(tree);
+        assertEquals(qupath.ext.flowpath.model.cohort.LogScale.LN1P, snap.scale());
+        CohortSession.Scored scored = CohortSession.score(snap, tree.deepCopy());
+        assertEquals(qupath.ext.flowpath.model.cohort.LogScale.LN1P, scored.model().scale());
+
+        java.util.Set<AlignmentModel.ColumnRef> cols = CohortSession.rankedColumns(tree);
+        List<SlideSample> samples = ReviewScorerTest.cohort();
+        assertNotEquals(CohortSession.rankingKey(samples, cols, qupath.ext.flowpath.model.cohort.LogScale.LN),
+                CohortSession.rankingKey(samples, cols, qupath.ext.flowpath.model.cohort.LogScale.LN1P));
+    }
+
+    @Test
+    void aPickedPeakMakesThatSlideALandmarkAlignment() {
+        GateTree tree = ReviewScorerTest.tree();
+        String column = AlignmentModel.columnsOf(tree).iterator().next().key();
+        CohortSession s = new CohortSession();
+        s.setProjectSlides(refs("ref", "s1", "s2", "odd"));
+        s.samplingStarted();
+        for (SlideSample sample : ReviewScorerTest.cohort()) s.landed(new CohortSampler.Sampled(sample));
+        s.samplingFinished();
+        s.setPeaks(Map.of("s1", Map.of(column, 3.0), "ref", Map.of(column, 1.0)));
+        assertEquals(3.0, s.peaks().get("s1").get(column));
+        s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
+        assertEquals(Alignment.Kind.LANDMARK, s.model().alignment("s1", column).kind());
+    }
 }

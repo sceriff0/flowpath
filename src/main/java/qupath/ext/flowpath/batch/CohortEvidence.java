@@ -8,6 +8,7 @@ import qupath.ext.flowpath.cohort.SlideSample;
 import qupath.ext.flowpath.cohort.SlideSource;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.model.GateTree;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 
 import java.util.ArrayList;
@@ -51,7 +52,18 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
      * not known) of {@code sampled}; and the reference slide's name beside its id.
      */
     public record Provenance(int cellsPerSlide, String sampleSizeSource, int cacheHits, int sampled,
-                             String referenceSlideName) {}
+                             String referenceSlideName,
+                             LogScale scale) {
+        public Provenance {
+            scale = scale == null ? LogScale.LN : scale;
+        }
+
+        /** Without a recorded scale: the ln default. */
+        public Provenance(int cellsPerSlide, String sampleSizeSource, int cacheHits, int sampled,
+                          String referenceSlideName) {
+            this(cellsPerSlide, sampleSizeSource, cacheHits, sampled, referenceSlideName, LogScale.LN);
+        }
+    }
 
     /** A headless {@link #sample}: the evidence, and each sampled slide's full detection fingerprint. */
     public record Sampled(CohortEvidence evidence, Map<String, String> detectionFingerprints) {
@@ -84,12 +96,17 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
      * ({@link CohortSampler#detectionFingerprint}) is taken from it too, so a run's resume check
      * needs no second read of a slide the sampler already read.
      *
+     * @param scale     the project's log scale ({@code CohortSettingsFile}); peaks come from each slide's {@link BatchSlide#peaks}
      * @param tree      the tree the run gates with; only read
      * @param cancelled asked before each slide is sampled
      */
     public static Sampled sample(List<BatchSlide> slides, GateTree tree, AlignmentModel.Cache cache, int cellsPerSlide,
-                                 String sampleSizeSource, BooleanSupplier cancelled) {
+                                 String sampleSizeSource, LogScale scale, BooleanSupplier cancelled) {
         CohortSession session = new CohortSession();
+        session.setScale(scale);
+        Map<String, Map<String, Double>> peaks = new HashMap<>();
+        for (BatchSlide s : slides) if (!s.peaks().isEmpty()) peaks.put(s.id(), s.peaks());
+        session.setPeaks(peaks);
         session.setProject("batch", slides.stream().map(s -> new CohortSession.SlideRef(s.id(), s.name())).toList());
         session.setCache(cache);
         Set<String> excluded = slides.stream().filter(BatchSlide::cohortExcluded).map(BatchSlide::id)
@@ -110,12 +127,12 @@ public record CohortEvidence(AlignmentModel model, ReviewScorer.Result review, A
         List<SlideSample> samples = session.samples();
         for (SlideSample s : samples) {
             AlignmentModel.SlideEntry cached = cache.slides().get(s.slideId());
-            if (cached != null && cached.fingerprint().equals(AlignmentModel.fingerprint(s, session.model().scale()))) hits++;
+            if (cached != null && cached.fingerprint().equals(AlignmentModel.fingerprint(s, scale))) hits++;
         }
         String referenceName = slides.stream().filter(s -> s.id().equals(tree.getReferenceSlideId()))
                 .map(BatchSlide::name).findFirst().orElse(null);
         CohortEvidence evidence = new CohortEvidence(session.model(), session.review(), session.lookupOn(session.model()),
-                new Provenance(cellsPerSlide, sampleSizeSource, hits, samples.size(), referenceName), excluded);
+                new Provenance(cellsPerSlide, sampleSizeSource, hits, samples.size(), referenceName, scale), excluded);
         return new Sampled(evidence, fingerprints);
     }
 

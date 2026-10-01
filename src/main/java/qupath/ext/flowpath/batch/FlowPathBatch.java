@@ -3,6 +3,8 @@ package qupath.ext.flowpath.batch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.flowpath.cohort.CohortExclusions;
+import qupath.ext.flowpath.cohort.CohortPeaks;
+import qupath.ext.flowpath.cohort.ColumnDiagnostics;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
@@ -13,6 +15,7 @@ import qupath.ext.flowpath.engine.GateReadout;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.AlignmentCacheFile;
+import qupath.ext.flowpath.io.CohortSettingsFile;
 import qupath.ext.flowpath.io.CellTable;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.io.PopulationStatsExporter;
@@ -20,6 +23,7 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.GateWalk;
 import qupath.ext.flowpath.model.cohort.Alignment;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.lib.images.ImageData;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.projects.Project;
@@ -178,9 +182,10 @@ public final class FlowPathBatch {
             source = CohortEvidence.FROM_PREFERENCE;
         }
         List<BatchSlide> slides = batchSlides(p);
+        LogScale scale = CohortSettingsFile.read(CohortSettingsFile.pathFor(project.getPath().getParent()));
         Thread caller = Thread.currentThread();
         Run run = run(slides, FlowPathSerializer.load(treeJson), outDir, AlignmentCacheFile.read(cacheFile), cells, source,
-                openSlideId, (i, name) -> logger.info("FlowPath batch: slide {} of {} — {}", i + 1, slides.size(), name),
+                scale, openSlideId, (i, name) -> logger.info("FlowPath batch: slide {} of {} — {}", i + 1, slides.size(), name),
                 caller::isInterrupted);
         try {
             AlignmentCacheFile.write(cacheFile, run.cache(), cells);
@@ -201,6 +206,14 @@ public final class FlowPathBatch {
                 cancelled);
     }
 
+    /** As the full form, with the default (ln) log scale. */
+    static Run run(List<BatchSlide> slides, GateTree tree, File outDir, AlignmentModel.Cache cache, int cellsPerSlide,
+                   String sampleSizeSource, String openSlideId, BiConsumer<Integer, String> progress,
+                   BooleanSupplier cancelled) throws IOException {
+        return run(slides, tree, outDir, cache, cellsPerSlide, sampleSizeSource, LogScale.LN, openSlideId, progress,
+                cancelled);
+    }
+
     /**
      * Sample the cohort, gate every slide in order (resuming what {@code outDir} records as done),
      * then {@link #finish}. Cancellation "stops before the next slide" (spec §7, pre-flight ruling
@@ -211,13 +224,13 @@ public final class FlowPathBatch {
      * @param openSlideId the slide open in a viewer, gated but never written back; null headless
      */
     static Run run(List<BatchSlide> slides, GateTree tree, File outDir, AlignmentModel.Cache cache, int cellsPerSlide,
-                   String sampleSizeSource, String openSlideId, BiConsumer<Integer, String> progress,
+                   String sampleSizeSource, LogScale scale, String openSlideId, BiConsumer<Integer, String> progress,
                    BooleanSupplier cancelled) throws IOException {
         String refusal = BatchRunner.refusal(tree, slides);
         if (refusal != null) throw new IllegalStateException(refusal);
         Files.createDirectories(outDir.toPath());
         CohortEvidence.Sampled sampled = CohortEvidence.sample(slides, tree, cache, cellsPerSlide, sampleSizeSource,
-                cancelled);
+                scale, cancelled);
         CohortEvidence evidence = sampled.evidence();
         BatchRunner.Settings settings = new BatchRunner.Settings(tree, evidence.lookup(), outDir, openSlideId, true);
         RunState state = RunState.load(outDir);
@@ -412,6 +425,7 @@ public final class FlowPathBatch {
             CohortEvidence.Provenance p = evidence.provenance();
             w.write("sampled_cells_per_slide=" + p.cellsPerSlide() + "\n");
             w.write("sample_size_source=" + p.sampleSizeSource() + "\n");
+            w.write("log_scale=" + p.scale().token() + "\n");
             if (p.cacheHits() >= 0) w.write("alignment_cache_hits=" + p.cacheHits() + "/" + p.sampled() + "\n");
             w.write("reference_slide=" + (tree.getReferenceSlideId() == null ? "none" : tree.getReferenceSlideId()) + "\n");
             if (p.referenceSlideName() != null) w.write("reference_slide_name=" + p.referenceSlideName() + "\n");
@@ -424,7 +438,9 @@ public final class FlowPathBatch {
      * the lookup answers nothing), its marker-rule rates as the review computed them, and its
      * review state. {@code staining_factor} is the multiplicative factor that carries a
      * reference threshold onto the slide ({@link Alignment#factor}), {@code alignment_kind} how it was
-     * obtained. Rule subjects carry root indices
+     * obtained, {@code below_range_pct} the share (percent) of the slide's usable cells outside the
+     * alignment's domain and {@code otsu_discordance} the log-scale gap between the detector's and
+     * Otsu's shift ({@link ColumnDiagnostics}); blank when not finite. Rule subjects carry root indices
      * ({@link MarkerRules.Rule#indexedLabel}). {@code reviewed_flags} counts the enabled gates
      * {@link ReviewScorer#answered} on this slide.
      */
@@ -437,6 +453,11 @@ public final class FlowPathBatch {
             if (a == null) continue;
             qc(w, id, name, "staining_factor", col.key(), decimal(a.factor()));
             qc(w, id, name, "alignment_kind", col.key(), a.kind().name().toLowerCase(java.util.Locale.ROOT));
+            ColumnDiagnostics d = evidence.model().diagnostics(id, col.key());
+            if (d != null) {
+                qc(w, id, name, "below_range_pct", col.key(), decimal(100.0 * d.outsideFraction()));
+                qc(w, id, name, "otsu_discordance", col.key(), decimal(d.otsuDiscordance()));
+            }
         }
         for (MarkerRules.RuleRate rate : evidence.review().rules().rates()) {
             if (!rate.slideId().equals(id)) continue;
@@ -507,6 +528,7 @@ public final class FlowPathBatch {
             @Override public PathObjectHierarchy readHierarchy() throws Exception { return e.readHierarchy(); }
             @Override public void save(ImageData<BufferedImage> data) throws Exception { e.saveImageData(data); }
             @Override public boolean cohortExcluded() { return CohortExclusions.flagged(e); }
+            @Override public Map<String, Double> peaks() { return CohortPeaks.read(e); }
         }).toList();
     }
 

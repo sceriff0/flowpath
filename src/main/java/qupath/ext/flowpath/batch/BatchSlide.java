@@ -4,6 +4,7 @@ import qupath.lib.images.ImageData;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 
 import java.awt.image.BufferedImage;
+import java.util.Map;
 
 /** One project image as the batch run sees it. The QuPath adapter is {@link FlowPathBatch#batchSlides}. */
 public interface BatchSlide {
@@ -22,4 +23,7 @@ public interface BatchSlide {
 
     /** Set aside from the cohort ({@code cohort/CohortExclusions}): gated, never sampled. */
     default boolean cohortExcluded() { return false; }
+
+    /** Hand-picked peaks on this slide, column key to raw intensity ({@code cohort/CohortPeaks}). */
+    default Map<String, Double> peaks() { return Map.of(); }
 }

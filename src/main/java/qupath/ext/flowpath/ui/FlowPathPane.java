@@ -28,6 +28,7 @@ import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.cohort.BoundaryHotspot;
 import qupath.ext.flowpath.cohort.CohortCurvesCache;
 import qupath.ext.flowpath.cohort.CohortExclusions;
+import qupath.ext.flowpath.cohort.CohortPeaks;
 import qupath.ext.flowpath.cohort.CohortIdentity;
 import qupath.ext.flowpath.cohort.CohortPrefs;
 import qupath.ext.flowpath.cohort.CohortSampler;
@@ -43,6 +44,7 @@ import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.engine.LivePreviewService;
 import qupath.ext.flowpath.engine.TreeResolver;
 import qupath.ext.flowpath.io.AlignmentCacheFile;
+import qupath.ext.flowpath.io.CohortSettingsFile;
 import qupath.ext.flowpath.io.CsvExportJob;
 import qupath.ext.flowpath.io.FlowPathSerializer;
 import qupath.ext.flowpath.ingest.DetectionIngest;
@@ -932,6 +934,8 @@ public class FlowPathPane extends BorderPane {
         if (cohort.setProject(projectDir.toString(), refs)) forgetCohortSelection();
         Set<String> excluded = CohortExclusions.of(project).excluded();
         cohort.setExcluded(excluded);
+        cohort.setPeaks(CohortPeaks.of(project).peaks());
+        cohort.setScale(CohortSettingsFile.read(CohortSettingsFile.pathFor(projectDir)));
         if (refs.size() < 2) {
             cohortCoordinator.cancel();
             lastSampledKey = null;
@@ -2960,7 +2964,7 @@ public class FlowPathPane extends BorderPane {
         CohortEvidence evidence = new CohortEvidence(model, cohort.review(), lookup, new CohortEvidence.Provenance(
                 sampled >= 0 ? sampled : CohortPrefs.sampledCellsPerSlide(CohortPrefs.node()),
                 sampled >= 0 ? CohortEvidence.FROM_REVIEWED_MODEL : CohortEvidence.FROM_PREFERENCE,
-                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId())),
+                -1, cohort.samples().size(), cohort.projectNames().get(settings.tree().getReferenceSlideId()), cohort.scale()),
                 cohort.excluded());
         cohort.batchStarted();
         batchRun.run(slides, settings, (d, runs) -> FlowPathBatch.finish(d, settings.tree(), runs, evidence));

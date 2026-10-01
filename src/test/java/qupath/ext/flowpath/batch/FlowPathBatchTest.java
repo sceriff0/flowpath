@@ -490,6 +490,11 @@ class FlowPathBatchTest {
         assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,staining_factor,CD3,") && !l.endsWith(",1.0000")),
                 "the same data on an included slide IS corrected: " + qc);
         assertTrue(qc.stream().noneMatch(l -> l.startsWith("c,c.tif,staining_factor,")), "3: " + qc);
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,alignment_kind,CD3,")), qc.toString());
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,below_range_pct,CD3,")), qc.toString());
+        assertTrue(qc.stream().anyMatch(l -> l.startsWith("b,b.tif,otsu_discordance,CD3,")), qc.toString());
+        assertTrue(qc.stream().noneMatch(l -> l.contains("staining_stretch") || l.contains("staining_offset")), qc.toString());
+        assertTrue(Files.readAllLines(dir.resolve("run_info.txt")).contains("log_scale=ln"), "provenance");
 
         List<String> manifest = Files.readAllLines(dir.resolve(GatingManifestExporter.FILE));
         List<String> rows = manifest.stream().filter(l -> l.startsWith("c,c.tif,")).toList();
@@ -509,7 +514,7 @@ class FlowPathBatchTest {
         List<BatchSlide> slides = List.of(excluded(slide("a", cells(200), log)), slide("b", shifted.get(), log),
                 slide("c", shifted.get(), log));
         CohortEvidence evidence = CohortEvidence.sample(slides, tree(), AlignmentModel.Cache.empty(), 0,
-                CohortEvidence.FROM_ARGUMENT, () -> false).evidence();
+                CohortEvidence.FROM_ARGUMENT, qupath.ext.flowpath.model.cohort.LogScale.LN, () -> false).evidence();
         assertSame(qupath.ext.flowpath.engine.AlignmentLookup.NONE, evidence.lookup());
     }
 }

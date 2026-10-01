@@ -24,6 +24,10 @@ import java.util.StringJoiner;
  * Lives in {@code batch}, not {@code io} (pre-flight ruling C7): {@code batch} already imports
  * {@code io.*} (for {@link CellTable}, {@code PhenotypeCsvExporter}, …), so an {@code io} class
  * importing {@link BatchResult} would create a package cycle.
+ * <p>
+ * The landmark columns {@code ref_L1, ref_L2, slide_L1, slide_L2} are <b>raw intensities</b>
+ * ({@code Landmarks.scale().fromLog(l)}), whatever log scale the alignment ran on, so they read
+ * on the same axis as the thresholds beside them.
  */
 public final class GatingManifestExporter {
 
@@ -105,10 +109,10 @@ public final class GatingManifestExporter {
                         row.add(joined(applied.reference().axis(k)));
                         row.add(blank ? "" : joined(applied.applied().axis(k)));
                         row.add(source.token());
-                        row.add(ref == null || !ref.hasL1() ? "" : Double.toString(ref.l1()));
-                        row.add(ref == null || !ref.hasL2() ? "" : Double.toString(ref.l2()));
-                        row.add(slide == null || !slide.hasL1() ? "" : Double.toString(slide.l1()));
-                        row.add(slide == null || !slide.hasL2() ? "" : Double.toString(slide.l2()));
+                        row.add(ref == null || !ref.hasL1() ? "" : Double.toString(ref.scale().fromLog(ref.l1())));
+                        row.add(ref == null || !ref.hasL2() ? "" : Double.toString(ref.scale().fromLog(ref.l2())));
+                        row.add(slide == null || !slide.hasL1() ? "" : Double.toString(slide.scale().fromLog(slide.l1())));
+                        row.add(slide == null || !slide.hasL2() ? "" : Double.toString(slide.scale().fromLog(slide.l2())));
                         row.add(reviewed ? "ok" : "");
                         row.add(CellTable.escape(flags == null ? "" : flags));
                         w.write(row.toString());
