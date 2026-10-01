@@ -13,19 +13,18 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.cohort.Alignment;
-import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.function.ToDoubleFunction;
 
 /** Where on a slide a gate decides: the tile holding most cells close to its cut. */
 public final class BoundaryHotspot {
 
-    /** Half-width of the boundary band, in aligned asinh units — the same meaning on every slide. */
+    /** Half-width of the boundary band, in aligned log units — the same meaning on every slide. */
     public static final double BAND = 0.1;
     /** The evidence field, and the hotspot grid's tile: 200 µm (spec §6). */
     public static final double FIELD_MICRONS = 200;
@@ -46,18 +45,20 @@ public final class BoundaryHotspot {
     private BoundaryHotspot() {}
 
     /**
-     * Cells of {@code parent} (null: every cell) within {@link #BAND} aligned asinh units of the
+     * Cells of {@code parent} (null: every cell) within {@link #BAND} aligned log units of the
      * cut: each slide value is mapped back into reference units through {@code alignment}'s
      * inverse, so the band sits at the cut applied on this slide. A cell with no finite value is
-     * never on the boundary.
+     * never on the boundary, nor is one outside {@code scale}'s domain.
      */
     public static boolean[] boundaryCells(double[] raw, boolean[] parent, Alignment alignment,
-                                          double referenceCut, double cofactor) {
-        double cut = Landmarks.asinh(referenceCut, cofactor);
+                                          double referenceCut, LogScale scale) {
+        double cut = scale.toLog(referenceCut);
         boolean[] out = new boolean[raw.length];
+        if (Double.isNaN(cut)) return out;
         for (int i = 0; i < raw.length; i++) {
             if ((parent != null && !parent[i]) || !Double.isFinite(raw[i])) continue;
-            out[i] = Math.abs(Landmarks.asinh(alignment.inverse(raw[i]), cofactor) - cut) <= BAND;
+            double u = scale.toLog(alignment.inverse(raw[i]));
+            out[i] = !Double.isNaN(u) && Math.abs(u - cut) <= BAND;
         }
         return out;
     }
@@ -75,12 +76,11 @@ public final class BoundaryHotspot {
      * {@link TreeResolver#correctionFor}; nothing here computes an applied value.
      *
      * @param base      quality + ROI mask the parent population starts from; null for every cell
-     * @param cofactors a column key's cofactor (the reference slide's, {@code AlignmentModel.cofactor}),
-     *                  NaN when unknown (this slide's own median |value| is used then)
+     * @param scale     the log scale the band is measured on
      */
     public static Boundary of(GateTree live, GateNode gate, String slideId, AlignmentLookup lookup,
                               CellIndex index, MarkerStats stats, boolean[] base,
-                              ToDoubleFunction<String> cofactors) {
+                              LogScale scale) {
         TreeResolver.ResolvedTree resolved = TreeResolver.resolve(live, slideId, lookup);
         GateNode target = resolved.resolvedOf(gate);
         if (target == null) throw new IllegalArgumentException("gate is not part of the tree: " + gate);
@@ -97,10 +97,8 @@ public final class BoundaryHotspot {
                 MeasuredColumn column = index.column(gate, k, stats);
                 if (column == null) continue;
                 double[] raw = column.values();
-                double c = columns.get(k) == null ? Double.NaN : cofactors.applyAsDouble(columns.get(k));
-                if (!Double.isFinite(c) || c <= 0) c = Landmarks.cofactor(raw);
                 boolean[] near = boundaryCells(raw, parent,
-                        TreeResolver.correctionFor(live, gate, k, slideId, lookup), reference.axis(k)[0], c);
+                        TreeResolver.correctionFor(live, gate, k, slideId, lookup), reference.axis(k)[0], scale);
                 for (int i = 0; i < near.length; i++) cells[i] |= near[i];
             }
         }
@@ -131,8 +129,8 @@ public final class BoundaryHotspot {
      * both centre on is taken from this, so the two land on the same tile.
      */
     public static Boundary ofSample(GateTree live, GateNode gate, SlideSample sample, AlignmentLookup lookup,
-                                    ToDoubleFunction<String> cofactors) {
-        return of(live, gate, sample.slideId(), lookup, sample.index(), sample.stats(), sample.clean(), cofactors);
+                                    LogScale scale) {
+        return of(live, gate, sample.slideId(), lookup, sample.index(), sample.stats(), sample.clean(), scale);
     }
 
     /** ROI centroids are level-0 pixels — the space {@code QuPathViewer.setCenterPixelLocation} takes. */

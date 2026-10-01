@@ -62,6 +62,7 @@ import qupath.ext.flowpath.model.PolygonGate;
 import qupath.ext.flowpath.model.QuadrantGate;
 import qupath.ext.flowpath.model.RectangleGate;
 import qupath.ext.flowpath.model.RegionMask;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.ui.editor.EditorAlignment;
 import qupath.ext.flowpath.umap.PhenotypeSnapshot;
@@ -1261,7 +1262,7 @@ public class FlowPathPane extends BorderPane {
         syncViewerChannels(gate);
 
         BoundaryHotspot.Boundary boundary = BoundaryHotspot.of(session.tree(), gate, currentSlideId(), alignments,
-                session.index(), session.stats(), session.combinedMask(), cohort.model()::cofactor);
+                session.index(), session.stats(), session.combinedMask(), LogScale.LN  /* Task 3: model.scale() */);
         QuPathViewer viewer = qupath.getViewer();
         if (viewer != null && overlayViewer != viewer) {
             if (overlayViewer != null) overlayViewer.getCustomOverlayLayers().remove(boundaryOverlay);
@@ -1278,7 +1279,7 @@ public class FlowPathPane extends BorderPane {
         SlideSample sample = cohort.sample(currentSlideId());
         BoundaryHotspot.Hotspot hot = sample != null
                 ? BoundaryHotspot.hotspot(sample.index(),
-                        BoundaryHotspot.ofSample(session.tree(), gate, sample, alignments, cohort.model()::cofactor).cells(), field)
+                        BoundaryHotspot.ofSample(session.tree(), gate, sample, alignments, LogScale.LN  /* Task 3: model.scale() */).cells(), field)
                 : BoundaryHotspot.hotspot(session.index(), boundary.cells(), field);
         if (viewer != null) {
             if (hot != null) viewer.setCenterPixelLocation(hot.centerX(), hot.centerY());

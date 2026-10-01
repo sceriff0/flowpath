@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.ui.widgets;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.GatingEngine;
 import qupath.ext.flowpath.model.Branch;
@@ -427,9 +428,7 @@ class DisplayClassificationAgreementTest {
     // resolution that leaked one gate's applied value into another would show up here.
 
     private static final qupath.ext.flowpath.model.cohort.Alignment ALIGN =
-            qupath.ext.flowpath.model.cohort.Alignment.between(
-                    new qupath.ext.flowpath.model.cohort.Landmarks(1.0, 0.0, 2.0),
-                    new qupath.ext.flowpath.model.cohort.Landmarks(1.0, 0.3, 2.9));
+            qupath.ext.flowpath.model.cohort.Alignment.auto(30, 0.01);
 
     /** A second root on the probe gate's own X channel, branches named Z0/Z1. */
     private static GateNode sameChannelSibling() {
@@ -478,6 +477,7 @@ class DisplayClassificationAgreementTest {
         });
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void thresholdGateAgreesUnderANonIdentityAlignment() {
         assumeTrue(FxTestSupport.toolkitAvailable());

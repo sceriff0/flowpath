@@ -1,66 +1,49 @@
 package qupath.ext.flowpath.model.cohort;
 
 /**
- * A monotone map from reference-slide units to one slide's units for one column: an increasing
- * affine map g(u) = stretch * u + offset in asinh space, i.e. f(x) = c * sinh(g(asinh(x / c))).
- * Identity returns its input exactly (no asinh round trip), so an uncorrected number never drifts.
+ * One slide's staining correction for one column: UniFORM's shift in log space, i.e. one
+ * multiplicative factor (Wang et al. 2025, normalization.py:258-266 [FULL]: x_norm = x * exp(-shift)).
+ * {@link #apply} carries a reference-slide threshold onto this slide (x * factor), {@link #inverse}
+ * brings this slide's values into reference units. {@link Kind#AUTO} is UniFORM's automatic mode,
+ * {@link Kind#LANDMARK} its landmark mode (a hand-picked negative peak). Identity returns its input
+ * exactly, so an uncorrected number never drifts.
  */
 public final class Alignment {
 
-    public enum Kind { IDENTITY, SHIFT, TWO_LANDMARK }
+    public enum Kind { IDENTITY, AUTO, LANDMARK }
 
-    private static final Alignment IDENTITY = new Alignment(Kind.IDENTITY, 1.0, 1.0, 0.0, 0.0);
+    private static final Alignment IDENTITY = new Alignment(Kind.IDENTITY, 0, 0.0);
 
     private final Kind kind;
-    private final double cofactor;
-    private final double stretch;
-    private final double offset;
-    private final double shift;
+    private final int shiftBins;
+    private final double binWidth;
+    private final double factor;
 
-    private Alignment(Kind kind, double cofactor, double stretch, double offset, double shift) {
+    private Alignment(Kind kind, int shiftBins, double binWidth) {
         this.kind = kind;
-        this.cofactor = cofactor;
-        this.stretch = stretch;
-        this.offset = offset;
-        this.shift = shift;
+        this.shiftBins = shiftBins;
+        this.binWidth = binWidth;
+        this.factor = kind == Kind.IDENTITY ? 1.0 : Math.exp(shiftBins * binWidth);
     }
 
-    public static Alignment identity() {
-        return IDENTITY;
-    }
+    public static Alignment identity() { return IDENTITY; }
 
-    public static Alignment between(Landmarks reference, Landmarks slide) {
-        if (!reference.hasL1() || !slide.hasL1()) return IDENTITY;
-        double c = reference.cofactor();
-        double shift = slide.l1() - reference.l1();
-        if (reference.hasL2() && slide.hasL2()) {
-            double refSpan = reference.l2() - reference.l1();
-            double slideSpan = slide.l2() - slide.l1();
-            if (refSpan > 0 && slideSpan > 0) {
-                double stretch = slideSpan / refSpan;
-                return new Alignment(Kind.TWO_LANDMARK, c, stretch, slide.l1() - stretch * reference.l1(), shift);
-            }
-        }
-        return new Alignment(Kind.SHIFT, c, 1.0, shift, shift);
-    }
+    public static Alignment auto(int shiftBins, double binWidth) { return new Alignment(Kind.AUTO, shiftBins, binWidth); }
 
-    /** Reference units → this slide's units. */
+    public static Alignment landmark(int shiftBins, double binWidth) { return new Alignment(Kind.LANDMARK, shiftBins, binWidth); }
+
     public double apply(double referenceRaw) {
-        if (kind == Kind.IDENTITY) return referenceRaw;
-        return Landmarks.sinh(stretch * Landmarks.asinh(referenceRaw, cofactor) + offset, cofactor);
+        return kind == Kind.IDENTITY ? referenceRaw : referenceRaw * factor;
     }
 
-    /** This slide's units → reference units. */
     public double inverse(double slideRaw) {
-        if (kind == Kind.IDENTITY) return slideRaw;
-        return Landmarks.sinh((Landmarks.asinh(slideRaw, cofactor) - offset) / stretch, cofactor);
+        return kind == Kind.IDENTITY ? slideRaw : slideRaw / factor;
     }
 
     public Kind kind() { return kind; }
-    public double cofactor() { return cofactor; }
-    public double stretch() { return stretch; }
-    /** The asinh-space offset of g(u) = stretch * u + offset; 0 for identity. */
-    public double offset() { return offset; }
-    /** Slide L1 minus reference L1, asinh units; 0 for identity. */
-    public double shift() { return shift; }
+    public int shiftBins() { return shiftBins; }
+    public double binWidth() { return binWidth; }
+    /** shiftBins * binWidth, natural-log units; 0 for identity. */
+    public double logShift() { return shiftBins * binWidth; }
+    public double factor() { return factor; }
 }

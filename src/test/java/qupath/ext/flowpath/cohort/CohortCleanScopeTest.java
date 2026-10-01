@@ -99,7 +99,7 @@ class CohortCleanScopeTest {
 
     /** A landmark back in raw units: the cofactor moves with the clean cells, so asinh units do not compare. */
     static double raw(double u, Landmarks lm) {
-        return Landmarks.sinh(u, lm.cofactor());
+        return lm.scale().fromLog(u);
     }
 
     static int count(boolean[] mask) {

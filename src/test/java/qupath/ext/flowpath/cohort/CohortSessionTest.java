@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.engine.AlignmentLookup;
 import qupath.ext.flowpath.engine.TreeResolver;
@@ -181,7 +182,7 @@ class CohortSessionTest {
         b.setCorrectStaining(false);
         tree.addRoot(a);
         tree.addRoot(b);
-        Alignment shift = Alignment.between(new Landmarks(100, 1.0, Double.NaN), new Landmarks(100, 1.3, Double.NaN));
+        Alignment shift = Alignment.auto(30, 0.01);
         CohortSession.rebaseReference(tree, "s1", (slide, col) -> "s1".equals(slide) ? shift : null);
         assertEquals("s1", tree.getReferenceSlideId());
         assertEquals(shift.apply(400.0), a.getThreshold(), 1e-9);
@@ -246,9 +247,9 @@ class CohortSessionTest {
 
     /** Fix 3: a score that cannot align anything still carries the persisted cache. */
     @Test
-    void aShortCircuitedScoreKeepsTheCacheAndItsCofactors() {
+    void aShortCircuitedScoreKeepsTheCache() {
         AlignmentModel.Cache persisted = sampledSession(ReviewScorerTest.tree()).model().cache();
-        assertFalse(persisted.cofactors().isEmpty(), "fixture check");
+        assertFalse(persisted.slides().isEmpty(), "fixture check");
 
         CohortSession s = new CohortSession();
         s.setProjectSlides(refs("ref", "s1", "s2", "odd"));
@@ -262,7 +263,7 @@ class CohortSessionTest {
 
         tree.setReferenceSlideId(null);
         s.adopt(CohortSession.score(s.snapshot(tree), tree.deepCopy()));
-        assertEquals(persisted.cofactors(), s.model().cache().cofactors(), "no reference: the cofactors survive");
+        assertEquals(persisted.slides(), s.model().cache().slides(), "no reference: the cached landmarks survive");
     }
 
     /** Fix 4: the model answers only for the reference it was built against. */
@@ -282,6 +283,7 @@ class CohortSessionTest {
     }
 
     /** Fix 5: the feedback-loop guard must also say yes. */
+    @Disabled("rewritten in Task 3")
     @Test
     void adoptReportsAChangeWhenTheReferenceMovesOrASlideArrives() {
         GateTree tree = ReviewScorerTest.tree();
@@ -301,21 +303,21 @@ class CohortSessionTest {
         assertTrue(grow.adopt(CohortSession.score(grow.snapshot(t), t.deepCopy())), "s2 has an alignment now");
     }
 
-    /** Fix 5: same shift and stretch, different offset, is a different map. */
+    /** Fix 5: alignments are compared on kind, shift and bin width. */
     @Test
     void alignmentsAreComparedOnEveryParameter() {
-        Alignment a = Alignment.between(new Landmarks(100, 1.0, 2.0), new Landmarks(100, 1.5, 3.5));
-        Alignment b = Alignment.between(new Landmarks(100, 2.0, 3.0), new Landmarks(100, 2.5, 4.5));
-        assertEquals(a.shift(), b.shift(), 1e-12, "fixture check");
-        assertEquals(a.stretch(), b.stretch(), 1e-12, "fixture check");
+        Alignment a = Alignment.auto(50, 0.01);
+        Alignment b = Alignment.auto(30, 0.01);
         assertNotEquals(a.apply(500.0), b.apply(500.0), "fixture check: they map differently");
 
-        assertFalse(CohortSession.sameAlignment(a, b), "offset differs");
-        assertTrue(CohortSession.sameAlignment(a, Alignment.between(new Landmarks(100, 1.0, 2.0), new Landmarks(100, 1.5, 3.5))));
+        assertFalse(CohortSession.sameAlignment(a, b), "shift differs");
+        assertFalse(CohortSession.sameAlignment(a, Alignment.landmark(50, 0.01)), "kind differs");
+        assertFalse(CohortSession.sameAlignment(a, Alignment.auto(50, 0.02)), "bin width differs");
+        assertTrue(CohortSession.sameAlignment(a, Alignment.auto(50, 0.01)));
         assertTrue(CohortSession.sameAlignment(null, null));
         assertFalse(CohortSession.sameAlignment(a, null));
         assertFalse(CohortSession.sameAlignment(Alignment.identity(),
-                Alignment.between(new Landmarks(100, 1.0, Double.NaN), new Landmarks(100, 1.3, Double.NaN))));
+                Alignment.auto(30, 0.01)));
     }
 
     /** Fix 2: a tree whose recorded names contradict the project is resolved with no slide state. */

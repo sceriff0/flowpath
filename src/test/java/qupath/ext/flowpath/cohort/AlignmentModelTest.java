@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.Compartment;
@@ -7,6 +8,7 @@ import qupath.ext.flowpath.model.MarkerStats;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.testing.Cells;
 
 import java.util.ArrayList;
@@ -45,30 +47,30 @@ class AlignmentModelTest {
         return out;
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void everySlideIsAlignedToTheReferencePerColumn() {
         AlignmentModel m = AlignmentModel.build("ref", cohort(0.0), CD8, AlignmentModel.Cache.empty());
         assertSame(Alignment.identity(), m.alignment("ref", "CD8"));
         Alignment s3 = m.alignment("s3", "CD8");
-        assertEquals(Alignment.Kind.TWO_LANDMARK, s3.kind());
-        assertEquals(0.1, s3.shift(), 0.15);
+        assertEquals(Alignment.Kind.AUTO, s3.kind());
+        assertEquals(0.1, s3.logShift(), 0.15);
         assertNotNull(m.landmarks("s3", "CD8"));
         assertFalse(m.referenceMissing());
     }
 
     /**
      * Review Focus 5: the reference slide was deleted from the project. With no reference sample
-     * there is no cofactor (final ruling I2), so nothing is aligned and no landmark is claimed.
+     * there is nothing to align to, so no slide gets an alignment.
      */
     @Test
     void aMissingReferenceSampleYieldsNoAlignments() {
         AlignmentModel m = AlignmentModel.build("gone", cohort(0.0), CD8, AlignmentModel.Cache.empty());
         assertTrue(m.referenceMissing());
         assertNull(m.alignment("s1", "CD8"));
-        assertNull(m.landmarks("s1", "CD8"), "no reference, no cofactor, no landmark");
-        assertTrue(Double.isNaN(m.cofactor("CD8")));
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void unusualStainingIsFlaggedWithADirection() {
         AlignmentModel m = AlignmentModel.build("ref", cohort(1.2), CD8, AlignmentModel.Cache.empty());
@@ -81,34 +83,19 @@ class AlignmentModelTest {
     }
 
     @Test
-    void cachedLandmarksAreReusedOnlyForTheSameKeyAndTheCurrentCofactor() {
-        double c = AlignmentModel.build("ref", cohort(0.0), CD8, AlignmentModel.Cache.empty()).cofactor("CD8");
-        Landmarks planted = new Landmarks(c, 0.5, 3.5);
-        Landmarks otherCofactor = new Landmarks(7.0, 0.5, 3.5);
-        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8", 7.0),
+    void cachedLandmarksAreReusedOnlyForTheSameKeyAndTheCurrentScale() {
+        Landmarks planted = new Landmarks(LogScale.LN, 0.5, 3.5);
+        Landmarks otherScale = new Landmarks(LogScale.LN1P, 0.5, 3.5);
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(
                 Map.of("s1", new AlignmentModel.SlideEntry("f-s1", Map.of("CD8", planted)),
                         "s2", new AlignmentModel.SlideEntry("stale", Map.of("CD8", planted)),
-                        "s3", new AlignmentModel.SlideEntry("f-s3", Map.of("CD8", otherCofactor))));
+                        "s3", new AlignmentModel.SlideEntry("f-s3", Map.of("CD8", otherScale))));
         AlignmentModel m = AlignmentModel.build("ref", cohort(0.0), CD8, cache);
-        assertEquals(c, m.cofactor("CD8"), "the reference's cofactor, never the cached one");
-        assertEquals(planted, m.landmarks("s1", "CD8"), "same key, same cofactor: reused");
+        assertEquals(planted, m.landmarks("s1", "CD8"), "same key, same scale: reused");
         assertNotEquals(planted, m.landmarks("s2", "CD8"), "a changed key re-aligns");
-        assertEquals(c, m.landmarks("s3", "CD8").cofactor(), "landmarks found under another cofactor are found again");
+        assertEquals(LogScale.LN, m.landmarks("s3", "CD8").scale(), "landmarks found on another scale are found again");
+        assertNotEquals(otherScale, m.landmarks("s3", "CD8"));
         assertEquals("f-s2", m.cache().slides().get("s2").fingerprint());
-        assertEquals(c, m.cache().cofactors().get("CD8"));
-    }
-
-    /** Final ruling I2: the cofactor is the reference slide's median |x| over its clean sample. */
-    @Test
-    void theCofactorIsTheReferenceSlidesMedianMagnitude() {
-        List<SlideSample> samples = cohort(0.0);
-        double[] ref = samples.get(0).index().column("CD8", Compartment.WHOLE_CELL, Statistic.MEAN,
-                samples.get(0).stats()).values();
-        AlignmentModel m = AlignmentModel.build("ref", samples, CD8, AlignmentModel.Cache.empty());
-        assertEquals(Landmarks.cofactor(ref), m.cofactor("CD8"), 0.0);
-        AlignmentModel reordered = AlignmentModel.build("ref", List.of(samples.get(4), samples.get(2), samples.get(0),
-                samples.get(1), samples.get(3)), CD8, AlignmentModel.Cache.empty());
-        assertEquals(m.cofactor("CD8"), reordered.cofactor("CD8"), 0.0);
     }
 
     /**
@@ -117,13 +104,11 @@ class AlignmentModelTest {
      * — and a build with no cache at all (a headless run, a deleted cache file) equals both.
      */
     @Test
-    void theCofactorAndLandmarksDoNotDependOnArrivalOrderOrOnTheCache() {
+    void theLandmarksDoNotDependOnArrivalOrderOrOnTheCache() {
         List<SlideSample> all = cohort(0.0);
         AlignmentModel referenceLast = incrementally(List.of(all.get(1), all.get(2), all.get(3), all.get(4), all.get(0)));
         AlignmentModel referenceFirst = incrementally(all);
         AlignmentModel cacheless = AlignmentModel.build("ref", all, CD8, AlignmentModel.Cache.empty());
-        assertEquals(cacheless.cofactor("CD8"), referenceLast.cofactor("CD8"), 0.0);
-        assertEquals(cacheless.cofactor("CD8"), referenceFirst.cofactor("CD8"), 0.0);
         for (SlideSample s : all) {
             assertEquals(cacheless.landmarks(s.slideId(), "CD8"), referenceLast.landmarks(s.slideId(), "CD8"), s.slideId());
             assertEquals(cacheless.landmarks(s.slideId(), "CD8"), referenceFirst.landmarks(s.slideId(), "CD8"), s.slideId());

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class GatingManifestExporterTest {
 
-    static final Alignment SHIFT = Alignment.between(new Landmarks(1.0, 1.0, Double.NaN), new Landmarks(1.0, 1.3, Double.NaN));
+    static final Alignment SHIFT = Alignment.auto(30, 0.01);
 
     static GateTree tree() {
         GateTree tree = new GateTree();
@@ -114,8 +114,8 @@ class GatingManifestExporterTest {
         File file = dir.resolve(GatingManifestExporter.FILE).toFile();
         GatingManifestExporter.write(file, tree, List.of(result(tree, "s2", List.of("CD8", "CD3"))),
                 new GatingManifestExporter.Annotations() {
-                    @Override public Landmarks reference(String column) { return new Landmarks(1.0, 1.25, Double.NaN); }
-                    @Override public Landmarks slide(String slideId, String column) { return new Landmarks(1.0, 1.5, 4.5); }
+                    @Override public Landmarks reference(String column) { return new Landmarks(qupath.ext.flowpath.model.cohort.LogScale.LN, 1.25, Double.NaN); }
+                    @Override public Landmarks slide(String slideId, String column) { return new Landmarks(qupath.ext.flowpath.model.cohort.LogScale.LN, 1.5, 4.5); }
                     @Override public String flags(String slideId, int rootIndex, String gatePath) { return "unusual-staining"; }
                 });
         List<String> lines = Files.readAllLines(file.toPath());

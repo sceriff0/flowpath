@@ -365,8 +365,7 @@ public final class CohortSession {
     /** Whether two alignments map every number identically; package-private for its table test. */
     static boolean sameAlignment(Alignment a, Alignment b) {
         if (a == null || b == null) return a == b;
-        return a.kind() == b.kind() && a.stretch() == b.stretch() && a.shift() == b.shift()
-                && a.offset() == b.offset() && a.cofactor() == b.cofactor();
+        return a.kind() == b.kind() && a.shiftBins() == b.shiftBins() && a.binWidth() == b.binWidth();
     }
 
     private void updateCorrectionDisabled() {

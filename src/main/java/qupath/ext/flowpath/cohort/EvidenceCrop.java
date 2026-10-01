@@ -7,6 +7,7 @@ import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.MeasuredColumn;
 import qupath.ext.flowpath.model.cohort.Alignment;
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.lib.images.servers.ImageChannel;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.regions.RegionRequest;
@@ -69,7 +70,7 @@ public final class EvidenceCrop {
         GateNode gate = CohortSession.liveGate(tree, item.key());
         if (gate == null || gate.getChannels().isEmpty()) return null;
         String slideId = item.key().slideId();
-        BoundaryHotspot.Boundary boundary = BoundaryHotspot.ofSample(tree, gate, sample, lookup, model::cofactor);
+        BoundaryHotspot.Boundary boundary = BoundaryHotspot.ofSample(tree, gate, sample, lookup, LogScale.LN);
         BoundaryHotspot.Hotspot hot = BoundaryHotspot.hotspot(sample.index(), boundary.cells(), fieldPixels);
         if (hot == null) return null;
 
@@ -78,9 +79,9 @@ public final class EvidenceCrop {
         Landmarks ref = column == null ? null : model.referenceLandmarks(column);
         if (ref != null && ref.hasL1()) {
             Alignment a = TreeResolver.correctionFor(tree, gate, 0, slideId, lookup);
-            lo = a.apply(Landmarks.sinh(ref.l1(), ref.cofactor()));
+            lo = a.apply(ref.scale().fromLog(ref.l1()));
             if (ref.hasL2()) {
-                hi = a.apply(Landmarks.sinh(ref.l2(), ref.cofactor()));
+                hi = a.apply(ref.scale().fromLog(ref.l2()));
             } else if (reference != null && reference.index().getMarkerIndex(gate.getChannels().get(0)) >= 0) {
                 MeasuredColumn refColumn = reference.index().column(gate, 0, reference.stats());
                 if (refColumn != null) hi = a.apply(refColumn.percentile(99.5));

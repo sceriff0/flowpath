@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.batch;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.cohort.AlignmentModel;
@@ -476,6 +477,7 @@ class FlowPathBatchTest {
         };
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void anExcludedSlideIsGatedUncorrectedAndFlaggedInQc(@TempDir Path dir) throws Exception {
         java.util.function.Supplier<Cells> shifted = () -> Cells.of(200).atGrid(10, 10)

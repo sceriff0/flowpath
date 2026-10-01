@@ -422,8 +422,9 @@ public final class FlowPathBatch {
     /**
      * The slide's cohort rows: its alignment per column (what the run corrected with — none when
      * the lookup answers nothing), its marker-rule rates as the review computed them, and its
-     * review state. {@code staining_offset} is the slide's L1 minus the reference's, in asinh
-     * units ({@link Alignment#shift}). Rule subjects carry root indices
+     * review state. {@code staining_factor} is the multiplicative factor that carries a
+     * reference threshold onto the slide ({@link Alignment#factor}), {@code alignment_kind} how it was
+     * obtained. Rule subjects carry root indices
      * ({@link MarkerRules.Rule#indexedLabel}). {@code reviewed_flags} counts the enabled gates
      * {@link ReviewScorer#answered} on this slide.
      */
@@ -434,8 +435,8 @@ public final class FlowPathBatch {
         for (AlignmentModel.ColumnRef col : AlignmentModel.columnsOf(tree)) {
             Alignment a = evidence.lookup().alignment(id, col.key());
             if (a == null) continue;
-            qc(w, id, name, "staining_offset", col.key(), decimal(a.shift()));
-            qc(w, id, name, "staining_stretch", col.key(), decimal(a.stretch()));
+            qc(w, id, name, "staining_factor", col.key(), decimal(a.factor()));
+            qc(w, id, name, "alignment_kind", col.key(), a.kind().name().toLowerCase(java.util.Locale.ROOT));
         }
         for (MarkerRules.RuleRate rate : evidence.review().rules().rates()) {
             if (!rate.slideId().equals(id)) continue;

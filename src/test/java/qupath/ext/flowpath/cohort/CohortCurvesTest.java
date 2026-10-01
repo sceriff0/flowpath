@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CohortCurvesTest {
 
-    static final Alignment SHIFT = Alignment.between(new Landmarks(1.0, 1.0, Double.NaN), new Landmarks(1.0, 1.3, Double.NaN));
+    static final Alignment SHIFT = Alignment.auto(30, 0.01);
 
     static SlideSample sample(String id, boolean withCd4) {
         return sample(id, withCd4, i -> false);

@@ -8,15 +8,13 @@ import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
 import qupath.ext.flowpath.model.Statistic;
 import qupath.ext.flowpath.model.cohort.Alignment;
-import qupath.ext.flowpath.model.cohort.CohortStats;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.model.cohort.Landmarks;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -45,38 +43,33 @@ public final class AlignmentModel {
 
     /**
      * One slide's cached landmarks, keyed by column, tagged with the {@link SlideSample#cacheKey}
-     * they were found from; each {@link Landmarks} carries the cofactor it was found with.
+     * they were found from; each {@link Landmarks} carries the scale it was found on.
      */
     public record SlideEntry(String fingerprint, Map<String, Landmarks> columns) {}
 
-    /**
-     * The persisted alignment cache: one {@link SlideEntry} per slide, and the cofactor each column
-     * had in the build that wrote it (a record — every build recomputes it from the reference).
-     */
-    public record Cache(Map<String, Double> cofactors, Map<String, SlideEntry> slides) {
+    /** The persisted alignment cache: one {@link SlideEntry} per slide. */
+    public record Cache(Map<String, SlideEntry> slides) {
         public static Cache empty() {
-            return new Cache(Map.of(), Map.of());
+            return new Cache(Map.of());
         }
 
         public boolean isEmpty() {
-            return cofactors.isEmpty() && slides.isEmpty();
+            return slides.isEmpty();
         }
     }
 
     private final String referenceSlideId;
     private final boolean referenceMissing;
-    private final Map<String, Double> cofactors;
     private final Map<String, Map<String, Landmarks>> landmarks;   // slide -> column -> landmarks
     private final Map<String, Map<String, Alignment>> alignments;  // slide -> column -> alignment
     private final Map<String, Map<String, String>> unusual;        // slide -> column -> reason
     private final Cache cache;
 
-    private AlignmentModel(String referenceSlideId, boolean referenceMissing, Map<String, Double> cofactors,
+    private AlignmentModel(String referenceSlideId, boolean referenceMissing,
                            Map<String, Map<String, Landmarks>> landmarks, Map<String, Map<String, Alignment>> alignments,
                            Map<String, Map<String, String>> unusual, Cache cache) {
         this.referenceSlideId = referenceSlideId;
         this.referenceMissing = referenceMissing;
-        this.cofactors = cofactors;
         this.landmarks = landmarks;
         this.alignments = alignments;
         this.unusual = unusual;
@@ -93,7 +86,7 @@ public final class AlignmentModel {
      * rather than being replaced by nothing.
      */
     public static AlignmentModel empty(Cache cache) {
-        return new AlignmentModel(null, false, Map.of(), Map.of(), Map.of(), Map.of(), cache);
+        return new AlignmentModel(null, false, Map.of(), Map.of(), Map.of(), cache);
     }
 
     /** Every axis column of every gate in {@code tree}, enabled or not. */
@@ -117,32 +110,18 @@ public final class AlignmentModel {
     }
 
     /**
-     * Align every sample to {@code referenceSlideId}'s for each of {@code columns}.
-     * <p>
-     * A column's asinh cofactor is the median |x| over the <b>reference slide's</b> clean sample
-     * for that column ({@link Landmarks#cofactor}) — a function of the reference alone, so it does
-     * not depend on which samples happened to have arrived first, and a run with no cache
-     * reproduces a cached one exactly. With the reference not sampled (missing, failed, not yet
-     * landed) no cofactor is known and no landmark is found for any slide: there is nothing to
-     * align to.
-     * <p>
-     * A slide's cached landmarks are reused when its {@link SlideSample#cacheKey} — the sample
-     * fingerprint plus the filter and ROI its clean mask came from — matches and they were found
-     * with the cofactor in force now; anything else is found again.
+     * Find every sample's landmarks for {@code columns}. Temporary (rewritten in Task 3): every
+     * slide, the reference included, is given {@link Alignment#identity()} until the UniFORM
+     * shift lands. A slide's cached landmarks are reused when its {@link SlideSample#cacheKey}
+     * matches and they were found on the same {@link LogScale}.
      */
     public static AlignmentModel build(String referenceSlideId, List<SlideSample> samples,
                                        Set<ColumnRef> columns, Cache cache) {
+        LogScale scale = LogScale.LN;
         Map<String, SlideEntry> cachedSlides = new HashMap<>(cache.slides());
         Map<String, Map<String, Landmarks>> landmarks = new HashMap<>();
-        SlideSample reference = null;
-        for (SlideSample s : samples) if (s.slideId().equals(referenceSlideId)) reference = s;
-        boolean referenceSampled = reference != null;
-
-        Map<String, Double> cofactors = new HashMap<>();
-        for (ColumnRef col : columns) {
-            double[] v = reference == null ? null : cleanValues(reference, col);
-            if (v != null) cofactors.put(col.key(), Landmarks.cofactor(v));
-        }
+        boolean referenceSampled = false;
+        for (SlideSample s : samples) if (s.slideId().equals(referenceSlideId)) referenceSampled = true;
 
         for (SlideSample s : samples) {
             SlideEntry cached = cachedSlides.get(s.slideId());
@@ -151,15 +130,14 @@ public final class AlignmentModel {
             Map<String, Landmarks> perColumn = new HashMap<>();
             for (ColumnRef col : columns) {
                 String key = col.key();
-                Double c = cofactors.get(key);
-                if (s.index().getMarkerIndex(col.channel()) < 0 || c == null) {
+                if (s.index().getMarkerIndex(col.channel()) < 0) {
                     kept.remove(key);
                     continue;
                 }
                 Landmarks lm = kept.get(key);
-                if (lm == null || Double.compare(lm.cofactor(), c) != 0) {
+                if (lm == null || lm.scale() != scale) {
                     double[] raw = s.index().column(col.channel(), col.compartment(), col.statistic(), s.stats()).values();
-                    lm = Landmarks.find(raw, s.clean(), c);
+                    lm = Landmarks.find(raw, s.clean(), scale);
                     kept.put(key, lm);
                 }
                 perColumn.put(key, lm);
@@ -169,57 +147,18 @@ public final class AlignmentModel {
         }
 
         Map<String, Map<String, Alignment>> alignments = new HashMap<>();
-        Map<String, Map<String, String>> unusual = new HashMap<>();
-        for (ColumnRef col : columns) {
-            String key = col.key();
-            Landmarks ref = referenceSampled ? landmarks.get(referenceSlideId).get(key) : null;
-            List<Double> shifts = new ArrayList<>();
-            List<Double> stretches = new ArrayList<>();
-            for (SlideSample s : samples) {
-                Landmarks lm = landmarks.get(s.slideId()).get(key);
-                if (ref == null || lm == null) continue;
-                Alignment a = s.slideId().equals(referenceSlideId) ? Alignment.identity() : Alignment.between(ref, lm);
-                alignments.computeIfAbsent(s.slideId(), k -> new HashMap<>()).put(key, a);
-                if (lm.hasL1() && ref.hasL1()) shifts.add(lm.l1() - ref.l1());
-                if (lm.hasL2() && ref.hasL2()) stretches.add((lm.l2() - lm.l1()) / (ref.l2() - ref.l1()));
-            }
-            // "Unusual staining" is judged only when at least 3 slides have an L1 (spec §13).
-            if (shifts.size() < MIN_SLIDES_FOR_SPREAD) continue;
-            double[] shiftValues = toArray(shifts);
-            double medShift = CohortStats.median(shiftValues);
-            double madShift = Math.max(MIN_MAD, CohortStats.mad(shiftValues, medShift));
-            boolean haveStretch = stretches.size() >= MIN_SLIDES_FOR_SPREAD;
-            double[] stretchValues = toArray(stretches);
-            double medStretch = stretchValues.length == 0 ? 1.0 : CohortStats.median(stretchValues);
-            double madStretch = Math.max(MIN_MAD, stretchValues.length == 0 ? 0 : CohortStats.mad(stretchValues, medStretch));
-            for (SlideSample s : samples) {
-                Landmarks lm = landmarks.get(s.slideId()).get(key);
-                if (lm == null || !lm.hasL1() || ref == null || !ref.hasL1()) continue;
-                double shift = lm.l1() - ref.l1();
-                String reason = null;
-                if (Math.abs(shift - medShift) > MAD_LIMIT * madShift) {
-                    // asinh ~= log for bright values, so exp(|shift|) reads as a fold-change factor.
-                    reason = String.format(Locale.US, "Staining %.1f× %s than typical",
-                            Math.exp(Math.abs(shift - medShift)), shift > medShift ? "brighter" : "dimmer");
-                } else if (haveStretch && lm.hasL2() && ref.hasL2()) {
-                    double stretch = (lm.l2() - lm.l1()) / (ref.l2() - ref.l1());
-                    if (Math.abs(stretch - medStretch) > MAD_LIMIT * madStretch) {
-                        boolean higher = stretch > medStretch;
-                        reason = String.format(Locale.US, "Staining contrast %.1f× %s than typical",
-                                higher ? stretch / medStretch : medStretch / stretch, higher ? "higher" : "lower");
-                    }
+        if (referenceSampled) {
+            for (ColumnRef col : columns) {
+                String key = col.key();
+                if (landmarks.get(referenceSlideId).get(key) == null) continue;
+                for (SlideSample s : samples) {
+                    if (landmarks.get(s.slideId()).get(key) == null) continue;
+                    alignments.computeIfAbsent(s.slideId(), k -> new HashMap<>()).put(key, Alignment.identity());
                 }
-                if (reason != null) unusual.computeIfAbsent(s.slideId(), k -> new HashMap<>()).put(key, reason);
             }
         }
-        return new AlignmentModel(referenceSlideId, !referenceSampled, Map.copyOf(cofactors), landmarks,
-                alignments, unusual, new Cache(Map.copyOf(cofactors), Map.copyOf(cachedSlides)));
-    }
-
-    private static double[] toArray(List<Double> values) {
-        double[] out = new double[values.size()];
-        for (int i = 0; i < out.length; i++) out[i] = values.get(i);
-        return out;
+        return new AlignmentModel(referenceSlideId, !referenceSampled, landmarks, alignments, new HashMap<>(),
+                new Cache(Map.copyOf(cachedSlides)));
     }
 
     /**
@@ -249,12 +188,6 @@ public final class AlignmentModel {
 
     public Landmarks referenceLandmarks(String columnKey) {
         return referenceMissing ? null : landmarks(referenceSlideId, columnKey);
-    }
-
-    /** The cofactor for {@code columnKey} (the reference slide's median |x|); NaN when unknown. */
-    public double cofactor(String columnKey) {
-        Double c = cofactors.get(columnKey);
-        return c == null ? Double.NaN : c;
     }
 
     /** A human-readable "unusual staining" reason for {@code (slideId, columnKey)}, or null when typical. */

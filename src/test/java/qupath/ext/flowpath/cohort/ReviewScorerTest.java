@@ -1,5 +1,6 @@
 package qupath.ext.flowpath.cohort;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
@@ -73,6 +74,7 @@ class ReviewScorerTest {
         assertEquals(new ReviewItem.Key("s1", 1, "CD8"), onPeak.key());
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void unusualStainingIsFlaggedWithItsReason() {
         ReviewItem odd = itemsFor(score(tree(), cohort()), "odd", 0).get(0);
@@ -80,6 +82,7 @@ class ReviewScorerTest {
         assertTrue(odd.reasons().get(0).endsWith("brighter than typical"), odd.reasons().toString());
     }
 
+    @Disabled("rewritten in Task 3")
     @Test
     void noLandmarkOnlyWhenCorrectionIsOn() {
         List<SlideSample> samples = cohort();

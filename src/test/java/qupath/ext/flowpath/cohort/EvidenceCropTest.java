@@ -129,8 +129,8 @@ class EvidenceCropTest {
 
         Landmarks ref = model.referenceLandmarks("CD8");
         Alignment a = model.alignment("s3", "CD8");
-        assertEquals(a.apply(Landmarks.sinh(ref.l1(), ref.cofactor())), second.markerLo(), 1e-9);
-        assertEquals(a.apply(Landmarks.sinh(ref.l2(), ref.cofactor())), second.markerHi(), 1e-9);
+        assertEquals(a.apply(ref.scale().fromLog(ref.l1())), second.markerLo(), 1e-9);
+        assertEquals(a.apply(ref.scale().fromLog(ref.l2())), second.markerHi(), 1e-9);
         assertEquals("CD8", second.markerChannel());
     }
 
@@ -144,7 +144,7 @@ class EvidenceCropTest {
         EvidenceCrop.Spec spec = EvidenceCrop.spec(itemFor(tree, 1), tree, samples.get(3), samples.get(0), model,
                 model::alignment, 512);
         Landmarks ref = model.referenceLandmarks("CD8");
-        assertEquals(Landmarks.sinh(ref.l1(), ref.cofactor()), spec.markerLo(), 1e-9,
+        assertEquals(ref.scale().fromLog(ref.l1()), spec.markerLo(), 1e-9,
                 "the range is corrected exactly when the gate is (TreeResolver.correctionFor)");
     }
 

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.ext.flowpath.cohort.AlignmentModel;
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,45 +18,41 @@ class AlignmentCacheFileTest {
     void roundTripsIncludingAnAbsentLandmark(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
         assertEquals(project.resolve("flowpath").resolve("alignment-cache.json"), file);
-        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8: Cell: Median", 123.5),
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(
                 Map.of("a3f", new AlignmentModel.SlideEntry("fp", Map.of("CD8: Cell: Median",
-                        new Landmarks(123.5, 1.25, Double.NaN)))));
+                        new Landmarks(LogScale.LN, 1.25, Double.NaN)))));
         AlignmentCacheFile.write(file, cache, 5000);
         AlignmentModel.Cache back = AlignmentCacheFile.read(file);
-        assertEquals(123.5, back.cofactors().get("CD8: Cell: Median"));
         Landmarks lm = back.slides().get("a3f").columns().get("CD8: Cell: Median");
         assertEquals(1.25, lm.l1());
+        assertEquals(LogScale.LN, lm.scale());
         assertFalse(lm.hasL2());
         assertEquals("fp", back.slides().get("a3f").fingerprint());
         assertEquals(java.util.OptionalInt.of(5000), AlignmentCacheFile.sampledCellsPerSlide(file),
                 "the sample size the landmarks were found from is recorded");
+        assertTrue(Files.readString(file).contains("\"version\": 2"));
+        assertTrue(Files.readString(file).contains("\"scale\": \"ln\""));
     }
 
-    /**
-     * Final ruling I2: a slide not sampled in the build that wrote the cache keeps landmarks found
-     * under an earlier reference's cofactor. Each landmark keeps its own cofactor through the file,
-     * so AlignmentModel's "found under the cofactor in force now" check still sees the old one.
-     */
     @Test
-    void eachLandmarkKeepsTheCofactorItWasFoundWith(@TempDir Path project) throws Exception {
+    void theScaleRoundTripsPerSlide(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
-        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8", 200.0),
-                Map.of("now", new AlignmentModel.SlideEntry("f1", Map.of("CD8", new Landmarks(200.0, 1.0, 3.0))),
-                        "earlier", new AlignmentModel.SlideEntry("f2", Map.of("CD8", new Landmarks(90.0, 1.5, 3.5)))));
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(
+                Map.of("now", new AlignmentModel.SlideEntry("f1", Map.of("CD8", new Landmarks(LogScale.LN1P, 1.0, 3.0)))));
         AlignmentCacheFile.write(file, cache, 5000);
-        AlignmentModel.Cache back = AlignmentCacheFile.read(file);
-        assertEquals(200.0, back.slides().get("now").columns().get("CD8").cofactor());
-        assertEquals(90.0, back.slides().get("earlier").columns().get("CD8").cofactor());
+        assertEquals(LogScale.LN1P, AlignmentCacheFile.read(file).slides().get("now").columns().get("CD8").scale());
     }
 
-    /** A file written before landmarks carried their own cofactor reads the column's. */
+    /** An earlier FlowPath's cache (version 1, asinh landmarks) is ignored, never converted. */
     @Test
-    void anOlderFileFallsBackToTheColumnCofactor(@TempDir Path project) throws Exception {
+    void anEarlierVersionIsAnEmptyCache(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
         Files.createDirectories(file.getParent());
         Files.writeString(file, "{\"version\":1,\"cofactors\":{\"CD8\":77.0},"
                 + "\"slides\":{\"a\":{\"fingerprint\":\"f\",\"columns\":{\"CD8\":{\"l1\":1.0}}}}}");
-        assertEquals(77.0, AlignmentCacheFile.read(file).slides().get("a").columns().get("CD8").cofactor());
+        assertTrue(AlignmentCacheFile.read(file).isEmpty());
+        Files.writeString(file, "{\"slides\":{}}");
+        assertTrue(AlignmentCacheFile.read(file).isEmpty(), "no version: ignored");
     }
 
     @Test
@@ -64,18 +61,19 @@ class AlignmentCacheFileTest {
         assertTrue(AlignmentCacheFile.read(file).slides().isEmpty());
         Files.createDirectories(file.getParent());
         Files.writeString(file, "{not json");
-        assertTrue(AlignmentCacheFile.read(file).cofactors().isEmpty());
+        assertTrue(AlignmentCacheFile.read(file).isEmpty());
         assertTrue(AlignmentCacheFile.sampledCellsPerSlide(file).isEmpty());
     }
 
-    /** An empty cache never overwrites landmarks and cofactors already on disk. */
+    /** An empty cache never overwrites landmarks already on disk. */
     @Test
     void anEmptyCacheNeverOverwritesAStoredOne(@TempDir Path project) throws Exception {
         Path file = AlignmentCacheFile.pathFor(project);
-        AlignmentModel.Cache cache = new AlignmentModel.Cache(Map.of("CD8", 42.0), Map.of());
+        AlignmentModel.Cache cache = new AlignmentModel.Cache(
+                Map.of("a", new AlignmentModel.SlideEntry("f", Map.of("CD8", new Landmarks(LogScale.LN, 1.0, 2.0)))));
         AlignmentCacheFile.write(file, cache, 5000);
         AlignmentCacheFile.write(file, AlignmentModel.Cache.empty(), 1);
-        assertEquals(42.0, AlignmentCacheFile.read(file).cofactors().get("CD8"));
+        assertEquals(1.0, AlignmentCacheFile.read(file).slides().get("a").columns().get("CD8").l1());
 
         Path fresh = AlignmentCacheFile.pathFor(project.resolve("other"));
         AlignmentCacheFile.write(fresh, AlignmentModel.Cache.empty(), 1);

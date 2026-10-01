@@ -12,6 +12,7 @@ import qupath.ext.flowpath.model.Region2DGate;
 import qupath.ext.flowpath.model.SlideSetting;
 import qupath.ext.flowpath.model.cohort.Density;
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -133,14 +134,11 @@ public final class ReviewScorer {
                     }
 
                     if (oneDimensionalCut) {
-                        // The reference's cofactor; with no reference sample (missing from the
-                        // project, not sampled yet) this slide's own, which only sets the scale
-                        // the density is estimated on.
-                        double c = model.cofactor(column);
-                        if (!Double.isFinite(c)) c = Landmarks.cofactor(raw);
-                        if (Double.isFinite(c)) {
-                            Density density = Density.of(Landmarks.toAsinh(raw, parent, c));
-                            double u = Landmarks.asinh(applied.applied().axis(k)[0], c);
+                        // Task 3 switches this to model.scale().
+                        LogScale scale = LogScale.LN;
+                        Density density = Density.of(Landmarks.toLog(raw, parent, scale));
+                        double u = scale.toLog(applied.applied().axis(k)[0]);
+                        if (!Double.isNaN(u)) {
                             Density.Peak peak = density.nearestPeak(u);
                             if (peak != null && density.at(u) >= ON_PEAK_FRACTION * peak.height()) {
                                 flags.add(ReviewItem.Flag.ON_PEAK);

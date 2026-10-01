@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BatchRunnerTest {
 
-    static final Alignment SHIFT = Alignment.between(new Landmarks(1.0, 1.0, Double.NaN), new Landmarks(1.0, 1.3, Double.NaN));
+    static final Alignment SHIFT = Alignment.auto(30, 0.01);
 
     static BatchSlide slide(String id, Cells cells, List<String> saved) {
         return new BatchSlide() {

@@ -45,7 +45,7 @@ class LivePreviewServiceResolutionTest {
         tree.addRoot(b);
         tree.setReferenceSlideId("ref");
 
-        Alignment shift = Alignment.between(new Landmarks(1.0, 1.0, Double.NaN), new Landmarks(1.0, 1.3, Double.NaN));
+        Alignment shift = Alignment.auto(30, 0.01);
         double appliedA = shift.apply(10.5);
         long expectedA = java.util.Arrays.stream(cd45).filter(v -> v >= appliedA).count();
         assertNotEquals(10, expectedA, "fixture check: the alignment moves root A's cut");

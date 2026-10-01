@@ -6,7 +6,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * A Gaussian kernel density on a fixed grid spanning the data, in asinh units. Binned (grid ×
+ * A Gaussian kernel density on a fixed grid spanning the data, in log units. Binned (grid ×
  * kernel reach, not cells × grid) so "every cell" on a million-cell slide stays cheap, and
  * reflected at both data edges so a pile-up at the lowest value is not mistaken for a peak.
  */

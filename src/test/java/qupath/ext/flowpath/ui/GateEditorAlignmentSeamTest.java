@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class GateEditorAlignmentSeamTest {
 
-    static final Alignment BRIGHTER = Alignment.between(new Landmarks(10.0, 0.0, 2.0), new Landmarks(10.0, 0.3, 2.9));
+    static final Alignment BRIGHTER = Alignment.auto(30, 0.01);
 
     enum Type {
         THRESHOLD(() -> { GateNode g = new GateNode("CD3", 10); g.setStatistic(Statistic.MEAN); return g; }),

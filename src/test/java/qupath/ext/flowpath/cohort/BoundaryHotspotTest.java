@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.cohort;
 
 import org.junit.jupiter.api.Test;
+import qupath.ext.flowpath.model.cohort.LogScale;
 import qupath.ext.flowpath.model.CellIndex;
 import qupath.ext.flowpath.model.GateNode;
 import qupath.ext.flowpath.model.GateTree;
@@ -17,18 +18,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class BoundaryHotspotTest {
 
     @Test
-    void boundaryCellsAreWithinATenthOfAnAlignedAsinhUnitOfTheCut() {
-        double[] raw = {0.8, 0.9, 1.0, 1.1, 1.2, Double.NaN, 1.0};
+    void boundaryCellsAreWithinATenthOfAnAlignedLogUnitOfTheCut() {
+        double[] raw = {85, 95, 100, 105, 120, Double.NaN, 100};
         boolean[] parent = {true, true, true, true, true, true, false};
         assertArrayEquals(new boolean[]{false, true, true, true, false, false, false},
-                BoundaryHotspot.boundaryCells(raw, parent, Alignment.identity(), 1.0, 1.0));
+                BoundaryHotspot.boundaryCells(raw, parent, Alignment.identity(), 100.0, LogScale.LN));
     }
 
     @Test
     void onABrighterSlideTheBandSitsAtTheAppliedCut() {
-        Alignment brighter = Alignment.between(new Landmarks(1.0, 0.0, Double.NaN), new Landmarks(1.0, 0.5, Double.NaN));
+        Alignment brighter = Alignment.auto(50, 0.01);
         double applied = brighter.apply(1.0);
-        boolean[] b = BoundaryHotspot.boundaryCells(new double[]{1.0, applied}, null, brighter, 1.0, 1.0);
+        boolean[] b = BoundaryHotspot.boundaryCells(new double[]{1.0, applied}, null, brighter, 1.0, LogScale.LN);
         assertFalse(b[0], "the raw reference number is not the boundary on this slide");
         assertTrue(b[1]);
     }
@@ -73,7 +74,7 @@ class BoundaryHotspotTest {
         second.setPositiveColor(0x00C800);
         second.setNegativeColor(0x0000C8);
 
-        BoundaryHotspot.Boundary b = BoundaryHotspot.of(tree, second, "s1", null, index, stats, null, key -> 1.0);
+        BoundaryHotspot.Boundary b = BoundaryHotspot.of(tree, second, "s1", null, index, stats, null, LogScale.LN);
 
         assertArrayEquals(new boolean[]{false, false, false, false, false, false, false, true, true, true}, b.cells(),
                 "the band is at the second root's cut (7), not the first's (3)");
@@ -81,7 +82,7 @@ class BoundaryHotspotTest {
         assertEquals(0x00C800, b.rgb()[8] & 0xFFFFFF);
 
         BoundaryHotspot.Boundary first = BoundaryHotspot.of(tree, tree.getRoots().get(0), "s1", null, index, stats,
-                null, key -> 1.0);
+                null, LogScale.LN);
         assertArrayEquals(new boolean[]{false, false, false, true, true, true, false, false, false, false}, first.cells());
     }
 
@@ -94,7 +95,7 @@ class BoundaryHotspotTest {
         tree.addRoot(rect);
         tree.addRoot(new GateNode("CD3", 2));
         boolean[] base = {true, false, true, true};
-        BoundaryHotspot.Boundary b = BoundaryHotspot.of(tree, rect, "s1", null, index, stats, base, key -> 1.0);
+        BoundaryHotspot.Boundary b = BoundaryHotspot.of(tree, rect, "s1", null, index, stats, base, LogScale.LN);
         assertArrayEquals(base, b.cells());
         assertNotSame(base, b.cells(), "a copy, never the caller's mask");
     }

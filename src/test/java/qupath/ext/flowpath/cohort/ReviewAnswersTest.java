@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ReviewAnswersTest {
 
-    static final Alignment SHIFT = Alignment.between(new Landmarks(100, 1.0, Double.NaN), new Landmarks(100, 1.3, Double.NaN));
+    static final Alignment SHIFT = Alignment.auto(30, 0.01);
     static final AlignmentLookup LOOKUP = (slide, col) -> "s1".equals(slide) ? SHIFT : null;
 
     static GateTree tree() {

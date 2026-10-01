@@ -1,6 +1,7 @@
 package qupath.ext.flowpath.cohort;
 
 import qupath.ext.flowpath.model.cohort.Landmarks;
+import qupath.ext.flowpath.model.cohort.LogScale;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,9 +18,8 @@ import java.util.function.Function;
 /**
  * Which slide to suggest as the cohort's reference, and why (spec §4.2). Pure.
  * <p>
- * <b>Eligibility</b> uses the alignment's own landmark finder and cofactor: a slide R qualifies only
- * if, on every gated column, {@code Landmarks.find(R's clean values, null, Landmarks.cofactor(R's
- * clean values))} has an L1 — exactly what {@link AlignmentModel#build} computes when R is the
+ * <b>Eligibility</b> uses the alignment's own landmark finder: a slide R qualifies only
+ * if, on every gated column, {@code Landmarks.find(R's clean values, null, LogScale.LN)} has an L1 — exactly what {@link AlignmentModel#build} computes when R is the
  * reference — and at least the cohort's modal landmark count (fdaNorm's rule, Hahne et al. 2010).
  * <p>
  * <b>The suggestion</b> is the medoid of the eligible slides under the L1 distance between
@@ -105,7 +105,7 @@ public final class ReferenceRanking {
         Map<String, List<String>> reasons = new LinkedHashMap<>();
         for (SlideSample s : samples) reasons.put(s.slideId(), new ArrayList<>());
 
-        // Landmarks per (slide, column), each with the slide's own cofactor: what alignment would find
+        // Landmarks per (slide, column), on the log scale: what alignment would find
         // with that slide as the reference.
         Map<String, Map<String, Landmarks>> landmarks = new HashMap<>();
         Map<String, Map<String, double[]>> values = new HashMap<>();
@@ -116,7 +116,7 @@ public final class ReferenceRanking {
                 double[] v = AlignmentModel.cleanValues(s, col);
                 if (v == null) continue;
                 perValues.put(col.key(), v);
-                perColumn.put(col.key(), Landmarks.find(v, null, Landmarks.cofactor(v)));
+                perColumn.put(col.key(), Landmarks.find(v, null, LogScale.LN));
             }
             landmarks.put(s.slideId(), perColumn);
             values.put(s.slideId(), perValues);
@@ -204,7 +204,7 @@ public final class ReferenceRanking {
     }
 
     private static int count(Landmarks lm) {
-        return lm.hasL2() ? 2 : lm.hasL1() ? 1 : 0;
+        return lm.count();
     }
 
     /** The column's channel, or its full key when another gated column shares the channel. */

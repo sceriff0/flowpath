@@ -37,7 +37,7 @@ class CsvExportJobResolutionTest {
         tree.setReferenceSlideId("ref");
 
         CellIndex index = Cells.of(4).marker("CD3", 1, 2, 3, 4).build();
-        Alignment shift = Alignment.between(new Landmarks(1.0, 1.0, Double.NaN), new Landmarks(1.0, 1.3, Double.NaN));
+        Alignment shift = Alignment.auto(30, 0.01);
 
         CsvExportJob.Snapshot snapshot = CsvExportJob.Snapshot.of(dir.resolve("x.csv").toFile(), tree, index,
                 MarkerStats.compute(index), null, null, "s1", (s, c) -> "CD3".equals(c) ? shift : null);
