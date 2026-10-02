@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.8] - 02/10/2026
+
+### Changed — UniFORM staining correction
+
+- **Staining correction follows UniFORM** (Wang et al. 2025, Cell Reports Methods): each slide ×
+  marker is corrected by one multiplication factor. The factor comes from aligning the slide's
+  log-intensity histogram with the reference slide's. The two-peak stretch is gone, so a slide
+  with truly fewer positive cells is no longer pulled toward the reference.
+- **Pick the negative peak by hand** (UniFORM's landmark mode): the Cohort detail pane shows both
+  slides' histograms, their negative peaks and an arrow from the reference threshold to this
+  slide's. You can click the slide's or the reference's negative peak; **Use automatic** removes
+  the pick. Picks are stored with the project, not in the gate tree.
+- **Values below 1** are left out of estimating the shift, as in UniFORM, and corrected like the
+  rest. The detail pane says how many were left out. A project option estimates the shift on
+  ln(x + 1) instead (a documented departure, off by default).
+- **Each reason to look has its own symbol**, with a one-line legend and a tooltip naming the
+  check and its source:
+  - ⇆ aligned on the positive peak;
+  - ∅ no negative peak;
+  - \# too few cells;
+  - ≠ Otsu disagrees after correction;
+  - ↕ unusual shift;
+  - <1 many values below the log range;
+  - ± lineage double positives;
+  - ⋀ threshold on a peak.
+
+  A corrected cell shows its factor (`×1.40`), ◆ a picked peak, ★ the reference row,
+  ☑ confirmed, `raw` not corrected.
+- **Clicking ☆ on a slide makes that slide the reference.** If the gates were drawn on another
+  slide, that slide is confirmed first and the clicked one follows once re-alignment finishes;
+  you are told if that second step is dropped. The reference row is listed first in bold, the
+  open slide is marked ●, and the gating panel names the reference and this slide's factor.
+- **Output files.** In `qc_summary.csv`, `staining_factor`, `alignment_kind`, `below_range_pct`
+  and `otsu_discordance_pct` replace `staining_offset` and `staining_stretch`, and the run info
+  records `log_scale`. In `gating_manifest.csv`, the flag names change and the landmark columns
+  hold raw intensities.
+
 ## [0.9.7] - 01/10/2026
 
 ### Changed — Cohort window and an explicit reference slide
